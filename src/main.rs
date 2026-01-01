@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "a", version, about)]
+#[command(name = "Fohte's armyknife", bin_name = "a", version, about)]
 struct Cli {}
 
 fn main() {
