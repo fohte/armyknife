@@ -7,4 +7,9 @@ description = "A multi-purpose CLI tool"
 repository = "https://github.com/fohte/armyknife"
 license = "MIT"
 
+[[bin]]
+name = "a"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
