@@ -1,0 +1,10 @@
+[package]
+name = "armyknife"
+version = "0.1.0"
+edition = "2024"
+authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
+description = "A multi-purpose CLI tool"
+repository = "https://github.com/fohte/armyknife"
+license = "MIT"
+
+[dependencies]
