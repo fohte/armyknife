@@ -13,3 +13,5 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+self_update = { version = "0.27", features = ["rustls"], default-features = false }
+semver = "1"
