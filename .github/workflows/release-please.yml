@@ -64,7 +64,7 @@ jobs:
       - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../a-${{ matrix.target }}.tar.gz a
+          tar czf ../../../armyknife-${{ matrix.target }}.tar.gz a
           cd ../../..
 
       - name: Upload to release
@@ -72,4 +72,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            a-${{ matrix.target }}.tar.gz
+            armyknife-${{ matrix.target }}.tar.gz
