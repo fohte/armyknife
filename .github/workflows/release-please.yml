@@ -35,6 +35,8 @@ jobs:
 
   build-release:
     needs: release-please
+    # always() is required because release-please job is skipped on workflow_dispatch,
+    # and dependent jobs skip without evaluating their if condition by default.
     if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
     strategy:
       matrix:
