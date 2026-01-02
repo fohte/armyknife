@@ -1,6 +1,6 @@
 use self_update::cargo_crate_version;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,12 +19,8 @@ fn last_check_file() -> Option<PathBuf> {
     cache_dir().map(|d| d.join("last_update_check"))
 }
 
-fn should_check_for_update() -> bool {
-    let Some(path) = last_check_file() else {
-        return true;
-    };
-
-    let Ok(contents) = fs::read_to_string(&path) else {
+fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
         return true;
     };
 
@@ -32,22 +28,29 @@ fn should_check_for_update() -> bool {
         return true;
     };
 
+    now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS
+}
+
+fn should_check_for_update() -> bool {
+    let Some(path) = last_check_file() else {
+        return true;
+    };
+
     let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return true;
     };
 
-    now.as_secs().saturating_sub(last_check) >= CHECK_INTERVAL_SECS
+    should_check_for_update_with_path(&path, now.as_secs())
+}
+
+fn write_last_check_time(path: &Path, timestamp: u64) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, timestamp.to_string())
 }
 
 fn update_last_check_time() {
-    let Some(cache) = cache_dir() else {
-        return;
-    };
-
-    if fs::create_dir_all(&cache).is_err() {
-        return;
-    }
-
     let Some(path) = last_check_file() else {
         return;
     };
@@ -56,7 +59,7 @@ fn update_last_check_time() {
         return;
     };
 
-    let _ = fs::write(path, now.as_secs().to_string());
+    let _ = write_last_check_time(&path, now.as_secs());
 }
 
 fn check_for_update() -> Option<String> {
@@ -122,4 +125,75 @@ pub fn do_update() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn should_check_when_file_does_not_exist() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("last_update_check");
+        let now = 1000000;
+
+        assert!(should_check_for_update_with_path(&path, now));
+    }
+
+    #[test]
+    fn should_check_when_file_contains_invalid_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("last_update_check");
+        fs::write(&path, "invalid").unwrap();
+        let now = 1000000;
+
+        assert!(should_check_for_update_with_path(&path, now));
+    }
+
+    #[test]
+    fn should_not_check_when_recently_checked() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("last_update_check");
+        let now = 1000000u64;
+        let last_check = now - 3600; // 1 hour ago
+        fs::write(&path, last_check.to_string()).unwrap();
+
+        assert!(!should_check_for_update_with_path(&path, now));
+    }
+
+    #[test]
+    fn should_check_when_interval_passed() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("last_update_check");
+        let now = 1000000u64;
+        let last_check = now - CHECK_INTERVAL_SECS - 1; // Just over 24 hours ago
+        fs::write(&path, last_check.to_string()).unwrap();
+
+        assert!(should_check_for_update_with_path(&path, now));
+    }
+
+    #[test]
+    fn should_check_at_exact_interval() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("last_update_check");
+        let now = 1000000u64;
+        let last_check = now - CHECK_INTERVAL_SECS; // Exactly 24 hours ago
+        fs::write(&path, last_check.to_string()).unwrap();
+
+        assert!(should_check_for_update_with_path(&path, now));
+    }
+
+    #[test]
+    fn write_creates_cache_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("subdir").join("last_update_check");
+        let timestamp = 1234567890u64;
+
+        write_last_check_time(&path, timestamp).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "1234567890");
+    }
 }

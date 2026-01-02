@@ -69,6 +69,7 @@ dependencies = [
  "dirs",
  "self_update",
  "semver 1.0.27",
+ "tempfile",
 ]
 
 [[package]]
