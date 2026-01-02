@@ -42,6 +42,8 @@ jobs:
             os: ubuntu-latest
             use-cross: true
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
