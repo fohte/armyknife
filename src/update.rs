@@ -1,13 +1,72 @@
 use self_update::cargo_crate_version;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
 const BIN_NAME: &str = "a";
 
+const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+fn cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("armyknife"))
+}
+
+fn last_check_file() -> Option<PathBuf> {
+    cache_dir().map(|d| d.join("last_update_check"))
+}
+
+fn should_check_for_update() -> bool {
+    let Some(path) = last_check_file() else {
+        return true;
+    };
+
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return true;
+    };
+
+    let Ok(last_check) = contents.trim().parse::<u64>() else {
+        return true;
+    };
+
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return true;
+    };
+
+    now.as_secs().saturating_sub(last_check) >= CHECK_INTERVAL_SECS
+}
+
+fn update_last_check_time() {
+    let Some(cache) = cache_dir() else {
+        return;
+    };
+
+    if fs::create_dir_all(&cache).is_err() {
+        return;
+    }
+
+    let Some(path) = last_check_file() else {
+        return;
+    };
+
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return;
+    };
+
+    let _ = fs::write(path, now.as_secs().to_string());
+}
+
 fn check_for_update() -> Option<String> {
+    if !should_check_for_update() {
+        return None;
+    }
+
+    // Update timestamp before fetching to avoid repeated requests if fetch is slow
+    update_last_check_time();
+
     let releases = self_update::backends::github::ReleaseList::configure()
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
