@@ -3,11 +3,18 @@ on:
     branches:
       - master
       - main
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., v0.1.1)'
+        required: true
+        type: string
 
 name: release-please
 
 jobs:
   release-please:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -28,7 +35,9 @@ jobs:
 
   build-release:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    # always() is required because release-please job is skipped on workflow_dispatch,
+    # and dependent jobs skip without evaluating their if condition by default.
+    if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
     strategy:
       matrix:
         include:
@@ -42,6 +51,8 @@ jobs:
             os: ubuntu-latest
             use-cross: true
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +83,7 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
         run: |
-          gh release upload ${{ needs.release-please.outputs.tag_name }} \
+          gh release upload "$TAG_NAME" \
             armyknife-${{ matrix.target }}.tar.gz
