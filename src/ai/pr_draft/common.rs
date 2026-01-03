@@ -59,9 +59,10 @@ pub struct RepoInfo {
 }
 
 impl RepoInfo {
+    /// Get repo info using gh CLI (includes is_private check via network)
     pub fn from_current_dir() -> Result<Self> {
         let branch = get_current_branch()?;
-        let (owner, repo) = get_repo_owner_and_name()?;
+        let (owner, repo) = get_repo_owner_and_name_from_git()?;
         let is_private = check_is_private(&owner, &repo)?;
 
         Ok(Self {
@@ -71,9 +72,22 @@ impl RepoInfo {
             is_private,
         })
     }
+
+    /// Get repo info from git only (no network call, is_private defaults to false)
+    pub fn from_git_only() -> Result<Self> {
+        let branch = get_current_branch()?;
+        let (owner, repo) = get_repo_owner_and_name_from_git()?;
+
+        Ok(Self {
+            owner,
+            repo,
+            branch,
+            is_private: false,
+        })
+    }
 }
 
-fn get_current_branch() -> Result<String> {
+pub fn get_current_branch() -> Result<String> {
     let output = Command::new("git")
         .args(["branch", "--show-current"])
         .output()
@@ -86,36 +100,38 @@ fn get_current_branch() -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn get_repo_owner_and_name() -> Result<(String, String)> {
-    let output = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "owner,name",
-            "-q",
-            ".owner.login + \"/\" + .name",
-        ])
+/// Get owner and repo from git remote origin URL (no network call)
+pub fn get_repo_owner_and_name_from_git() -> Result<(String, String)> {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
         .output()
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
     if !output.status.success() {
         return Err(PrDraftError::RepoInfoError(
-            String::from_utf8_lossy(&output.stderr).to_string(),
+            "No git remote 'origin' found".to_string(),
         ));
     }
 
-    let full_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let parts: Vec<&str> = full_name.split('/').collect();
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_github_url(&url)
+}
 
-    if parts.len() != 2 {
-        return Err(PrDraftError::RepoInfoError(format!(
-            "Unexpected repo format: {}",
-            full_name
-        )));
+fn parse_github_url(url: &str) -> Result<(String, String)> {
+    // SSH format: git@github.com:owner/repo.git
+    // HTTPS format: https://github.com/owner/repo.git
+    let re = Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap();
+
+    if let Some(captures) = re.captures(url) {
+        let owner = captures.get(1).unwrap().as_str().to_string();
+        let repo = captures.get(2).unwrap().as_str().to_string();
+        Ok((owner, repo))
+    } else {
+        Err(PrDraftError::RepoInfoError(format!(
+            "Could not parse GitHub URL: {}",
+            url
+        )))
     }
-
-    Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
 fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
@@ -183,6 +199,28 @@ impl DraftFile {
 
     pub fn approve_path(draft_path: &Path) -> PathBuf {
         draft_path.with_extension("md.approve")
+    }
+
+    /// Extract owner, repo, and branch from a draft file path.
+    /// Path format: /tmp/pr-body-draft/<owner>/<repo>/<branch>.md
+    pub fn parse_path(path: &Path) -> Option<(String, String, String)> {
+        let draft_dir = Self::draft_dir();
+        let relative = path.strip_prefix(&draft_dir).ok()?;
+        let components: Vec<_> = relative.components().collect();
+
+        if components.len() != 3 {
+            return None;
+        }
+
+        let owner = components[0].as_os_str().to_str()?.to_string();
+        let repo = components[1].as_os_str().to_str()?.to_string();
+        let branch = components[2]
+            .as_os_str()
+            .to_str()?
+            .strip_suffix(".md")?
+            .to_string();
+
+        Some((owner, repo, branch))
     }
 
     pub fn from_path(path: PathBuf) -> Result<Self> {

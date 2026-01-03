@@ -25,11 +25,18 @@ pub struct ReviewCompleteArgs {
 }
 
 pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let repo_info = RepoInfo::from_current_dir()?;
-
-    let draft_path = match &args.filepath {
-        Some(path) => path.clone(),
-        None => DraftFile::path_for(&repo_info),
+    let (draft_path, owner, repo, branch) = match &args.filepath {
+        Some(path) => {
+            let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
+                PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
+            })?;
+            (path.clone(), owner, repo, branch)
+        }
+        None => {
+            let repo_info = RepoInfo::from_git_only()?;
+            let path = DraftFile::path_for(&repo_info);
+            (path, repo_info.owner, repo_info.repo, repo_info.branch)
+        }
     };
 
     if !draft_path.exists() {
@@ -46,10 +53,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Create lock file
     fs::write(&lock_path, "")?;
 
-    let window_title = format!(
-        "PR: {}/{} @ {}",
-        repo_info.owner, repo_info.repo, repo_info.branch
-    );
+    let window_title = format!("PR: {}/{} @ {}", owner, repo, branch);
 
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
