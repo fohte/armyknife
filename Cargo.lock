@@ -69,7 +69,6 @@ dependencies = [
  "dirs",
  "rstest",
  "self_update",
- "semver",
  "tempfile",
 ]
 
