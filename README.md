@@ -1,5 +1,8 @@
 # armyknife
 
+[![GitHub release](https://img.shields.io/github/v/release/fohte/armyknife)](https://github.com/fohte/armyknife/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Personal CLI toolkit written in Rust
 
 ## Installation
