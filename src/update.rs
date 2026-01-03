@@ -160,28 +160,17 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "1234567890");
     }
 
-    #[test]
-    fn auto_update_calls_updater_when_check_needed() {
+    #[rstest]
+    #[case(true, true)]
+    #[case(false, false)]
+    fn auto_update_runs_based_on_check_flag(
+        #[case] should_check: bool,
+        #[case] expected_called: bool,
+    ) {
         let updater_called = AtomicBool::new(false);
 
         auto_update_impl(
-            || true, // should check
-            || {},   // no-op for update_time
-            || {
-                updater_called.store(true, Ordering::SeqCst);
-                Ok(())
-            },
-        );
-
-        assert!(updater_called.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn auto_update_skips_when_recently_checked() {
-        let updater_called = AtomicBool::new(false);
-
-        auto_update_impl(
-            || false, // should not check
+            || should_check,
             || {},
             || {
                 updater_called.store(true, Ordering::SeqCst);
@@ -189,6 +178,6 @@ mod tests {
             },
         );
 
-        assert!(!updater_called.load(Ordering::SeqCst));
+        assert_eq!(updater_called.load(Ordering::SeqCst), expected_called);
     }
 }
