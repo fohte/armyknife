@@ -1,4 +1,4 @@
-import { execSync } from 'child_process'
+const { execSync } = require('child_process')
 
 function getCurrentRepo() {
   try {
@@ -12,7 +12,7 @@ function getCurrentRepo() {
   }
 }
 
-export const noExternalGitHubRefs = (parsed, when, value) => {
+const noExternalGitHubRefs = (parsed, when, value) => {
   const options = value || {}
   const currentRepo = options.currentRepo || getCurrentRepo()
   if (!currentRepo || !parsed.raw) return [true]
@@ -56,4 +56,4 @@ const plugin = {
   },
 }
 
-export default plugin
+module.exports = plugin
