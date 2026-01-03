@@ -21,9 +21,7 @@ fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
     fs::read_to_string(path)
         .ok()
         .and_then(|contents| contents.trim().parse::<u64>().ok())
-        .is_none_or(|last_check| {
-            now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS
-        })
+        .is_none_or(|last_check| now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS)
 }
 
 fn should_check_for_update() -> bool {
@@ -62,7 +60,11 @@ fn update_last_check_time() {
 /// Automatically check for updates and apply if available.
 /// Runs synchronously but only checks once per 24 hours (cached).
 pub fn auto_update() {
-    auto_update_impl(should_check_for_update, update_last_check_time, do_update_silent);
+    auto_update_impl(
+        should_check_for_update,
+        update_last_check_time,
+        do_update_silent,
+    );
 }
 
 fn auto_update_impl<C, T, U>(should_check: C, update_time: T, updater: U)
@@ -109,10 +111,7 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn do_update() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = base_update_builder();
-    let status = builder
-        .show_download_progress(true)
-        .build()?
-        .update()?;
+    let status = builder.show_download_progress(true).build()?.update()?;
 
     if status.updated() {
         println!("Updated to version {}!", status.version());
