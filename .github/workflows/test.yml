@@ -37,8 +37,9 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # mise-action's cache doesn't include ~/.rustup and ~/.cargo, so we cache
-      # them ourselves to preserve Rust components (clippy, rustfmt).
+      # mise-action only caches ~/.local/share/mise, but Rust toolchain
+      # is installed to ~/.rustup and ~/.cargo. Without caching these,
+      # toolchain (including clippy/rustfmt) is missing after cache restore.
       - name: Cache mise and Rust toolchain
         uses: actions/cache@v4
         with:
