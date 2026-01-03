@@ -21,7 +21,7 @@ fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
     fs::read_to_string(path)
         .ok()
         .and_then(|contents| contents.trim().parse::<u64>().ok())
-        .map_or(true, |last_check| {
+        .is_none_or(|last_check| {
             now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS
         })
 }
