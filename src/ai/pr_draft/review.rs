@@ -1,9 +1,10 @@
 use clap::Args;
+use indoc::formatdoc;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, Result};
+use super::common::{DraftFile, PrDraftError, RepoInfo};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReviewArgs {
@@ -11,7 +12,19 @@ pub struct ReviewArgs {
     pub filepath: Option<PathBuf>,
 }
 
-pub fn run(args: &ReviewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+/// Internal command to complete the review process after Neovim exits.
+/// This is called by WezTerm, not directly by users.
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct ReviewCompleteArgs {
+    /// Path to the draft file
+    pub filepath: PathBuf,
+
+    /// tmux session to restore after review
+    #[arg(long)]
+    pub tmux_target: Option<String>,
+}
+
+pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     let draft_path = match &args.filepath {
         Some(path) => path.clone(),
         None => {
@@ -31,22 +44,32 @@ pub fn run(args: &ReviewArgs) -> std::result::Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
+    // Create lock file
+    fs::write(&lock_path, "")?;
+
     let repo_info = RepoInfo::from_current_dir()?;
     let window_title = format!(
         "PR: {}/{} @ {}",
         repo_info.owner, repo_info.repo, repo_info.branch
     );
 
-    // Save tmux session info for later restoration
-    let tmux_info = get_tmux_info();
+    // Get tmux session info for later restoration
+    let tmux_target = get_tmux_target();
 
-    // Create nvim wrapper script
-    let wrapper_script = create_nvim_wrapper(&draft_path, &window_title, tmux_info.as_ref())?;
+    // Get the path to the current executable
+    let exe_path = std::env::current_exe()?;
 
-    // Create lock file
-    fs::write(&lock_path, "")?;
+    // Build the command for review-complete
+    let mut review_cmd = format!(
+        "{} ai pr-draft review-complete {}",
+        exe_path.display(),
+        draft_path.display()
+    );
+    if let Some(ref target) = tmux_target {
+        review_cmd.push_str(&format!(" --tmux-target {}", target));
+    }
 
-    // Launch WezTerm with nvim
+    // Launch WezTerm with the review-complete command
     let status = Command::new("open")
         .args([
             "-n",
@@ -55,10 +78,17 @@ pub fn run(args: &ReviewArgs) -> std::result::Result<(), Box<dyn std::error::Err
             "--args",
             "--config",
             "window_decorations=\"TITLE | RESIZE\"",
+            "--config",
+            "initial_cols=120",
+            "--config",
+            "initial_rows=40",
             "start",
+            "--class",
+            &window_title,
             "--",
             "bash",
-            wrapper_script.to_str().unwrap(),
+            "-c",
+            &review_cmd,
         ])
         .status();
 
@@ -74,143 +104,86 @@ pub fn run(args: &ReviewArgs) -> std::result::Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-#[derive(Debug)]
-struct TmuxInfo {
-    session: String,
-    window: String,
-    pane: String,
+pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let draft_path = &args.filepath;
+
+    // Ensure cleanup happens even on panic
+    let _cleanup_guard = CleanupGuard {
+        lock_path: DraftFile::lock_path(draft_path),
+        tmux_target: args.tmux_target.clone(),
+    };
+
+    // Launch Neovim
+    let status = Command::new("nvim")
+        .arg(draft_path)
+        .status()
+        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch nvim: {}", e)))?;
+
+    if !status.success() {
+        eprintln!("Neovim exited with non-zero status");
+        return Ok(());
+    }
+
+    // After Neovim exits, check if submit was approved
+    let draft = DraftFile::from_path(draft_path.clone())?;
+
+    if draft.frontmatter.steps.submit {
+        // Save approval hash
+        draft.save_approval()?;
+        println!(
+            "{}",
+            formatdoc! {"
+                PR approved. Run the following command to create the PR:
+
+                    a ai pr-draft submit
+            "}
+        );
+    } else {
+        // Remove approval if exists
+        draft.remove_approval()?;
+        println!("PR not approved. Set 'steps.submit: true' and save to approve.");
+    }
+
+    Ok(())
 }
 
-fn get_tmux_info() -> Option<TmuxInfo> {
+struct CleanupGuard {
+    lock_path: PathBuf,
+    tmux_target: Option<String>,
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        // Remove lock file
+        let _ = fs::remove_file(&self.lock_path);
+
+        // Restore tmux session
+        if let Some(ref target) = self.tmux_target {
+            let _ = Command::new("tmux")
+                .args(["switch-client", "-t", target])
+                .status();
+        }
+    }
+}
+
+fn get_tmux_target() -> Option<String> {
     if std::env::var("TMUX").is_err() {
         return None;
     }
 
-    let session = Command::new("tmux")
-        .args(["display-message", "-p", "#{session_name}"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })?;
+    let session = run_tmux_command(&["display-message", "-p", "#{session_name}"])?;
+    let window = run_tmux_command(&["display-message", "-p", "#{window_index}"])?;
+    let pane = run_tmux_command(&["display-message", "-p", "#{pane_index}"])?;
 
-    let window = Command::new("tmux")
-        .args(["display-message", "-p", "#{window_index}"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })?;
-
-    let pane = Command::new("tmux")
-        .args(["display-message", "-p", "#{pane_index}"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })?;
-
-    Some(TmuxInfo {
-        session,
-        window,
-        pane,
-    })
+    Some(format!("{}:{}.{}", session, window, pane))
 }
 
-fn create_nvim_wrapper(
-    draft_path: &Path,
-    window_title: &str,
-    tmux_info: Option<&TmuxInfo>,
-) -> Result<PathBuf> {
-    let wrapper = tempfile::Builder::new()
-        .prefix("nvim-wrapper-")
-        .suffix(".sh")
-        .tempfile()
-        .map_err(PrDraftError::Io)?;
-
-    let (_, wrapper_path) = wrapper.keep().map_err(|e| PrDraftError::Io(e.error))?;
-
-    let draft_path_str = draft_path.display();
-    let lock_path = DraftFile::lock_path(draft_path);
-    let lock_path_str = lock_path.display();
-    let approve_path = DraftFile::approve_path(draft_path);
-    let approve_path_str = approve_path.display();
-
-    let tmux_restore = if let Some(info) = tmux_info {
-        format!(
-            r#"
-# Restore tmux session
-if command -v tmux &>/dev/null && [ -n "$TMUX_PANE" ]; then
-    tmux switch-client -t "{}:{}.{}"
-fi
-"#,
-            info.session, info.window, info.pane
-        )
-    } else {
-        String::new()
-    };
-
-    let script = format!(
-        r#"#!/bin/bash
-set -e
-
-DRAFT_PATH="{draft_path_str}"
-LOCK_PATH="{lock_path_str}"
-APPROVE_PATH="{approve_path_str}"
-WINDOW_TITLE="{window_title}"
-
-cleanup() {{
-    rm -f "$LOCK_PATH"
-    rm -f "$0"  # Remove this wrapper script
-    {tmux_restore}
-}}
-
-trap cleanup EXIT
-
-# Set window title via nvim
-nvim -c "set titlestring=$WINDOW_TITLE" -c "set title" "$DRAFT_PATH"
-
-# After nvim exits, check if submit was approved
-if command -v yq &>/dev/null; then
-    SUBMIT_VALUE=$(sed -n '/^---$/,/^---$/p' "$DRAFT_PATH" | yq -r '.steps.submit // false')
-else
-    # Fallback: simple grep-based check
-    SUBMIT_VALUE=$(sed -n '/^---$/,/^---$/{{/submit:/p}}' "$DRAFT_PATH" | grep -o 'true\|false' | head -1)
-fi
-
-if [ "$SUBMIT_VALUE" = "true" ]; then
-    # Compute hash and save to approve file
-    shasum -a 256 "$DRAFT_PATH" | cut -d' ' -f1 > "$APPROVE_PATH"
-    echo "PR approved. Run 'a ai pr-draft submit' to create the PR."
-else
-    rm -f "$APPROVE_PATH"
-    echo "PR not approved. Set 'steps.submit: true' and save to approve."
-fi
-"#
-    );
-
-    fs::write(&wrapper_path, script)?;
-
-    // Make executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&wrapper_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&wrapper_path, perms)?;
-    }
-
-    Ok(wrapper_path)
+fn run_tmux_command(args: &[&str]) -> Option<String> {
+    Command::new("tmux").args(args).output().ok().and_then(|o| {
+        if o.status.success() {
+            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+        } else {
+            None
+        }
+    })
 }

@@ -1,3 +1,4 @@
+use indoc::formatdoc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -206,7 +207,6 @@ impl DraftFile {
         format!("{:x}", hasher.finalize())
     }
 
-    #[allow(dead_code)]
     pub fn save_approval(&self) -> Result<()> {
         let hash = self.compute_hash();
         let approve_path = Self::approve_path(&self.path);
@@ -289,26 +289,22 @@ fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
 
 pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
     if is_private {
-        format!(
-            r#"---
-title: "{}"
-steps:
-  submit: false
----
-"#,
-            title
-        )
+        formatdoc! {r#"
+            ---
+            title: "{title}"
+            steps:
+              submit: false
+            ---
+        "#}
     } else {
-        format!(
-            r#"---
-title: "{}"
-steps:
-  ready-for-translation: false
-  submit: false
----
-"#,
-            title
-        )
+        formatdoc! {r#"
+            ---
+            title: "{title}"
+            steps:
+              ready-for-translation: false
+              submit: false
+            ---
+        "#}
     }
 }
 
@@ -334,37 +330,54 @@ pub fn read_stdin_if_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
+    use rstest::rstest;
 
-    #[test]
-    fn test_parse_frontmatter() {
-        let content = r#"---
-title: "Test PR"
-steps:
-  submit: true
----
-This is the body"#;
-
+    #[rstest]
+    #[case::basic(
+        indoc! {r#"
+            ---
+            title: "Test PR"
+            steps:
+              submit: true
+            ---
+            This is the body
+        "#},
+        "Test PR",
+        false,
+        true,
+        "This is the body\n"
+    )]
+    #[case::with_ready_for_translation(
+        indoc! {r#"
+            ---
+            title: "Public PR"
+            steps:
+              ready-for-translation: true
+              submit: false
+            ---
+            Body content
+        "#},
+        "Public PR",
+        true,
+        false,
+        "Body content\n"
+    )]
+    fn test_parse_frontmatter(
+        #[case] content: &str,
+        #[case] expected_title: &str,
+        #[case] expected_ready_for_translation: bool,
+        #[case] expected_submit: bool,
+        #[case] expected_body: &str,
+    ) {
         let (frontmatter, body) = parse_frontmatter(content).unwrap();
-        assert_eq!(frontmatter.title, "Test PR");
-        assert!(frontmatter.steps.submit);
-        assert_eq!(body, "This is the body");
-    }
-
-    #[test]
-    fn test_parse_frontmatter_with_ready_for_translation() {
-        let content = r#"---
-title: "Public PR"
-steps:
-  ready-for-translation: true
-  submit: false
----
-Body content"#;
-
-        let (frontmatter, body) = parse_frontmatter(content).unwrap();
-        assert_eq!(frontmatter.title, "Public PR");
-        assert!(frontmatter.steps.ready_for_translation);
-        assert!(!frontmatter.steps.submit);
-        assert_eq!(body, "Body content");
+        assert_eq!(frontmatter.title, expected_title);
+        assert_eq!(
+            frontmatter.steps.ready_for_translation,
+            expected_ready_for_translation
+        );
+        assert_eq!(frontmatter.steps.submit, expected_submit);
+        assert_eq!(body, expected_body);
     }
 
     #[test]
@@ -377,28 +390,29 @@ Body content"#;
         assert_eq!(body, content);
     }
 
-    #[test]
-    fn test_contains_japanese() {
-        assert!(contains_japanese("これはテスト"));
-        assert!(contains_japanese("Hello 世界"));
-        assert!(contains_japanese("カタカナ"));
-        assert!(!contains_japanese("Hello World"));
-        assert!(!contains_japanese("abc123!@#"));
+    #[rstest]
+    #[case::hiragana("これはテスト", true)]
+    #[case::mixed("Hello 世界", true)]
+    #[case::katakana("カタカナ", true)]
+    #[case::english("Hello World", false)]
+    #[case::symbols("abc123!@#", false)]
+    fn test_contains_japanese(#[case] text: &str, #[case] expected: bool) {
+        assert_eq!(contains_japanese(text), expected);
     }
 
-    #[test]
-    fn test_generate_frontmatter_private() {
-        let result = generate_frontmatter("Test Title", true);
+    #[rstest]
+    #[case::private(true, false)]
+    #[case::public(false, true)]
+    fn test_generate_frontmatter(
+        #[case] is_private: bool,
+        #[case] should_contain_ready_for_translation: bool,
+    ) {
+        let result = generate_frontmatter("Test Title", is_private);
         assert!(result.contains("title: \"Test Title\""));
         assert!(result.contains("submit: false"));
-        assert!(!result.contains("ready-for-translation"));
-    }
-
-    #[test]
-    fn test_generate_frontmatter_public() {
-        let result = generate_frontmatter("Test Title", false);
-        assert!(result.contains("title: \"Test Title\""));
-        assert!(result.contains("submit: false"));
-        assert!(result.contains("ready-for-translation: false"));
+        assert_eq!(
+            result.contains("ready-for-translation"),
+            should_contain_ready_for_translation
+        );
     }
 }
