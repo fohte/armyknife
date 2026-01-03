@@ -63,13 +63,22 @@ fn update_last_check_time() {
 /// Automatically check for updates and apply if available.
 /// Runs synchronously but only checks once per 24 hours (cached).
 pub fn auto_update() {
-    if !should_check_for_update() {
+    auto_update_impl(should_check_for_update, update_last_check_time, do_update_silent);
+}
+
+fn auto_update_impl<C, T, U>(should_check: C, update_time: T, updater: U)
+where
+    C: FnOnce() -> bool,
+    T: FnOnce(),
+    U: FnOnce() -> Result<(), Box<dyn std::error::Error>>,
+{
+    if !should_check() {
         return;
     }
 
-    update_last_check_time();
+    update_time();
 
-    if let Err(e) = do_update_silent() {
+    if let Err(e) = updater() {
         eprintln!("Auto-update failed: {e}");
     }
 }
@@ -116,6 +125,7 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
     const NOW: u64 = 1000000;
@@ -145,5 +155,37 @@ mod tests {
         write_last_check_time(&path, 1234567890).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "1234567890");
+    }
+
+    #[test]
+    fn auto_update_calls_updater_when_check_needed() {
+        let updater_called = AtomicBool::new(false);
+
+        auto_update_impl(
+            || true, // should check
+            || {},   // no-op for update_time
+            || {
+                updater_called.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(updater_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn auto_update_skips_when_recently_checked() {
+        let updater_called = AtomicBool::new(false);
+
+        auto_update_impl(
+            || false, // should not check
+            || {},
+            || {
+                updater_called.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(!updater_called.load(Ordering::SeqCst));
     }
 }
