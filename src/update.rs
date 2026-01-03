@@ -18,15 +18,12 @@ fn last_check_file() -> Option<PathBuf> {
 }
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return true;
-    };
-
-    let Ok(last_check) = contents.trim().parse::<u64>() else {
-        return true;
-    };
-
-    now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u64>().ok())
+        .map_or(true, |last_check| {
+            now_secs.saturating_sub(last_check) >= CHECK_INTERVAL_SECS
+        })
 }
 
 fn should_check_for_update() -> bool {
@@ -57,7 +54,9 @@ fn update_last_check_time() {
         return;
     };
 
-    let _ = write_last_check_time(&path, now.as_secs());
+    if let Err(e) = write_last_check_time(&path, now.as_secs()) {
+        eprintln!("Failed to write last update check time: {e}");
+    }
 }
 
 /// Automatically check for updates and apply if available.
@@ -83,14 +82,21 @@ where
     }
 }
 
-fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
-    let status = self_update::backends::github::Update::configure()
+fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
+    let mut builder = self_update::backends::github::Update::configure();
+    builder
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
+        .current_version(cargo_crate_version!());
+    builder
+}
+
+fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = base_update_builder();
+    let status = builder
         .show_download_progress(false)
         .no_confirm(true)
-        .current_version(cargo_crate_version!())
         .build()?
         .update()?;
 
@@ -102,12 +108,9 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn do_update() -> Result<(), Box<dyn std::error::Error>> {
-    let status = self_update::backends::github::Update::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .bin_name(BIN_NAME)
+    let mut builder = base_update_builder();
+    let status = builder
         .show_download_progress(true)
-        .current_version(cargo_crate_version!())
         .build()?
         .update()?;
 
