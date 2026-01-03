@@ -5,8 +5,8 @@ use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands};
 
 fn main() {
-    // Start update check in background (non-blocking)
-    let update_rx = update::spawn_update_check();
+    // Auto-update if a new version is available (checked once per 24 hours)
+    update::auto_update();
 
     let cli = Cli::parse();
 
@@ -18,10 +18,8 @@ fn main() {
             }
         }
         None => {
-            // No subcommand - show help
             Cli::command().print_help().ok();
             println!();
-            update::print_update_notification(update_rx);
         }
     }
 }

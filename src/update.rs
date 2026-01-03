@@ -1,9 +1,7 @@
 use self_update::cargo_crate_version;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
@@ -62,50 +60,36 @@ fn update_last_check_time() {
     let _ = write_last_check_time(&path, now.as_secs());
 }
 
-fn check_for_update() -> Option<String> {
+/// Automatically check for updates and apply if available.
+/// Runs synchronously but only checks once per 24 hours (cached).
+pub fn auto_update() {
     if !should_check_for_update() {
-        return None;
+        return;
     }
 
-    // Update timestamp before fetching to avoid repeated requests if fetch is slow
     update_last_check_time();
 
-    let releases = self_update::backends::github::ReleaseList::configure()
+    if let Err(e) = do_update_silent() {
+        eprintln!("Auto-update failed: {e}");
+    }
+}
+
+fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
+    let status = self_update::backends::github::Update::configure()
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
-        .build()
-        .ok()?
-        .fetch()
-        .ok()?;
+        .bin_name(BIN_NAME)
+        .show_download_progress(false)
+        .no_confirm(true)
+        .current_version(cargo_crate_version!())
+        .build()?
+        .update()?;
 
-    let latest = releases.first()?;
-    let current = semver::Version::parse(cargo_crate_version!()).ok()?;
-    let latest_version = semver::Version::parse(&latest.version).ok()?;
-
-    if latest_version > current {
-        Some(latest.version.clone())
-    } else {
-        None
+    if status.updated() {
+        eprintln!("Updated to version {}.", status.version());
     }
-}
 
-pub fn spawn_update_check() -> mpsc::Receiver<Option<String>> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let result = check_for_update();
-        let _ = tx.send(result);
-    });
-    rx
-}
-
-pub fn print_update_notification(rx: mpsc::Receiver<Option<String>>) {
-    // Wait up to 500ms for the update check to complete
-    // This balances responsiveness with giving the check time to finish
-    if let Ok(Some(version)) = rx.recv_timeout(Duration::from_millis(500)) {
-        eprintln!();
-        eprintln!("A new version of armyknife is available: v{version}");
-        eprintln!("Run `a update` to update to the latest version.");
-    }
+    Ok(())
 }
 
 pub fn do_update() -> Result<(), Box<dyn std::error::Error>> {
