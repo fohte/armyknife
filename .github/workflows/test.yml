@@ -37,6 +37,11 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # mise-action's built-in cache only covers ~/.local/share/mise, but mise
+      # installs Rust via rustup to ~/.rustup and ~/.cargo, placing only symlinks
+      # in its install directory. Without caching these directories, rustup
+      # re-downloads the toolchain without the components specified in .mise.toml
+      # (clippy, rustfmt), causing "cargo-clippy not installed" errors.
       - name: Cache mise and Rust toolchain
         uses: actions/cache@v4
         with:
