@@ -1,4 +1,5 @@
 [tools]
+rust = { version = "1.92.0", profile = "default" }
 lefthook = "2.0.12"
 
 # lefthook hooks
