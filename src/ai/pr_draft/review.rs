@@ -25,12 +25,11 @@ pub struct ReviewCompleteArgs {
 }
 
 pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let repo_info = RepoInfo::from_current_dir()?;
+
     let draft_path = match &args.filepath {
         Some(path) => path.clone(),
-        None => {
-            let repo_info = RepoInfo::from_current_dir()?;
-            DraftFile::path_for(&repo_info)
-        }
+        None => DraftFile::path_for(&repo_info),
     };
 
     if !draft_path.exists() {
@@ -47,7 +46,6 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Create lock file
     fs::write(&lock_path, "")?;
 
-    let repo_info = RepoInfo::from_current_dir()?;
     let window_title = format!(
         "PR: {}/{} @ {}",
         repo_info.owner, repo_info.repo, repo_info.branch
