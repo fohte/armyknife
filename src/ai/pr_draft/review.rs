@@ -74,22 +74,23 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
         review_args.push(target.clone());
     }
 
-    // Use RAII guard to ensure lock cleanup on any exit path
-    let _lock_guard = LockGuard {
-        lock_path: lock_path.clone(),
-    };
+    // RAII guard ensures lock cleanup on error paths
+    let mut lock_guard = LockGuard::new(lock_path);
 
     // Launch WezTerm with the review-complete command
-    let status = launch_wezterm(&window_title, &exe_path, &review_args);
+    let status = launch_wezterm(&window_title, &exe_path, &review_args)
+        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch WezTerm: {e}")))?;
 
-    if let Err(e) = status {
+    if !status.success() {
+        // Guard will be dropped here, removing lock file
         return Err(Box::new(PrDraftError::CommandFailed(format!(
-            "Failed to launch WezTerm: {e}"
+            "WezTerm exited with status: {status}"
         ))));
     }
 
-    // Prevent guard from removing lock on success (WezTerm will handle it)
-    std::mem::forget(_lock_guard);
+    // WezTerm launched successfully - disarm guard so lock file remains
+    // (review-complete will handle cleanup when it finishes)
+    lock_guard.disarm();
 
     Ok(())
 }
@@ -140,11 +141,29 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error:
 /// RAII guard for lock file cleanup in run()
 struct LockGuard {
     lock_path: PathBuf,
+    /// If true, skip cleanup on drop (used when WezTerm will handle it)
+    disarmed: bool,
+}
+
+impl LockGuard {
+    fn new(lock_path: PathBuf) -> Self {
+        Self {
+            lock_path,
+            disarmed: false,
+        }
+    }
+
+    /// Prevent this guard from removing the lock file on drop
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
 }
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.lock_path);
+        if !self.disarmed {
+            let _ = fs::remove_file(&self.lock_path);
+        }
     }
 }
 

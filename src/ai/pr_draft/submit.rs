@@ -1,5 +1,5 @@
 use clap::Args;
-use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -59,12 +59,14 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     }
 
     // Create temp file for body
-    let body_file = tempfile::Builder::new()
+    // Write to the existing handle for Windows compatibility (can't reopen path while held)
+    let mut body_file = tempfile::Builder::new()
         .prefix("pr-body-")
         .suffix(".md")
         .tempfile()?;
 
-    fs::write(body_file.path(), &draft.body)?;
+    body_file.write_all(draft.body.as_bytes())?;
+    body_file.flush()?;
 
     // Build gh pr create command using builder pattern
     let mut gh_cmd = Command::new("gh");
