@@ -73,27 +73,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Launch WezTerm with the review-complete command
-    let status = Command::new("open")
-        .args([
-            "-n",
-            "-a",
-            "WezTerm",
-            "--args",
-            "--config",
-            "window_decorations=\"TITLE | RESIZE\"",
-            "--config",
-            "initial_cols=120",
-            "--config",
-            "initial_rows=40",
-            "start",
-            "--class",
-            &window_title,
-            "--",
-            "bash",
-            "-c",
-            &review_cmd,
-        ])
-        .status();
+    let status = launch_wezterm(&window_title, &review_cmd);
 
     if let Err(e) = status {
         // Cleanup lock on error
@@ -188,4 +168,50 @@ fn run_tmux_command(args: &[&str]) -> Option<String> {
             None
         }
     })
+}
+
+#[cfg(target_os = "macos")]
+fn launch_wezterm(window_title: &str, command: &str) -> std::io::Result<std::process::ExitStatus> {
+    Command::new("open")
+        .args([
+            "-n",
+            "-a",
+            "WezTerm",
+            "--args",
+            "--config",
+            "window_decorations=\"TITLE | RESIZE\"",
+            "--config",
+            "initial_cols=120",
+            "--config",
+            "initial_rows=40",
+            "start",
+            "--class",
+            window_title,
+            "--",
+            "bash",
+            "-c",
+            command,
+        ])
+        .status()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch_wezterm(window_title: &str, command: &str) -> std::io::Result<std::process::ExitStatus> {
+    Command::new("wezterm")
+        .args([
+            "--config",
+            "window_decorations=\"TITLE | RESIZE\"",
+            "--config",
+            "initial_cols=120",
+            "--config",
+            "initial_rows=40",
+            "start",
+            "--class",
+            window_title,
+            "--",
+            "bash",
+            "-c",
+            command,
+        ])
+        .status()
 }
