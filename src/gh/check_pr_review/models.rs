@@ -53,6 +53,7 @@ pub struct CommentsNode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
+    #[allow(dead_code)] // Used in tests
     pub database_id: i64,
     pub author: Option<Author>,
     pub body: String,
@@ -86,6 +87,7 @@ pub struct Author {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyTo {
+    #[allow(dead_code)] // Required for API schema compatibility
     pub database_id: i64,
 }
 
@@ -144,17 +146,14 @@ impl ReviewThread {
         self.comments.nodes.iter().find(|c| c.reply_to.is_none())
     }
 
-    /// Get replies to the root comment
+    /// Get all replies (comments that are not the root comment).
+    /// This includes nested replies (replies to replies) since GitHub's API
+    /// allows reply chains where replyTo points to any previous comment.
     pub fn replies(&self) -> Vec<&Comment> {
-        let root_id = self.root_comment().map(|c| c.database_id);
         self.comments
             .nodes
             .iter()
-            .filter(|c| {
-                c.reply_to
-                    .as_ref()
-                    .is_some_and(|r| Some(r.database_id) == root_id)
-            })
+            .filter(|c| c.reply_to.is_some())
             .collect()
     }
 
@@ -278,10 +277,10 @@ mod tests {
             is_resolved: false,
             comments: CommentsNode {
                 nodes: vec![
-                    make_comment(1, Some(100), None),      // root
-                    make_comment(2, Some(100), Some(1)),   // reply to root
-                    make_comment(3, Some(100), Some(1)),   // another reply
-                    make_comment(4, Some(100), Some(999)), // reply to non-existent
+                    make_comment(1, Some(100), None),    // root
+                    make_comment(2, Some(100), Some(1)), // reply to root
+                    make_comment(3, Some(100), Some(1)), // another reply to root
+                    make_comment(4, Some(100), Some(2)), // nested reply (reply to comment 2)
                 ],
             },
         };
@@ -290,7 +289,13 @@ mod tests {
         assert!(root.is_some());
         assert_eq!(root.unwrap().database_id, 1);
 
+        // replies() returns all comments that are not the root (have reply_to set)
         let replies = thread.replies();
-        assert_eq!(replies.len(), 2);
+        assert_eq!(replies.len(), 3);
+        // Verify all non-root comments are included
+        let reply_ids: Vec<i64> = replies.iter().map(|c| c.database_id).collect();
+        assert!(reply_ids.contains(&2));
+        assert!(reply_ids.contains(&3));
+        assert!(reply_ids.contains(&4)); // nested reply is also included
     }
 }

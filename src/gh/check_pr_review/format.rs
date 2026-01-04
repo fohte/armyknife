@@ -245,6 +245,10 @@ pub fn print_review_details(
     review_num: usize,
     options: &FormatOptions,
 ) -> Result<()> {
+    if review_num == 0 {
+        return Err(CheckPrReviewError::ReviewNotFound(review_num));
+    }
+
     let sorted_reviews = pr_data.sorted_reviews();
 
     let review = sorted_reviews
