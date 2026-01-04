@@ -6,7 +6,15 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use thiserror::Error;
+
+static GITHUB_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap());
+static FRONTMATTER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
+static JAPANESE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -120,16 +128,13 @@ pub fn get_repo_owner_and_name_from_git() -> Result<(String, String)> {
 fn parse_github_url(url: &str) -> Result<(String, String)> {
     // SSH format: git@github.com:owner/repo.git
     // HTTPS format: https://github.com/owner/repo.git
-    let re = Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap();
-
-    if let Some(captures) = re.captures(url) {
+    if let Some(captures) = GITHUB_URL_RE.captures(url) {
         let owner = captures.get(1).unwrap().as_str().to_string();
         let repo = captures.get(2).unwrap().as_str().to_string();
         Ok((owner, repo))
     } else {
         Err(PrDraftError::RepoInfoError(format!(
-            "Could not parse GitHub URL: {}",
-            url
+            "Could not parse GitHub URL: {url}"
         )))
     }
 }
@@ -139,7 +144,7 @@ fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
         .args([
             "repo",
             "view",
-            &format!("{}/{}", owner, repo),
+            &format!("{owner}/{repo}"),
             "--json",
             "isPrivate",
             "-q",
@@ -183,7 +188,7 @@ pub struct DraftFile {
 
 impl DraftFile {
     pub fn draft_dir() -> PathBuf {
-        PathBuf::from("/tmp/pr-body-draft")
+        std::env::temp_dir().join("pr-body-draft")
     }
 
     pub fn path_for(repo_info: &RepoInfo) -> PathBuf {
@@ -238,15 +243,15 @@ impl DraftFile {
         })
     }
 
-    pub fn compute_hash(&self) -> String {
-        let content = fs::read_to_string(&self.path).unwrap_or_default();
+    pub fn compute_hash(&self) -> io::Result<String> {
+        let content = fs::read_to_string(&self.path)?;
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        format!("{:x}", hasher.finalize())
+        Ok(format!("{:x}", hasher.finalize()))
     }
 
     pub fn save_approval(&self) -> Result<()> {
-        let hash = self.compute_hash();
+        let hash = self.compute_hash()?;
         let approve_path = Self::approve_path(&self.path);
         fs::write(&approve_path, hash)?;
         Ok(())
@@ -268,7 +273,7 @@ impl DraftFile {
         }
 
         let saved_hash = fs::read_to_string(&approve_path)?.trim().to_string();
-        let current_hash = self.compute_hash();
+        let current_hash = self.compute_hash()?;
 
         if saved_hash != current_hash {
             return Err(PrDraftError::ModifiedAfterApproval);
@@ -307,9 +312,7 @@ impl DraftFile {
 }
 
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
-    let frontmatter_regex = Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap();
-
-    if let Some(captures) = frontmatter_regex.captures(content) {
+    if let Some(captures) = FRONTMATTER_RE.captures(content) {
         let yaml_str = captures.get(1).map_or("", |m| m.as_str());
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
         let body = content[captures.get(0).unwrap().end()..].to_string();
@@ -347,8 +350,7 @@ pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
 }
 
 pub fn contains_japanese(text: &str) -> bool {
-    let japanese_regex = Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap();
-    japanese_regex.is_match(text)
+    JAPANESE_RE.is_match(text)
 }
 
 pub fn read_stdin_if_available() -> Option<String> {

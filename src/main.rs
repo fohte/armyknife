@@ -14,9 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match command {
-        Commands::Ai(ai_cmd) => match ai_cmd {
-            ai::AiCommands::PrDraft(pr_draft_cmd) => pr_draft_cmd.run()?,
-        },
+        Commands::Ai(ai_cmd) => ai_cmd.run()?,
         Commands::Update => update::do_update()?,
     }
 

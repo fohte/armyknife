@@ -28,7 +28,8 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (draft_path, owner, repo, branch) = match &args.filepath {
         Some(path) => {
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
-                PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
+                let display = path.display();
+                PrDraftError::CommandFailed(format!("Invalid draft path: {display}"))
             })?;
             (path.clone(), owner, repo, branch)
         }
@@ -53,7 +54,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Create lock file
     fs::write(&lock_path, "")?;
 
-    let window_title = format!("PR: {}/{} @ {}", owner, repo, branch);
+    let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
@@ -68,7 +69,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
         draft_path.display()
     );
     if let Some(ref target) = tmux_target {
-        review_cmd.push_str(&format!(" --tmux-target {}", target));
+        review_cmd.push_str(&format!(" --tmux-target {target}"));
     }
 
     // Launch WezTerm with the review-complete command
@@ -98,8 +99,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
         // Cleanup lock on error
         let _ = fs::remove_file(&lock_path);
         return Err(Box::new(PrDraftError::CommandFailed(format!(
-            "Failed to launch WezTerm: {}",
-            e
+            "Failed to launch WezTerm: {e}"
         ))));
     }
 
@@ -119,7 +119,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error:
     let status = Command::new("nvim")
         .arg(draft_path)
         .status()
-        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch nvim: {}", e)))?;
+        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch nvim: {e}")))?;
 
     if !status.success() {
         eprintln!("Neovim exited with non-zero status");
@@ -177,7 +177,7 @@ fn get_tmux_target() -> Option<String> {
     let window = run_tmux_command(&["display-message", "-p", "#{window_index}"])?;
     let pane = run_tmux_command(&["display-message", "-p", "#{pane_index}"])?;
 
-    Some(format!("{}:{}.{}", session, window, pane))
+    Some(format!("{session}:{window}.{pane}"))
 }
 
 fn run_tmux_command(args: &[&str]) -> Option<String> {

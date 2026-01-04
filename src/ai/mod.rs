@@ -8,3 +8,11 @@ pub enum AiCommands {
     #[command(subcommand)]
     PrDraft(pr_draft::PrDraftCommands),
 }
+
+impl AiCommands {
+    pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            Self::PrDraft(cmd) => cmd.run(),
+        }
+    }
+}

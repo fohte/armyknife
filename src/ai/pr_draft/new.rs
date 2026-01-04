@@ -23,7 +23,7 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
     let frontmatter = generate_frontmatter(title, repo_info.is_private);
 
     let body = read_stdin_if_available().unwrap_or_default();
-    let content = format!("{}{}", frontmatter, body);
+    let content = format!("{frontmatter}{body}");
 
     fs::write(&draft_path, content)?;
 

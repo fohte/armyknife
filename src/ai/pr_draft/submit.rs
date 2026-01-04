@@ -91,7 +91,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     let output = Command::new("gh")
         .args(&gh_args)
         .output()
-        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to run gh: {}", e)))?;
+        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to run gh: {e}")))?;
 
     if !output.status.success() {
         return Err(Box::new(PrDraftError::CommandFailed(format!(
@@ -101,7 +101,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     }
 
     let pr_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    println!("{}", pr_url);
+    println!("{pr_url}");
 
     // Cleanup
     draft.cleanup()?;
