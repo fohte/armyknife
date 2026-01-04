@@ -31,8 +31,12 @@ pub trait ReviewHandler<S: DocumentSchema> {
     ///
     /// This is called when launching WezTerm to specify what command should run
     /// after the user closes Neovim.
-    fn build_complete_args(&self, document_path: &Path, tmux_target: Option<&str>)
-    -> Vec<OsString>;
+    fn build_complete_args(
+        &self,
+        document_path: &Path,
+        tmux_target: Option<&str>,
+        window_title: &str,
+    ) -> Vec<OsString>;
 
     /// Called after the user finishes editing and closes Neovim.
     ///
@@ -75,7 +79,8 @@ where
     let exe_path = std::env::current_exe()?;
 
     // Build the review-complete command arguments
-    let review_args = handler.build_complete_args(document_path, tmux_target.as_deref());
+    let review_args =
+        handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
 
     // Launch WezTerm
     let options = LaunchOptions {
@@ -105,10 +110,13 @@ where
 /// 2. Launches Neovim for the user to edit the document
 /// 3. After Neovim exits, parses the document and calls the handler's callback
 ///
+/// If `window_title` is provided, it will be displayed in Neovim's title bar.
+///
 /// This is typically called by the review-complete subcommand that WezTerm runs.
 pub fn complete_review<S, H>(
     document_path: &Path,
     tmux_target: Option<&str>,
+    window_title: Option<&str>,
     handler: &H,
 ) -> Result<()>
 where
@@ -119,7 +127,7 @@ where
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
 
     // Launch Neovim
-    let status = run_neovim(document_path)?;
+    let status = run_neovim(document_path, window_title)?;
 
     if !status.success() {
         eprintln!("Neovim exited with non-zero status");
