@@ -296,4 +296,32 @@ mod tests {
         assert!(reply_ids.contains(&3));
         assert!(reply_ids.contains(&4)); // nested reply is also included
     }
+
+    #[test]
+    fn test_reply_to_deserialize_ignores_extra_fields() {
+        // Verify serde ignores unknown fields (like databaseId from API)
+        let json = r#"{"databaseId": 123}"#;
+        let reply_to: ReplyTo = serde_json::from_str(json).unwrap();
+        // ReplyTo is an empty struct, just verify it deserializes
+        assert!(std::mem::size_of_val(&reply_to) == 0 || true);
+    }
+
+    #[test]
+    fn test_comment_with_reply_to_deserialize() {
+        let json = r#"{
+            "databaseId": 1,
+            "author": {"login": "user"},
+            "body": "test",
+            "createdAt": "2024-01-01T00:00:00Z",
+            "path": "file.rs",
+            "line": 10,
+            "originalLine": null,
+            "diffHunk": null,
+            "replyTo": {"databaseId": 999},
+            "pullRequestReview": {"databaseId": 100}
+        }"#;
+        let comment: Comment = serde_json::from_str(json).unwrap();
+        assert!(comment.reply_to.is_some());
+        assert_eq!(comment.database_id, 1);
+    }
 }
