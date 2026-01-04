@@ -1,5 +1,5 @@
 use clap::Args;
-use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use super::common::{
@@ -41,7 +41,13 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
 
     // Determine worktree directory name from branch name
     let worktree_name = branch_to_worktree_name(name);
-    let worktree_dir = format!("{repo_root}/.worktrees/{worktree_name}");
+    let worktrees_dir = format!("{repo_root}/.worktrees");
+    let worktree_dir = format!("{worktrees_dir}/{worktree_name}");
+
+    // Ensure .worktrees directory exists
+    std::fs::create_dir_all(&worktrees_dir).map_err(|e| {
+        WmError::CommandFailed(format!("Failed to create .worktrees directory: {e}"))
+    })?;
 
     // Fetch with prune
     let fetch_status = Command::new("git")
@@ -188,25 +194,17 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
     }
 
     // Build claude command with optional prompt
+    // Note: We pass the prompt as a quoted argument directly to avoid temp file issues
     let claude_cmd = if let Some(prompt) = &args.prompt {
-        // Create a temporary file for the prompt
-        let prompt_file = tempfile::Builder::new()
-            .prefix("claude-prompt-")
-            .suffix(".txt")
-            .tempfile()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        fs::write(prompt_file.path(), prompt).map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        // Keep the file alive by persisting it
-        let prompt_path = prompt_file.into_temp_path();
-        format!("claude \"$(cat {})\"", prompt_path.display())
+        // Escape single quotes in prompt for shell
+        let escaped = prompt.replace('\'', "'\\''");
+        format!("claude $'{escaped}'")
     } else {
         "claude".to_string()
     };
 
     // Determine target tmux session from repository root
-    let target_session = get_tmux_session_name(&repo_root)?;
+    let target_session = get_tmux_session_name(&repo_root);
 
     // Create session if it doesn't exist
     let session_exists = Command::new("tmux")
@@ -294,20 +292,24 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
 }
 
 /// Get tmux session name from repository root (equivalent to tmux-name session)
-fn get_tmux_session_name(repo_root: &str) -> Result<String> {
-    let output = Command::new("tmux-name")
+fn get_tmux_session_name(repo_root: &str) -> String {
+    // Try tmux-name command first
+    if let Ok(output) = Command::new("tmux-name")
         .args(["session", repo_root])
         .output()
-        .map_err(|e| WmError::CommandFailed(format!("tmux-name failed: {e}")))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        // Fallback: use the directory name
-        let name = std::path::Path::new(repo_root)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("default");
-        Ok(name.to_string())
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
     }
+
+    // Fallback: use the directory name
+    Path::new(repo_root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default")
+        .to_string()
 }

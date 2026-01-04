@@ -191,7 +191,8 @@ fn get_current_tmux_window_if_in_worktree(worktree_path: &str) -> Option<String>
         .trim()
         .to_string();
 
-    if current_path.starts_with(worktree_path) {
+    // Use Path::starts_with for proper path comparison (avoids /tmp/foo matching /tmp/foo2)
+    if std::path::Path::new(&current_path).starts_with(worktree_path) {
         let window_id = Command::new("tmux")
             .args(["display-message", "-p", "#{window_id}"])
             .output()
