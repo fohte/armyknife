@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::ai::AiCommands;
+use crate::gh::GhCommands;
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +22,10 @@ pub enum Commands {
     /// AI-related tools
     #[command(subcommand)]
     Ai(AiCommands),
+
+    /// GitHub-related tools
+    #[command(subcommand)]
+    Gh(GhCommands),
 
     /// Update to the latest version
     Update,
