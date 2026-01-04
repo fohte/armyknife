@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/fohte/armyknife/compare/v0.1.2...v0.1.3) (2026-01-04)
+
+
+### Features
+
+* **ai:** add `a ai pr-draft` command ([#20](https://github.com/fohte/armyknife/issues/20)) ([6badeea](https://github.com/fohte/armyknife/commit/6badeeabe5f16fe3d050f619d5ac371dca12dd8c))
+
 ## [0.1.2](https://github.com/fohte/armyknife/compare/v0.1.1...v0.1.2) (2026-01-03)
 
 
