@@ -213,12 +213,13 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
             .keep()
             .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
 
-        // Escape single quotes in path for shell: ' -> '\''
+        // Use shlex for safe shell escaping (handles spaces, quotes, metacharacters)
         let path_str = prompt_path.display().to_string();
-        let escaped_path = path_str.replace('\'', "'\\''");
+        let escaped_path = shlex::try_quote(&path_str)
+            .map_err(|_| WmError::CommandFailed("Failed to escape path".into()))?;
 
         // Read prompt, pass to claude, then delete the temp file
-        format!("claude \"$(cat '{escaped_path}')\" ; rm '{escaped_path}'")
+        format!("claude \"$(cat {escaped_path})\" ; rm {escaped_path}")
     } else {
         "claude".to_string()
     };
