@@ -194,9 +194,9 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
     }
 
     // Build claude command with optional prompt
-    // Use a temp file + persist() so the file survives until the shell reads it.
-    // We use `claude "$(cat <path>)"` which is POSIX-compliant and preserves
-    // the exact content (no backslash escape interpretation).
+    // Use a temp file + keep() so the file survives until the shell reads it.
+    // We use `claude "$(cat '<path>')" ; rm '<path>'` which is POSIX-compliant,
+    // preserves exact content, and cleans up the temp file after use.
     let claude_cmd = if let Some(prompt) = &args.prompt {
         let prompt_file = tempfile::Builder::new()
             .prefix("claude-prompt-")
@@ -207,13 +207,18 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
         std::fs::write(prompt_file.path(), prompt)
             .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
 
-        // persist() keeps the file on disk (it won't be deleted on drop)
+        // keep() persists the file on disk (it won't be deleted on drop)
         let prompt_path = prompt_file
             .into_temp_path()
             .keep()
             .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
 
-        format!("claude \"$(cat {})\"", prompt_path.display())
+        // Escape single quotes in path for shell: ' -> '\''
+        let path_str = prompt_path.display().to_string();
+        let escaped_path = path_str.replace('\'', "'\\''");
+
+        // Read prompt, pass to claude, then delete the temp file
+        format!("claude \"$(cat '{escaped_path}')\" ; rm '{escaped_path}'")
     } else {
         "claude".to_string()
     };
