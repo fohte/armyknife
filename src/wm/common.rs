@@ -7,9 +7,6 @@ pub enum WmError {
     #[error("Not in a git repository")]
     NotInGitRepo,
 
-    #[error("Failed to get repository root: {0}")]
-    RepoRootError(String),
-
     #[error("Worktree not found: {0}")]
     WorktreeNotFound(String),
 
@@ -28,39 +25,26 @@ pub enum WmError {
 
 pub type Result<T> = std::result::Result<T, WmError>;
 
-/// Get the repository root.
-/// For bare repositories, returns the git directory itself.
-/// For regular repositories, returns the working tree root.
+/// Get the main worktree root (the first entry in `git worktree list`).
+/// This is always the main repository, regardless of which worktree we're in.
+/// For bare repositories, this is the bare repo directory.
+/// For regular repositories, this is the main working tree root.
 pub fn get_repo_root() -> Result<String> {
-    // First try to get the working tree root
     let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+        .args(["worktree", "list", "--porcelain"])
         .output()
         .map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    if !output.status.success() {
+        return Err(WmError::NotInGitRepo);
     }
 
-    // Check if bare repository
-    let bare_output = Command::new("git")
-        .args(["rev-parse", "--is-bare-repository"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
-    if bare_output.status.success() && String::from_utf8_lossy(&bare_output.stdout).trim() == "true"
-    {
-        let git_dir = Command::new("git")
-            .args(["rev-parse", "--git-dir"])
-            .output()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        if git_dir.status.success() {
-            let path = String::from_utf8_lossy(&git_dir.stdout).trim().to_string();
-            // Convert to absolute path if relative
-            let abs_path =
-                std::fs::canonicalize(&path).map_err(|e| WmError::RepoRootError(e.to_string()))?;
-            return Ok(abs_path.to_string_lossy().to_string());
+    // The first "worktree <path>" line is always the main worktree
+    for line in stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            return Ok(path.to_string());
         }
     }
 
