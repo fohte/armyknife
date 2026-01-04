@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
+use super::common::{DraftFile, PrDraftError, RepoInfo, check_is_private, contains_japanese};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -24,11 +24,21 @@ pub struct SubmitArgs {
 }
 
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let repo_info = RepoInfo::from_current_dir()?;
-
-    let draft_path = match &args.filepath {
-        Some(path) => path.clone(),
-        None => DraftFile::path_for(&repo_info),
+    // Get draft path and is_private status
+    let (draft_path, is_private) = match &args.filepath {
+        Some(path) => {
+            // When filepath is provided, parse it to get owner/repo for is_private check
+            let (owner, repo, _branch) = DraftFile::parse_path(path).ok_or_else(|| {
+                PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
+            })?;
+            let is_private = check_is_private(&owner, &repo)?;
+            (path.clone(), is_private)
+        }
+        None => {
+            // Auto-detect from current git repo
+            let repo_info = RepoInfo::from_current_dir()?;
+            (DraftFile::path_for(&repo_info), repo_info.is_private)
+        }
     };
 
     // Check for lock (editor still open)
@@ -49,7 +59,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     }
 
     // For public repos, check for Japanese characters
-    if !repo_info.is_private {
+    if !is_private {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(Box::new(PrDraftError::JapaneseInTitle));
         }
@@ -108,4 +118,134 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     let _ = Command::new("gh").args(["pr", "view", "--web"]).status();
 
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    #[test]
+    fn submit_with_filepath_should_not_require_git_repo() {
+        let temp_cwd = tempdir().expect("tempdir");
+        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
+
+        let gh_stub_dir = tempdir().expect("gh stub dir");
+        let gh_stub_path = gh_stub_dir.path().join("gh");
+        fs::write(
+            &gh_stub_path,
+            r#"#!/bin/sh
+# fake gh
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo "true"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  echo https://example.com/pr/1
+  exit 0
+fi
+exit 0
+"#,
+        )
+        .expect("write gh stub");
+        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
+        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
+
+        let repo_info = RepoInfo {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            branch: "feature/test".into(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(
+            &draft_path,
+            indoc! {r#"
+                ---
+                title: "Ready title"
+                steps:
+                  submit: true
+                ---
+                Body content
+            "#},
+        )
+        .expect("write draft");
+        DraftFile::from_path(draft_path.clone())
+            .expect("draft file")
+            .save_approval()
+            .expect("save approval");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            gh_args: vec![],
+        };
+
+        let result = run(&args);
+
+        assert!(
+            result.is_ok(),
+            "submit should work even when cwd is not inside a git repo"
+        );
+    }
+
+    struct WorkingDirGuard {
+        original: std::path::PathBuf,
+    }
+
+    impl WorkingDirGuard {
+        fn change(path: &std::path::Path) -> Self {
+            let original = std::env::current_dir().expect("cwd");
+            std::env::set_current_dir(path).expect("set cwd");
+            Self { original }
+        }
+    }
+
+    impl Drop for WorkingDirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    struct PathGuard {
+        original: Option<String>,
+    }
+
+    impl PathGuard {
+        fn prepend(dir: &std::path::Path) -> Self {
+            let original = std::env::var("PATH").ok();
+            let new_path = if let Some(ref current) = original {
+                format!("{}:{}", dir.display(), current)
+            } else {
+                dir.display().to_string()
+            };
+            unsafe {
+                std::env::set_var("PATH", new_path);
+            }
+            Self { original }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            if let Some(ref original) = self.original {
+                unsafe {
+                    std::env::set_var("PATH", original);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var("PATH");
+                }
+            }
+        }
+    }
 }

@@ -138,7 +138,7 @@ fn parse_github_url(url: &str) -> Result<(String, String)> {
     }
 }
 
-fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
+pub fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
     let output = Command::new("gh")
         .args([
             "repo",

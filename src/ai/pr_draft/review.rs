@@ -62,17 +62,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Get the path to the current executable
     let exe_path = std::env::current_exe()?;
 
-    // Build arguments for review-complete command (avoid shell injection)
-    let mut review_args = vec![
-        "ai".to_string(),
-        "pr-draft".to_string(),
-        "review-complete".to_string(),
-        draft_path.display().to_string(),
-    ];
-    if let Some(ref target) = tmux_target {
-        review_args.push("--tmux-target".to_string());
-        review_args.push(target.clone());
-    }
+    let review_args = build_review_args(&draft_path, tmux_target.as_deref());
 
     // RAII guard ensures lock cleanup on error paths
     let mut lock_guard = LockGuard::new(lock_path);
@@ -209,11 +199,59 @@ fn get_tmux_target() -> Option<String> {
     }
 }
 
+fn build_review_args(
+    draft_path: &std::path::Path,
+    tmux_target: Option<&str>,
+) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+
+    let mut args: Vec<OsString> = vec![
+        "ai".into(),
+        "pr-draft".into(),
+        "review-complete".into(),
+        draft_path.as_os_str().to_os_string(),
+    ];
+
+    if let Some(target) = tmux_target {
+        args.push("--tmux-target".into());
+        args.push(target.into());
+    }
+
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn build_review_args_should_roundtrip_non_utf_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut filename = OsString::from_vec(vec![b'b', b'r', b'a', b'n', b'c', b'h', 0xff]);
+        filename.push(".md");
+        let draft_path = DraftFile::draft_dir()
+            .join("owner")
+            .join("repo")
+            .join(std::path::PathBuf::from(filename));
+
+        let args = build_review_args(&draft_path, Some("sess:1.0"));
+        let restored = std::path::Path::new(&args[3]);
+        assert_eq!(
+            restored.as_os_str(),
+            draft_path.as_os_str(),
+            "Path should survive argument building without loss"
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn launch_wezterm(
     window_title: &str,
     exe_path: &std::path::Path,
-    args: &[String],
+    args: &[std::ffi::OsString],
 ) -> std::io::Result<std::process::ExitStatus> {
     let mut cmd = Command::new("open");
     cmd.args([
@@ -241,7 +279,7 @@ fn launch_wezterm(
 fn launch_wezterm(
     window_title: &str,
     exe_path: &std::path::Path,
-    args: &[String],
+    args: &[std::ffi::OsString],
 ) -> std::io::Result<std::process::ExitStatus> {
     let mut cmd = Command::new("wezterm");
     cmd.args([
