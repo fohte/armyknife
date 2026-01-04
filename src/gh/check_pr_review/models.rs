@@ -84,12 +84,10 @@ pub struct Author {
     pub login: String,
 }
 
+/// Marker struct indicating a comment is a reply.
+/// The actual databaseId is ignored since we only check for existence.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReplyTo {
-    #[allow(dead_code)] // Required for API schema compatibility
-    pub database_id: i64,
-}
+pub struct ReplyTo {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,7 +165,7 @@ impl ReviewThread {
 mod tests {
     use super::*;
 
-    fn make_comment(id: i64, review_id: Option<i64>, reply_to: Option<i64>) -> Comment {
+    fn make_comment(id: i64, review_id: Option<i64>, is_reply: bool) -> Comment {
         Comment {
             database_id: id,
             author: Some(Author {
@@ -179,7 +177,7 @@ mod tests {
             line: Some(10),
             original_line: None,
             diff_hunk: None,
-            reply_to: reply_to.map(|id| ReplyTo { database_id: id }),
+            reply_to: if is_reply { Some(ReplyTo {}) } else { None },
             pull_request_review: review_id.map(|id| PullRequestReview { database_id: id }),
         }
     }
@@ -188,7 +186,7 @@ mod tests {
         ReviewThread {
             is_resolved,
             comments: CommentsNode {
-                nodes: vec![make_comment(1, review_id, None)],
+                nodes: vec![make_comment(1, review_id, false)],
             },
         }
     }
@@ -277,10 +275,10 @@ mod tests {
             is_resolved: false,
             comments: CommentsNode {
                 nodes: vec![
-                    make_comment(1, Some(100), None),    // root
-                    make_comment(2, Some(100), Some(1)), // reply to root
-                    make_comment(3, Some(100), Some(1)), // another reply to root
-                    make_comment(4, Some(100), Some(2)), // nested reply (reply to comment 2)
+                    make_comment(1, Some(100), false), // root
+                    make_comment(2, Some(100), true),  // reply
+                    make_comment(3, Some(100), true),  // another reply
+                    make_comment(4, Some(100), true),  // nested reply
                 ],
             },
         };
