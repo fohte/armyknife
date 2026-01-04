@@ -145,9 +145,6 @@ pub fn fetch_pr_data(
         all_threads.retain(|t| !t.is_resolved);
     }
 
-    // Filter reviews with non-empty body
-    all_reviews.retain(|r| !r.body.is_empty());
-
     Ok(PrData {
         reviews: all_reviews,
         threads: all_threads,

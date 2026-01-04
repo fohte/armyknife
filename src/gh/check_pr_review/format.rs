@@ -28,8 +28,10 @@ fn process_body(body: &str, options: &FormatOptions) -> String {
 
 fn truncate_text(text: &str, max_length: usize) -> String {
     let first_line = text.lines().next().unwrap_or("").trim_start();
-    if first_line.len() > max_length {
-        format!("{}...", &first_line[..max_length])
+    let char_count = first_line.chars().count();
+    if char_count > max_length {
+        let truncated: String = first_line.chars().take(max_length).collect();
+        format!("{truncated}...")
     } else {
         first_line.to_string()
     }
@@ -278,6 +280,16 @@ mod tests {
         assert_eq!(truncate_text("Hello World", 20), "Hello World");
         assert_eq!(truncate_text("Hello World", 5), "Hello...");
         assert_eq!(truncate_text("  Leading spaces", 10), "Leading sp...");
+    }
+
+    #[test]
+    fn test_truncate_text_utf8() {
+        // Should not panic on multibyte characters
+        assert_eq!(truncate_text("日本語テスト", 3), "日本語...");
+        assert_eq!(truncate_text("こんにちは世界", 5), "こんにちは...");
+        assert_eq!(truncate_text("Hello 世界", 7), "Hello 世...");
+        // Full string when under limit
+        assert_eq!(truncate_text("日本語", 10), "日本語");
     }
 
     #[test]
