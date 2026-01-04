@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+use crate::ai::AiCommands;
+
 #[derive(Parser)]
 #[command(
     name = "Fohte's armyknife",
@@ -16,6 +18,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum Commands {
+    /// AI-related tools
+    #[command(subcommand)]
+    Ai(AiCommands),
+
     /// Update to the latest version
     Update,
 }

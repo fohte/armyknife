@@ -31,6 +31,10 @@ a <command>
 ### Commands
 
 - `a update` - Update to the latest version
+- `a ai pr-draft <subcommand>` - Manage PR body drafts for AI-assisted PR creation
+  - `new` - Create a new PR body draft file
+  - `review` - Open the draft in Neovim for review (via WezTerm)
+  - `submit` - Create a PR from the approved draft
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
