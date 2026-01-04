@@ -75,13 +75,13 @@ impl<S: DocumentSchema> Document<S> {
 
     /// Save the approval hash for this document.
     pub fn save_approval(&self) -> Result<()> {
-        self.approval_manager().save(&self.path)
+        self.approval_manager().save()
     }
 
     /// Verify that the document hasn't been modified since approval.
     #[allow(dead_code)]
     pub fn verify_approval(&self) -> Result<()> {
-        self.approval_manager().verify(&self.path)
+        self.approval_manager().verify()
     }
 
     /// Remove the approval file.
