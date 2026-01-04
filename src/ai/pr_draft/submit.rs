@@ -23,23 +23,46 @@ pub struct SubmitArgs {
     pub gh_args: Vec<String>,
 }
 
+/// Holds the target repository and branch information for PR creation
+struct PrTarget {
+    owner: String,
+    repo: String,
+    branch: String,
+    is_private: bool,
+}
+
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Get draft path and is_private status
-    let (draft_path, is_private) = match &args.filepath {
+    // Get draft path and target repo info
+    let (draft_path, target) = match &args.filepath {
         Some(path) => {
-            // When filepath is provided, parse it to get owner/repo for is_private check
-            let (owner, repo, _branch) = DraftFile::parse_path(path).ok_or_else(|| {
+            // When filepath is provided, parse it to get owner/repo/branch
+            let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
             })?;
             let is_private = check_is_private(&owner, &repo)?;
-            (path.clone(), is_private)
+            (
+                path.clone(),
+                PrTarget {
+                    owner,
+                    repo,
+                    branch,
+                    is_private,
+                },
+            )
         }
         None => {
             // Auto-detect from current git repo
             let repo_info = RepoInfo::from_current_dir()?;
-            (DraftFile::path_for(&repo_info), repo_info.is_private)
+            let target = PrTarget {
+                owner: repo_info.owner.clone(),
+                repo: repo_info.repo.clone(),
+                branch: repo_info.branch.clone(),
+                is_private: repo_info.is_private,
+            };
+            (DraftFile::path_for(&repo_info), target)
         }
     };
+    let is_private = target.is_private;
 
     // Check for lock (editor still open)
     if DraftFile::lock_path(&draft_path).exists() {
@@ -79,9 +102,18 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     body_file.flush()?;
 
     // Build gh pr create command using builder pattern
+    let repo_spec = format!("{}/{}", target.owner, target.repo);
     let mut gh_cmd = Command::new("gh");
     gh_cmd
-        .args(["pr", "create", "--title"])
+        .args([
+            "pr",
+            "create",
+            "--repo",
+            &repo_spec,
+            "--head",
+            &target.branch,
+        ])
+        .arg("--title")
         .arg(&draft.frontmatter.title)
         .arg("--body-file")
         .arg(body_file.path());
@@ -114,8 +146,10 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     // Cleanup
     draft.cleanup()?;
 
-    // Open PR in browser
-    let _ = Command::new("gh").args(["pr", "view", "--web"]).status();
+    // Open PR in browser using the returned URL
+    let _ = Command::new("gh")
+        .args(["pr", "view", "--web", "--repo", &repo_spec, &pr_url])
+        .status();
 
     Ok(())
 }
@@ -124,11 +158,13 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
 mod tests {
     use super::*;
     use indoc::indoc;
+    use serial_test::serial;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     #[test]
+    #[serial]
     fn submit_with_filepath_should_not_require_git_repo() {
         let temp_cwd = tempdir().expect("tempdir");
         let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
@@ -137,18 +173,22 @@ mod tests {
         let gh_stub_path = gh_stub_dir.path().join("gh");
         fs::write(
             &gh_stub_path,
-            r#"#!/bin/sh
-# fake gh
-if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
-  echo "true"
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-  echo https://example.com/pr/1
-  exit 0
-fi
-exit 0
-"#,
+            indoc! {r#"
+            #!/bin/sh
+            # fake gh
+            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+              echo "true"
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+              echo https://example.com/pr/1
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+              exit 0
+            fi
+            exit 0
+        "#},
         )
         .expect("write gh stub");
         let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
@@ -195,6 +235,93 @@ exit 0
         assert!(
             result.is_ok(),
             "submit should work even when cwd is not inside a git repo"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn submit_with_filepath_should_use_draft_branch() {
+        let temp_cwd = tempdir().expect("tempdir");
+        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
+
+        let gh_stub_dir = tempdir().expect("gh stub dir");
+        let gh_stub_path = gh_stub_dir.path().join("gh");
+        fs::write(
+            &gh_stub_path,
+            indoc! {r#"
+            #!/bin/sh
+            # fake gh that requires --head
+            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+              echo "true"
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+              head_flag=0
+              while [ "$#" -gt 0 ]; do
+                if [ "$1" = "--head" ]; then
+                  head_flag=1
+                fi
+                shift
+              done
+              if [ "$head_flag" -eq 0 ]; then
+                echo "missing --head argument" >&2
+                exit 42
+              fi
+              echo https://example.com/pr/1
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+              exit 0
+            fi
+            echo "unexpected gh invocation: $@" >&2
+            exit 1
+        "#},
+        )
+        .expect("write gh stub");
+        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
+        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
+
+        let repo_info = RepoInfo {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            branch: "feature/missing-head".into(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(
+            &draft_path,
+            indoc! {r#"
+                ---
+                title: "Ready title"
+                steps:
+                  submit: true
+                ---
+                Body content
+            "#},
+        )
+        .expect("write draft");
+        DraftFile::from_path(draft_path.clone())
+            .expect("draft file")
+            .save_approval()
+            .expect("save approval");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            gh_args: vec![],
+        };
+
+        let result = run(&args);
+
+        assert!(
+            result.is_ok(),
+            "submit should pass the draft branch to gh when --filepath is used"
         );
     }
 
