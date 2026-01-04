@@ -1,5 +1,6 @@
 mod ai;
 mod cli;
+mod human_in_the_loop;
 mod update;
 
 use clap::Parser;
