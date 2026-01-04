@@ -62,26 +62,34 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Get the path to the current executable
     let exe_path = std::env::current_exe()?;
 
-    // Build the command for review-complete
-    let mut review_cmd = format!(
-        "{} ai pr-draft review-complete {}",
-        exe_path.display(),
-        draft_path.display()
-    );
+    // Build arguments for review-complete command (avoid shell injection)
+    let mut review_args = vec![
+        "ai".to_string(),
+        "pr-draft".to_string(),
+        "review-complete".to_string(),
+        draft_path.display().to_string(),
+    ];
     if let Some(ref target) = tmux_target {
-        review_cmd.push_str(&format!(" --tmux-target {target}"));
+        review_args.push("--tmux-target".to_string());
+        review_args.push(target.clone());
     }
 
+    // Use RAII guard to ensure lock cleanup on any exit path
+    let _lock_guard = LockGuard {
+        lock_path: lock_path.clone(),
+    };
+
     // Launch WezTerm with the review-complete command
-    let status = launch_wezterm(&window_title, &review_cmd);
+    let status = launch_wezterm(&window_title, &exe_path, &review_args);
 
     if let Err(e) = status {
-        // Cleanup lock on error
-        let _ = fs::remove_file(&lock_path);
         return Err(Box::new(PrDraftError::CommandFailed(format!(
             "Failed to launch WezTerm: {e}"
         ))));
     }
+
+    // Prevent guard from removing lock on success (WezTerm will handle it)
+    std::mem::forget(_lock_guard);
 
     Ok(())
 }
@@ -129,6 +137,18 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// RAII guard for lock file cleanup in run()
+struct LockGuard {
+    lock_path: PathBuf,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lock_path);
+    }
+}
+
+/// RAII guard for cleanup after review-complete (lock file + tmux restore)
 struct CleanupGuard {
     lock_path: PathBuf,
     tmux_target: Option<String>,
@@ -153,65 +173,71 @@ fn get_tmux_target() -> Option<String> {
         return None;
     }
 
-    let session = run_tmux_command(&["display-message", "-p", "#{session_name}"])?;
-    let window = run_tmux_command(&["display-message", "-p", "#{window_index}"])?;
-    let pane = run_tmux_command(&["display-message", "-p", "#{pane_index}"])?;
+    // Get session:window.pane in a single tmux call for consistency and performance
+    let output = Command::new("tmux")
+        .args([
+            "display-message",
+            "-p",
+            "#{session_name}:#{window_index}.#{pane_index}",
+        ])
+        .output()
+        .ok()?;
 
-    Some(format!("{session}:{window}.{pane}"))
-}
-
-fn run_tmux_command(args: &[&str]) -> Option<String> {
-    Command::new("tmux").args(args).output().ok().and_then(|o| {
-        if o.status.success() {
-            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-        } else {
-            None
-        }
-    })
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
-fn launch_wezterm(window_title: &str, command: &str) -> std::io::Result<std::process::ExitStatus> {
-    Command::new("open")
-        .args([
-            "-n",
-            "-a",
-            "WezTerm",
-            "--args",
-            "--config",
-            "window_decorations=\"TITLE | RESIZE\"",
-            "--config",
-            "initial_cols=120",
-            "--config",
-            "initial_rows=40",
-            "start",
-            "--class",
-            window_title,
-            "--",
-            "bash",
-            "-c",
-            command,
-        ])
-        .status()
+fn launch_wezterm(
+    window_title: &str,
+    exe_path: &std::path::Path,
+    args: &[String],
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new("open");
+    cmd.args([
+        "-n",
+        "-a",
+        "WezTerm",
+        "--args",
+        "--config",
+        "window_decorations=\"TITLE | RESIZE\"",
+        "--config",
+        "initial_cols=120",
+        "--config",
+        "initial_rows=40",
+        "start",
+        "--class",
+        window_title,
+        "--",
+    ]);
+    cmd.arg(exe_path);
+    cmd.args(args);
+    cmd.status()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn launch_wezterm(window_title: &str, command: &str) -> std::io::Result<std::process::ExitStatus> {
-    Command::new("wezterm")
-        .args([
-            "--config",
-            "window_decorations=\"TITLE | RESIZE\"",
-            "--config",
-            "initial_cols=120",
-            "--config",
-            "initial_rows=40",
-            "start",
-            "--class",
-            window_title,
-            "--",
-            "bash",
-            "-c",
-            command,
-        ])
-        .status()
+fn launch_wezterm(
+    window_title: &str,
+    exe_path: &std::path::Path,
+    args: &[String],
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new("wezterm");
+    cmd.args([
+        "--config",
+        "window_decorations=\"TITLE | RESIZE\"",
+        "--config",
+        "initial_cols=120",
+        "--config",
+        "initial_rows=40",
+        "start",
+        "--class",
+        window_title,
+        "--",
+    ]);
+    cmd.arg(exe_path);
+    cmd.args(args);
+    cmd.status()
 }

@@ -27,10 +27,6 @@ pub enum PrDraftError {
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
-    #[allow(dead_code)]
-    #[error("Editor is already open for this file")]
-    EditorAlreadyOpen,
-
     #[error("PR was not approved. Please run 'review' and set 'steps.submit: true'")]
     NotApproved,
 
@@ -96,8 +92,10 @@ impl RepoInfo {
 }
 
 pub fn get_current_branch() -> Result<String> {
+    // Use rev-parse --abbrev-ref HEAD to handle detached HEAD state
+    // (returns "HEAD" when detached, unlike branch --show-current which returns empty)
     let output = Command::new("git")
-        .args(["branch", "--show-current"])
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
@@ -116,8 +114,9 @@ pub fn get_repo_owner_and_name_from_git() -> Result<(String, String)> {
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
     if !output.status.success() {
+        // Include actual git error message for better debugging
         return Err(PrDraftError::RepoInfoError(
-            "No git remote 'origin' found".to_string(),
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
 
@@ -208,22 +207,27 @@ impl DraftFile {
 
     /// Extract owner, repo, and branch from a draft file path.
     /// Path format: /tmp/pr-body-draft/<owner>/<repo>/<branch>.md
+    /// Note: branch names can contain "/" (e.g., "feature/foo"), resulting in nested paths.
     pub fn parse_path(path: &Path) -> Option<(String, String, String)> {
         let draft_dir = Self::draft_dir();
         let relative = path.strip_prefix(&draft_dir).ok()?;
         let components: Vec<_> = relative.components().collect();
 
-        if components.len() != 3 {
+        // Need at least 3 components: owner, repo, and at least one branch segment
+        if components.len() < 3 {
             return None;
         }
 
         let owner = components[0].as_os_str().to_str()?.to_string();
         let repo = components[1].as_os_str().to_str()?.to_string();
-        let branch = components[2]
-            .as_os_str()
-            .to_str()?
-            .strip_suffix(".md")?
-            .to_string();
+
+        // Join remaining components to reconstruct branch name with "/"
+        let branch_parts: Vec<&str> = components[2..]
+            .iter()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        let branch_path = branch_parts.join("/");
+        let branch = branch_path.strip_suffix(".md")?.to_string();
 
         Some((owner, repo, branch))
     }
@@ -282,17 +286,6 @@ impl DraftFile {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn is_locked(&self) -> bool {
-        Self::lock_path(&self.path).exists()
-    }
-
-    #[allow(dead_code)]
-    pub fn create_lock(&self) -> Result<()> {
-        fs::write(Self::lock_path(&self.path), "")?;
-        Ok(())
-    }
-
     pub fn remove_lock(&self) -> Result<()> {
         let lock_path = Self::lock_path(&self.path);
         if lock_path.exists() {
@@ -329,23 +322,27 @@ fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
 }
 
 pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
+    // Use serde_yaml to properly escape title (handles ", \n, and other special chars)
+    let escaped_title = serde_yaml::to_string(&title).unwrap_or_else(|_| format!("\"{title}\""));
+    let escaped_title = escaped_title.trim();
+
     if is_private {
-        formatdoc! {r#"
+        formatdoc! {"
             ---
-            title: "{title}"
+            title: {escaped_title}
             steps:
               submit: false
             ---
-        "#}
+        "}
     } else {
-        formatdoc! {r#"
+        formatdoc! {"
             ---
-            title: "{title}"
+            title: {escaped_title}
             steps:
               ready-for-translation: false
               submit: false
             ---
-        "#}
+        "}
     }
 }
 
@@ -448,11 +445,23 @@ mod tests {
         #[case] should_contain_ready_for_translation: bool,
     ) {
         let result = generate_frontmatter("Test Title", is_private);
-        assert!(result.contains("title: \"Test Title\""));
+        // serde_yaml may quote the title differently, just check the title value is present
+        assert!(result.contains("Test Title"), "result was: {result}");
         assert!(result.contains("submit: false"));
         assert_eq!(
             result.contains("ready-for-translation"),
             should_contain_ready_for_translation
         );
+    }
+
+    #[test]
+    fn test_generate_frontmatter_escapes_special_chars() {
+        // Test that special characters in title are properly escaped
+        let result = generate_frontmatter("Title with \"quotes\" and\nnewline", false);
+        // Should be parseable as valid YAML
+        let parsed = parse_frontmatter(&result);
+        assert!(parsed.is_ok(), "Failed to parse: {result}");
+        let (frontmatter, _) = parsed.unwrap();
+        assert_eq!(frontmatter.title, "Title with \"quotes\" and\nnewline");
     }
 }

@@ -66,30 +66,26 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
 
     fs::write(body_file.path(), &draft.body)?;
 
-    // Build gh pr create command
-    let mut gh_args = vec![
-        "pr".to_string(),
-        "create".to_string(),
-        "--title".to_string(),
-        draft.frontmatter.title.clone(),
-        "--body-file".to_string(),
-        body_file.path().display().to_string(),
-    ];
+    // Build gh pr create command using builder pattern
+    let mut gh_cmd = Command::new("gh");
+    gh_cmd
+        .args(["pr", "create", "--title"])
+        .arg(&draft.frontmatter.title)
+        .arg("--body-file")
+        .arg(body_file.path());
 
     if let Some(base) = &args.base {
-        gh_args.push("--base".to_string());
-        gh_args.push(base.clone());
+        gh_cmd.arg("--base").arg(base);
     }
 
     if args.draft {
-        gh_args.push("--draft".to_string());
+        gh_cmd.arg("--draft");
     }
 
-    gh_args.extend(args.gh_args.clone());
+    gh_cmd.args(&args.gh_args);
 
     // Create PR
-    let output = Command::new("gh")
-        .args(&gh_args)
+    let output = gh_cmd
         .output()
         .map_err(|e| PrDraftError::CommandFailed(format!("Failed to run gh: {e}")))?;
 
