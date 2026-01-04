@@ -194,11 +194,26 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
     }
 
     // Build claude command with optional prompt
-    // Note: We pass the prompt as a quoted argument directly to avoid temp file issues
+    // Use a temp file + persist() so the file survives until the shell reads it.
+    // We use `claude "$(cat <path>)"` which is POSIX-compliant and preserves
+    // the exact content (no backslash escape interpretation).
     let claude_cmd = if let Some(prompt) = &args.prompt {
-        // Escape single quotes in prompt for shell
-        let escaped = prompt.replace('\'', "'\\''");
-        format!("claude $'{escaped}'")
+        let prompt_file = tempfile::Builder::new()
+            .prefix("claude-prompt-")
+            .suffix(".txt")
+            .tempfile()
+            .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+
+        std::fs::write(prompt_file.path(), prompt)
+            .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
+
+        // persist() keeps the file on disk (it won't be deleted on drop)
+        let prompt_path = prompt_file
+            .into_temp_path()
+            .keep()
+            .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
+
+        format!("claude \"$(cat {})\"", prompt_path.display())
     } else {
         "claude".to_string()
     };
