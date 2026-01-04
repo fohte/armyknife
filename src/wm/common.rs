@@ -1,0 +1,282 @@
+use serde::Deserialize;
+use std::process::Command;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum WmError {
+    #[error("Not in a git repository")]
+    NotInGitRepo,
+
+    #[error("Failed to get repository root: {0}")]
+    RepoRootError(String),
+
+    #[error("Worktree not found: {0}")]
+    WorktreeNotFound(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
+
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON parse error: {0}")]
+    JsonParse(#[from] serde_json::Error),
+}
+
+pub type Result<T> = std::result::Result<T, WmError>;
+
+/// Get the repository root.
+/// For bare repositories, returns the git directory itself.
+/// For regular repositories, returns the working tree root.
+pub fn get_repo_root() -> Result<String> {
+    // First try to get the working tree root
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+
+    // Check if bare repository
+    let bare_output = Command::new("git")
+        .args(["rev-parse", "--is-bare-repository"])
+        .output()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if bare_output.status.success() && String::from_utf8_lossy(&bare_output.stdout).trim() == "true"
+    {
+        let git_dir = Command::new("git")
+            .args(["rev-parse", "--git-dir"])
+            .output()
+            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+        if git_dir.status.success() {
+            let path = String::from_utf8_lossy(&git_dir.stdout).trim().to_string();
+            // Convert to absolute path if relative
+            let abs_path =
+                std::fs::canonicalize(&path).map_err(|e| WmError::RepoRootError(e.to_string()))?;
+            return Ok(abs_path.to_string_lossy().to_string());
+        }
+    }
+
+    Err(WmError::NotInGitRepo)
+}
+
+/// Get the main branch name (main or master)
+pub fn get_main_branch() -> Result<String> {
+    // Check for origin/main first
+    let main = Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/remotes/origin/main",
+        ])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if main.success() {
+        return Ok("main".to_string());
+    }
+
+    // Fall back to master
+    Ok("master".to_string())
+}
+
+/// Check if a branch exists (local or remote)
+pub fn branch_exists(branch: &str) -> bool {
+    // Check local
+    let local = Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if local {
+        return true;
+    }
+
+    // Check remote
+    Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Check if a local branch exists
+pub fn local_branch_exists(branch: &str) -> bool {
+    Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Check if a remote branch exists
+pub fn remote_branch_exists(branch: &str) -> bool {
+    Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeStatus {
+    Merged { reason: String },
+    NotMerged { reason: String },
+}
+
+impl MergeStatus {
+    pub fn is_merged(&self) -> bool {
+        matches!(self, MergeStatus::Merged { .. })
+    }
+
+    pub fn reason(&self) -> &str {
+        match self {
+            MergeStatus::Merged { reason } | MergeStatus::NotMerged { reason } => reason,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PrInfo {
+    state: String,
+    url: String,
+}
+
+/// Check if a branch is merged (via PR or git merge-base)
+pub fn get_merge_status(branch_name: &str) -> MergeStatus {
+    // First, check PR status via gh
+    if let Ok(output) = Command::new("gh")
+        .args(["pr", "view", branch_name, "--json", "state,url"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(pr_info) = serde_json::from_slice::<PrInfo>(&output.stdout) {
+                match pr_info.state.as_str() {
+                    "MERGED" => {
+                        return MergeStatus::Merged {
+                            reason: format!("PR {} merged", pr_info.url),
+                        };
+                    }
+                    "OPEN" => {
+                        return MergeStatus::NotMerged {
+                            reason: format!("PR {} is open", pr_info.url),
+                        };
+                    }
+                    "CLOSED" => {
+                        return MergeStatus::NotMerged {
+                            reason: format!("PR {} is closed (not merged)", pr_info.url),
+                        };
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Fallback: check using git merge-base
+    let main_branch = get_main_branch().unwrap_or_else(|_| "main".to_string());
+    let base_branch = format!("origin/{main_branch}");
+
+    let merge_base = Command::new("git")
+        .args(["merge-base", "--is-ancestor", branch_name, &base_branch])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if merge_base {
+        return MergeStatus::Merged {
+            reason: format!("ancestor of {base_branch}"),
+        };
+    }
+
+    MergeStatus::NotMerged {
+        reason: "not merged (no PR found, not ancestor of base branch)".to_string(),
+    }
+}
+
+/// Normalize a branch name to a worktree directory name
+/// - Removes fohte/ prefix
+/// - Replaces slashes with dashes
+pub fn branch_to_worktree_name(branch: &str) -> String {
+    let name_no_prefix = branch.strip_prefix("fohte/").unwrap_or(branch);
+    name_no_prefix.replace('/', "-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::simple("feature-branch", "feature-branch")]
+    #[case::with_prefix("fohte/feature-branch", "feature-branch")]
+    #[case::with_slash("feature/branch", "feature-branch")]
+    #[case::with_prefix_and_slash("fohte/feature/branch", "feature-branch")]
+    #[case::nested_slash("feature/sub/branch", "feature-sub-branch")]
+    fn test_branch_to_worktree_name(#[case] branch: &str, #[case] expected: &str) {
+        assert_eq!(branch_to_worktree_name(branch), expected);
+    }
+
+    #[test]
+    fn test_merge_status_is_merged() {
+        let merged = MergeStatus::Merged {
+            reason: "test".to_string(),
+        };
+        let not_merged = MergeStatus::NotMerged {
+            reason: "test".to_string(),
+        };
+
+        assert!(merged.is_merged());
+        assert!(!not_merged.is_merged());
+    }
+
+    #[test]
+    fn test_merge_status_reason() {
+        let merged = MergeStatus::Merged {
+            reason: "PR merged".to_string(),
+        };
+        let not_merged = MergeStatus::NotMerged {
+            reason: "PR is open".to_string(),
+        };
+
+        assert_eq!(merged.reason(), "PR merged");
+        assert_eq!(not_merged.reason(), "PR is open");
+    }
+
+    #[test]
+    fn test_pr_info_deserialization() {
+        let json = r#"{"state": "MERGED", "url": "https://github.com/fohte/armyknife/pull/1"}"#;
+        let pr_info: PrInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(pr_info.state, "MERGED");
+        assert_eq!(pr_info.url, "https://github.com/fohte/armyknife/pull/1");
+    }
+}
