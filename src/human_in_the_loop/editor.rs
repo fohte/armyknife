@@ -21,9 +21,16 @@ impl Default for LaunchOptions {
 
 /// Launch Neovim to edit a file.
 ///
+/// If `window_title` is provided, it sets Neovim's titlestring option.
 /// Blocks until the user closes Neovim.
-pub fn run_neovim(file_path: &Path) -> std::io::Result<ExitStatus> {
-    Command::new("nvim").arg(file_path).status()
+pub fn run_neovim(file_path: &Path, window_title: Option<&str>) -> std::io::Result<ExitStatus> {
+    let mut cmd = Command::new("nvim");
+    if let Some(title) = window_title {
+        // Escape single quotes in the title for Vimscript
+        let escaped_title = title.replace('\'', "''");
+        cmd.args(["-c", &format!("let &titlestring = '{escaped_title}'")]);
+    }
+    cmd.arg(file_path).status()
 }
 
 #[cfg(target_os = "macos")]

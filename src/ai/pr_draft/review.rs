@@ -24,6 +24,10 @@ pub struct ReviewCompleteArgs {
     /// tmux session to restore after review
     #[arg(long)]
     pub tmux_target: Option<String>,
+
+    /// Window title for Neovim
+    #[arg(long)]
+    pub window_title: Option<String>,
 }
 
 /// Handler for PR draft review sessions.
@@ -34,6 +38,7 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
         &self,
         document_path: &Path,
         tmux_target: Option<&str>,
+        window_title: &str,
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "ai".into(),
@@ -46,6 +51,9 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
             args.push("--tmux-target".into());
             args.push(target.into());
         }
+
+        args.push("--window-title".into());
+        args.push(window_title.into());
 
         args
     }
@@ -97,6 +105,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error:
     complete_review::<Frontmatter, _>(
         &args.filepath,
         args.tmux_target.as_deref(),
+        args.window_title.as_deref(),
         &PrDraftReviewHandler,
     )?;
 
@@ -121,7 +130,7 @@ mod tests {
             .join(std::path::PathBuf::from(filename));
 
         let handler = PrDraftReviewHandler;
-        let args = handler.build_complete_args(&draft_path, Some("sess:1.0"));
+        let args = handler.build_complete_args(&draft_path, Some("sess:1.0"), "Test Title");
         let restored = std::path::Path::new(&args[3]);
         assert_eq!(
             restored.as_os_str(),
