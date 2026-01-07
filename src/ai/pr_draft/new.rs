@@ -22,7 +22,13 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
     }
 
     // Check if the repo is private (defaults to true if network is unavailable)
-    let is_private = check_is_private(&repo_info.owner, &repo_info.repo).unwrap_or(true);
+    let is_private = match check_is_private(&repo_info.owner, &repo_info.repo) {
+        Ok(private) => private,
+        Err(e) => {
+            eprintln!("Warning: Failed to check repository visibility, assuming private: {e}");
+            true
+        }
+    };
 
     let title = args.title.as_deref().unwrap_or("");
     let frontmatter = generate_frontmatter(title, is_private);
@@ -46,7 +52,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    fn create_git_stub(stub_dir: &std::path::Path) -> std::path::PathBuf {
+    fn create_git_stub(stub_dir: &std::path::Path) {
         let git_stub = stub_dir.join("git");
         fs::write(
             &git_stub,
@@ -68,10 +74,9 @@ mod tests {
         let mut perms = fs::metadata(&git_stub).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&git_stub, perms).expect("chmod");
-        git_stub
     }
 
-    fn create_gh_stub(stub_dir: &std::path::Path, is_private: Option<bool>) -> std::path::PathBuf {
+    fn create_gh_stub(stub_dir: &std::path::Path, is_private: Option<bool>) {
         let gh_stub = stub_dir.join("gh");
         let script = match is_private {
             Some(true) => indoc! {r#"
@@ -94,7 +99,6 @@ mod tests {
         let mut perms = fs::metadata(&gh_stub).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&gh_stub, perms).expect("chmod");
-        gh_stub
     }
 
     #[test]
