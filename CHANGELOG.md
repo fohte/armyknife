@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/fohte/armyknife/compare/v0.1.3...v0.1.4) (2026-01-07)
+
+
+### Bug Fixes
+
+* **ai:** fix window title and private repo detection in pr-draft ([#26](https://github.com/fohte/armyknife/issues/26)) ([fdd4760](https://github.com/fohte/armyknife/commit/fdd47601eebd2964b263a468c6cfab368ad11724))
+
 ## [0.1.3](https://github.com/fohte/armyknife/compare/v0.1.2...v0.1.3) (2026-01-04)
 
 
