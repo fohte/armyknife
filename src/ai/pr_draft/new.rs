@@ -47,6 +47,7 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
 mod tests {
     use super::*;
     use indoc::indoc;
+    use rstest::rstest;
     use serial_test::serial;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -101,38 +102,21 @@ mod tests {
         fs::set_permissions(&gh_stub, perms).expect("chmod");
     }
 
-    #[test]
+    #[rstest]
+    #[case::offline(None, false)]
+    #[case::private(Some(true), false)]
+    #[case::public(Some(false), true)]
     #[serial]
-    fn new_should_not_require_network_to_generate_draft() {
+    fn new_generates_correct_frontmatter(
+        #[case] gh_response: Option<bool>,
+        #[case] expect_ready_for_translation: bool,
+    ) {
         let temp_cwd = tempdir().expect("tempdir");
         let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
 
         let stub_dir = tempdir().expect("stub dir");
         create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), None); // offline
-        let _path_guard = PathGuard::prepend(stub_dir.path());
-
-        let args = NewArgs {
-            title: Some("Test Title".to_string()),
-        };
-
-        let result = run(&args);
-
-        assert!(
-            result.is_ok(),
-            "new should not fail just because gh (network) is unavailable"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn new_should_exclude_ready_for_translation_for_private_repo() {
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), Some(true)); // private
+        create_gh_stub(stub_dir.path(), gh_response);
         let _path_guard = PathGuard::prepend(stub_dir.path());
 
         let args = NewArgs {
@@ -144,35 +128,10 @@ mod tests {
         let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
         let content = fs::read_to_string(&draft_path).expect("read draft");
 
-        assert!(
-            !content.contains("ready-for-translation"),
-            "private repo should not include ready-for-translation step, but got:\n{content}"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn new_should_include_ready_for_translation_for_public_repo() {
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), Some(false)); // public
-        let _path_guard = PathGuard::prepend(stub_dir.path());
-
-        let args = NewArgs {
-            title: Some("Test Title".to_string()),
-        };
-
-        run(&args).expect("run should succeed");
-
-        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
-        let content = fs::read_to_string(&draft_path).expect("read draft");
-
-        assert!(
+        assert_eq!(
             content.contains("ready-for-translation"),
-            "public repo should include ready-for-translation step, but got:\n{content}"
+            expect_ready_for_translation,
+            "expected ready-for-translation={expect_ready_for_translation}, got:\n{content}"
         );
     }
 
