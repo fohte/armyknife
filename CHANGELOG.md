@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/fohte/armyknife/compare/v0.1.5...v0.1.6) (2026-01-08)
+
+
+### Bug Fixes
+
+* **update:** support gzip decompression ([#31](https://github.com/fohte/armyknife/issues/31)) ([708b7a6](https://github.com/fohte/armyknife/commit/708b7a6dae1a1b7b608e4c8e53fe8982c44559a8))
+
 ## [0.1.5](https://github.com/fohte/armyknife/compare/v0.1.4...v0.1.5) (2026-01-08)
 
 
