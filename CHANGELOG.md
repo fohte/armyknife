@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/fohte/armyknife/compare/v0.1.4...v0.1.5) (2026-01-08)
+
+
+### Bug Fixes
+
+* **update:** fix tar archive extraction error in `a update` ([#29](https://github.com/fohte/armyknife/issues/29)) ([193f468](https://github.com/fohte/armyknife/commit/193f4683b130cc26184220c023c14ad5169998cf))
+
 ## [0.1.4](https://github.com/fohte/armyknife/compare/v0.1.3...v0.1.4) (2026-01-07)
 
 
