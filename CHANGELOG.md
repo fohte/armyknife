@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.7](https://github.com/fohte/armyknife/compare/v0.1.6...v0.1.7) (2026-01-10)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** use stable tmux IDs for window/pane restoration ([#35](https://github.com/fohte/armyknife/issues/35)) ([5c8eaae](https://github.com/fohte/armyknife/commit/5c8eaaeb53d4f602ffcae438b99f3d94944e4cd5))
+* **pr-draft:** prevent accidental overwrite of existing draft files ([#33](https://github.com/fohte/armyknife/issues/33)) ([8be82a1](https://github.com/fohte/armyknife/commit/8be82a11f0f565a4135bcd8f6c1869c27332e98e))
+
 ## [0.1.6](https://github.com/fohte/armyknife/compare/v0.1.5...v0.1.6) (2026-01-08)
 
 
