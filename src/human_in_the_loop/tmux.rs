@@ -44,12 +44,9 @@ mod tests {
     fn is_stable_target(target: &str) -> bool {
         // Expected format: session_name:@window_id.%pane_id
         // The @ prefix indicates window_id, % prefix indicates pane_id
-        if let Some(colon_pos) = target.find(':') {
-            let window_pane = &target[colon_pos + 1..];
-            if let Some(dot_pos) = window_pane.find('.') {
-                let window_part = &window_pane[..dot_pos];
-                let pane_part = &window_pane[dot_pos + 1..];
-                return window_part.starts_with('@') && pane_part.starts_with('%');
+        if let Some((_session, window_pane)) = target.split_once(':') {
+            if let Some((window, pane)) = window_pane.split_once('.') {
+                return window.starts_with('@') && pane.starts_with('%');
             }
         }
         false
