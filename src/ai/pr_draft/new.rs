@@ -151,11 +151,33 @@ mod tests {
         fs::set_permissions(&gh_stub, perms).expect("chmod");
     }
 
-    fn cleanup_draft_file() {
+    struct TestEnv {
+        _temp_cwd: tempfile::TempDir,
+        _cwd_guard: WorkingDirGuard,
+        _stub_dir: tempfile::TempDir,
+        _path_guard: PathGuard,
+    }
+
+    fn setup_test_env(gh_response: Option<bool>) -> TestEnv {
         // Clean up any existing draft file from previous test runs
         let draft_dir = DraftFile::draft_dir().join("owner").join("repo");
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
+        }
+
+        let temp_cwd = tempdir().expect("tempdir");
+        let cwd_guard = WorkingDirGuard::change(temp_cwd.path());
+
+        let stub_dir = tempdir().expect("stub dir");
+        create_git_stub(stub_dir.path());
+        create_gh_stub(stub_dir.path(), gh_response);
+        let path_guard = PathGuard::prepend(stub_dir.path());
+
+        TestEnv {
+            _temp_cwd: temp_cwd,
+            _cwd_guard: cwd_guard,
+            _stub_dir: stub_dir,
+            _path_guard: path_guard,
         }
     }
 
@@ -168,22 +190,13 @@ mod tests {
         #[case] gh_response: Option<bool>,
         #[case] expect_ready_for_translation: bool,
     ) {
-        cleanup_draft_file();
+        let _env = setup_test_env(gh_response);
 
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), gh_response);
-        let _path_guard = PathGuard::prepend(stub_dir.path());
-
-        let args = NewArgs {
+        run(&NewArgs {
             title: Some("Test Title".to_string()),
             force: false,
-        };
-
-        run(&args).expect("run should succeed");
+        })
+        .expect("run should succeed");
 
         let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
         let content = fs::read_to_string(&draft_path).expect("read draft");
@@ -198,22 +211,13 @@ mod tests {
     #[test]
     #[serial]
     fn new_fails_when_file_exists_without_force() {
-        cleanup_draft_file();
+        let _env = setup_test_env(Some(true));
 
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), Some(true));
-        let _path_guard = PathGuard::prepend(stub_dir.path());
-
-        // First run: should succeed
-        let args = NewArgs {
+        run(&NewArgs {
             title: Some("First Title".to_string()),
             force: false,
-        };
-        run(&args).expect("first run should succeed");
+        })
+        .expect("first run should succeed");
 
         let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
         assert!(
@@ -221,16 +225,13 @@ mod tests {
             "draft file should exist after first run"
         );
 
-        // Second run without --force: should fail
-        let args = NewArgs {
+        let result = run(&NewArgs {
             title: Some("Second Title".to_string()),
             force: false,
-        };
-        let result = run(&args);
+        });
         assert!(result.is_err(), "second run without --force should fail");
 
-        let err = result.unwrap_err();
-        let err_msg = err.to_string();
+        let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("already exists"),
             "error message should mention 'already exists': {err_msg}"
@@ -240,7 +241,6 @@ mod tests {
             "error message should mention '--force': {err_msg}"
         );
 
-        // Verify the original content was not overwritten
         let content = fs::read_to_string(&draft_path).expect("read draft");
         assert!(
             content.contains("First Title"),
@@ -276,33 +276,21 @@ mod tests {
     #[test]
     #[serial]
     fn new_overwrites_when_file_exists_with_force() {
-        cleanup_draft_file();
+        let _env = setup_test_env(Some(true));
 
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), Some(true));
-        let _path_guard = PathGuard::prepend(stub_dir.path());
-
-        // First run: should succeed
-        let args = NewArgs {
+        run(&NewArgs {
             title: Some("First Title".to_string()),
             force: false,
-        };
-        run(&args).expect("first run should succeed");
+        })
+        .expect("first run should succeed");
 
-        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
-
-        // Second run with --force: should succeed and overwrite
-        let args = NewArgs {
+        run(&NewArgs {
             title: Some("Second Title".to_string()),
             force: true,
-        };
-        run(&args).expect("second run with --force should succeed");
+        })
+        .expect("second run with --force should succeed");
 
-        // Verify the content was overwritten
+        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
         let content = fs::read_to_string(&draft_path).expect("read draft");
         assert!(
             content.contains("Second Title"),
