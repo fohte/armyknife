@@ -162,7 +162,7 @@ mod tests {
         // Clean up any existing draft file from previous test runs
         let draft_dir = DraftFile::draft_dir().join("owner").join("repo");
         if draft_dir.exists() {
-            let _ = fs::remove_dir_all(&draft_dir);
+            fs::remove_dir_all(&draft_dir).expect("failed to clean up draft directory");
         }
 
         let temp_cwd = tempdir().expect("tempdir");
