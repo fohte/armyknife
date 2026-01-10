@@ -29,6 +29,9 @@ pub enum PrDraftError {
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
+    #[error("Draft file already exists: {0}\nUse --force to overwrite")]
+    FileAlreadyExists(PathBuf),
+
     #[error("PR was not approved. Please run 'review' and set 'steps.submit: true'")]
     NotApproved,
 

@@ -6,7 +6,14 @@ mod update;
 use clap::Parser;
 use cli::{Cli, Commands};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Cli { command } = Cli::parse();
 
     if !matches!(command, Commands::Update) {
