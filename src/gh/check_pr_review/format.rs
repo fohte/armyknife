@@ -158,9 +158,7 @@ pub fn print_full(pr_data: &PrData, options: &FormatOptions) {
 }
 
 fn print_review_with_threads(review: &Review, pr_data: &PrData, options: &FormatOptions) {
-    if !review.body.is_empty() {
-        print_review(review, options);
-    }
+    print_review(review, options);
 
     let review_threads = pr_data.threads_for_review(review.database_id);
     for thread in review_threads {

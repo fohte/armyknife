@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PrData {
@@ -119,7 +120,7 @@ impl PrData {
 
     /// Get orphan threads (not associated with any review)
     pub fn orphan_threads(&self) -> Vec<&ReviewThread> {
-        let review_ids: Vec<i64> = self.reviews.iter().map(|r| r.database_id).collect();
+        let review_ids: HashSet<i64> = self.reviews.iter().map(|r| r.database_id).collect();
         self.threads
             .iter()
             .filter(|t| {
