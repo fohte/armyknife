@@ -4,6 +4,9 @@ mod delete;
 mod list;
 mod new;
 
+#[cfg(test)]
+mod tests;
+
 use clap::Subcommand;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
