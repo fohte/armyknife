@@ -158,31 +158,30 @@ struct PrInfo {
 /// Check if a branch is merged (via PR or git merge-base)
 pub fn get_merge_status(branch_name: &str) -> MergeStatus {
     // First, check PR status via gh
-    if let Some(output) = Command::new("gh")
+    if let Some(pr_info) = Command::new("gh")
         .args(["pr", "view", branch_name, "--json", "state,url"])
         .output()
         .ok()
         .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<PrInfo>(&o.stdout).ok())
     {
-        if let Ok(pr_info) = serde_json::from_slice::<PrInfo>(&output.stdout) {
-            match pr_info.state.as_str() {
-                "MERGED" => {
-                    return MergeStatus::Merged {
-                        reason: format!("PR {} merged", pr_info.url),
-                    };
-                }
-                "OPEN" => {
-                    return MergeStatus::NotMerged {
-                        reason: format!("PR {} is open", pr_info.url),
-                    };
-                }
-                "CLOSED" => {
-                    return MergeStatus::NotMerged {
-                        reason: format!("PR {} is closed (not merged)", pr_info.url),
-                    };
-                }
-                _ => {}
+        match pr_info.state.as_str() {
+            "MERGED" => {
+                return MergeStatus::Merged {
+                    reason: format!("PR {} merged", pr_info.url),
+                };
             }
+            "OPEN" => {
+                return MergeStatus::NotMerged {
+                    reason: format!("PR {} is open", pr_info.url),
+                };
+            }
+            "CLOSED" => {
+                return MergeStatus::NotMerged {
+                    reason: format!("PR {} is closed (not merged)", pr_info.url),
+                };
+            }
+            _ => {}
         }
     }
 

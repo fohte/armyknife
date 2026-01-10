@@ -173,20 +173,20 @@ fn collect_worktrees(repo_root: &str) -> Result<(Vec<WorktreeInfo>, Vec<Worktree
     }
 
     // Handle the last entry if there's no trailing newline
-    if let (Some(path), Some(branch)) = (current_path, current_branch) {
-        if path != repo_root {
-            let merge_status = get_merge_status(&branch);
-            let wt = WorktreeInfo {
-                path,
-                branch,
-                reason: merge_status.reason().to_string(),
-            };
+    if let (Some(path), Some(branch)) = (current_path, current_branch)
+        && path != repo_root
+    {
+        let merge_status = get_merge_status(&branch);
+        let wt = WorktreeInfo {
+            path,
+            branch,
+            reason: merge_status.reason().to_string(),
+        };
 
-            if merge_status.is_merged() {
-                to_delete.push(wt);
-            } else {
-                to_skip.push(wt);
-            }
+        if merge_status.is_merged() {
+            to_delete.push(wt);
+        } else {
+            to_skip.push(wt);
         }
     }
 
