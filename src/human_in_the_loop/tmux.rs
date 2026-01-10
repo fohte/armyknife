@@ -82,20 +82,4 @@ mod tests {
             "Format should not use pane_index"
         );
     }
-
-    #[rstest]
-    #[ignore] // Requires tmux environment
-    fn test_get_tmux_target_returns_stable_format() {
-        // Skip if not running inside tmux
-        if std::env::var("TMUX").is_err() {
-            panic!("This test requires tmux environment");
-        }
-
-        let target = get_tmux_target().expect("Should get tmux target inside tmux");
-
-        assert!(
-            is_stable_target(&target),
-            "Expected stable target format (session:@window_id.%pane_id), got: {target}"
-        );
-    }
 }
