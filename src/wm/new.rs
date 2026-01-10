@@ -315,15 +315,15 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
 /// Get tmux session name from repository root (equivalent to tmux-name session)
 fn get_tmux_session_name(repo_root: &str) -> String {
     // Try tmux-name command first
-    if let Ok(output) = Command::new("tmux-name")
+    if let Some(output) = Command::new("tmux-name")
         .args(["session", repo_root])
         .output()
+        .ok()
+        .filter(|o| o.status.success())
     {
-        if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return name;
         }
     }
 

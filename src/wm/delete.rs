@@ -46,24 +46,22 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
     let target_window_id = get_current_tmux_window_if_in_worktree(&worktree_path);
 
     // Check if the branch can be safely deleted before deleting worktree
-    if let Some(ref branch) = branch_name {
-        if local_branch_exists(branch) {
-            let merge_status = get_merge_status(branch);
-            if !merge_status.is_merged() && !args.force {
-                eprintln!(
-                    "Warning: Branch '{}' is not merged ({})",
-                    branch,
-                    merge_status.reason()
-                );
-                print!("Delete anyway? [y/N] ");
-                io::stdout().flush().ok();
+    if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
+        let merge_status = get_merge_status(branch);
+        if !merge_status.is_merged() && !args.force {
+            eprintln!(
+                "Warning: Branch '{}' is not merged ({})",
+                branch,
+                merge_status.reason()
+            );
+            print!("Delete anyway? [y/N] ");
+            io::stdout().flush().ok();
 
-                let mut input = String::new();
-                io::stdin().read_line(&mut input).ok();
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("Cancelled.");
-                    return Err(WmError::Cancelled);
-                }
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).ok();
+            if !input.trim().eq_ignore_ascii_case("y") {
+                println!("Cancelled.");
+                return Err(WmError::Cancelled);
             }
         }
     }
@@ -91,16 +89,14 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
     println!("Worktree removed: {worktree_path}");
 
     // Delete the branch if it exists
-    if let Some(branch) = branch_name {
-        if local_branch_exists(&branch) {
-            let status = Command::new("git")
-                .args(["branch", "-D", &branch])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    if let Some(branch) = branch_name.filter(|b| local_branch_exists(b)) {
+        let status = Command::new("git")
+            .args(["branch", "-D", &branch])
+            .status()
+            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
-            if status.success() {
-                println!("Branch deleted: {branch}");
-            }
+        if status.success() {
+            println!("Branch deleted: {branch}");
         }
     }
 
@@ -160,12 +156,12 @@ fn get_worktree_branch(worktree_path: &str) -> Result<Option<String>> {
     for line in stdout.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
             current_worktree = Some(path);
-        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            if current_worktree == Some(worktree_path) {
-                // Remove refs/heads/ prefix
-                let branch = branch_ref.strip_prefix("refs/heads/").unwrap_or(branch_ref);
-                return Ok(Some(branch.to_string()));
-            }
+        } else if line.strip_prefix("branch ").is_some() && current_worktree == Some(worktree_path)
+        {
+            // Remove refs/heads/ prefix
+            let branch_ref = line.strip_prefix("branch ").unwrap();
+            let branch = branch_ref.strip_prefix("refs/heads/").unwrap_or(branch_ref);
+            return Ok(Some(branch.to_string()));
         }
     }
 
