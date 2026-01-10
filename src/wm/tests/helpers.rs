@@ -7,35 +7,42 @@ pub struct TestRepo {
 }
 
 impl TestRepo {
+    /// Create a git Command with isolated config (ignores global/system settings).
+    fn git_command(dir: &Path) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(dir);
+        // Ignore global/system git config to ensure tests are isolated from
+        // local settings (e.g., GPG signing, aliases, hooks).
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+        cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
+        cmd
+    }
+
     /// Create a new test repository with an initial commit.
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
 
         // Initialize git repo
-        let status = Command::new("git")
+        let status = Self::git_command(dir.path())
             .args(["init"])
-            .current_dir(dir.path())
             .status()
             .expect("Failed to run git init");
         assert!(status.success(), "git init failed");
 
         // Configure git user for commits
-        Command::new("git")
+        Self::git_command(dir.path())
             .args(["config", "user.email", "test@example.com"])
-            .current_dir(dir.path())
             .status()
             .expect("Failed to configure git email");
 
-        Command::new("git")
+        Self::git_command(dir.path())
             .args(["config", "user.name", "Test User"])
-            .current_dir(dir.path())
             .status()
             .expect("Failed to configure git name");
 
         // Create initial commit
-        let status = Command::new("git")
+        let status = Self::git_command(dir.path())
             .args(["commit", "--allow-empty", "-m", "Initial commit"])
-            .current_dir(dir.path())
             .status()
             .expect("Failed to run git commit");
         assert!(status.success(), "git commit failed");
@@ -60,7 +67,7 @@ impl TestRepo {
         let worktrees_dir = self.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).expect("Failed to create .worktrees dir");
 
-        let status = Command::new("git")
+        let status = Self::git_command(&self.path())
             .args([
                 "worktree",
                 "add",
@@ -68,7 +75,6 @@ impl TestRepo {
                 "-b",
                 branch_name,
             ])
-            .current_dir(self.path())
             .status()
             .expect("Failed to run git worktree add");
         assert!(status.success(), "git worktree add failed");
