@@ -1,10 +1,12 @@
 use clap::Args;
 use indoc::formatdoc;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
-use super::common::{DraftFile, PrDraftError, RepoInfo};
+use super::common::{DraftFile, Frontmatter, PrDraftError, RepoInfo};
+use crate::human_in_the_loop::{
+    Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReviewArgs {
@@ -22,6 +24,58 @@ pub struct ReviewCompleteArgs {
     /// tmux session to restore after review
     #[arg(long)]
     pub tmux_target: Option<String>,
+
+    /// Window title for Neovim
+    #[arg(long)]
+    pub window_title: Option<String>,
+}
+
+/// Handler for PR draft review sessions.
+pub struct PrDraftReviewHandler;
+
+impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
+    fn build_complete_args(
+        &self,
+        document_path: &Path,
+        tmux_target: Option<&str>,
+        window_title: &str,
+    ) -> Vec<OsString> {
+        let mut args: Vec<OsString> = vec![
+            "ai".into(),
+            "pr-draft".into(),
+            "review-complete".into(),
+            document_path.as_os_str().to_os_string(),
+        ];
+
+        if let Some(target) = tmux_target {
+            args.push("--tmux-target".into());
+            args.push(target.into());
+        }
+
+        args.push("--window-title".into());
+        args.push(window_title.into());
+
+        args
+    }
+
+    fn on_review_complete(&self, document: &Document<Frontmatter>) -> HilResult<()> {
+        if document.frontmatter.is_approved() {
+            document.save_approval()?;
+            println!(
+                "{}",
+                formatdoc! {"
+                    PR approved. Run the following command to create the PR:
+
+                        a ai pr-draft submit
+                "}
+            );
+        } else {
+            document.remove_approval()?;
+            println!("PR not approved. Set 'steps.submit: true' and save to approve.");
+        }
+
+        Ok(())
+    }
 }
 
 pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -40,184 +94,22 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if !draft_path.exists() {
-        return Err(Box::new(PrDraftError::FileNotFound(draft_path)));
-    }
-
-    // Check for existing lock
-    let lock_path = DraftFile::lock_path(&draft_path);
-    if lock_path.exists() {
-        eprintln!("Skipped: Editor is already open for this file.");
-        return Ok(());
-    }
-
-    // Create lock file
-    fs::write(&lock_path, "")?;
-
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    // Get tmux session info for later restoration
-    let tmux_target = get_tmux_target();
-
-    // Get the path to the current executable
-    let exe_path = std::env::current_exe()?;
-
-    let review_args = build_review_args(&draft_path, tmux_target.as_deref());
-
-    // RAII guard ensures lock cleanup on error paths
-    let mut lock_guard = LockGuard::new(lock_path);
-
-    // Launch WezTerm with the review-complete command
-    let status = launch_wezterm(&window_title, &exe_path, &review_args)
-        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch WezTerm: {e}")))?;
-
-    if !status.success() {
-        // Guard will be dropped here, removing lock file
-        return Err(Box::new(PrDraftError::CommandFailed(format!(
-            "WezTerm exited with status: {status}"
-        ))));
-    }
-
-    // WezTerm launched successfully - disarm guard so lock file remains
-    // (review-complete will handle cleanup when it finishes)
-    lock_guard.disarm();
+    start_review::<Frontmatter, _>(&draft_path, &window_title, &PrDraftReviewHandler)?;
 
     Ok(())
 }
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let draft_path = &args.filepath;
-
-    // Ensure cleanup happens even on panic
-    let _cleanup_guard = CleanupGuard {
-        lock_path: DraftFile::lock_path(draft_path),
-        tmux_target: args.tmux_target.clone(),
-    };
-
-    // Launch Neovim
-    let status = Command::new("nvim")
-        .arg(draft_path)
-        .status()
-        .map_err(|e| PrDraftError::CommandFailed(format!("Failed to launch nvim: {e}")))?;
-
-    if !status.success() {
-        eprintln!("Neovim exited with non-zero status");
-        return Ok(());
-    }
-
-    // After Neovim exits, check if submit was approved
-    let draft = DraftFile::from_path(draft_path.clone())?;
-
-    if draft.frontmatter.steps.submit {
-        // Save approval hash
-        draft.save_approval()?;
-        println!(
-            "{}",
-            formatdoc! {"
-                PR approved. Run the following command to create the PR:
-
-                    a ai pr-draft submit
-            "}
-        );
-    } else {
-        // Remove approval if exists
-        draft.remove_approval()?;
-        println!("PR not approved. Set 'steps.submit: true' and save to approve.");
-    }
+    complete_review::<Frontmatter, _>(
+        &args.filepath,
+        args.tmux_target.as_deref(),
+        args.window_title.as_deref(),
+        &PrDraftReviewHandler,
+    )?;
 
     Ok(())
-}
-
-/// RAII guard for lock file cleanup in run()
-struct LockGuard {
-    lock_path: PathBuf,
-    /// If true, skip cleanup on drop (used when WezTerm will handle it)
-    disarmed: bool,
-}
-
-impl LockGuard {
-    fn new(lock_path: PathBuf) -> Self {
-        Self {
-            lock_path,
-            disarmed: false,
-        }
-    }
-
-    /// Prevent this guard from removing the lock file on drop
-    fn disarm(&mut self) {
-        self.disarmed = true;
-    }
-}
-
-impl Drop for LockGuard {
-    fn drop(&mut self) {
-        if !self.disarmed {
-            let _ = fs::remove_file(&self.lock_path);
-        }
-    }
-}
-
-/// RAII guard for cleanup after review-complete (lock file + tmux restore)
-struct CleanupGuard {
-    lock_path: PathBuf,
-    tmux_target: Option<String>,
-}
-
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        // Remove lock file
-        let _ = fs::remove_file(&self.lock_path);
-
-        // Restore tmux session
-        if let Some(ref target) = self.tmux_target {
-            let _ = Command::new("tmux")
-                .args(["switch-client", "-t", target])
-                .status();
-        }
-    }
-}
-
-fn get_tmux_target() -> Option<String> {
-    if std::env::var("TMUX").is_err() {
-        return None;
-    }
-
-    // Get session:window.pane in a single tmux call for consistency and performance
-    let output = Command::new("tmux")
-        .args([
-            "display-message",
-            "-p",
-            "#{session_name}:#{window_index}.#{pane_index}",
-        ])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn build_review_args(
-    draft_path: &std::path::Path,
-    tmux_target: Option<&str>,
-) -> Vec<std::ffi::OsString> {
-    use std::ffi::OsString;
-
-    let mut args: Vec<OsString> = vec![
-        "ai".into(),
-        "pr-draft".into(),
-        "review-complete".into(),
-        draft_path.as_os_str().to_os_string(),
-    ];
-
-    if let Some(target) = tmux_target {
-        args.push("--tmux-target".into());
-        args.push(target.into());
-    }
-
-    args
 }
 
 #[cfg(test)]
@@ -237,7 +129,8 @@ mod tests {
             .join("repo")
             .join(std::path::PathBuf::from(filename));
 
-        let args = build_review_args(&draft_path, Some("sess:1.0"));
+        let handler = PrDraftReviewHandler;
+        let args = handler.build_complete_args(&draft_path, Some("sess:1.0"), "Test Title");
         let restored = std::path::Path::new(&args[3]);
         assert_eq!(
             restored.as_os_str(),
@@ -245,56 +138,4 @@ mod tests {
             "Path should survive argument building without loss"
         );
     }
-}
-
-#[cfg(target_os = "macos")]
-fn launch_wezterm(
-    window_title: &str,
-    exe_path: &std::path::Path,
-    args: &[std::ffi::OsString],
-) -> std::io::Result<std::process::ExitStatus> {
-    let mut cmd = Command::new("open");
-    cmd.args([
-        "-n",
-        "-a",
-        "WezTerm",
-        "--args",
-        "--config",
-        "window_decorations=\"TITLE | RESIZE\"",
-        "--config",
-        "initial_cols=120",
-        "--config",
-        "initial_rows=40",
-        "start",
-        "--class",
-        window_title,
-        "--",
-    ]);
-    cmd.arg(exe_path);
-    cmd.args(args);
-    cmd.status()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn launch_wezterm(
-    window_title: &str,
-    exe_path: &std::path::Path,
-    args: &[std::ffi::OsString],
-) -> std::io::Result<std::process::ExitStatus> {
-    let mut cmd = Command::new("wezterm");
-    cmd.args([
-        "--config",
-        "window_decorations=\"TITLE | RESIZE\"",
-        "--config",
-        "initial_cols=120",
-        "--config",
-        "initial_rows=40",
-        "start",
-        "--class",
-        window_title,
-        "--",
-    ]);
-    cmd.arg(exe_path);
-    cmd.args(args);
-    cmd.status()
 }

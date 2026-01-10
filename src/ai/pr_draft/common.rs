@@ -9,6 +9,8 @@ use std::process::Command;
 use std::sync::LazyLock;
 use thiserror::Error;
 
+use crate::human_in_the_loop::{Document, DocumentSchema};
+
 static GITHUB_URL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap());
 static FRONTMATTER_RE: LazyLock<Regex> =
@@ -26,6 +28,9 @@ pub enum PrDraftError {
 
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
+
+    #[error("Draft file already exists: {0}\nUse --force to overwrite")]
+    FileAlreadyExists(PathBuf),
 
     #[error("PR was not approved. Please run 'review' and set 'steps.submit: true'")]
     NotApproved,
@@ -162,12 +167,18 @@ pub fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
     Ok(is_private_str == "true")
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Frontmatter {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub steps: Steps,
+}
+
+impl DocumentSchema for Frontmatter {
+    fn is_approved(&self) -> bool {
+        self.steps.submit
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -177,6 +188,10 @@ pub struct Steps {
     #[serde(default)]
     pub submit: bool,
 }
+
+/// Type alias for PR draft documents.
+#[allow(dead_code)]
+pub type PrDraftDocument = Document<Frontmatter>;
 
 #[derive(Debug, Clone)]
 pub struct DraftFile {
@@ -254,6 +269,7 @@ impl DraftFile {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
+    #[allow(dead_code)]
     pub fn save_approval(&self) -> Result<()> {
         let hash = self.compute_hash()?;
         let approve_path = Self::approve_path(&self.path);
