@@ -212,16 +212,14 @@ fn print_comment(
     }
 
     // Print diff context (only for root comments)
-    if !is_reply {
-        if let Some(diff_hunk) = &comment.diff_hunk {
-            let path = comment.path.as_deref().unwrap_or("?");
-            println!("File: {path}");
-            // Print last 3 lines of diff hunk for context
-            let lines: Vec<&str> = diff_hunk.lines().collect();
-            let start = lines.len().saturating_sub(3);
-            for line in &lines[start..] {
-                println!("{line}");
-            }
+    if !is_reply && let Some(diff_hunk) = &comment.diff_hunk {
+        let path = comment.path.as_deref().unwrap_or("?");
+        println!("File: {path}");
+        // Print last 3 lines of diff hunk for context
+        let lines: Vec<&str> = diff_hunk.lines().collect();
+        let start = lines.len().saturating_sub(3);
+        for line in &lines[start..] {
+            println!("{line}");
         }
     }
 
