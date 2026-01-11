@@ -102,25 +102,24 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    fn create_git_stub(stub_dir: &std::path::Path) {
+    fn create_git_stub(stub_dir: &std::path::Path, test_id: &str) {
         let git_stub = stub_dir.join("git");
-        fs::write(
-            &git_stub,
-            indoc! {r#"
-            #!/bin/sh
-            if [ "$1" = "rev-parse" ]; then
-              echo "feature/test"
-              exit 0
-            fi
-            if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then
-              echo "https://github.com/owner/repo.git"
-              exit 0
-            fi
-            echo "unexpected git command: $@" >&2
-            exit 1
-        "#},
-        )
-        .expect("write git stub");
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  echo "feature/test"
+  exit 0
+fi
+if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then
+  echo "https://github.com/owner/{}.git"
+  exit 0
+fi
+echo "unexpected git command: $@" >&2
+exit 1
+"#,
+            test_id
+        );
+        fs::write(&git_stub, script).expect("write git stub");
         let mut perms = fs::metadata(&git_stub).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&git_stub, perms).expect("chmod");
@@ -152,45 +151,60 @@ mod tests {
     }
 
     struct TestEnv {
+        test_id: String,
         _temp_cwd: tempfile::TempDir,
         _cwd_guard: WorkingDirGuard,
         _stub_dir: tempfile::TempDir,
-        _path_guard: PathGuard,
+        _git_guard: EnvGuard,
+        _gh_guard: EnvGuard,
     }
 
-    fn setup_test_env(gh_response: Option<bool>) -> TestEnv {
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            // Clean up the test-specific draft directory
+            let draft_dir = DraftFile::draft_dir().join("owner").join(&self.test_id);
+            let _ = fs::remove_dir_all(&draft_dir);
+        }
+    }
+
+    fn setup_test_env(test_id: &str, gh_response: Option<bool>) -> TestEnv {
         // Clean up any existing draft file from previous test runs
-        let draft_dir = DraftFile::draft_dir().join("owner").join("repo");
+        let draft_dir = DraftFile::draft_dir().join("owner").join(test_id);
         if draft_dir.exists() {
-            fs::remove_dir_all(&draft_dir).expect("failed to clean up draft directory");
+            let _ = fs::remove_dir_all(&draft_dir);
         }
 
         let temp_cwd = tempdir().expect("tempdir");
         let cwd_guard = WorkingDirGuard::change(temp_cwd.path());
 
         let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
+        create_git_stub(stub_dir.path(), test_id);
         create_gh_stub(stub_dir.path(), gh_response);
-        let path_guard = PathGuard::prepend(stub_dir.path());
+
+        let git_guard = EnvGuard::set("ARMYKNIFE_GIT_PATH", stub_dir.path().join("git"));
+        let gh_guard = EnvGuard::set("ARMYKNIFE_GH_PATH", stub_dir.path().join("gh"));
 
         TestEnv {
+            test_id: test_id.to_string(),
             _temp_cwd: temp_cwd,
             _cwd_guard: cwd_guard,
             _stub_dir: stub_dir,
-            _path_guard: path_guard,
+            _git_guard: git_guard,
+            _gh_guard: gh_guard,
         }
     }
 
     #[rstest]
-    #[case::offline(None, false)]
-    #[case::private(Some(true), false)]
-    #[case::public(Some(false), true)]
-    #[serial]
+    #[case::offline("frontmatter_offline", None, false)]
+    #[case::private("frontmatter_private", Some(true), false)]
+    #[case::public("frontmatter_public", Some(false), true)]
+    #[serial(pr_draft)]
     fn new_generates_correct_frontmatter(
+        #[case] test_id: &str,
         #[case] gh_response: Option<bool>,
         #[case] expect_ready_for_translation: bool,
     ) {
-        let _env = setup_test_env(gh_response);
+        let _env = setup_test_env(test_id, gh_response);
 
         run(&NewArgs {
             title: Some("Test Title".to_string()),
@@ -209,9 +223,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(pr_draft)]
     fn new_fails_when_file_exists_without_force() {
-        let _env = setup_test_env(Some(true));
+        let _env = setup_test_env("fails_without_force", Some(true));
 
         run(&NewArgs {
             title: Some("First Title".to_string()),
@@ -274,9 +288,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(pr_draft)]
     fn new_overwrites_when_file_exists_with_force() {
-        let _env = setup_test_env(Some(true));
+        let _env = setup_test_env("overwrites_with_force", Some(true));
 
         run(&NewArgs {
             title: Some("First Title".to_string()),
@@ -316,34 +330,30 @@ mod tests {
         }
     }
 
-    struct PathGuard {
-        original: Option<String>,
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
     }
 
-    impl PathGuard {
-        fn prepend(dir: &std::path::Path) -> Self {
-            let original = std::env::var("PATH").ok();
-            let new_path = if let Some(ref current) = original {
-                format!("{}:{}", dir.display(), current)
-            } else {
-                dir.display().to_string()
-            };
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var_os(key);
             unsafe {
-                std::env::set_var("PATH", new_path);
+                std::env::set_var(key, value);
             }
-            Self { original }
+            Self { key, original }
         }
     }
 
-    impl Drop for PathGuard {
+    impl Drop for EnvGuard {
         fn drop(&mut self) {
             if let Some(ref original) = self.original {
                 unsafe {
-                    std::env::set_var("PATH", original);
+                    std::env::set_var(self.key, original);
                 }
             } else {
                 unsafe {
-                    std::env::remove_var("PATH");
+                    std::env::remove_var(self.key);
                 }
             }
         }

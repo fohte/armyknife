@@ -2,6 +2,7 @@ use indoc::formatdoc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,21 @@ static FRONTMATTER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
 static JAPANESE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
+
+/// Create a Command for git, using ARMYKNIFE_GIT_PATH env var if set.
+/// This allows tests to inject a stub without modifying global PATH.
+pub fn git_command() -> Command {
+    let program =
+        std::env::var_os("ARMYKNIFE_GIT_PATH").unwrap_or_else(|| OsStr::new("git").into());
+    Command::new(program)
+}
+
+/// Create a Command for gh, using ARMYKNIFE_GH_PATH env var if set.
+/// This allows tests to inject a stub without modifying global PATH.
+pub fn gh_command() -> Command {
+    let program = std::env::var_os("ARMYKNIFE_GH_PATH").unwrap_or_else(|| OsStr::new("gh").into());
+    Command::new(program)
+}
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -99,7 +115,7 @@ impl RepoInfo {
 pub fn get_current_branch() -> Result<String> {
     // Use rev-parse --abbrev-ref HEAD to handle detached HEAD state
     // (returns "HEAD" when detached, unlike branch --show-current which returns empty)
-    let output = Command::new("git")
+    let output = git_command()
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
@@ -113,7 +129,7 @@ pub fn get_current_branch() -> Result<String> {
 
 /// Get owner and repo from git remote origin URL (no network call)
 pub fn get_repo_owner_and_name_from_git() -> Result<(String, String)> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(["remote", "get-url", "origin"])
         .output()
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
@@ -144,7 +160,7 @@ fn parse_github_url(url: &str) -> Result<(String, String)> {
 }
 
 pub fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
-    let output = Command::new("gh")
+    let output = gh_command()
         .args([
             "repo",
             "view",

@@ -1,9 +1,10 @@
 use clap::Args;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, check_is_private, contains_japanese};
+use super::common::{
+    DraftFile, PrDraftError, RepoInfo, check_is_private, contains_japanese, gh_command,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -103,7 +104,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
 
     // Build gh pr create command using builder pattern
     let repo_spec = format!("{}/{}", target.owner, target.repo);
-    let mut gh_cmd = Command::new("gh");
+    let mut gh_cmd = gh_command();
     gh_cmd
         .args([
             "pr",
@@ -147,7 +148,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     draft.cleanup()?;
 
     // Open PR in browser using the returned URL
-    let _ = Command::new("gh")
+    let _ = gh_command()
         .args(["pr", "view", "--web", "--repo", &repo_spec, &pr_url])
         .status();
 
@@ -163,14 +164,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    #[test]
-    #[serial]
-    fn submit_with_filepath_should_not_require_git_repo() {
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let gh_stub_dir = tempdir().expect("gh stub dir");
-        let gh_stub_path = gh_stub_dir.path().join("gh");
+    fn create_gh_stub(stub_dir: &std::path::Path) {
+        let gh_stub_path = stub_dir.join("gh");
         fs::write(
             &gh_stub_path,
             indoc! {r#"
@@ -194,7 +189,56 @@ mod tests {
         let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&gh_stub_path, perms).expect("chmod");
-        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
+    }
+
+    fn create_gh_stub_with_head_check(stub_dir: &std::path::Path) {
+        let gh_stub_path = stub_dir.join("gh");
+        fs::write(
+            &gh_stub_path,
+            indoc! {r#"
+            #!/bin/sh
+            # fake gh that requires --head
+            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+              echo "true"
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+              head_flag=0
+              while [ "$#" -gt 0 ]; do
+                if [ "$1" = "--head" ]; then
+                  head_flag=1
+                fi
+                shift
+              done
+              if [ "$head_flag" -eq 0 ]; then
+                echo "missing --head argument" >&2
+                exit 42
+              fi
+              echo https://example.com/pr/1
+              exit 0
+            fi
+            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+              exit 0
+            fi
+            echo "unexpected gh invocation: $@" >&2
+            exit 1
+        "#},
+        )
+        .expect("write gh stub");
+        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
+    }
+
+    #[test]
+    #[serial(pr_draft)]
+    fn submit_with_filepath_should_not_require_git_repo() {
+        let temp_cwd = tempdir().expect("tempdir");
+        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
+
+        let gh_stub_dir = tempdir().expect("gh stub dir");
+        create_gh_stub(gh_stub_dir.path());
+        let _gh_guard = EnvGuard::set("ARMYKNIFE_GH_PATH", gh_stub_dir.path().join("gh"));
 
         let repo_info = RepoInfo {
             owner: "owner".into(),
@@ -239,49 +283,14 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(pr_draft)]
     fn submit_with_filepath_should_use_draft_branch() {
         let temp_cwd = tempdir().expect("tempdir");
         let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
 
         let gh_stub_dir = tempdir().expect("gh stub dir");
-        let gh_stub_path = gh_stub_dir.path().join("gh");
-        fs::write(
-            &gh_stub_path,
-            indoc! {r#"
-            #!/bin/sh
-            # fake gh that requires --head
-            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
-              echo "true"
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-              head_flag=0
-              while [ "$#" -gt 0 ]; do
-                if [ "$1" = "--head" ]; then
-                  head_flag=1
-                fi
-                shift
-              done
-              if [ "$head_flag" -eq 0 ]; then
-                echo "missing --head argument" >&2
-                exit 42
-              fi
-              echo https://example.com/pr/1
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-              exit 0
-            fi
-            echo "unexpected gh invocation: $@" >&2
-            exit 1
-        "#},
-        )
-        .expect("write gh stub");
-        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
-        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
+        create_gh_stub_with_head_check(gh_stub_dir.path());
+        let _gh_guard = EnvGuard::set("ARMYKNIFE_GH_PATH", gh_stub_dir.path().join("gh"));
 
         let repo_info = RepoInfo {
             owner: "owner".into(),
@@ -343,34 +352,30 @@ mod tests {
         }
     }
 
-    struct PathGuard {
-        original: Option<String>,
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
     }
 
-    impl PathGuard {
-        fn prepend(dir: &std::path::Path) -> Self {
-            let original = std::env::var("PATH").ok();
-            let new_path = if let Some(ref current) = original {
-                format!("{}:{}", dir.display(), current)
-            } else {
-                dir.display().to_string()
-            };
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var_os(key);
             unsafe {
-                std::env::set_var("PATH", new_path);
+                std::env::set_var(key, value);
             }
-            Self { original }
+            Self { key, original }
         }
     }
 
-    impl Drop for PathGuard {
+    impl Drop for EnvGuard {
         fn drop(&mut self) {
             if let Some(ref original) = self.original {
                 unsafe {
-                    std::env::set_var("PATH", original);
+                    std::env::set_var(self.key, original);
                 }
             } else {
                 unsafe {
-                    std::env::remove_var("PATH");
+                    std::env::remove_var(self.key);
                 }
             }
         }
