@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::LazyLock;
 use thiserror::Error;
 
@@ -17,6 +17,43 @@ static FRONTMATTER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
 static JAPANESE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
+
+/// Trait for executing external commands (git, gh).
+/// Enables dependency injection for testing without modifying global state.
+pub trait CommandRunner {
+    fn run_git(&self, args: &[&str]) -> io::Result<Output>;
+    fn run_gh(&self, args: &[&str]) -> io::Result<Output>;
+
+    /// Run gh with OsString arguments (for commands with file paths)
+    fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output>;
+
+    /// Open PR in browser (fire-and-forget, ok to fail silently)
+    fn open_in_browser(&self, repo: &str, pr_url: &str);
+}
+
+/// Production implementation that executes real commands.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RealCommandRunner;
+
+impl CommandRunner for RealCommandRunner {
+    fn run_git(&self, args: &[&str]) -> io::Result<Output> {
+        Command::new("git").args(args).output()
+    }
+
+    fn run_gh(&self, args: &[&str]) -> io::Result<Output> {
+        Command::new("gh").args(args).output()
+    }
+
+    fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output> {
+        Command::new("gh").args(args).output()
+    }
+
+    fn open_in_browser(&self, repo: &str, pr_url: &str) {
+        let _ = Command::new("gh")
+            .args(["pr", "view", "--web", "--repo", repo, pr_url])
+            .status();
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -69,10 +106,10 @@ pub struct RepoInfo {
 
 impl RepoInfo {
     /// Get repo info using gh CLI (includes is_private check via network)
-    pub fn from_current_dir() -> Result<Self> {
-        let branch = get_current_branch()?;
-        let (owner, repo) = get_repo_owner_and_name_from_git()?;
-        let is_private = check_is_private(&owner, &repo)?;
+    pub fn from_current_dir(runner: &impl CommandRunner) -> Result<Self> {
+        let branch = get_current_branch(runner)?;
+        let (owner, repo) = get_repo_owner_and_name_from_git(runner)?;
+        let is_private = check_is_private(runner, &owner, &repo)?;
 
         Ok(Self {
             owner,
@@ -83,9 +120,9 @@ impl RepoInfo {
     }
 
     /// Get repo info from git only (no network call, is_private defaults to false)
-    pub fn from_git_only() -> Result<Self> {
-        let branch = get_current_branch()?;
-        let (owner, repo) = get_repo_owner_and_name_from_git()?;
+    pub fn from_git_only(runner: &impl CommandRunner) -> Result<Self> {
+        let branch = get_current_branch(runner)?;
+        let (owner, repo) = get_repo_owner_and_name_from_git(runner)?;
 
         Ok(Self {
             owner,
@@ -96,12 +133,11 @@ impl RepoInfo {
     }
 }
 
-pub fn get_current_branch() -> Result<String> {
+pub fn get_current_branch(runner: &impl CommandRunner) -> Result<String> {
     // Use rev-parse --abbrev-ref HEAD to handle detached HEAD state
     // (returns "HEAD" when detached, unlike branch --show-current which returns empty)
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
+    let output = runner
+        .run_git(&["rev-parse", "--abbrev-ref", "HEAD"])
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
     if !output.status.success() {
@@ -112,10 +148,9 @@ pub fn get_current_branch() -> Result<String> {
 }
 
 /// Get owner and repo from git remote origin URL (no network call)
-pub fn get_repo_owner_and_name_from_git() -> Result<(String, String)> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .output()
+pub fn get_repo_owner_and_name_from_git(runner: &impl CommandRunner) -> Result<(String, String)> {
+    let output = runner
+        .run_git(&["remote", "get-url", "origin"])
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
     if !output.status.success() {
@@ -143,18 +178,18 @@ fn parse_github_url(url: &str) -> Result<(String, String)> {
     }
 }
 
-pub fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
-    let output = Command::new("gh")
-        .args([
+pub fn check_is_private(runner: &impl CommandRunner, owner: &str, repo: &str) -> Result<bool> {
+    let repo_spec = format!("{owner}/{repo}");
+    let output = runner
+        .run_gh(&[
             "repo",
             "view",
-            &format!("{owner}/{repo}"),
+            &repo_spec,
             "--json",
             "isPrivate",
             "-q",
             ".isPrivate",
         ])
-        .output()
         .map_err(|e| PrDraftError::RepoInfoError(e.to_string()))?;
 
     if !output.status.success() {
@@ -479,5 +514,116 @@ mod tests {
         assert!(parsed.is_ok(), "Failed to parse: {result}");
         let (frontmatter, _) = parsed.unwrap();
         assert_eq!(frontmatter.title, "Title with \"quotes\" and\nnewline");
+    }
+}
+
+/// Test utilities for mocking command execution.
+#[cfg(test)]
+pub mod test_utils {
+    use super::*;
+    use std::process::ExitStatus;
+
+    /// Mock implementation of CommandRunner for testing.
+    /// Returns pre-configured responses without executing real commands.
+    #[derive(Clone)]
+    pub struct MockCommandRunner {
+        pub branch: String,
+        pub owner: String,
+        pub repo: String,
+        pub is_private: Option<bool>, // None = error (offline)
+        pub gh_pr_create_result: Option<String>, // None = error
+    }
+
+    impl MockCommandRunner {
+        pub fn new(owner: &str, repo: &str, branch: &str) -> Self {
+            Self {
+                branch: branch.to_string(),
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                is_private: Some(true),
+                gh_pr_create_result: Some("https://github.com/owner/repo/pull/1".to_string()),
+            }
+        }
+
+        pub fn with_private(mut self, is_private: Option<bool>) -> Self {
+            self.is_private = is_private;
+            self
+        }
+
+        fn make_output(stdout: &str, success: bool) -> Output {
+            #[cfg(unix)]
+            use std::os::unix::process::ExitStatusExt;
+            #[cfg(windows)]
+            use std::os::windows::process::ExitStatusExt;
+
+            let status = if success {
+                ExitStatus::from_raw(0)
+            } else {
+                #[cfg(unix)]
+                {
+                    ExitStatus::from_raw(256) // exit code 1
+                }
+                #[cfg(windows)]
+                {
+                    ExitStatus::from_raw(1)
+                }
+            };
+            Output {
+                status,
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: if success {
+                    Vec::new()
+                } else {
+                    stdout.as_bytes().to_vec()
+                },
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_git(&self, args: &[&str]) -> io::Result<Output> {
+            match args.first() {
+                Some(&"rev-parse") => Ok(Self::make_output(&format!("{}\n", self.branch), true)),
+                Some(&"remote") if args.get(1) == Some(&"get-url") => Ok(Self::make_output(
+                    &format!("https://github.com/{}/{}.git\n", self.owner, self.repo),
+                    true,
+                )),
+                _ => Ok(Self::make_output("unexpected git command", false)),
+            }
+        }
+
+        fn run_gh(&self, args: &[&str]) -> io::Result<Output> {
+            match args.first() {
+                Some(&"repo") if args.get(1) == Some(&"view") => match self.is_private {
+                    Some(true) => Ok(Self::make_output("true\n", true)),
+                    Some(false) => Ok(Self::make_output("false\n", true)),
+                    None => Ok(Self::make_output("offline", false)),
+                },
+                _ => Ok(Self::make_output("unexpected gh command", false)),
+            }
+        }
+
+        fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output> {
+            let args_str: Vec<&str> = args
+                .iter()
+                .map(|s| {
+                    s.to_str()
+                        .expect("MockCommandRunner only supports UTF-8 arguments in tests")
+                })
+                .collect();
+            match args_str.first() {
+                Some(&"pr") if args_str.get(1) == Some(&"create") => {
+                    match &self.gh_pr_create_result {
+                        Some(url) => Ok(Self::make_output(&format!("{url}\n"), true)),
+                        None => Ok(Self::make_output("gh pr create failed", false)),
+                    }
+                }
+                _ => self.run_gh(&args_str),
+            }
+        }
+
+        fn open_in_browser(&self, _repo: &str, _pr_url: &str) {
+            // No-op in tests
+        }
     }
 }
