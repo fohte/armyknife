@@ -182,7 +182,7 @@ mod tests {
         }
     }
 
-    fn setup_test_env(owner: &str, repo: &str, _branch: &str) -> TestEnv {
+    fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
         let gh_runner = MockGhRunner::new();
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn submit_with_filepath_should_not_require_git_repo() {
         // Use unique repo name to avoid conflicts in parallel tests
-        let env = setup_test_env("owner", "repo_submit_no_git", "feature/test");
+        let env = setup_test_env("owner", "repo_submit_no_git");
         let draft_path = create_approved_draft(&env, "feature/test", "Ready title", "Body content");
 
         let args = SubmitArgs {
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn submit_with_filepath_should_use_draft_branch() {
         // Use unique repo name to avoid conflicts in parallel tests
-        let env = setup_test_env("owner", "repo_submit_branch", "feature/missing-head");
+        let env = setup_test_env("owner", "repo_submit_branch");
         let draft_path =
             create_approved_draft(&env, "feature/missing-head", "Ready title", "Body content");
 
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn submit_fails_when_not_approved() {
-        let env = setup_test_env("owner", "repo_submit_not_approved", "feature/unapproved");
+        let env = setup_test_env("owner", "repo_submit_not_approved");
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
             repo: env.repo.clone(),
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn submit_fails_with_empty_title() {
-        let env = setup_test_env("owner", "repo_submit_empty_title", "feature/empty-title");
+        let env = setup_test_env("owner", "repo_submit_empty_title");
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
             repo: env.repo.clone(),
