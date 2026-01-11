@@ -31,6 +31,7 @@ a <command>
 ### Commands
 
 - `a update` - Update to the latest version
+- `a name-branch <description>` - Generate a branch name from a description using AI (Claude Code)
 - `a ai pr-draft <subcommand>` - Manage PR body drafts for AI-assisted PR creation
   - `new` - Create a new PR body draft file
   - `review` - Open the draft in Neovim for review (via WezTerm)
