@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::ai::AiCommands;
+use crate::wm::WmCommands;
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +22,10 @@ pub enum Commands {
     /// AI-related tools
     #[command(subcommand)]
     Ai(AiCommands),
+
+    /// Git worktree manager
+    #[command(subcommand)]
+    Wm(WmCommands),
 
     /// Update to the latest version
     Update,

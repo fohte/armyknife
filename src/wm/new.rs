@@ -1,0 +1,345 @@
+use clap::Args;
+use std::path::Path;
+use std::process::Command;
+
+use super::error::{Result, WmError};
+use super::git::{
+    BRANCH_PREFIX, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
+    local_branch_exists, remote_branch_exists,
+};
+
+/// Mode for creating a worktree
+enum WorktreeAddMode<'a> {
+    /// Checkout an existing local branch
+    LocalBranch { branch: &'a str },
+    /// Create a tracking branch from remote
+    TrackRemote { branch: &'a str },
+    /// Create a new branch from base
+    NewBranch { branch: &'a str, base: &'a str },
+    /// Force create/reset a branch from base
+    ForceNewBranch { branch: &'a str, base: &'a str },
+}
+
+/// Run `git worktree add` with the specified mode
+fn git_worktree_add(worktree_dir: &str, mode: WorktreeAddMode) -> Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.args(["worktree", "add", worktree_dir]);
+
+    match mode {
+        WorktreeAddMode::LocalBranch { branch } => {
+            cmd.arg(branch);
+        }
+        WorktreeAddMode::TrackRemote { branch } => {
+            cmd.args(["-b", branch, &format!("origin/{branch}")]);
+        }
+        WorktreeAddMode::NewBranch { branch, base } => {
+            cmd.args(["-b", branch, base]);
+        }
+        WorktreeAddMode::ForceNewBranch { branch, base } => {
+            cmd.args(["-B", branch, base]);
+        }
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("git worktree add failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Add a worktree for an existing branch (local or remote)
+fn add_worktree_for_branch(worktree_dir: &str, branch: &str) -> Result<()> {
+    if local_branch_exists(branch) {
+        git_worktree_add(worktree_dir, WorktreeAddMode::LocalBranch { branch })
+    } else if remote_branch_exists(branch) {
+        git_worktree_add(worktree_dir, WorktreeAddMode::TrackRemote { branch })
+    } else {
+        // Fallback: use as-is (should not normally happen)
+        git_worktree_add(worktree_dir, WorktreeAddMode::LocalBranch { branch })
+    }
+}
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct NewArgs {
+    /// Branch name (existing branch will be checked out,
+    /// non-existing branch will be created with fohte/ prefix)
+    pub name: String,
+
+    /// Base branch for new branch creation (default: origin/main or origin/master)
+    #[arg(long)]
+    pub from: Option<String>,
+
+    /// Force create new branch even if it already exists
+    #[arg(long)]
+    pub force: bool,
+
+    /// Initial prompt to send to Claude Code
+    #[arg(long)]
+    pub prompt: Option<String>,
+}
+
+pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    run_inner(args)?;
+    Ok(())
+}
+
+fn run_inner(args: &NewArgs) -> Result<()> {
+    let name = &args.name;
+    let repo_root = get_repo_root()?;
+
+    // Determine worktree directory name from branch name
+    let worktree_name = branch_to_worktree_name(name);
+    let worktrees_dir = format!("{repo_root}/.worktrees");
+    let worktree_dir = format!("{worktrees_dir}/{worktree_name}");
+
+    // Ensure .worktrees directory exists
+    std::fs::create_dir_all(&worktrees_dir).map_err(|e| {
+        WmError::CommandFailed(format!("Failed to create .worktrees directory: {e}"))
+    })?;
+
+    // Fetch with prune
+    let fetch_status = Command::new("git")
+        .args(["fetch", "-p"])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !fetch_status.success() {
+        return Err(WmError::CommandFailed("git fetch failed".into()));
+    }
+
+    // Remove BRANCH_PREFIX to avoid double prefix
+    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
+
+    // Determine action based on branch existence and flags
+    if args.force {
+        // Force create new branch with BRANCH_PREFIX
+        let main_branch = get_main_branch()?;
+        let base_branch = args
+            .from
+            .clone()
+            .unwrap_or_else(|| format!("origin/{main_branch}"));
+        let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
+
+        git_worktree_add(
+            &worktree_dir,
+            WorktreeAddMode::ForceNewBranch {
+                branch: &branch,
+                base: &base_branch,
+            },
+        )?;
+    } else if branch_exists(name) {
+        // Branch exists with the exact name provided
+        add_worktree_for_branch(&worktree_dir, name)?;
+    } else {
+        let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
+        if branch_exists(&branch_with_prefix) {
+            // Branch exists with BRANCH_PREFIX
+            add_worktree_for_branch(&worktree_dir, &branch_with_prefix)?;
+        } else {
+            // Branch doesn't exist, create new one with BRANCH_PREFIX
+            let main_branch = get_main_branch()?;
+            let base_branch = args
+                .from
+                .clone()
+                .unwrap_or_else(|| format!("origin/{main_branch}"));
+            let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
+
+            git_worktree_add(
+                &worktree_dir,
+                WorktreeAddMode::NewBranch {
+                    branch: &branch,
+                    base: &base_branch,
+                },
+            )?;
+        }
+    }
+
+    // Setup tmux window with nvim + claude
+    setup_tmux_window(
+        &repo_root,
+        &worktree_dir,
+        &worktree_name,
+        args.prompt.as_deref(),
+    )?;
+
+    Ok(())
+}
+
+/// Build the claude command, optionally with an initial prompt via temp file
+fn build_claude_command(prompt: Option<&str>) -> Result<String> {
+    let Some(prompt) = prompt else {
+        return Ok("claude".to_string());
+    };
+
+    // Write prompt to a temp file that persists until shell reads it
+    let prompt_file = tempfile::Builder::new()
+        .prefix("claude-prompt-")
+        .suffix(".txt")
+        .tempfile()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+
+    std::fs::write(prompt_file.path(), prompt)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
+
+    let prompt_path = prompt_file
+        .into_temp_path()
+        .keep()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
+
+    let path_str = prompt_path.display().to_string();
+    let escaped_path = shlex::try_quote(&path_str)
+        .map_err(|_| WmError::CommandFailed("Failed to escape path".into()))?;
+
+    // Command reads prompt, passes to claude, then deletes temp file
+    Ok(format!(
+        "claude \"$(cat {escaped_path})\" ; rm {escaped_path}"
+    ))
+}
+
+/// Setup a tmux window with split panes for nvim and claude
+fn setup_tmux_window(
+    repo_root: &str,
+    worktree_dir: &str,
+    worktree_name: &str,
+    prompt: Option<&str>,
+) -> Result<()> {
+    let claude_cmd = build_claude_command(prompt)?;
+    let target_session = get_tmux_session_name(repo_root);
+
+    ensure_tmux_session_exists(&target_session, repo_root)?;
+    create_split_window(&target_session, worktree_dir, worktree_name, &claude_cmd)?;
+    switch_to_session_if_needed(&target_session)?;
+
+    Ok(())
+}
+
+/// Ensure the tmux session exists, creating it if necessary
+fn ensure_tmux_session_exists(session: &str, cwd: &str) -> Result<()> {
+    let exists = Command::new("tmux")
+        .args(["has-session", "-t", session])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if exists {
+        return Ok(());
+    }
+
+    let status = Command::new("tmux")
+        .args(["new-session", "-ds", session, "-c", cwd])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("tmux new-session failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Create a split window with nvim on left, claude on right
+fn create_split_window(
+    session: &str,
+    cwd: &str,
+    window_name: &str,
+    claude_cmd: &str,
+) -> Result<()> {
+    let status = Command::new("tmux")
+        .args([
+            "new-window",
+            "-t",
+            session,
+            "-c",
+            cwd,
+            "-n",
+            window_name,
+            ";",
+            "split-window",
+            "-h",
+            "-c",
+            cwd,
+            ";",
+            "select-pane",
+            "-t",
+            "1",
+            ";",
+            "send-keys",
+            "nvim",
+            "C-m",
+            ";",
+            "select-pane",
+            "-t",
+            "2",
+            ";",
+            "send-keys",
+            claude_cmd,
+            "C-m",
+            ";",
+            "select-pane",
+            "-t",
+            "1",
+        ])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("tmux new-window failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Switch to session if we're in tmux and not already in the target session
+fn switch_to_session_if_needed(target_session: &str) -> Result<()> {
+    if std::env::var("TMUX").is_err() {
+        return Ok(());
+    }
+
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", "#{session_name}"])
+        .output()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if current == target_session {
+        return Ok(());
+    }
+
+    Command::new("tmux")
+        .args(["switch-client", "-t", target_session])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Get tmux session name from repository root (equivalent to tmux-name session)
+fn get_tmux_session_name(repo_root: &str) -> String {
+    // Try tmux-name command first
+    if let Some(output) = Command::new("tmux-name")
+        .args(["session", repo_root])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+    {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return name;
+        }
+    }
+
+    // Fallback: use the directory name
+    Path::new(repo_root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default")
+        .to_string()
+}

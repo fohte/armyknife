@@ -1,0 +1,24 @@
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum WmError {
+    #[error("Not in a git repository")]
+    NotInGitRepo,
+
+    #[error("Worktree not found: {0}")]
+    WorktreeNotFound(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
+
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON parse error: {0}")]
+    JsonParse(#[from] serde_json::Error),
+}
+
+pub type Result<T> = std::result::Result<T, WmError>;
