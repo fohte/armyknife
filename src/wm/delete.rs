@@ -2,9 +2,8 @@ use clap::Args;
 use std::io::{self, Write};
 use std::process::Command;
 
-use super::common::{
-    Result, WmError, branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists,
-};
+use super::error::{Result, WmError};
+use super::git::{branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {

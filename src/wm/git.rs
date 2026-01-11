@@ -1,32 +1,10 @@
 use serde::Deserialize;
 use std::process::Command;
-use thiserror::Error;
+
+use super::error::{Result, WmError};
 
 /// Branch prefix for new branches created by `wm new`
 pub const BRANCH_PREFIX: &str = "fohte/";
-
-#[derive(Error, Debug)]
-pub enum WmError {
-    #[error("Not in a git repository")]
-    NotInGitRepo,
-
-    #[error("Worktree not found: {0}")]
-    WorktreeNotFound(String),
-
-    #[error("Operation cancelled")]
-    Cancelled,
-
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("JSON parse error: {0}")]
-    JsonParse(#[from] serde_json::Error),
-}
-
-pub type Result<T> = std::result::Result<T, WmError>;
 
 /// Get the main worktree root (the first entry in `git worktree list`).
 /// This is always the main repository, regardless of which worktree we're in.
@@ -77,33 +55,7 @@ pub fn get_main_branch() -> Result<String> {
 
 /// Check if a branch exists (local or remote)
 pub fn branch_exists(branch: &str) -> bool {
-    // Check local
-    let local = Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if local {
-        return true;
-    }
-
-    // Check remote
-    Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/remotes/origin/{branch}"),
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    local_branch_exists(branch) || remote_branch_exists(branch)
 }
 
 /// Check if a local branch exists

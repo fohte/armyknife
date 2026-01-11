@@ -1,9 +1,7 @@
-mod helpers;
-
-use helpers::TestRepo;
 use serial_test::serial;
 
-use crate::wm::common::{branch_to_worktree_name, get_repo_root};
+use crate::testing::TestRepo;
+use crate::wm::git::{branch_to_worktree_name, get_repo_root};
 
 #[test]
 #[serial]

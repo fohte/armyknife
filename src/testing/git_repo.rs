@@ -106,6 +106,12 @@ impl TestRepo {
 }
 
 /// RAII guard that changes the current working directory and restores it on drop.
+///
+/// This guard is essential for tests that modify global state (current working directory).
+/// Without it:
+/// - Tests could pollute each other's state
+/// - Panic during test would leave cwd in unexpected state
+/// - Parallel tests would have race conditions on cwd
 pub struct WorkingDirGuard {
     original: PathBuf,
 }

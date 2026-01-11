@@ -1,6 +1,7 @@
 mod clean;
-pub mod common;
 mod delete;
+mod error;
+mod git;
 mod list;
 mod new;
 

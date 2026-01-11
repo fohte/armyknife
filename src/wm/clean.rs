@@ -2,7 +2,8 @@ use clap::Args;
 use std::io::{self, Write};
 use std::process::Command;
 
-use super::common::{Result, WmError, get_merge_status, get_repo_root, local_branch_exists};
+use super::error::{Result, WmError};
+use super::git::{get_merge_status, get_repo_root, local_branch_exists};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -23,40 +24,19 @@ pub fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Erro
 }
 
 fn run_inner(args: &CleanArgs) -> Result<()> {
-    // Fetch with prune
-    let fetch_status = Command::new("git")
-        .args(["fetch", "-p"])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if !fetch_status.success() {
-        return Err(WmError::CommandFailed("git fetch failed".into()));
-    }
+    git_fetch_prune()?;
 
     let repo_root = get_repo_root()?;
-
-    // Collect worktrees with their merge status
     let (to_delete, to_skip) = collect_worktrees(&repo_root)?;
 
-    // Display skipped worktrees
-    if !to_skip.is_empty() {
-        println!("Worktrees to keep:");
-        for wt in &to_skip {
-            println!("  {} ({})", wt.path, wt.reason);
-        }
-        println!();
-    }
+    display_worktrees_to_keep(&to_skip);
 
-    // Display worktrees to delete
     if to_delete.is_empty() {
         println!("No merged worktrees to delete.");
         return Ok(());
     }
 
-    println!("Worktrees to delete:");
-    for wt in &to_delete {
-        println!("  {} ({})", wt.path, wt.reason);
-    }
+    display_worktrees_to_delete(&to_delete);
 
     if args.dry_run {
         println!();
@@ -64,56 +44,115 @@ fn run_inner(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
+    if !confirm_deletion() {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    println!();
+    delete_worktrees(&to_delete)?;
+
+    Ok(())
+}
+
+/// Run `git fetch -p` to prune stale remote-tracking references
+fn git_fetch_prune() -> Result<()> {
+    let status = Command::new("git")
+        .args(["fetch", "-p"])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("git fetch failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Display worktrees that will be kept
+fn display_worktrees_to_keep(worktrees: &[WorktreeInfo]) {
+    if worktrees.is_empty() {
+        return;
+    }
+
+    println!("Worktrees to keep:");
+    for wt in worktrees {
+        println!("  {} ({})", wt.path, wt.reason);
+    }
+    println!();
+}
+
+/// Display worktrees that will be deleted
+fn display_worktrees_to_delete(worktrees: &[WorktreeInfo]) {
+    println!("Worktrees to delete:");
+    for wt in worktrees {
+        println!("  {} ({})", wt.path, wt.reason);
+    }
+}
+
+/// Prompt user for confirmation
+fn confirm_deletion() -> bool {
     println!();
     print!("Delete these worktrees? [y/N] ");
     io::stdout().flush().ok();
 
     let mut input = String::new();
     io::stdin().read_line(&mut input).ok();
-    if !input.trim().eq_ignore_ascii_case("y") {
-        println!("Cancelled.");
+    input.trim().eq_ignore_ascii_case("y")
+}
+
+/// Delete all worktrees and their branches
+fn delete_worktrees(worktrees: &[WorktreeInfo]) -> Result<()> {
+    for wt in worktrees {
+        if delete_single_worktree(wt)? {
+            delete_branch_if_exists(&wt.branch)?;
+        }
+    }
+
+    println!();
+    println!("Done. Deleted {} worktree(s).", worktrees.len());
+
+    Ok(())
+}
+
+/// Delete a single worktree. Returns true if successful.
+fn delete_single_worktree(wt: &WorktreeInfo) -> Result<bool> {
+    let has_submodules = std::path::Path::new(&wt.path).join(".gitmodules").exists();
+
+    let mut args = vec!["worktree", "remove"];
+    if has_submodules {
+        args.push("--force");
+    }
+    args.push(&wt.path);
+
+    let status = Command::new("git")
+        .args(&args)
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if status.success() {
+        println!("Deleted: {} ({})", wt.path, wt.reason);
+        Ok(true)
+    } else {
+        eprintln!("Failed to delete: {}", wt.path);
+        Ok(false)
+    }
+}
+
+/// Delete a branch if it exists locally
+fn delete_branch_if_exists(branch: &str) -> Result<()> {
+    if branch.is_empty() || !local_branch_exists(branch) {
         return Ok(());
     }
 
-    println!();
+    let status = Command::new("git")
+        .args(["branch", "-D", branch])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
-    for wt in &to_delete {
-        // Remove worktree (force if submodules exist)
-        let has_submodules = std::path::Path::new(&wt.path).join(".gitmodules").exists();
-
-        let worktree_remove_args = if has_submodules {
-            vec!["worktree", "remove", "--force", &wt.path]
-        } else {
-            vec!["worktree", "remove", &wt.path]
-        };
-
-        let status = Command::new("git")
-            .args(&worktree_remove_args)
-            .status()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        if status.success() {
-            println!("Deleted: {} ({})", wt.path, wt.reason);
-        } else {
-            eprintln!("Failed to delete: {}", wt.path);
-            continue;
-        }
-
-        // Delete the branch if it exists
-        if !wt.branch.is_empty() && local_branch_exists(&wt.branch) {
-            let status = Command::new("git")
-                .args(["branch", "-D", &wt.branch])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-            if status.success() {
-                println!("  Branch deleted: {}", wt.branch);
-            }
-        }
+    if status.success() {
+        println!("  Branch deleted: {branch}");
     }
-
-    println!();
-    println!("Done. Deleted {} worktree(s).", to_delete.len());
 
     Ok(())
 }

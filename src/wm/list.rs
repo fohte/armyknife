@@ -1,7 +1,7 @@
 use clap::Args;
 use std::process::Command;
 
-use super::common::WmError;
+use super::error::WmError;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}

@@ -2,9 +2,10 @@ use clap::Args;
 use std::path::Path;
 use std::process::Command;
 
-use super::common::{
-    BRANCH_PREFIX, Result, WmError, branch_exists, branch_to_worktree_name, get_main_branch,
-    get_repo_root, local_branch_exists, remote_branch_exists,
+use super::error::{Result, WmError};
+use super::git::{
+    BRANCH_PREFIX, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
+    local_branch_exists, remote_branch_exists,
 };
 
 /// Mode for creating a worktree
@@ -157,74 +158,110 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         }
     }
 
-    // Build claude command with optional prompt
-    // Use a temp file + keep() so the file survives until the shell reads it.
-    // We use `claude "$(cat '<path>')" ; rm '<path>'` which is POSIX-compliant,
-    // preserves exact content, and cleans up the temp file after use.
-    let claude_cmd = if let Some(prompt) = &args.prompt {
-        let prompt_file = tempfile::Builder::new()
-            .prefix("claude-prompt-")
-            .suffix(".txt")
-            .tempfile()
-            .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+    // Setup tmux window with nvim + claude
+    setup_tmux_window(
+        &repo_root,
+        &worktree_dir,
+        &worktree_name,
+        args.prompt.as_deref(),
+    )?;
 
-        std::fs::write(prompt_file.path(), prompt)
-            .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
+    Ok(())
+}
 
-        // keep() persists the file on disk (it won't be deleted on drop)
-        let prompt_path = prompt_file
-            .into_temp_path()
-            .keep()
-            .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
-
-        // Use shlex for safe shell escaping (handles spaces, quotes, metacharacters)
-        let path_str = prompt_path.display().to_string();
-        let escaped_path = shlex::try_quote(&path_str)
-            .map_err(|_| WmError::CommandFailed("Failed to escape path".into()))?;
-
-        // Read prompt, pass to claude, then delete the temp file
-        format!("claude \"$(cat {escaped_path})\" ; rm {escaped_path}")
-    } else {
-        "claude".to_string()
+/// Build the claude command, optionally with an initial prompt via temp file
+fn build_claude_command(prompt: Option<&str>) -> Result<String> {
+    let Some(prompt) = prompt else {
+        return Ok("claude".to_string());
     };
 
-    // Determine target tmux session from repository root
-    let target_session = get_tmux_session_name(&repo_root);
+    // Write prompt to a temp file that persists until shell reads it
+    let prompt_file = tempfile::Builder::new()
+        .prefix("claude-prompt-")
+        .suffix(".txt")
+        .tempfile()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
 
-    // Create session if it doesn't exist
-    let session_exists = Command::new("tmux")
-        .args(["has-session", "-t", &target_session])
+    std::fs::write(prompt_file.path(), prompt)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
+
+    let prompt_path = prompt_file
+        .into_temp_path()
+        .keep()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
+
+    let path_str = prompt_path.display().to_string();
+    let escaped_path = shlex::try_quote(&path_str)
+        .map_err(|_| WmError::CommandFailed("Failed to escape path".into()))?;
+
+    // Command reads prompt, passes to claude, then deletes temp file
+    Ok(format!(
+        "claude \"$(cat {escaped_path})\" ; rm {escaped_path}"
+    ))
+}
+
+/// Setup a tmux window with split panes for nvim and claude
+fn setup_tmux_window(
+    repo_root: &str,
+    worktree_dir: &str,
+    worktree_name: &str,
+    prompt: Option<&str>,
+) -> Result<()> {
+    let claude_cmd = build_claude_command(prompt)?;
+    let target_session = get_tmux_session_name(repo_root);
+
+    ensure_tmux_session_exists(&target_session, repo_root)?;
+    create_split_window(&target_session, worktree_dir, worktree_name, &claude_cmd)?;
+    switch_to_session_if_needed(&target_session)?;
+
+    Ok(())
+}
+
+/// Ensure the tmux session exists, creating it if necessary
+fn ensure_tmux_session_exists(session: &str, cwd: &str) -> Result<()> {
+    let exists = Command::new("tmux")
+        .args(["has-session", "-t", session])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
 
-    if !session_exists {
-        let status = Command::new("tmux")
-            .args(["new-session", "-ds", &target_session, "-c", &repo_root])
-            .status()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        if !status.success() {
-            return Err(WmError::CommandFailed("tmux new-session failed".into()));
-        }
+    if exists {
+        return Ok(());
     }
 
-    // Create a tmux window in the target session with split layout
-    // left pane: neovim, right pane: claude code
+    let status = Command::new("tmux")
+        .args(["new-session", "-ds", session, "-c", cwd])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("tmux new-session failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Create a split window with nvim on left, claude on right
+fn create_split_window(
+    session: &str,
+    cwd: &str,
+    window_name: &str,
+    claude_cmd: &str,
+) -> Result<()> {
     let status = Command::new("tmux")
         .args([
             "new-window",
             "-t",
-            &target_session,
+            session,
             "-c",
-            &worktree_dir,
+            cwd,
             "-n",
-            &worktree_name,
+            window_name,
             ";",
             "split-window",
             "-h",
             "-c",
-            &worktree_dir,
+            cwd,
             ";",
             "select-pane",
             "-t",
@@ -239,7 +276,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
             "2",
             ";",
             "send-keys",
-            &claude_cmd,
+            claude_cmd,
             "C-m",
             ";",
             "select-pane",
@@ -253,25 +290,33 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         return Err(WmError::CommandFailed("tmux new-window failed".into()));
     }
 
-    // Switch to the target session if in tmux and not already in it
-    if std::env::var("TMUX").is_ok() {
-        let current_session = Command::new("tmux")
-            .args(["display-message", "-p", "#{session_name}"])
-            .output()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    Ok(())
+}
 
-        if current_session.status.success() {
-            let current = String::from_utf8_lossy(&current_session.stdout)
-                .trim()
-                .to_string();
-            if current != target_session {
-                Command::new("tmux")
-                    .args(["switch-client", "-t", &target_session])
-                    .status()
-                    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-            }
-        }
+/// Switch to session if we're in tmux and not already in the target session
+fn switch_to_session_if_needed(target_session: &str) -> Result<()> {
+    if std::env::var("TMUX").is_err() {
+        return Ok(());
     }
+
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", "#{session_name}"])
+        .output()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if current == target_session {
+        return Ok(());
+    }
+
+    Command::new("tmux")
+        .args(["switch-client", "-t", target_session])
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     Ok(())
 }
