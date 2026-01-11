@@ -1,5 +1,6 @@
 mod ai;
 mod cli;
+mod gh;
 mod human_in_the_loop;
 mod update;
 
@@ -23,6 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
+        Commands::Gh(gh_cmd) => gh_cmd.run()?,
         Commands::Update => update::do_update()?,
     }
 

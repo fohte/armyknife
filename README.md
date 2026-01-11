@@ -35,6 +35,7 @@ a <command>
   - `new` - Create a new PR body draft file
   - `review` - Open the draft in Neovim for review (via WezTerm)
   - `submit` - Create a PR from the approved draft
+- `a gh check-pr-review <pr-number>` - Fetch PR review comments in a concise format
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
