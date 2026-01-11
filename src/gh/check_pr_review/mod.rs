@@ -53,7 +53,7 @@ pub struct CheckPrReviewArgs {
     pub open_details: bool,
 }
 
-pub fn run(args: &CheckPrReviewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: &CheckPrReviewArgs) -> Result<()> {
     let (owner, repo) = get_repo_owner_and_name(args.repo.as_deref())?;
 
     let pr_data = fetch_pr_data(&owner, &repo, args.pr_number, args.include_resolved)?;

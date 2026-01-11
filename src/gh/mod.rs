@@ -11,7 +11,10 @@ pub enum GhCommands {
 impl GhCommands {
     pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Self::CheckPrReview(args) => check_pr_review::run(args),
+            Self::CheckPrReview(args) => {
+                check_pr_review::run(args)?;
+                Ok(())
+            }
         }
     }
 }

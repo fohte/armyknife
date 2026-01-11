@@ -134,7 +134,7 @@ fn test_root_comment_and_replies() {
 fn test_reply_to_deserialize_ignores_extra_fields() {
     let json = r#"{"databaseId": 123}"#;
     let reply_to: ReplyTo = serde_json::from_str(json).unwrap();
-    assert!(std::mem::size_of_val(&reply_to) == 0 || true);
+    assert_eq!(std::mem::size_of::<ReplyTo>(), 0);
 }
 
 #[test]

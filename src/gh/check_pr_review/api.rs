@@ -4,6 +4,8 @@ use indoc::indoc;
 use serde::Deserialize;
 use std::process::Command;
 
+// Note: comments(first: 100) doesn't paginate, so threads with 100+ comments
+// will be truncated. This is an acceptable limitation as such threads are rare.
 const GRAPHQL_QUERY: &str = indoc! {"
     query($owner: String!, $repo: String!, $pr: Int!, $threadCursor: String, $reviewCursor: String) {
       repository(owner: $owner, name: $repo) {
