@@ -2,52 +2,30 @@
 
 This document describes the design principles and conventions for armyknife.
 
-## Command Hierarchy
+## Command Design
 
-### Top-level Commands
-
-Direct user actions that don't require subcommands.
-
-- `update`: Self-update the CLI
-
-### `ai` Subcommands
-
-Commands designed for AI agents (e.g., Claude Code) to call programmatically.
-
-These are NOT meant to be called directly by humans. Instead, AI agents use these during automated workflows (e.g., via Claude Code skills).
-
-## Naming Convention
-
-### Pattern: Noun + Verb
-
-`ai` subcommands follow a noun-verb pattern:
+Commands follow the pattern:
 
 ```
-a ai <noun> <verb>
+a [<scope>...] <action>
 ```
 
-| Level | Pattern         | Example           |
-| ----- | --------------- | ----------------- |
-| Noun  | `a ai <noun>`   | `a ai pr-draft`   |
-| Verb  | `<noun> <verb>` | `pr-draft submit` |
-
-### Rationale
-
-- **Noun** represents the resource being managed (e.g., `pr-draft`)
-- **Verb** represents the action to perform (e.g., `new`, `review`, `submit`)
-- This allows multiple verbs per noun, keeping related actions grouped
+- **Scope**: Optional, can be nested to group related commands
+- **Action**: The verb representing what to do
 
 ### Examples
 
-```sh
-# pr-draft: Manage PR body drafts
-a ai pr-draft new       # Create a new draft
-a ai pr-draft review    # Open draft for human review
-a ai pr-draft submit    # Submit as a PR
+| Command                | Scope         | Action            |
+| ---------------------- | ------------- | ----------------- |
+| `a update`             | (none)        | `update`          |
+| `a wm new`             | `wm`          | `new`             |
+| `a ai pr-draft submit` | `ai pr-draft` | `submit`          |
+| `a gh check-pr-review` | `gh`          | `check-pr-review` |
 
-# Future example: branch-name generation
-a ai gen new --branch   # Generate a branch name (hypothetical)
-```
+### Naming Convention
+
+- **Scope**: Noun or abbreviation representing the domain (e.g., `ai`, `wm`, `gh`)
+- **Action**: Verb representing what to do (e.g., `new`, `submit`, `update`)
 
 ## Module Structure
 
@@ -66,9 +44,4 @@ src/
 └── main.rs                 # Entry point
 ```
 
-When adding a new `ai` subcommand:
-
-1. Create a new directory under `src/ai/` (e.g., `src/ai/gen/`)
-2. Define the subcommand enum in `mod.rs`
-3. Add each action as a separate module
-4. Register in `src/ai/mod.rs`
+Shared modules are extracted when reusable (e.g., `human_in_the_loop/`).
