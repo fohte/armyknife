@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::Path;
 use std::process::Command;
 
 use super::error::{Result, WmError};
@@ -11,7 +12,14 @@ pub const BRANCH_PREFIX: &str = "fohte/";
 /// For bare repositories, this is the bare repo directory.
 /// For regular repositories, this is the main working tree root.
 pub fn get_repo_root() -> Result<String> {
+    let cwd = std::env::current_dir().map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    get_repo_root_in(&cwd)
+}
+
+/// Get the main worktree root, running git from the specified directory.
+pub fn get_repo_root_in(cwd: &Path) -> Result<String> {
     let output = Command::new("git")
+        .current_dir(cwd)
         .args(["worktree", "list", "--porcelain"])
         .output()
         .map_err(|e| WmError::CommandFailed(e.to_string()))?;

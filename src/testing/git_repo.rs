@@ -84,48 +84,4 @@ impl TestRepo {
     pub fn worktree_path(&self, branch_name: &str) -> PathBuf {
         self.path().join(".worktrees").join(branch_name)
     }
-
-    /// Run a closure in the repository directory.
-    pub fn run_in_dir<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let _guard = WorkingDirGuard::change(&self.path());
-        f()
-    }
-
-    /// Run a closure in a worktree directory.
-    pub fn run_in_worktree<F, R>(&self, branch_name: &str, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let worktree_path = self.worktree_path(branch_name);
-        let _guard = WorkingDirGuard::change(&worktree_path);
-        f()
-    }
-}
-
-/// RAII guard that changes the current working directory and restores it on drop.
-///
-/// This guard is essential for tests that modify global state (current working directory).
-/// Without it:
-/// - Tests could pollute each other's state
-/// - Panic during test would leave cwd in unexpected state
-/// - Parallel tests would have race conditions on cwd
-pub struct WorkingDirGuard {
-    original: PathBuf,
-}
-
-impl WorkingDirGuard {
-    pub fn change(path: &Path) -> Self {
-        let original = std::env::current_dir().expect("Failed to get current dir");
-        std::env::set_current_dir(path).expect("Failed to change directory");
-        Self { original }
-    }
-}
-
-impl Drop for WorkingDirGuard {
-    fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.original);
-    }
 }
