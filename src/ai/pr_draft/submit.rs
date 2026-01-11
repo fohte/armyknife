@@ -4,8 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use super::common::{
-    CommandRunner, DraftFile, PrDraftError, RealCommandRunner, RepoInfo, check_is_private,
-    contains_japanese,
+    DraftFile, GhRunner, PrDraftError, RealGhRunner, RepoInfo, check_is_private, contains_japanese,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -35,12 +34,12 @@ struct PrTarget {
 }
 
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_with_runner(args, &RealCommandRunner)
+    run_with_gh_runner(args, &RealGhRunner)
 }
 
-fn run_with_runner(
+fn run_with_gh_runner(
     args: &SubmitArgs,
-    runner: &impl CommandRunner,
+    gh_runner: &impl GhRunner,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
@@ -49,7 +48,7 @@ fn run_with_runner(
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
             })?;
-            let is_private = check_is_private(runner, &owner, &repo)?;
+            let is_private = check_is_private(gh_runner, &owner, &repo)?;
             (
                 path.clone(),
                 PrTarget {
@@ -62,7 +61,7 @@ fn run_with_runner(
         }
         None => {
             // Auto-detect from current git repo
-            let repo_info = RepoInfo::from_current_dir(runner)?;
+            let repo_info = RepoInfo::from_current_dir(gh_runner)?;
             let target = PrTarget {
                 owner: repo_info.owner.clone(),
                 repo: repo_info.repo.clone(),
@@ -140,7 +139,7 @@ fn run_with_runner(
     }
 
     // Create PR
-    let output = runner
+    let output = gh_runner
         .run_gh_with_args(&gh_args)
         .map_err(|e| PrDraftError::CommandFailed(format!("Failed to run gh: {e}")))?;
 
@@ -158,7 +157,7 @@ fn run_with_runner(
     draft.cleanup()?;
 
     // Open PR in browser using the returned URL
-    runner.open_in_browser(&repo_spec, &pr_url);
+    gh_runner.open_in_browser(&repo_spec, &pr_url);
 
     Ok(())
 }
@@ -166,12 +165,14 @@ fn run_with_runner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::pr_draft::common::test_utils::MockCommandRunner;
+    use crate::ai::pr_draft::common::test_utils::MockGhRunner;
     use indoc::indoc;
     use std::fs;
 
     struct TestEnv {
-        runner: MockCommandRunner,
+        gh_runner: MockGhRunner,
+        owner: String,
+        repo: String,
         draft_dir: std::path::PathBuf,
     }
 
@@ -181,19 +182,24 @@ mod tests {
         }
     }
 
-    fn setup_test_env(owner: &str, repo: &str, branch: &str) -> TestEnv {
-        let runner = MockCommandRunner::new(owner, repo, branch);
+    fn setup_test_env(owner: &str, repo: &str, _branch: &str) -> TestEnv {
+        let gh_runner = MockGhRunner::new();
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
         }
-        TestEnv { runner, draft_dir }
+        TestEnv {
+            gh_runner,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            draft_dir,
+        }
     }
 
     fn create_approved_draft(env: &TestEnv, branch: &str, title: &str, body: &str) -> PathBuf {
         let repo_info = RepoInfo {
-            owner: env.runner.owner.clone(),
-            repo: env.runner.repo.clone(),
+            owner: env.owner.clone(),
+            repo: env.repo.clone(),
             branch: branch.to_string(),
             is_private: true,
         };
@@ -234,11 +240,11 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run_with_runner(&args, &env.runner);
+        let result = run_with_gh_runner(&args, &env.gh_runner);
 
         assert!(
             result.is_ok(),
-            "submit should work with MockCommandRunner: {:?}",
+            "submit should work with MockGhRunner: {:?}",
             result.err()
         );
     }
@@ -257,7 +263,7 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run_with_runner(&args, &env.runner);
+        let result = run_with_gh_runner(&args, &env.gh_runner);
 
         assert!(
             result.is_ok(),
@@ -270,8 +276,8 @@ mod tests {
     fn submit_fails_when_not_approved() {
         let env = setup_test_env("owner", "repo_submit_not_approved", "feature/unapproved");
         let repo_info = RepoInfo {
-            owner: env.runner.owner.clone(),
-            repo: env.runner.repo.clone(),
+            owner: env.owner.clone(),
+            repo: env.repo.clone(),
             branch: "feature/unapproved".to_string(),
             is_private: true,
         };
@@ -299,7 +305,7 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run_with_runner(&args, &env.runner);
+        let result = run_with_gh_runner(&args, &env.gh_runner);
 
         assert!(result.is_err(), "submit should fail when not approved");
         let err_msg = result.unwrap_err().to_string();
@@ -313,8 +319,8 @@ mod tests {
     fn submit_fails_with_empty_title() {
         let env = setup_test_env("owner", "repo_submit_empty_title", "feature/empty-title");
         let repo_info = RepoInfo {
-            owner: env.runner.owner.clone(),
-            repo: env.runner.repo.clone(),
+            owner: env.owner.clone(),
+            repo: env.repo.clone(),
             branch: "feature/empty-title".to_string(),
             is_private: true,
         };
@@ -346,7 +352,7 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run_with_runner(&args, &env.runner);
+        let result = run_with_gh_runner(&args, &env.gh_runner);
 
         assert!(result.is_err(), "submit should fail with empty title");
         let err_msg = result.unwrap_err().to_string();
