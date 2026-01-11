@@ -36,12 +36,12 @@ Update to the latest version.
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
-### `a ai <command>`
+### `a ai`
 
 Commands designed for AI agents (e.g., Claude Code) to call programmatically.
 These provide structured inputs/outputs suitable for AI workflows.
 
-#### `a ai pr-draft <action>`
+#### `a ai pr-draft`
 
 Manage PR body drafts with human-in-the-loop review.
 
