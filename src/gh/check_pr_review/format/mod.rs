@@ -8,9 +8,12 @@ use super::models::{Review, ReviewState};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static DETAILS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<details[^>]*>\s*<summary[^>]*>(.*?)</summary>.*?</details>").unwrap()
-});
+// Matches <details> blocks with optional <summary>
+static DETAILS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<details[^>]*>(.*?)</details>").unwrap());
+
+static SUMMARY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)^\s*<summary[^>]*>(.*?)</summary>").unwrap());
 
 pub struct FormatOptions {
     pub open_details: bool,
@@ -18,7 +21,14 @@ pub struct FormatOptions {
 
 fn collapse_details(text: &str) -> String {
     DETAILS_RE
-        .replace_all(text, |caps: &regex::Captures| format!("[▶ {}]", &caps[1]))
+        .replace_all(text, |caps: &regex::Captures| {
+            let inner = &caps[1];
+            if let Some(summary_caps) = SUMMARY_RE.captures(inner) {
+                format!("[▶ {}]", &summary_caps[1])
+            } else {
+                "[▶ ...]".to_string()
+            }
+        })
         .to_string()
 }
 
@@ -73,19 +83,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_collapse_details() {
-        let input = "Before <details><summary>Click me</summary>Hidden content</details> After";
-        let expected = "Before [▶ Click me] After";
-        assert_eq!(collapse_details(input), expected);
+    fn test_collapse_details_with_summary() {
+        assert_eq!(
+            collapse_details(
+                "Before <details><summary>Click me</summary>Hidden content</details> After"
+            ),
+            "Before [▶ Click me] After"
+        );
     }
 
     #[test]
     fn test_collapse_details_multiline() {
-        let input =
-            "Text\n<details>\n<summary>Summary</summary>\nLots of\nhidden\nstuff\n</details>\nMore";
-        let result = collapse_details(input);
-        assert!(result.contains("[▶ Summary]"));
-        assert!(!result.contains("hidden"));
+        assert_eq!(
+            collapse_details(
+                "Text\n<details>\n<summary>Summary</summary>\nLots of\nhidden\nstuff\n</details>\nMore"
+            ),
+            "Text\n[▶ Summary]\nMore"
+        );
+    }
+
+    #[test]
+    fn test_collapse_details_without_summary() {
+        assert_eq!(
+            collapse_details("Before <details>Hidden content</details> After"),
+            "Before [▶ ...] After"
+        );
     }
 
     #[test]

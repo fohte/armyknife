@@ -232,13 +232,13 @@ mod tests {
         assert!(result.is_err(), "second run without --force should fail");
 
         let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("already exists"),
-            "error message should mention 'already exists': {err_msg}"
-        );
-        assert!(
-            err_msg.contains("--force"),
-            "error message should mention '--force': {err_msg}"
+        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
+        assert_eq!(
+            err_msg,
+            format!(
+                "Draft file already exists: {}\nUse --force to overwrite",
+                draft_path.display()
+            )
         );
 
         let content = fs::read_to_string(&draft_path).expect("read draft");
@@ -265,12 +265,7 @@ mod tests {
     #[test]
     fn format_diff_with_color_includes_ansi_codes() {
         let result = format_diff("old\n", "new\n", true);
-        assert!(result.contains("\x1b[31m"), "should contain red color code");
-        assert!(
-            result.contains("\x1b[32m"),
-            "should contain green color code"
-        );
-        assert!(result.contains("\x1b[0m"), "should contain reset code");
+        assert_eq!(result, "\x1b[31m-old\n\x1b[0m\x1b[32m+new\n\x1b[0m");
     }
 
     #[test]

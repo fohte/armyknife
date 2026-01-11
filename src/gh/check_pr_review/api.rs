@@ -1,66 +1,67 @@
 use super::models::{PrData, Review, ReviewThread};
 use super::{CheckPrReviewError, Result};
+use indoc::indoc;
 use serde::Deserialize;
 use std::process::Command;
 
-const GRAPHQL_QUERY: &str = r#"
-query($owner: String!, $repo: String!, $pr: Int!, $threadCursor: String, $reviewCursor: String) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      reviews(first: 100, after: $reviewCursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          databaseId
-          author { login }
-          body
-          state
-          createdAt
-        }
-      }
-      reviewThreads(first: 100, after: $threadCursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          isResolved
-          comments(first: 100) {
+const GRAPHQL_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $pr: Int!, $threadCursor: String, $reviewCursor: String) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) {
+          reviews(first: 100, after: $reviewCursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             nodes {
               databaseId
               author { login }
               body
+              state
               createdAt
-              path
-              line
-              originalLine
-              diffHunk
-              replyTo { databaseId }
-              pullRequestReview { databaseId }
+            }
+          }
+          reviewThreads(first: 100, after: $threadCursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              isResolved
+              comments(first: 100) {
+                nodes {
+                  databaseId
+                  author { login }
+                  body
+                  createdAt
+                  path
+                  line
+                  originalLine
+                  diffHunk
+                  replyTo { databaseId }
+                  pullRequestReview { databaseId }
+                }
+              }
             }
           }
         }
       }
     }
-  }
-}
-"#;
+"};
 
 #[derive(Debug, Deserialize)]
-struct GraphQlResponse {
-    data: Option<GraphQlData>,
-    errors: Option<Vec<GraphQlError>>,
+struct GraphQLResponse {
+    data: Option<GraphQLData>,
+    errors: Option<Vec<GraphQLError>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GraphQlError {
+struct GraphQLError {
     message: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct GraphQlData {
+struct GraphQLData {
     repository: Option<Repository>,
 }
 
@@ -98,87 +99,105 @@ struct PageInfo {
     end_cursor: Option<String>,
 }
 
+#[derive(Default)]
+struct PaginationState {
+    thread_cursor: Option<String>,
+    review_cursor: Option<String>,
+    thread_done: bool,
+    review_done: bool,
+}
+
+impl PaginationState {
+    fn has_more(&self) -> bool {
+        !self.thread_done || !self.review_done
+    }
+
+    fn update_threads(&mut self, page_info: &PageInfo) {
+        if page_info.has_next_page {
+            self.thread_cursor = page_info.end_cursor.clone();
+        } else {
+            self.thread_done = true;
+        }
+    }
+
+    fn update_reviews(&mut self, page_info: &PageInfo) {
+        if page_info.has_next_page {
+            self.review_cursor = page_info.end_cursor.clone();
+        } else {
+            self.review_done = true;
+        }
+    }
+}
+
 pub fn fetch_pr_data(
     owner: &str,
     repo: &str,
     pr_number: u64,
     include_resolved: bool,
 ) -> Result<PrData> {
-    let mut all_threads: Vec<ReviewThread> = Vec::new();
-    let mut all_reviews: Vec<Review> = Vec::new();
-    let mut thread_cursor: Option<String> = None;
-    let mut review_cursor: Option<String> = None;
-    let mut thread_has_next = true;
-    let mut review_has_next = true;
+    let mut threads: Vec<ReviewThread> = Vec::new();
+    let mut reviews: Vec<Review> = Vec::new();
+    let mut pagination = PaginationState::default();
 
-    while thread_has_next || review_has_next {
-        let result = execute_graphql(
-            owner,
-            repo,
-            pr_number,
-            thread_cursor.as_deref(),
-            review_cursor.as_deref(),
-        )?;
-
-        let pr = result
+    while pagination.has_more() {
+        let pr = execute_graphql(owner, repo, pr_number, &pagination)?
             .repository
             .and_then(|r| r.pull_request)
             .ok_or_else(|| {
-                CheckPrReviewError::GraphQlError("Pull request not found".to_string())
+                CheckPrReviewError::GraphQLError("Pull request not found".to_string())
             })?;
 
-        if thread_has_next {
-            all_threads.extend(pr.review_threads.nodes);
-            thread_has_next = pr.review_threads.page_info.has_next_page;
-            thread_cursor = pr.review_threads.page_info.end_cursor;
+        if !pagination.thread_done {
+            threads.extend(pr.review_threads.nodes);
+            pagination.update_threads(&pr.review_threads.page_info);
         }
 
-        if review_has_next {
-            all_reviews.extend(pr.reviews.nodes);
-            review_has_next = pr.reviews.page_info.has_next_page;
-            review_cursor = pr.reviews.page_info.end_cursor;
+        if !pagination.review_done {
+            reviews.extend(pr.reviews.nodes);
+            pagination.update_reviews(&pr.reviews.page_info);
         }
     }
 
-    // Filter threads by resolved status if needed
     if !include_resolved {
-        all_threads.retain(|t| !t.is_resolved);
+        threads.retain(|t| !t.is_resolved);
     }
 
-    Ok(PrData {
-        reviews: all_reviews,
-        threads: all_threads,
-    })
+    Ok(PrData { reviews, threads })
 }
 
 fn execute_graphql(
     owner: &str,
     repo: &str,
     pr_number: u64,
-    thread_cursor: Option<&str>,
-    review_cursor: Option<&str>,
-) -> Result<GraphQlData> {
+    pagination: &PaginationState,
+) -> Result<GraphQLData> {
     let mut args = vec![
-        "api".to_string(),
-        "graphql".to_string(),
-        "-f".to_string(),
-        format!("query={GRAPHQL_QUERY}"),
-        "-f".to_string(),
-        format!("owner={owner}"),
-        "-f".to_string(),
-        format!("repo={repo}"),
-        "-F".to_string(),
-        format!("pr={pr_number}"),
+        "api", "graphql", "-f", "query=", "-f", "owner=", "-f", "repo=", "-F", "pr=",
     ];
 
-    if let Some(cursor) = thread_cursor {
-        args.push("-f".to_string());
-        args.push(format!("threadCursor={cursor}"));
+    // Build the actual argument values separately to avoid shell injection
+    let query_arg = format!("query={GRAPHQL_QUERY}");
+    let owner_arg = format!("owner={owner}");
+    let repo_arg = format!("repo={repo}");
+    let pr_arg = format!("pr={pr_number}");
+
+    args[3] = &query_arg;
+    args[5] = &owner_arg;
+    args[7] = &repo_arg;
+    args[9] = &pr_arg;
+
+    let thread_cursor_arg;
+    if let Some(cursor) = &pagination.thread_cursor {
+        thread_cursor_arg = format!("threadCursor={cursor}");
+        args.push("-f");
+        args.push(&thread_cursor_arg);
     }
 
-    if let Some(cursor) = review_cursor {
-        args.push("-f".to_string());
-        args.push(format!("reviewCursor={cursor}"));
+    let review_cursor_arg;
+    if let Some(cursor) = &pagination.review_cursor {
+        review_cursor_arg = format!("reviewCursor={cursor}");
+        args.push("-f");
+        args.push(&review_cursor_arg);
     }
 
     let output = Command::new("gh")
@@ -187,19 +206,19 @@ fn execute_graphql(
         .map_err(CheckPrReviewError::IoError)?;
 
     if !output.status.success() {
-        return Err(CheckPrReviewError::GraphQlError(
+        return Err(CheckPrReviewError::GraphQLError(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
 
-    let response: GraphQlResponse = serde_json::from_slice(&output.stdout)?;
+    let response: GraphQLResponse = serde_json::from_slice(&output.stdout)?;
 
     if let Some(errors) = response.errors {
-        let messages: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
-        return Err(CheckPrReviewError::GraphQlError(messages.join(", ")));
+        let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        return Err(CheckPrReviewError::GraphQLError(messages.join(", ")));
     }
 
     response
         .data
-        .ok_or_else(|| CheckPrReviewError::GraphQlError("No data in response".to_string()))
+        .ok_or_else(|| CheckPrReviewError::GraphQLError("No data in response".to_string()))
 }

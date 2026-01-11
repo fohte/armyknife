@@ -13,7 +13,7 @@ pub enum CheckPrReviewError {
     RepoInfoError(String),
 
     #[error("GraphQL API error: {0}")]
-    GraphQlError(String),
+    GraphQLError(String),
 
     #[error("JSON parse error: {0}")]
     JsonError(#[from] serde_json::Error),
