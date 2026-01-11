@@ -55,38 +55,64 @@ pub(super) fn process_body(body: &str, options: &FormatOptions) -> String {
 
 /// Render markdown text for terminal display using termimad
 pub(super) fn render_markdown(text: &str) -> String {
+    use termimad::MadSkin;
+    use termimad::crossterm::style::{Attribute, Color};
+
     if text.trim().is_empty() {
         return String::new();
     }
-    termimad::text(text).to_string()
+
+    let mut skin = MadSkin::default_dark();
+
+    // Headers: bold white (like glow)
+    for header in &mut skin.headers {
+        header.compound_style.remove_attr(Attribute::Underlined);
+        header.compound_style.set_fg(Color::White);
+    }
+
+    // Inline code: match glow's dark.json (color: 203, background: 236)
+    skin.inline_code
+        .set_fgbg(Color::AnsiValue(203), Color::AnsiValue(236));
+
+    // Code block: match glow's chroma text color #C4C4C4 ≈ 251, background #373737 ≈ 237
+    skin.code_block
+        .set_fgbg(Color::AnsiValue(251), Color::AnsiValue(237));
+
+    // Left margin (2 spaces like glow)
+    skin.paragraph.left_margin = 2;
+    for header in &mut skin.headers {
+        header.left_margin = 2;
+    }
+    skin.code_block.left_margin = 4;
+
+    skin.term_text(text).to_string()
 }
 
-/// Print diff hunk with delta syntax highlighting
+/// Print diff hunk with delta syntax highlighting (last 3 lines only)
 pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
+    let lines: Vec<&str> = diff_hunk.lines().collect();
+
+    // Extract hunk header (first line if it starts with @@)
+    let hunk_header = lines.first().filter(|l| l.starts_with("@@")).copied();
+
+    // Get content lines (excluding hunk header if present)
+    let content_start = if hunk_header.is_some() { 1 } else { 0 };
+    let content_lines = &lines[content_start..];
+
+    // Only show last 3 lines of content (matching original script's `tail -n 3`)
+    let last_3_start = content_lines.len().saturating_sub(3);
+    let last_3_lines = &content_lines[last_3_start..];
+
     // Build diff format that delta expects
     let mut diff_input = String::new();
     diff_input.push_str(&format!("diff --git a/{path} b/{path}\n"));
     diff_input.push_str(&format!("--- a/{path}\n"));
     diff_input.push_str(&format!("+++ b/{path}\n"));
-
-    // Extract hunk header (@@...@@) and content
-    let lines: Vec<&str> = diff_hunk.lines().collect();
-    let hunk_header = lines.first().filter(|l| l.starts_with("@@")).copied();
-
-    if let Some(header) = hunk_header {
-        diff_input.push_str(header);
+    diff_input.push_str(hunk_header.unwrap_or("@@ -1,1 +1,1 @@"));
+    diff_input.push('\n');
+    for line in last_3_lines {
+        diff_input.push_str(line);
         diff_input.push('\n');
-        for line in &lines[1..] {
-            diff_input.push_str(line);
-            diff_input.push('\n');
-        }
-    } else {
-        // No hunk header, use a synthetic one and include all lines
-        diff_input.push_str("@@ -1,1 +1,1 @@\n");
-        for line in &lines {
-            diff_input.push_str(line);
-            diff_input.push('\n');
-        }
     }
 
     // Try to pipe through delta, fall back to plain output
@@ -101,9 +127,8 @@ pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
         }
         let _ = child.wait();
     } else {
-        // delta not available, show last 3 lines of diff_hunk (original behavior)
-        let start = lines.len().saturating_sub(3);
-        for line in &lines[start..] {
+        // delta not available, show last 3 lines plain
+        for line in last_3_lines {
             println!("{line}");
         }
     }
