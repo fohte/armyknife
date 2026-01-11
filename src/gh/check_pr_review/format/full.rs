@@ -1,3 +1,4 @@
+use super::color::{BG_GRAY, DIM, RESET};
 use super::{FormatOptions, author_login, format_datetime, process_body, state_indicator};
 use crate::gh::check_pr_review::models::{Comment, PrData, Review, ReviewThread};
 use crate::gh::check_pr_review::{CheckPrReviewError, Result};
@@ -46,14 +47,15 @@ fn print_review_with_threads(review: &Review, pr_data: &PrData, options: &Format
 fn print_review(review: &Review, options: &FormatOptions) {
     let formatted_date = format_datetime(&review.created_at);
     println!(
-        "@{} ({}) {}",
+        "{BG_GRAY} @{} ({formatted_date}) {RESET} {}",
         author_login(review),
-        formatted_date,
         state_indicator(review.state)
     );
 
     let body = process_body(&review.body, options);
-    println!("{body}");
+    if !body.is_empty() {
+        println!("{body}");
+    }
     println!();
 }
 
@@ -77,11 +79,18 @@ fn print_comment(
     let formatted_date = format_datetime(&comment.created_at);
 
     if is_reply {
-        println!("{indent}└─ @{} ({formatted_date})", comment.author_login());
-    } else {
-        let resolved_indicator = if is_resolved { " [resolved]" } else { "" };
         println!(
-            "@{} ({formatted_date}){resolved_indicator}",
+            "{indent}└─ {BG_GRAY} @{} ({formatted_date}) {RESET}",
+            comment.author_login()
+        );
+    } else {
+        let resolved_indicator = if is_resolved {
+            format!(" {DIM}[resolved]{RESET}")
+        } else {
+            String::new()
+        };
+        println!(
+            "{BG_GRAY} @{} ({formatted_date}) {RESET}{resolved_indicator}",
             comment.author_login()
         );
     }

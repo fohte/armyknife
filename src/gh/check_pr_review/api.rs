@@ -171,39 +171,21 @@ fn execute_graphql(
     pr_number: u64,
     pagination: &PaginationState,
 ) -> Result<GraphQLData> {
-    let mut args = vec![
-        "api", "graphql", "-f", "query=", "-f", "owner=", "-f", "repo=", "-F", "pr=",
-    ];
+    let mut cmd = Command::new("gh");
+    cmd.args(["api", "graphql"]);
+    cmd.args(["-f", &format!("query={GRAPHQL_QUERY}")]);
+    cmd.args(["-f", &format!("owner={owner}")]);
+    cmd.args(["-f", &format!("repo={repo}")]);
+    cmd.args(["-F", &format!("pr={pr_number}")]);
 
-    // Build the actual argument values separately to avoid shell injection
-    let query_arg = format!("query={GRAPHQL_QUERY}");
-    let owner_arg = format!("owner={owner}");
-    let repo_arg = format!("repo={repo}");
-    let pr_arg = format!("pr={pr_number}");
-
-    args[3] = &query_arg;
-    args[5] = &owner_arg;
-    args[7] = &repo_arg;
-    args[9] = &pr_arg;
-
-    let thread_cursor_arg;
     if let Some(cursor) = &pagination.thread_cursor {
-        thread_cursor_arg = format!("threadCursor={cursor}");
-        args.push("-f");
-        args.push(&thread_cursor_arg);
+        cmd.args(["-f", &format!("threadCursor={cursor}")]);
     }
-
-    let review_cursor_arg;
     if let Some(cursor) = &pagination.review_cursor {
-        review_cursor_arg = format!("reviewCursor={cursor}");
-        args.push("-f");
-        args.push(&review_cursor_arg);
+        cmd.args(["-f", &format!("reviewCursor={cursor}")]);
     }
 
-    let output = Command::new("gh")
-        .args(&args)
-        .output()
-        .map_err(CheckPrReviewError::IoError)?;
+    let output = cmd.output().map_err(CheckPrReviewError::IoError)?;
 
     if !output.status.success() {
         return Err(CheckPrReviewError::GraphQLError(

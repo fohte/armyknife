@@ -19,6 +19,16 @@ pub struct FormatOptions {
     pub open_details: bool,
 }
 
+// ANSI color codes matching the original script
+pub(super) mod color {
+    pub const RESET: &str = "\x1b[0m";
+    pub const DIM: &str = "\x1b[2m";
+    pub const GREEN: &str = "\x1b[32m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const RED: &str = "\x1b[31m";
+    pub const BG_GRAY: &str = "\x1b[48;5;238m";
+}
+
 fn collapse_details(text: &str) -> String {
     DETAILS_RE
         .replace_all(text, |caps: &regex::Captures| {
@@ -60,13 +70,14 @@ pub(super) fn format_datetime(iso_date: &str) -> String {
         .collect()
 }
 
-pub(super) fn state_indicator(state: ReviewState) -> &'static str {
+pub(super) fn state_indicator(state: ReviewState) -> String {
+    use color::*;
     match state {
-        ReviewState::Approved => "[approved]",
-        ReviewState::ChangesRequested => "[changes requested]",
-        ReviewState::Commented => "[commented]",
-        ReviewState::Dismissed => "[dismissed]",
-        ReviewState::Pending => "[pending]",
+        ReviewState::Approved => format!("{GREEN}[approved]{RESET}"),
+        ReviewState::ChangesRequested => format!("{RED}[changes requested]{RESET}"),
+        ReviewState::Commented => format!("{YELLOW}[commented]{RESET}"),
+        ReviewState::Dismissed => format!("{DIM}[dismissed]{RESET}"),
+        ReviewState::Pending => format!("{DIM}[pending]{RESET}"),
     }
 }
 
