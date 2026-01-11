@@ -6,6 +6,8 @@ pub use summary::print_summary;
 
 use super::models::{Review, ReviewState};
 use regex::Regex;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
 // Matches <details> blocks with optional <summary>
@@ -43,10 +45,67 @@ fn collapse_details(text: &str) -> String {
 }
 
 pub(super) fn process_body(body: &str, options: &FormatOptions) -> String {
-    if options.open_details {
+    let text = if options.open_details {
         body.to_string()
     } else {
         collapse_details(body)
+    };
+    render_markdown(&text)
+}
+
+/// Render markdown text for terminal display using termimad
+pub(super) fn render_markdown(text: &str) -> String {
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    termimad::text(text).to_string()
+}
+
+/// Print diff hunk with delta syntax highlighting
+pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
+    // Build diff format that delta expects
+    let mut diff_input = String::new();
+    diff_input.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    diff_input.push_str(&format!("--- a/{path}\n"));
+    diff_input.push_str(&format!("+++ b/{path}\n"));
+
+    // Extract hunk header (@@...@@) and content
+    let lines: Vec<&str> = diff_hunk.lines().collect();
+    let hunk_header = lines.first().filter(|l| l.starts_with("@@")).copied();
+
+    if let Some(header) = hunk_header {
+        diff_input.push_str(header);
+        diff_input.push('\n');
+        for line in &lines[1..] {
+            diff_input.push_str(line);
+            diff_input.push('\n');
+        }
+    } else {
+        // No hunk header, use a synthetic one and include all lines
+        diff_input.push_str("@@ -1,1 +1,1 @@\n");
+        for line in &lines {
+            diff_input.push_str(line);
+            diff_input.push('\n');
+        }
+    }
+
+    // Try to pipe through delta, fall back to plain output
+    if let Ok(mut child) = Command::new("delta")
+        .args(["--paging=never", "--line-numbers"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(diff_input.as_bytes());
+        }
+        let _ = child.wait();
+    } else {
+        // delta not available, show last 3 lines of diff_hunk (original behavior)
+        let start = lines.len().saturating_sub(3);
+        for line in &lines[start..] {
+            println!("{line}");
+        }
     }
 }
 
@@ -62,6 +121,15 @@ pub(super) fn truncate_text(text: &str, max_length: usize) -> String {
 }
 
 pub(super) fn format_datetime(iso_date: &str) -> String {
+    use chrono::{DateTime, Local, Utc};
+
+    // Try to parse as ISO 8601 and convert to local time
+    if let Ok(utc) = iso_date.parse::<DateTime<Utc>>() {
+        let local: DateTime<Local> = utc.into();
+        return local.format("%Y-%m-%d %H:%M").to_string();
+    }
+
+    // Fallback: simple string manipulation
     iso_date
         .replace('T', " ")
         .replace('Z', "")
@@ -138,10 +206,16 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        assert_eq!(format_datetime("2024-01-15T10:30:00Z"), "2024-01-15 10:30");
-        assert_eq!(
-            format_datetime("2024-12-31T23:59:59.123Z"),
-            "2024-12-31 23:59"
-        );
+        // Valid ISO 8601 should produce YYYY-MM-DD HH:MM format (converted to local time)
+        let result = format_datetime("2024-06-15T12:30:00Z");
+        assert!(result.contains("2024-06-15") || result.contains("2024-06-16")); // depends on timezone
+        assert_eq!(result.len(), 16); // "YYYY-MM-DD HH:MM"
+
+        // Milliseconds should be handled
+        let result = format_datetime("2024-06-15T12:30:00.123Z");
+        assert_eq!(result.len(), 16);
+
+        // Invalid format falls back to string manipulation
+        assert_eq!(format_datetime("invalid"), "invalid");
     }
 }

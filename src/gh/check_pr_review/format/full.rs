@@ -1,5 +1,8 @@
 use super::color::{BG_GRAY, DIM, RESET};
-use super::{FormatOptions, author_login, format_datetime, process_body, state_indicator};
+use super::{
+    FormatOptions, author_login, format_datetime, print_diff_with_delta, process_body,
+    state_indicator,
+};
 use crate::gh::check_pr_review::models::{Comment, PrData, Review, ReviewThread};
 use crate::gh::check_pr_review::{CheckPrReviewError, Result};
 
@@ -96,13 +99,8 @@ fn print_comment(
     }
 
     if !is_reply && let Some(diff_hunk) = &comment.diff_hunk {
-        let path = comment.path.as_deref().unwrap_or("?");
-        println!("File: {path}");
-        let lines: Vec<&str> = diff_hunk.lines().collect();
-        let start = lines.len().saturating_sub(3);
-        for line in &lines[start..] {
-            println!("{line}");
-        }
+        let path = comment.path.as_deref().unwrap_or("unknown");
+        print_diff_with_delta(path, diff_hunk);
     }
 
     let body = process_body(&comment.body, options);
