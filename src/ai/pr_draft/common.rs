@@ -521,7 +521,6 @@ mod tests {
 #[cfg(test)]
 pub mod test_utils {
     use super::*;
-    use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
     /// Mock implementation of CommandRunner for testing.
@@ -552,12 +551,25 @@ pub mod test_utils {
         }
 
         fn make_output(stdout: &str, success: bool) -> Output {
-            Output {
-                status: if success {
-                    ExitStatus::from_raw(0)
-                } else {
+            #[cfg(unix)]
+            use std::os::unix::process::ExitStatusExt;
+            #[cfg(windows)]
+            use std::os::windows::process::ExitStatusExt;
+
+            let status = if success {
+                ExitStatus::from_raw(0)
+            } else {
+                #[cfg(unix)]
+                {
                     ExitStatus::from_raw(256) // exit code 1
-                },
+                }
+                #[cfg(windows)]
+                {
+                    ExitStatus::from_raw(1)
+                }
+            };
+            Output {
+                status,
                 stdout: stdout.as_bytes().to_vec(),
                 stderr: if success {
                     Vec::new()
@@ -592,7 +604,13 @@ pub mod test_utils {
         }
 
         fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output> {
-            let args_str: Vec<&str> = args.iter().filter_map(|s| s.to_str()).collect();
+            let args_str: Vec<&str> = args
+                .iter()
+                .map(|s| {
+                    s.to_str()
+                        .expect("MockCommandRunner only supports UTF-8 arguments in tests")
+                })
+                .collect();
             match args_str.first() {
                 Some(&"pr") if args_str.get(1) == Some(&"create") => {
                     match &self.gh_pr_create_result {
