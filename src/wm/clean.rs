@@ -139,6 +139,24 @@ fn collect_worktrees(repo_root: &str) -> Result<(Vec<WorktreeInfo>, Vec<Worktree
     let mut current_path: Option<String> = None;
     let mut current_branch: Option<String> = None;
 
+    // Closure to process a worktree entry and categorize by merge status
+    let mut process_entry = |path: String, branch: String| {
+        if path == repo_root {
+            return;
+        }
+        let merge_status = get_merge_status(&branch);
+        let wt = WorktreeInfo {
+            path,
+            branch,
+            reason: merge_status.reason().to_string(),
+        };
+        if merge_status.is_merged() {
+            to_delete.push(wt);
+        } else {
+            to_skip.push(wt);
+        }
+    };
+
     for line in stdout.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
             current_path = Some(path.to_string());
@@ -150,44 +168,14 @@ fn collect_worktrees(repo_root: &str) -> Result<(Vec<WorktreeInfo>, Vec<Worktree
         } else if line.is_empty() {
             // End of worktree entry
             if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
-                // Skip main worktree (bare repository root)
-                if path == repo_root {
-                    continue;
-                }
-
-                // Check merge status
-                let merge_status = get_merge_status(&branch);
-                let wt = WorktreeInfo {
-                    path,
-                    branch,
-                    reason: merge_status.reason().to_string(),
-                };
-
-                if merge_status.is_merged() {
-                    to_delete.push(wt);
-                } else {
-                    to_skip.push(wt);
-                }
+                process_entry(path, branch);
             }
         }
     }
 
     // Handle the last entry if there's no trailing newline
-    if let (Some(path), Some(branch)) = (current_path, current_branch)
-        && path != repo_root
-    {
-        let merge_status = get_merge_status(&branch);
-        let wt = WorktreeInfo {
-            path,
-            branch,
-            reason: merge_status.reason().to_string(),
-        };
-
-        if merge_status.is_merged() {
-            to_delete.push(wt);
-        } else {
-            to_skip.push(wt);
-        }
+    if let (Some(path), Some(branch)) = (current_path, current_branch) {
+        process_entry(path, branch);
     }
 
     Ok((to_delete, to_skip))

@@ -2,6 +2,9 @@ use serde::Deserialize;
 use std::process::Command;
 use thiserror::Error;
 
+/// Branch prefix for new branches created by `wm new`
+pub const BRANCH_PREFIX: &str = "fohte/";
+
 #[derive(Error, Debug)]
 pub enum WmError {
     #[error("Not in a git repository")]
@@ -207,10 +210,10 @@ pub fn get_merge_status(branch_name: &str) -> MergeStatus {
 }
 
 /// Normalize a branch name to a worktree directory name
-/// - Removes fohte/ prefix
+/// - Removes BRANCH_PREFIX
 /// - Replaces slashes with dashes
 pub fn branch_to_worktree_name(branch: &str) -> String {
-    let name_no_prefix = branch.strip_prefix("fohte/").unwrap_or(branch);
+    let name_no_prefix = branch.strip_prefix(BRANCH_PREFIX).unwrap_or(branch);
     name_no_prefix.replace('/', "-")
 }
 

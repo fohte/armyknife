@@ -36,7 +36,7 @@ a <command>
   - `review` - Open the draft in Neovim for review (via WezTerm)
   - `submit` - Create a PR from the approved draft
 - `a wm <subcommand>` - Git worktree management with tmux integration
-  - `list` - List worktrees with branch name, merge status, and PR info
+  - `list` - List all worktrees
   - `new <branch>` - Create a new worktree and open tmux window with nvim + claude
   - `delete [worktree]` - Delete a worktree (moves to main if run from within)
   - `clean` - Bulk delete merged worktrees

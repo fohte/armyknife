@@ -3,15 +3,70 @@ use std::path::Path;
 use std::process::Command;
 
 use super::common::{
-    Result, WmError, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
-    local_branch_exists, remote_branch_exists,
+    BRANCH_PREFIX, Result, WmError, branch_exists, branch_to_worktree_name, get_main_branch,
+    get_repo_root, local_branch_exists, remote_branch_exists,
 };
+
+/// Mode for creating a worktree
+enum WorktreeAddMode<'a> {
+    /// Checkout an existing local branch
+    LocalBranch { branch: &'a str },
+    /// Create a tracking branch from remote
+    TrackRemote { branch: &'a str },
+    /// Create a new branch from base
+    NewBranch { branch: &'a str, base: &'a str },
+    /// Force create/reset a branch from base
+    ForceNewBranch { branch: &'a str, base: &'a str },
+}
+
+/// Run `git worktree add` with the specified mode
+fn git_worktree_add(worktree_dir: &str, mode: WorktreeAddMode) -> Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.args(["worktree", "add", worktree_dir]);
+
+    match mode {
+        WorktreeAddMode::LocalBranch { branch } => {
+            cmd.arg(branch);
+        }
+        WorktreeAddMode::TrackRemote { branch } => {
+            cmd.args(["-b", branch, &format!("origin/{branch}")]);
+        }
+        WorktreeAddMode::NewBranch { branch, base } => {
+            cmd.args(["-b", branch, base]);
+        }
+        WorktreeAddMode::ForceNewBranch { branch, base } => {
+            cmd.args(["-B", branch, base]);
+        }
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed("git worktree add failed".into()));
+    }
+
+    Ok(())
+}
+
+/// Add a worktree for an existing branch (local or remote)
+fn add_worktree_for_branch(worktree_dir: &str, branch: &str) -> Result<()> {
+    if local_branch_exists(branch) {
+        git_worktree_add(worktree_dir, WorktreeAddMode::LocalBranch { branch })
+    } else if remote_branch_exists(branch) {
+        git_worktree_add(worktree_dir, WorktreeAddMode::TrackRemote { branch })
+    } else {
+        // Fallback: use as-is (should not normally happen)
+        git_worktree_add(worktree_dir, WorktreeAddMode::LocalBranch { branch })
+    }
+}
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
     /// Branch name (existing branch will be checked out,
     /// non-existing branch will be created with fohte/ prefix)
-    pub name: Option<String>,
+    pub name: String,
 
     /// Base branch for new branch creation (default: origin/main or origin/master)
     #[arg(long)]
@@ -27,16 +82,12 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let name = args
-        .name
-        .clone()
-        .ok_or_else(|| WmError::CommandFailed("Branch name is required".into()))?;
-
-    run_inner(args, &name)?;
+    run_inner(args)?;
     Ok(())
 }
 
-fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
+fn run_inner(args: &NewArgs) -> Result<()> {
+    let name = &args.name;
     let repo_root = get_repo_root()?;
 
     // Determine worktree directory name from branch name
@@ -59,137 +110,50 @@ fn run_inner(args: &NewArgs, name: &str) -> Result<()> {
         return Err(WmError::CommandFailed("git fetch failed".into()));
     }
 
-    // Remove fohte/ prefix to avoid fohte/fohte/<name>
-    let name_no_prefix = name.strip_prefix("fohte/").unwrap_or(name);
+    // Remove BRANCH_PREFIX to avoid double prefix
+    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
 
     // Determine action based on branch existence and flags
     if args.force {
-        // Force create new branch with fohte/ prefix
+        // Force create new branch with BRANCH_PREFIX
         let main_branch = get_main_branch()?;
         let base_branch = args
             .from
             .clone()
             .unwrap_or_else(|| format!("origin/{main_branch}"));
-        let branch = format!("fohte/{name_no_prefix}");
+        let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
 
-        let status = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                &worktree_dir,
-                "-B",
-                &branch,
-                &base_branch,
-            ])
-            .status()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        if !status.success() {
-            return Err(WmError::CommandFailed("git worktree add failed".into()));
-        }
+        git_worktree_add(
+            &worktree_dir,
+            WorktreeAddMode::ForceNewBranch {
+                branch: &branch,
+                base: &base_branch,
+            },
+        )?;
     } else if branch_exists(name) {
         // Branch exists with the exact name provided
-        if local_branch_exists(name) {
-            // If local branch exists, use it as-is
-            let status = Command::new("git")
-                .args(["worktree", "add", &worktree_dir, name])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-            if !status.success() {
-                return Err(WmError::CommandFailed("git worktree add failed".into()));
-            }
-        } else if remote_branch_exists(name) {
-            // If remote branch exists, create local tracking branch
-            let status = Command::new("git")
-                .args([
-                    "worktree",
-                    "add",
-                    &worktree_dir,
-                    "-b",
-                    name,
-                    &format!("origin/{name}"),
-                ])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-            if !status.success() {
-                return Err(WmError::CommandFailed("git worktree add failed".into()));
-            }
-        } else {
-            // Fallback: use as-is
-            let status = Command::new("git")
-                .args(["worktree", "add", &worktree_dir, name])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-            if !status.success() {
-                return Err(WmError::CommandFailed("git worktree add failed".into()));
-            }
-        }
+        add_worktree_for_branch(&worktree_dir, name)?;
     } else {
-        let branch_with_prefix = format!("fohte/{name_no_prefix}");
+        let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
-            // Branch exists with fohte/ prefix
-            if local_branch_exists(&branch_with_prefix) {
-                let status = Command::new("git")
-                    .args(["worktree", "add", &worktree_dir, &branch_with_prefix])
-                    .status()
-                    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-                if !status.success() {
-                    return Err(WmError::CommandFailed("git worktree add failed".into()));
-                }
-            } else if remote_branch_exists(&branch_with_prefix) {
-                let status = Command::new("git")
-                    .args([
-                        "worktree",
-                        "add",
-                        &worktree_dir,
-                        "-b",
-                        &branch_with_prefix,
-                        &format!("origin/{branch_with_prefix}"),
-                    ])
-                    .status()
-                    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-                if !status.success() {
-                    return Err(WmError::CommandFailed("git worktree add failed".into()));
-                }
-            } else {
-                let status = Command::new("git")
-                    .args(["worktree", "add", &worktree_dir, &branch_with_prefix])
-                    .status()
-                    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-                if !status.success() {
-                    return Err(WmError::CommandFailed("git worktree add failed".into()));
-                }
-            }
+            // Branch exists with BRANCH_PREFIX
+            add_worktree_for_branch(&worktree_dir, &branch_with_prefix)?;
         } else {
-            // Branch doesn't exist, create new one with fohte/ prefix
+            // Branch doesn't exist, create new one with BRANCH_PREFIX
             let main_branch = get_main_branch()?;
             let base_branch = args
                 .from
                 .clone()
                 .unwrap_or_else(|| format!("origin/{main_branch}"));
-            let branch = format!("fohte/{name_no_prefix}");
+            let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
 
-            let status = Command::new("git")
-                .args([
-                    "worktree",
-                    "add",
-                    &worktree_dir,
-                    "-b",
-                    &branch,
-                    &base_branch,
-                ])
-                .status()
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-            if !status.success() {
-                return Err(WmError::CommandFailed("git worktree add failed".into()));
-            }
+            git_worktree_add(
+                &worktree_dir,
+                WorktreeAddMode::NewBranch {
+                    branch: &branch,
+                    base: &base_branch,
+                },
+            )?;
         }
     }
 

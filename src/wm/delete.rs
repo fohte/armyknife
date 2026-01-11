@@ -34,8 +34,15 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
         return Err(WmError::CommandFailed("git worktree list failed".into()));
     }
 
+    // Check if the worktree path exists in the list (exact path match, not substring)
+    // Format: "/path/to/worktree  abc123 [branch]"
     let list_output = String::from_utf8_lossy(&worktree_list.stdout);
-    if !list_output.contains(&worktree_path) {
+    let is_valid_worktree = list_output.lines().any(|line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(|path| path == worktree_path)
+    });
+    if !is_valid_worktree {
         return Err(WmError::WorktreeNotFound(worktree_path));
     }
 
