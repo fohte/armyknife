@@ -1,10 +1,8 @@
 use clap::Args;
-use similar::{ChangeTag, TextDiff};
 use std::fs;
 
 use super::common::{
-    DraftFile, PrDraftError, RepoInfo, check_is_private, generate_frontmatter,
-    read_stdin_if_available,
+    DraftFile, RepoInfo, check_is_private, generate_frontmatter, read_stdin_if_available,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -12,25 +10,11 @@ pub struct NewArgs {
     /// PR title
     #[arg(long)]
     pub title: Option<String>,
-
-    /// Overwrite existing draft file if it exists
-    #[arg(long)]
-    pub force: bool,
 }
 
 pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let repo_info = RepoInfo::from_git_only()?;
     let draft_path = DraftFile::path_for(&repo_info);
-
-    // Check if the draft file already exists
-    let old_content = if draft_path.exists() {
-        if !args.force {
-            return Err(PrDraftError::FileAlreadyExists(draft_path).into());
-        }
-        Some(fs::read_to_string(&draft_path)?)
-    } else {
-        None
-    };
 
     // Create parent directories
     if let Some(parent) = draft_path.parent() {
@@ -52,44 +36,11 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
     let body = read_stdin_if_available().unwrap_or_default();
     let content = format!("{frontmatter}{body}");
 
-    // Show warning and diff when overwriting
-    if let Some(old) = &old_content {
-        eprintln!(
-            "Warning: Overwriting existing draft file: {}",
-            draft_path.display()
-        );
-        eprintln!();
-        print_diff(old, &content);
-        eprintln!();
-    }
-
     fs::write(&draft_path, content)?;
 
     println!("{}", draft_path.display());
 
     Ok(())
-}
-
-fn print_diff(old: &str, new: &str) {
-    eprint!("{}", format_diff(old, new, true));
-}
-
-fn format_diff(old: &str, new: &str, use_color: bool) -> String {
-    let diff = TextDiff::from_lines(old, new);
-    let mut output = String::new();
-
-    for change in diff.iter_all_changes() {
-        let (sign, prefix, suffix) = match change.tag() {
-            ChangeTag::Delete if use_color => ('-', "\x1b[31m", "\x1b[0m"),
-            ChangeTag::Insert if use_color => ('+', "\x1b[32m", "\x1b[0m"),
-            ChangeTag::Delete => ('-', "", ""),
-            ChangeTag::Insert => ('+', "", ""),
-            ChangeTag::Equal => (' ', "", ""),
-        };
-        output.push_str(&format!("{prefix}{sign}{change}{suffix}"));
-    }
-
-    output
 }
 
 #[cfg(all(test, unix))]
@@ -151,36 +102,6 @@ mod tests {
         fs::set_permissions(&gh_stub, perms).expect("chmod");
     }
 
-    struct TestEnv {
-        _temp_cwd: tempfile::TempDir,
-        _cwd_guard: WorkingDirGuard,
-        _stub_dir: tempfile::TempDir,
-        _path_guard: PathGuard,
-    }
-
-    fn setup_test_env(gh_response: Option<bool>) -> TestEnv {
-        // Clean up any existing draft file from previous test runs
-        let draft_dir = DraftFile::draft_dir().join("owner").join("repo");
-        if draft_dir.exists() {
-            fs::remove_dir_all(&draft_dir).expect("failed to clean up draft directory");
-        }
-
-        let temp_cwd = tempdir().expect("tempdir");
-        let cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let stub_dir = tempdir().expect("stub dir");
-        create_git_stub(stub_dir.path());
-        create_gh_stub(stub_dir.path(), gh_response);
-        let path_guard = PathGuard::prepend(stub_dir.path());
-
-        TestEnv {
-            _temp_cwd: temp_cwd,
-            _cwd_guard: cwd_guard,
-            _stub_dir: stub_dir,
-            _path_guard: path_guard,
-        }
-    }
-
     #[rstest]
     #[case::offline(None, false)]
     #[case::private(Some(true), false)]
@@ -190,13 +111,19 @@ mod tests {
         #[case] gh_response: Option<bool>,
         #[case] expect_ready_for_translation: bool,
     ) {
-        let _env = setup_test_env(gh_response);
+        let temp_cwd = tempdir().expect("tempdir");
+        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
 
-        run(&NewArgs {
+        let stub_dir = tempdir().expect("stub dir");
+        create_git_stub(stub_dir.path());
+        create_gh_stub(stub_dir.path(), gh_response);
+        let _path_guard = PathGuard::prepend(stub_dir.path());
+
+        let args = NewArgs {
             title: Some("Test Title".to_string()),
-            force: false,
-        })
-        .expect("run should succeed");
+        };
+
+        run(&args).expect("run should succeed");
 
         let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
         let content = fs::read_to_string(&draft_path).expect("read draft");
@@ -205,91 +132,6 @@ mod tests {
             content.contains("ready-for-translation"),
             expect_ready_for_translation,
             "expected ready-for-translation={expect_ready_for_translation}, got:\n{content}"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn new_fails_when_file_exists_without_force() {
-        let _env = setup_test_env(Some(true));
-
-        run(&NewArgs {
-            title: Some("First Title".to_string()),
-            force: false,
-        })
-        .expect("first run should succeed");
-
-        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
-        assert!(
-            draft_path.exists(),
-            "draft file should exist after first run"
-        );
-
-        let result = run(&NewArgs {
-            title: Some("Second Title".to_string()),
-            force: false,
-        });
-        assert!(result.is_err(), "second run without --force should fail");
-
-        let err_msg = result.unwrap_err().to_string();
-        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
-        assert_eq!(
-            err_msg,
-            format!(
-                "Draft file already exists: {}\nUse --force to overwrite",
-                draft_path.display()
-            )
-        );
-
-        let content = fs::read_to_string(&draft_path).expect("read draft");
-        assert!(
-            content.contains("First Title"),
-            "original content should be preserved: {content}"
-        );
-    }
-
-    #[rstest]
-    #[case::line_changed("old line\n", "new line\n", "-old line\n+new line\n")]
-    #[case::line_added("line1\n", "line1\nline2\n", " line1\n+line2\n")]
-    #[case::line_removed("line1\nline2\n", "line1\n", " line1\n-line2\n")]
-    #[case::identical("same\n", "same\n", " same\n")]
-    fn format_diff_generates_unified_diff(
-        #[case] old: &str,
-        #[case] new: &str,
-        #[case] expected: &str,
-    ) {
-        let result = format_diff(old, new, false);
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn format_diff_with_color_includes_ansi_codes() {
-        let result = format_diff("old\n", "new\n", true);
-        assert_eq!(result, "\x1b[31m-old\n\x1b[0m\x1b[32m+new\n\x1b[0m");
-    }
-
-    #[test]
-    #[serial]
-    fn new_overwrites_when_file_exists_with_force() {
-        let _env = setup_test_env(Some(true));
-
-        run(&NewArgs {
-            title: Some("First Title".to_string()),
-            force: false,
-        })
-        .expect("first run should succeed");
-
-        run(&NewArgs {
-            title: Some("Second Title".to_string()),
-            force: true,
-        })
-        .expect("second run with --force should succeed");
-
-        let draft_path = DraftFile::path_for(&RepoInfo::from_git_only().unwrap());
-        let content = fs::read_to_string(&draft_path).expect("read draft");
-        assert!(
-            content.contains("Second Title"),
-            "content should be overwritten: {content}"
         );
     }
 
