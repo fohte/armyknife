@@ -1,11 +1,7 @@
-use serial_test::serial;
-
 use crate::testing::TestRepo;
 use crate::wm::git::{branch_to_worktree_name, get_repo_root_in};
 
-// Tests use #[serial] because other tests (pr_draft) modify global PATH
 #[test]
-#[serial]
 fn get_repo_root_from_main_returns_main_path() {
     let repo = TestRepo::new();
 
@@ -14,7 +10,6 @@ fn get_repo_root_from_main_returns_main_path() {
 }
 
 #[test]
-#[serial]
 fn get_repo_root_from_worktree_returns_main_path() {
     let repo = TestRepo::new();
     repo.create_worktree("test-branch");
@@ -25,7 +20,6 @@ fn get_repo_root_from_worktree_returns_main_path() {
 }
 
 #[test]
-#[serial]
 fn worktrees_dir_created_in_main_when_run_from_worktree() {
     let repo = TestRepo::new();
     repo.create_worktree("first");

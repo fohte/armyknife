@@ -1,9 +1,12 @@
 use clap::Args;
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, check_is_private, contains_japanese};
+use super::common::{
+    CommandRunner, DraftFile, PrDraftError, RealCommandRunner, RepoInfo, check_is_private,
+    contains_japanese,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -32,6 +35,13 @@ struct PrTarget {
 }
 
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    run_with_runner(args, &RealCommandRunner)
+}
+
+fn run_with_runner(
+    args: &SubmitArgs,
+    runner: &impl CommandRunner,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
         Some(path) => {
@@ -39,7 +49,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
             })?;
-            let is_private = check_is_private(&owner, &repo)?;
+            let is_private = check_is_private(runner, &owner, &repo)?;
             (
                 path.clone(),
                 PrTarget {
@@ -52,7 +62,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
         }
         None => {
             // Auto-detect from current git repo
-            let repo_info = RepoInfo::from_current_dir()?;
+            let repo_info = RepoInfo::from_current_dir(runner)?;
             let target = PrTarget {
                 owner: repo_info.owner.clone(),
                 repo: repo_info.repo.clone(),
@@ -101,36 +111,37 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     body_file.write_all(draft.body.as_bytes())?;
     body_file.flush()?;
 
-    // Build gh pr create command using builder pattern
+    // Build gh pr create arguments
     let repo_spec = format!("{}/{}", target.owner, target.repo);
-    let mut gh_cmd = Command::new("gh");
-    gh_cmd
-        .args([
-            "pr",
-            "create",
-            "--repo",
-            &repo_spec,
-            "--head",
-            &target.branch,
-        ])
-        .arg("--title")
-        .arg(&draft.frontmatter.title)
-        .arg("--body-file")
-        .arg(body_file.path());
+    let mut gh_args: Vec<OsString> = vec![
+        "pr".into(),
+        "create".into(),
+        "--repo".into(),
+        repo_spec.clone().into(),
+        "--head".into(),
+        target.branch.into(),
+        "--title".into(),
+        draft.frontmatter.title.clone().into(),
+        "--body-file".into(),
+        body_file.path().as_os_str().to_owned(),
+    ];
 
     if let Some(base) = &args.base {
-        gh_cmd.arg("--base").arg(base);
+        gh_args.push("--base".into());
+        gh_args.push(base.into());
     }
 
     if args.draft {
-        gh_cmd.arg("--draft");
+        gh_args.push("--draft".into());
     }
 
-    gh_cmd.args(&args.gh_args);
+    for arg in &args.gh_args {
+        gh_args.push(arg.into());
+    }
 
     // Create PR
-    let output = gh_cmd
-        .output()
+    let output = runner
+        .run_gh_with_args(&gh_args)
         .map_err(|e| PrDraftError::CommandFailed(format!("Failed to run gh: {e}")))?;
 
     if !output.status.success() {
@@ -147,81 +158,74 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
     draft.cleanup()?;
 
     // Open PR in browser using the returned URL
-    let _ = Command::new("gh")
-        .args(["pr", "view", "--web", "--repo", &repo_spec, &pr_url])
-        .status();
+    runner.open_in_browser(&repo_spec, &pr_url);
 
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::pr_draft::common::test_utils::MockCommandRunner;
     use indoc::indoc;
-    use serial_test::serial;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use tempfile::tempdir;
+
+    struct TestEnv {
+        runner: MockCommandRunner,
+        draft_dir: std::path::PathBuf,
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.draft_dir);
+        }
+    }
+
+    fn setup_test_env(owner: &str, repo: &str, branch: &str) -> TestEnv {
+        let runner = MockCommandRunner::new(owner, repo, branch);
+        let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
+        if draft_dir.exists() {
+            let _ = fs::remove_dir_all(&draft_dir);
+        }
+        TestEnv { runner, draft_dir }
+    }
+
+    fn create_approved_draft(env: &TestEnv, branch: &str, title: &str, body: &str) -> PathBuf {
+        let repo_info = RepoInfo {
+            owner: env.runner.owner.clone(),
+            repo: env.runner.repo.clone(),
+            branch: branch.to_string(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        let content = format!(
+            indoc! {r#"
+                ---
+                title: "{title}"
+                steps:
+                  submit: true
+                ---
+                {body}
+            "#},
+            title = title,
+            body = body
+        );
+        fs::write(&draft_path, content).expect("write draft");
+        DraftFile::from_path(draft_path.clone())
+            .expect("draft file")
+            .save_approval()
+            .expect("save approval");
+        draft_path
+    }
 
     #[test]
-    #[serial]
     fn submit_with_filepath_should_not_require_git_repo() {
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
-
-        let gh_stub_dir = tempdir().expect("gh stub dir");
-        let gh_stub_path = gh_stub_dir.path().join("gh");
-        fs::write(
-            &gh_stub_path,
-            indoc! {r#"
-            #!/bin/sh
-            # fake gh
-            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
-              echo "true"
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-              echo https://example.com/pr/1
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-              exit 0
-            fi
-            exit 0
-        "#},
-        )
-        .expect("write gh stub");
-        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
-        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
-
-        let repo_info = RepoInfo {
-            owner: "owner".into(),
-            repo: "repo".into(),
-            branch: "feature/test".into(),
-            is_private: true,
-        };
-        let draft_path = DraftFile::path_for(&repo_info);
-        if let Some(parent) = draft_path.parent() {
-            fs::create_dir_all(parent).expect("create parent");
-        }
-        fs::write(
-            &draft_path,
-            indoc! {r#"
-                ---
-                title: "Ready title"
-                steps:
-                  submit: true
-                ---
-                Body content
-            "#},
-        )
-        .expect("write draft");
-        DraftFile::from_path(draft_path.clone())
-            .expect("draft file")
-            .save_approval()
-            .expect("save approval");
+        // Use unique repo name to avoid conflicts in parallel tests
+        let env = setup_test_env("owner", "repo_submit_no_git", "feature/test");
+        let draft_path = create_approved_draft(&env, "feature/test", "Ready title", "Body content");
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
@@ -230,63 +234,45 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run(&args);
+        let result = run_with_runner(&args, &env.runner);
 
         assert!(
             result.is_ok(),
-            "submit should work even when cwd is not inside a git repo"
+            "submit should work with MockCommandRunner: {:?}",
+            result.err()
         );
     }
 
     #[test]
-    #[serial]
     fn submit_with_filepath_should_use_draft_branch() {
-        let temp_cwd = tempdir().expect("tempdir");
-        let _cwd_guard = WorkingDirGuard::change(temp_cwd.path());
+        // Use unique repo name to avoid conflicts in parallel tests
+        let env = setup_test_env("owner", "repo_submit_branch", "feature/missing-head");
+        let draft_path =
+            create_approved_draft(&env, "feature/missing-head", "Ready title", "Body content");
 
-        let gh_stub_dir = tempdir().expect("gh stub dir");
-        let gh_stub_path = gh_stub_dir.path().join("gh");
-        fs::write(
-            &gh_stub_path,
-            indoc! {r#"
-            #!/bin/sh
-            # fake gh that requires --head
-            if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
-              echo "true"
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-              head_flag=0
-              while [ "$#" -gt 0 ]; do
-                if [ "$1" = "--head" ]; then
-                  head_flag=1
-                fi
-                shift
-              done
-              if [ "$head_flag" -eq 0 ]; then
-                echo "missing --head argument" >&2
-                exit 42
-              fi
-              echo https://example.com/pr/1
-              exit 0
-            fi
-            if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-              exit 0
-            fi
-            echo "unexpected gh invocation: $@" >&2
-            exit 1
-        "#},
-        )
-        .expect("write gh stub");
-        let mut perms = fs::metadata(&gh_stub_path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&gh_stub_path, perms).expect("chmod");
-        let _path_guard = PathGuard::prepend(gh_stub_dir.path());
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            gh_args: vec![],
+        };
 
+        let result = run_with_runner(&args, &env.runner);
+
+        assert!(
+            result.is_ok(),
+            "submit should pass the draft branch to gh when --filepath is used: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn submit_fails_when_not_approved() {
+        let env = setup_test_env("owner", "repo_submit_not_approved", "feature/unapproved");
         let repo_info = RepoInfo {
-            owner: "owner".into(),
-            repo: "repo".into(),
-            branch: "feature/missing-head".into(),
+            owner: env.runner.owner.clone(),
+            repo: env.runner.repo.clone(),
+            branch: "feature/unapproved".to_string(),
             is_private: true,
         };
         let draft_path = DraftFile::path_for(&repo_info);
@@ -297,11 +283,54 @@ mod tests {
             &draft_path,
             indoc! {r#"
                 ---
-                title: "Ready title"
+                title: "Not approved"
+                steps:
+                  submit: false
+                ---
+                Body
+            "#},
+        )
+        .expect("write draft");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            gh_args: vec![],
+        };
+
+        let result = run_with_runner(&args, &env.runner);
+
+        assert!(result.is_err(), "submit should fail when not approved");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not approved") || err_msg.contains("NotApproved"),
+            "error message should mention approval: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn submit_fails_with_empty_title() {
+        let env = setup_test_env("owner", "repo_submit_empty_title", "feature/empty-title");
+        let repo_info = RepoInfo {
+            owner: env.runner.owner.clone(),
+            repo: env.runner.repo.clone(),
+            branch: "feature/empty-title".to_string(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(
+            &draft_path,
+            indoc! {r#"
+                ---
+                title: ""
                 steps:
                   submit: true
                 ---
-                Body content
+                Body
             "#},
         )
         .expect("write draft");
@@ -317,62 +346,13 @@ mod tests {
             gh_args: vec![],
         };
 
-        let result = run(&args);
+        let result = run_with_runner(&args, &env.runner);
 
+        assert!(result.is_err(), "submit should fail with empty title");
+        let err_msg = result.unwrap_err().to_string();
         assert!(
-            result.is_ok(),
-            "submit should pass the draft branch to gh when --filepath is used"
+            err_msg.contains("title"),
+            "error message should mention title: {err_msg}"
         );
-    }
-
-    struct WorkingDirGuard {
-        original: std::path::PathBuf,
-    }
-
-    impl WorkingDirGuard {
-        fn change(path: &std::path::Path) -> Self {
-            let original = std::env::current_dir().expect("cwd");
-            std::env::set_current_dir(path).expect("set cwd");
-            Self { original }
-        }
-    }
-
-    impl Drop for WorkingDirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.original);
-        }
-    }
-
-    struct PathGuard {
-        original: Option<String>,
-    }
-
-    impl PathGuard {
-        fn prepend(dir: &std::path::Path) -> Self {
-            let original = std::env::var("PATH").ok();
-            let new_path = if let Some(ref current) = original {
-                format!("{}:{}", dir.display(), current)
-            } else {
-                dir.display().to_string()
-            };
-            unsafe {
-                std::env::set_var("PATH", new_path);
-            }
-            Self { original }
-        }
-    }
-
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            if let Some(ref original) = self.original {
-                unsafe {
-                    std::env::set_var("PATH", original);
-                }
-            } else {
-                unsafe {
-                    std::env::remove_var("PATH");
-                }
-            }
-        }
     }
 }
