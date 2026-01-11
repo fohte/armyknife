@@ -3,8 +3,7 @@
 //! This module provides a unified interface for git operations without
 //! spawning external git processes.
 
-use git2::{Repository, RepositoryOpenFlags};
-use std::path::Path;
+use git2::Repository;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -30,12 +29,13 @@ pub fn open_repo() -> Result<Repository> {
 }
 
 /// Open a git repository from a specific path.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn open_repo_at(path: &Path) -> Result<Repository> {
+#[cfg(test)]
+pub fn open_repo_at(path: &std::path::Path) -> Result<Repository> {
+    use git2::RepositoryOpenFlags;
     Repository::open_ext(
         path,
         RepositoryOpenFlags::empty(),
-        std::iter::empty::<&Path>(),
+        std::iter::empty::<&std::path::Path>(),
     )
     .map_err(|_| GitError::NotInRepo)
 }
@@ -54,7 +54,7 @@ pub fn origin_url(repo: &Repository) -> Result<String> {
         .map_err(|_| GitError::NoOriginRemote)?;
     remote
         .url()
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .ok_or(GitError::NoOriginRemote)
 }
 
