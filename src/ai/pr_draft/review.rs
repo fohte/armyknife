@@ -3,7 +3,7 @@ use indoc::formatdoc;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::common::{DraftFile, Frontmatter, PrDraftError, RealCommandRunner, RepoInfo};
+use super::common::{DraftFile, Frontmatter, PrDraftError, RepoInfo};
 use crate::human_in_the_loop::{
     Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
 };
@@ -88,7 +88,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
             (path.clone(), owner, repo, branch)
         }
         None => {
-            let repo_info = RepoInfo::from_git_only(&RealCommandRunner)?;
+            let repo_info = RepoInfo::from_git_only()?;
             let path = DraftFile::path_for(&repo_info);
             (path, repo_info.owner, repo_info.repo, repo_info.branch)
         }

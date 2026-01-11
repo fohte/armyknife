@@ -3,7 +3,7 @@ use similar::{ChangeTag, TextDiff};
 use std::fs;
 
 use super::common::{
-    CommandRunner, DraftFile, PrDraftError, RealCommandRunner, RepoInfo, check_is_private,
+    DraftFile, GhRunner, PrDraftError, RealGhRunner, RepoInfo, check_is_private,
     generate_frontmatter, read_stdin_if_available,
 };
 
@@ -19,14 +19,14 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_with_runner(args, &RealCommandRunner)
+    run_with_gh_runner(args, &RealGhRunner)
 }
 
-fn run_with_runner(
+fn run_with_gh_runner(
     args: &NewArgs,
-    runner: &impl CommandRunner,
+    gh_runner: &impl GhRunner,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let repo_info = RepoInfo::from_git_only(runner)?;
+    let repo_info = RepoInfo::from_git_only()?;
     let draft_path = DraftFile::path_for(&repo_info);
 
     // Check if the draft file already exists
@@ -45,7 +45,7 @@ fn run_with_runner(
     }
 
     // Check if the repo is private (defaults to true if network is unavailable)
-    let is_private = match check_is_private(runner, &repo_info.owner, &repo_info.repo) {
+    let is_private = match check_is_private(gh_runner, &repo_info.owner, &repo_info.repo) {
         Ok(private) => private,
         Err(e) => {
             eprintln!("Warning: Failed to check repository visibility, assuming private: {e}");
@@ -102,12 +102,15 @@ fn format_diff(old: &str, new: &str, use_color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::pr_draft::common::test_utils::MockCommandRunner;
+    use crate::ai::pr_draft::common::test_utils::MockGhRunner;
+    use crate::git::test_utils::TempRepo;
     use rstest::rstest;
     use std::fs;
+    use std::path::Path;
 
     struct TestEnv {
-        runner: MockCommandRunner,
+        gh_runner: MockGhRunner,
+        temp_repo: TempRepo,
         draft_dir: std::path::PathBuf,
     }
 
@@ -118,12 +121,74 @@ mod tests {
     }
 
     fn setup_test_env(owner: &str, repo: &str, is_private: Option<bool>) -> TestEnv {
-        let runner = MockCommandRunner::new(owner, repo, "feature/test").with_private(is_private);
+        let gh_runner = MockGhRunner::new().with_private(is_private);
+        let temp_repo = TempRepo::new(owner, repo, "feature-test");
+
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
         }
-        TestEnv { runner, draft_dir }
+        TestEnv {
+            gh_runner,
+            temp_repo,
+            draft_dir,
+        }
+    }
+
+    /// Run new command with a specific repo path (for testing)
+    fn run_with_path(
+        args: &NewArgs,
+        repo_path: &Path,
+        gh_runner: &impl GhRunner,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        // First get repo info without network (is_private = false)
+        let mut repo_info = RepoInfo::from_path(repo_path, None::<&MockGhRunner>)?;
+
+        // Then check is_private, defaulting to true on error (same as production code)
+        repo_info.is_private =
+            check_is_private(gh_runner, &repo_info.owner, &repo_info.repo).unwrap_or(true);
+
+        let draft_path = DraftFile::path_for(&repo_info);
+
+        // Check if the draft file already exists
+        let old_content = if draft_path.exists() {
+            if !args.force {
+                return Err(PrDraftError::FileAlreadyExists(draft_path).into());
+            }
+            Some(fs::read_to_string(&draft_path)?)
+        } else {
+            None
+        };
+
+        // Create parent directories
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let is_private = repo_info.is_private;
+
+        let title = args.title.as_deref().unwrap_or("");
+        let frontmatter = generate_frontmatter(title, is_private);
+
+        let body = read_stdin_if_available().unwrap_or_default();
+        let content = format!("{frontmatter}{body}");
+
+        // Show warning and diff when overwriting
+        if let Some(old) = &old_content {
+            eprintln!(
+                "Warning: Overwriting existing draft file: {}",
+                draft_path.display()
+            );
+            eprintln!();
+            print_diff(old, &content);
+            eprintln!();
+        }
+
+        fs::write(&draft_path, content)?;
+
+        println!("{}", draft_path.display());
+
+        Ok(())
     }
 
     #[rstest]
@@ -141,16 +206,17 @@ mod tests {
         );
         let env = setup_test_env("owner", &repo, is_private);
 
-        run_with_runner(
+        run_with_path(
             &NewArgs {
                 title: Some("Test Title".to_string()),
                 force: false,
             },
-            &env.runner,
+            &env.temp_repo.path(),
+            &env.gh_runner,
         )
         .expect("run should succeed");
 
-        let repo_info = RepoInfo::from_git_only(&env.runner).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), None::<&MockGhRunner>).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
 
@@ -165,28 +231,30 @@ mod tests {
     fn new_fails_when_file_exists_without_force() {
         let env = setup_test_env("owner", "repo_exists_no_force", Some(true));
 
-        run_with_runner(
+        run_with_path(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
-            &env.runner,
+            &env.temp_repo.path(),
+            &env.gh_runner,
         )
         .expect("first run should succeed");
 
-        let repo_info = RepoInfo::from_git_only(&env.runner).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), None::<&MockGhRunner>).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         assert!(
             draft_path.exists(),
             "draft file should exist after first run"
         );
 
-        let result = run_with_runner(
+        let result = run_with_path(
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: false,
             },
-            &env.runner,
+            &env.temp_repo.path(),
+            &env.gh_runner,
         );
         assert!(result.is_err(), "second run without --force should fail");
 
@@ -236,25 +304,27 @@ mod tests {
     fn new_overwrites_when_file_exists_with_force() {
         let env = setup_test_env("owner", "repo_overwrite", Some(true));
 
-        run_with_runner(
+        run_with_path(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
-            &env.runner,
+            &env.temp_repo.path(),
+            &env.gh_runner,
         )
         .expect("first run should succeed");
 
-        run_with_runner(
+        run_with_path(
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: true,
             },
-            &env.runner,
+            &env.temp_repo.path(),
+            &env.gh_runner,
         )
         .expect("second run with --force should succeed");
 
-        let repo_info = RepoInfo::from_git_only(&env.runner).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), None::<&MockGhRunner>).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
         assert!(
