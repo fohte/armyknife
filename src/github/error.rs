@@ -1,5 +1,7 @@
 //! GitHub API error types.
 
+use std::fmt::Write;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -21,7 +23,7 @@ fn format_octocrab_error(err: &octocrab::Error) -> String {
             let mut msg = format!("GitHub API error: {}", source.message);
 
             // Add HTTP status code
-            msg.push_str(&format!(" (HTTP {})", source.status_code.as_u16()));
+            write!(&mut msg, " (HTTP {})", source.status_code.as_u16()).unwrap();
 
             // Add detailed error information if available
             if let Some(errors) = &source.errors {
@@ -31,7 +33,7 @@ fn format_octocrab_error(err: &octocrab::Error) -> String {
                         let field = e.get("field").and_then(|v| v.as_str());
                         let code = e.get("code").and_then(|v| v.as_str());
                         match (field, code) {
-                            (Some(f), Some(c)) => Some(format!("{} is {}", f, c)),
+                            (Some(f), Some(c)) => Some(format!("{f} is {c}")),
                             (Some(f), None) => Some(f.to_string()),
                             (None, Some(c)) => Some(c.to_string()),
                             (None, None) => None,
@@ -40,7 +42,7 @@ fn format_octocrab_error(err: &octocrab::Error) -> String {
                     .collect();
 
                 if !error_details.is_empty() {
-                    msg.push_str(&format!(" [{}]", error_details.join(", ")));
+                    write!(&mut msg, " [{}]", error_details.join(", ")).unwrap();
                 }
             }
 
