@@ -2,6 +2,7 @@ mod ai;
 mod cli;
 mod git;
 mod human_in_the_loop;
+mod name_branch;
 #[cfg(test)]
 mod testing;
 mod update;
@@ -27,6 +28,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
+        Commands::NameBranch(args) => args.run()?,
         Commands::Wm(wm_cmd) => wm_cmd.run()?,
         Commands::Update => update::do_update()?,
     }

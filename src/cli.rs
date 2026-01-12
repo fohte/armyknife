@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::ai::AiCommands;
+use crate::name_branch::NameBranchArgs;
 use crate::wm::WmCommands;
 
 #[derive(Parser)]
@@ -22,6 +23,9 @@ pub enum Commands {
     /// AI-related tools
     #[command(subcommand)]
     Ai(AiCommands),
+
+    /// Generate a branch name from a description using AI
+    NameBranch(NameBranchArgs),
 
     /// Git worktree manager
     #[command(subcommand)]
