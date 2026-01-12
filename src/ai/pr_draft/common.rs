@@ -5,11 +5,11 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 use std::sync::LazyLock;
 use thiserror::Error;
 
 use crate::git;
+use crate::github;
 use crate::human_in_the_loop::{Document, DocumentSchema};
 
 static FRONTMATTER_RE: LazyLock<Regex> =
@@ -17,42 +17,13 @@ static FRONTMATTER_RE: LazyLock<Regex> =
 static JAPANESE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
 
-/// Trait for executing GitHub CLI commands.
-/// Enables dependency injection for testing without modifying global state.
-pub trait GhRunner {
-    fn run_gh(&self, args: &[&str]) -> io::Result<Output>;
-
-    /// Run gh with OsString arguments (for commands with file paths)
-    fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output>;
-
-    /// Open PR in browser (fire-and-forget, ok to fail silently)
-    fn open_in_browser(&self, repo: &str, pr_url: &str);
-}
-
-/// Production implementation that executes real commands.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RealGhRunner;
-
-impl GhRunner for RealGhRunner {
-    fn run_gh(&self, args: &[&str]) -> io::Result<Output> {
-        Command::new("gh").args(args).output()
-    }
-
-    fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output> {
-        Command::new("gh").args(args).output()
-    }
-
-    fn open_in_browser(&self, repo: &str, pr_url: &str) {
-        let _ = Command::new("gh")
-            .args(["pr", "view", "--web", "--repo", repo, pr_url])
-            .status();
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum PrDraftError {
     #[error("Git error: {0}")]
     Git(#[from] git::GitError),
+
+    #[error("GitHub error: {0}")]
+    GitHub(#[from] github::GitHubError),
 
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
@@ -83,9 +54,6 @@ pub enum PrDraftError {
 
     #[error("Command failed: {0}")]
     CommandFailed(String),
-
-    #[error("GitHub CLI error: {0}")]
-    GhCommandFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, PrDraftError>;
@@ -99,32 +67,47 @@ pub struct RepoInfo {
 }
 
 impl RepoInfo {
-    /// Get repo info using gh CLI (includes is_private check via network)
-    pub fn from_current_dir(gh_runner: &impl GhRunner) -> Result<Self> {
+    /// Get repo info with is_private check via GitHub API (async)
+    pub async fn from_current_dir_async() -> Result<Self> {
         let repo = git::open_repo()?;
-        Self::from_git2_repo(&repo, Some(gh_runner))
+        Self::from_git2_repo_async(&repo, true).await
     }
 
     /// Get repo info from git only (no network call, is_private defaults to false)
     pub fn from_git_only() -> Result<Self> {
         let repo = git::open_repo()?;
-        Self::from_git2_repo::<RealGhRunner>(&repo, None)
+        let branch = git::current_branch(&repo)?;
+        let (owner, repo_name) = git::github_owner_and_repo(&repo)?;
+        Ok(Self {
+            owner,
+            repo: repo_name,
+            branch,
+            is_private: false,
+        })
     }
 
     /// Get repo info from a git2 Repository at a specific path.
     /// Used for testing with temporary repositories.
     #[cfg(test)]
-    pub fn from_path(path: &Path, gh_runner: Option<&impl GhRunner>) -> Result<Self> {
+    pub fn from_path(path: &Path, check_private: bool) -> Result<Self> {
         let repo = git::open_repo_at(path)?;
-        Self::from_git2_repo(&repo, gh_runner)
+        let branch = git::current_branch(&repo)?;
+        let (owner, repo_name) = git::github_owner_and_repo(&repo)?;
+        Ok(Self {
+            owner,
+            repo: repo_name,
+            branch,
+            is_private: if check_private { false } else { false },
+        })
     }
 
-    fn from_git2_repo<R: GhRunner>(repo: &git2::Repository, gh_runner: Option<&R>) -> Result<Self> {
+    async fn from_git2_repo_async(repo: &git2::Repository, check_private: bool) -> Result<Self> {
         let branch = git::current_branch(repo)?;
         let (owner, repo_name) = git::github_owner_and_repo(repo)?;
-        let is_private = match gh_runner {
-            Some(runner) => check_is_private(runner, &owner, &repo_name)?,
-            None => false,
+        let is_private = if check_private {
+            check_is_private(&owner, &repo_name).await?
+        } else {
+            false
         };
 
         Ok(Self {
@@ -136,28 +119,11 @@ impl RepoInfo {
     }
 }
 
-pub fn check_is_private(gh_runner: &impl GhRunner, owner: &str, repo: &str) -> Result<bool> {
-    let repo_spec = format!("{owner}/{repo}");
-    let output = gh_runner
-        .run_gh(&[
-            "repo",
-            "view",
-            &repo_spec,
-            "--json",
-            "isPrivate",
-            "-q",
-            ".isPrivate",
-        ])
-        .map_err(|e| PrDraftError::GhCommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        return Err(PrDraftError::GhCommandFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
-
-    let is_private_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(is_private_str == "true")
+/// Check if a repository is private using GitHub API.
+pub async fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
+    let client = github::create_client()?;
+    let is_private = github::is_repo_private(&client, owner, repo).await?;
+    Ok(is_private)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -472,99 +438,5 @@ mod tests {
         assert!(parsed.is_ok(), "Failed to parse: {result}");
         let (frontmatter, _) = parsed.unwrap();
         assert_eq!(frontmatter.title, "Title with \"quotes\" and\nnewline");
-    }
-}
-
-/// Test utilities for mocking command execution.
-#[cfg(test)]
-pub mod test_utils {
-    use super::*;
-    use std::process::ExitStatus;
-
-    /// Mock implementation of GhRunner for testing.
-    /// Returns pre-configured responses without executing real commands.
-    #[derive(Clone)]
-    pub struct MockGhRunner {
-        pub is_private: Option<bool>,            // None = error (offline)
-        pub gh_pr_create_result: Option<String>, // None = error
-    }
-
-    impl MockGhRunner {
-        pub fn new() -> Self {
-            Self {
-                is_private: Some(true),
-                gh_pr_create_result: Some("https://github.com/owner/repo/pull/1".to_string()),
-            }
-        }
-
-        pub fn with_private(mut self, is_private: Option<bool>) -> Self {
-            self.is_private = is_private;
-            self
-        }
-
-        fn make_output(stdout: &str, success: bool) -> Output {
-            #[cfg(unix)]
-            use std::os::unix::process::ExitStatusExt;
-            #[cfg(windows)]
-            use std::os::windows::process::ExitStatusExt;
-
-            let status = if success {
-                ExitStatus::from_raw(0)
-            } else {
-                #[cfg(unix)]
-                {
-                    ExitStatus::from_raw(256) // exit code 1
-                }
-                #[cfg(windows)]
-                {
-                    ExitStatus::from_raw(1)
-                }
-            };
-            Output {
-                status,
-                stdout: stdout.as_bytes().to_vec(),
-                stderr: if success {
-                    Vec::new()
-                } else {
-                    stdout.as_bytes().to_vec()
-                },
-            }
-        }
-    }
-
-    impl GhRunner for MockGhRunner {
-        fn run_gh(&self, args: &[&str]) -> io::Result<Output> {
-            match args.first() {
-                Some(&"repo") if args.get(1) == Some(&"view") => match self.is_private {
-                    Some(true) => Ok(Self::make_output("true\n", true)),
-                    Some(false) => Ok(Self::make_output("false\n", true)),
-                    None => Ok(Self::make_output("offline", false)),
-                },
-                _ => Ok(Self::make_output("unexpected gh command", false)),
-            }
-        }
-
-        fn run_gh_with_args(&self, args: &[std::ffi::OsString]) -> io::Result<Output> {
-            let args_str: Vec<&str> = args
-                .iter()
-                .map(|s| {
-                    s.to_str()
-                        .expect("MockGhRunner only supports UTF-8 arguments in tests")
-                })
-                .collect();
-            match args_str.first() {
-                Some(&"pr") if args_str.get(1) == Some(&"create") => {
-                    match &self.gh_pr_create_result {
-                        Some(url) => Ok(Self::make_output(&format!("{url}\n"), true)),
-                        None => Ok(Self::make_output("gh pr create failed", false)),
-                    }
-                }
-                _ => self.run_gh(&args_str),
-            }
-        }
-
-        fn open_in_browser(&self, _repo: &str, _pr_url: &str) {
-            // No-op in tests
-        }
     }
 }
