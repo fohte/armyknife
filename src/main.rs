@@ -1,5 +1,6 @@
 mod ai;
 mod cli;
+mod gh;
 mod git;
 mod github;
 mod human_in_the_loop;
@@ -13,14 +14,15 @@ mod wm;
 use clap::Parser;
 use cli::{Cli, Commands};
 
-fn main() {
-    if let Err(e) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Cli { command } = Cli::parse();
 
     if !matches!(command, Commands::Update) {
@@ -30,6 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
+        Commands::Gh(gh_cmd) => gh_cmd.run().await?,
         Commands::NameBranch(args) => args.run()?,
         Commands::Wm(wm_cmd) => wm_cmd.run()?,
         Commands::Update => update::do_update()?,
