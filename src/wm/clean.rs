@@ -142,3 +142,81 @@ async fn collect_worktrees(
 
     Ok((to_delete, to_skip))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TestRepo;
+    use std::path::PathBuf;
+
+    fn make_clean_info(name: &str, path: PathBuf, branch: &str, reason: &str) -> CleanWorktreeInfo {
+        CleanWorktreeInfo {
+            wt: LinkedWorktree {
+                name: name.to_string(),
+                path,
+                branch: branch.to_string(),
+                commit: "abc1234".to_string(),
+            },
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn delete_worktrees_deletes_all_worktrees() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature-a");
+        test_repo.create_worktree("feature-b");
+
+        let repo = test_repo.open();
+
+        let worktrees = vec![
+            make_clean_info(
+                "feature-a",
+                test_repo.worktree_path("feature-a"),
+                "feature-a",
+                "merged",
+            ),
+            make_clean_info(
+                "feature-b",
+                test_repo.worktree_path("feature-b"),
+                "feature-b",
+                "merged",
+            ),
+        ];
+
+        delete_worktrees(&repo, &worktrees).unwrap();
+
+        // Verify worktrees are deleted
+        assert!(repo.find_worktree("feature-a").is_err());
+        assert!(repo.find_worktree("feature-b").is_err());
+    }
+
+    #[test]
+    fn delete_worktrees_handles_empty_list() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let result = delete_worktrees(&repo, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn display_worktrees_to_keep_does_nothing_for_empty() {
+        // Just ensure it doesn't panic
+        display_worktrees_to_keep(&[]);
+    }
+
+    #[test]
+    fn display_worktrees_to_delete_does_not_panic() {
+        let test_repo = TestRepo::new();
+        let worktrees = vec![make_clean_info(
+            "feature",
+            test_repo.path().join(".worktrees/feature"),
+            "feature",
+            "merged",
+        )];
+
+        // Just ensure it doesn't panic
+        display_worktrees_to_delete(&worktrees);
+    }
+}

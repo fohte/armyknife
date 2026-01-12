@@ -172,3 +172,175 @@ pub fn get_main_worktree_info(repo: &Repository) -> (String, String) {
         .unwrap_or_else(|| "(none)".to_string());
     (branch, commit)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TestRepo;
+
+    #[test]
+    fn get_main_repo_from_main_returns_same_repo() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let main_repo = get_main_repo(&repo).unwrap();
+        assert_eq!(
+            main_repo.workdir().unwrap().canonicalize().unwrap(),
+            test_repo.path()
+        );
+    }
+
+    #[test]
+    fn get_main_repo_from_worktree_returns_main() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+
+        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+        let main_repo = get_main_repo(&wt_repo).unwrap();
+
+        assert_eq!(
+            main_repo.workdir().unwrap().canonicalize().unwrap(),
+            test_repo.path()
+        );
+    }
+
+    #[test]
+    fn get_worktree_branch_returns_branch_name() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature-branch");
+
+        let repo = test_repo.open();
+        let branch = get_worktree_branch(&repo, "feature-branch");
+
+        assert_eq!(branch, Some("feature-branch".to_string()));
+    }
+
+    #[test]
+    fn get_worktree_branch_returns_none_for_nonexistent() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let branch = get_worktree_branch(&repo, "nonexistent");
+        assert_eq!(branch, None);
+    }
+
+    #[test]
+    fn delete_worktree_removes_worktree() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("to-delete");
+
+        let repo = test_repo.open();
+
+        // Verify worktree exists
+        assert!(repo.find_worktree("to-delete").is_ok());
+
+        // Delete it
+        let result = delete_worktree(&repo, "to-delete").unwrap();
+        assert!(result);
+
+        // Verify it's gone
+        assert!(repo.find_worktree("to-delete").is_err());
+    }
+
+    #[test]
+    fn delete_worktree_returns_false_for_nonexistent() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let result = delete_worktree(&repo, "nonexistent").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn find_worktree_name_finds_by_path() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("my-feature");
+
+        let repo = test_repo.open();
+        let wt_path = test_repo.worktree_path("my-feature");
+
+        let name = find_worktree_name(&repo, wt_path.to_str().unwrap()).unwrap();
+        assert_eq!(name, "my-feature");
+    }
+
+    #[test]
+    fn find_worktree_name_returns_error_for_nonexistent() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let result = find_worktree_name(&repo, "/nonexistent/path");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_linked_worktrees_empty_when_no_worktrees() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let worktrees = list_linked_worktrees(&repo).unwrap();
+        assert!(worktrees.is_empty());
+    }
+
+    #[test]
+    fn list_linked_worktrees_returns_all_worktrees() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature-a");
+        test_repo.create_worktree("feature-b");
+
+        let repo = test_repo.open();
+        let worktrees = list_linked_worktrees(&repo).unwrap();
+
+        assert_eq!(worktrees.len(), 2);
+
+        let names: Vec<&str> = worktrees.iter().map(|w| w.name.as_str()).collect();
+        assert!(names.contains(&"feature-a"));
+        assert!(names.contains(&"feature-b"));
+    }
+
+    #[test]
+    fn list_linked_worktrees_includes_branch_and_commit() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+
+        let repo = test_repo.open();
+        let worktrees = list_linked_worktrees(&repo).unwrap();
+
+        assert_eq!(worktrees.len(), 1);
+        let wt = &worktrees[0];
+        assert_eq!(wt.name, "feature");
+        assert_eq!(wt.branch, "feature");
+        assert_eq!(wt.commit.len(), 7);
+        assert_eq!(wt.path, test_repo.worktree_path("feature"));
+    }
+
+    #[test]
+    fn get_main_worktree_path_from_main() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let path = get_main_worktree_path(&repo).unwrap();
+        assert_eq!(path.canonicalize().unwrap(), test_repo.path());
+    }
+
+    #[test]
+    fn get_main_worktree_path_from_worktree() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+
+        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+        let path = get_main_worktree_path(&wt_repo).unwrap();
+
+        assert_eq!(path.canonicalize().unwrap(), test_repo.path());
+    }
+
+    #[test]
+    fn get_main_worktree_info_returns_branch_and_commit() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let (branch, commit) = get_main_worktree_info(&repo);
+
+        assert_eq!(branch, "master");
+        assert_eq!(commit.len(), 7);
+    }
+}

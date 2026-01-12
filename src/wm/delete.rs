@@ -109,3 +109,34 @@ fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
             .map_err(|e| WmError::CommandFailed(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TestRepo;
+
+    #[test]
+    fn resolve_worktree_path_with_existing_path() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+
+        let wt_path = test_repo.worktree_path("feature");
+        let result = resolve_worktree_path(Some(wt_path.to_str().unwrap())).unwrap();
+
+        assert_eq!(result, wt_path.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn resolve_worktree_path_with_nonexistent_returns_error() {
+        let result = resolve_worktree_path(Some("/nonexistent/path/to/worktree"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_worktree_path_with_none_returns_current_dir() {
+        let current = std::env::current_dir().unwrap();
+        let result = resolve_worktree_path(None).unwrap();
+
+        assert_eq!(result, current.to_string_lossy().to_string());
+    }
+}
