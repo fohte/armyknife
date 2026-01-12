@@ -12,7 +12,8 @@ pub mod test_utils;
 
 #[allow(unused_imports)] // MergeStatus is returned by get_merge_status
 pub use branch::{
-    MergeStatus, branch_exists, get_merge_status, local_branch_exists, remote_branch_exists,
+    MergeStatus, branch_exists, find_base_branch, get_merge_status, local_branch_exists,
+    remote_branch_exists,
 };
 pub use error::GitError;
 pub use github::github_owner_and_repo;

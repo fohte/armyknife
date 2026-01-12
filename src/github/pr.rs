@@ -53,13 +53,10 @@ impl PrClient for OctocrabClient {
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
         let pulls = self.client.pulls(&params.owner, &params.repo);
 
-        // If base is not specified, fetch the repository's default branch
+        // If base is not specified, find the base branch from local git info or GitHub API
         let base = match &params.base {
             Some(b) => b.clone(),
-            None => {
-                let repo = self.client.repos(&params.owner, &params.repo).get().await?;
-                repo.default_branch.unwrap_or_else(|| "main".to_string())
-            }
+            None => crate::git::find_base_branch(&params.owner, &params.repo).await,
         };
 
         let pr = if params.draft {

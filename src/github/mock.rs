@@ -64,6 +64,11 @@ impl RepoClient for MockGitHubClient {
         let key = format!("{owner}/{repo}");
         Ok(self.private_repos.get(&key).copied().unwrap_or(true))
     }
+
+    async fn get_default_branch(&self, _owner: &str, _repo: &str) -> Result<String> {
+        // Default to "main" for mock
+        Ok("main".to_string())
+    }
 }
 
 #[async_trait::async_trait]

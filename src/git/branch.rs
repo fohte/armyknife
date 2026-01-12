@@ -2,7 +2,7 @@
 
 use git2::{BranchType, Repository};
 
-use super::repo::open_repo;
+use super::repo::{get_main_branch, open_repo};
 
 /// Check if a branch exists (local or remote)
 pub fn branch_exists(branch: &str) -> bool {
@@ -24,6 +24,32 @@ pub fn remote_branch_exists(branch: &str) -> bool {
     };
     let remote_branch = format!("origin/{branch}");
     repo.find_branch(&remote_branch, BranchType::Remote).is_ok()
+}
+
+/// Find the base branch for PR creation.
+///
+/// Priority:
+/// 1. If `origin/main` exists locally, return "main"
+/// 2. If `origin/master` exists locally, return "master"
+/// 3. Fallback to GitHub API to get the repository's default branch
+///
+/// This avoids unnecessary API calls when the base branch can be determined locally.
+pub async fn find_base_branch(owner: &str, repo: &str) -> String {
+    // Try to determine base branch from local git info first
+    if let Ok(branch) = get_main_branch() {
+        return branch;
+    }
+
+    // Fallback to GitHub API
+    use crate::github::{OctocrabClient, RepoClient};
+    if let Ok(client) = OctocrabClient::get()
+        && let Ok(default_branch) = client.get_default_branch(owner, repo).await
+    {
+        return default_branch;
+    }
+
+    // Ultimate fallback
+    "main".to_string()
 }
 
 /// Check if `branch` is an ancestor of `base` (equivalent to `git merge-base --is-ancestor`)
