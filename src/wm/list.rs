@@ -126,83 +126,56 @@ mod tests {
 
     // Output format spec tests
 
-    #[test]
-    fn format_worktree_list_uses_dynamic_width() {
-        let entries = vec![
-            WorktreeInfo {
-                path: PathBuf::from("/short"),
-                branch: "main".to_string(),
-                commit: "1111111".to_string(),
-            },
-            WorktreeInfo {
-                path: PathBuf::from("/much-longer-path"),
-                branch: "feature".to_string(),
-                commit: "2222222".to_string(),
-            },
-        ];
+    use indoc::indoc;
+    use rstest::rstest;
 
-        let output = format_worktree_list(&entries);
-        let lines: Vec<&str> = output.lines().collect();
-
-        // Both lines should align commits at the same column
-        let commit_pos_1 = lines[0].find("1111111").unwrap();
-        let commit_pos_2 = lines[1].find("2222222").unwrap();
-        assert_eq!(commit_pos_1, commit_pos_2);
-
-        // Width should match the longest path (17 chars) + 1 space
-        assert_eq!(commit_pos_1, 18);
+    fn entry(path: &str, commit: &str, branch: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            path: PathBuf::from(path),
+            commit: commit.to_string(),
+            branch: branch.to_string(),
+        }
     }
 
-    #[test]
-    fn format_worktree_list_single_entry_no_padding() {
-        let entries = vec![WorktreeInfo {
-            path: PathBuf::from("/repo"),
-            branch: "main".to_string(),
-            commit: "abc1234".to_string(),
-        }];
-
-        let output = format_worktree_list(&entries);
-        assert_eq!(output, "/repo abc1234 [main]");
-    }
-
-    #[test]
-    fn format_worktree_list_format_structure() {
-        let entries = vec![WorktreeInfo {
-            path: PathBuf::from("/path/to/repo"),
-            branch: "feature-branch".to_string(),
-            commit: "abc1234".to_string(),
-        }];
-
-        let output = format_worktree_list(&entries);
-        // Format: "{path} {commit} [{branch}]"
-        assert!(output.starts_with("/path/to/repo"));
-        assert!(output.contains("abc1234"));
-        assert!(output.ends_with("[feature-branch]"));
-    }
-
-    #[test]
-    fn format_worktree_list_joins_with_newlines() {
-        let entries = vec![
-            WorktreeInfo {
-                path: PathBuf::from("/repo1"),
-                branch: "main".to_string(),
-                commit: "1111111".to_string(),
-            },
-            WorktreeInfo {
-                path: PathBuf::from("/repo2"),
-                branch: "feature".to_string(),
-                commit: "2222222".to_string(),
-            },
-        ];
-
-        let output = format_worktree_list(&entries);
-        let lines: Vec<&str> = output.lines().collect();
-
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("/repo1"));
-        assert!(lines[0].contains("[main]"));
-        assert!(lines[1].contains("/repo2"));
-        assert!(lines[1].contains("[feature]"));
+    #[rstest]
+    #[case::single_entry(
+        vec![entry("/repo", "abc1234", "main")],
+        "/repo abc1234 [main]"
+    )]
+    #[case::two_entries_same_length(
+        vec![
+            entry("/repo1", "1111111", "main"),
+            entry("/repo2", "2222222", "dev"),
+        ],
+        indoc! {"
+            /repo1 1111111 [main]
+            /repo2 2222222 [dev]"}
+    )]
+    #[case::dynamic_width_alignment(
+        vec![
+            entry("/short", "1111111", "main"),
+            entry("/much-longer-path", "2222222", "feature"),
+        ],
+        indoc! {"
+            /short            1111111 [main]
+            /much-longer-path 2222222 [feature]"}
+    )]
+    #[case::three_entries_with_varying_lengths(
+        vec![
+            entry("/a", "aaa1111", "main"),
+            entry("/medium-path", "bbb2222", "develop"),
+            entry("/x", "ccc3333", "feature"),
+        ],
+        indoc! {"
+            /a           aaa1111 [main]
+            /medium-path bbb2222 [develop]
+            /x           ccc3333 [feature]"}
+    )]
+    fn format_worktree_list_produces_expected_output(
+        #[case] entries: Vec<WorktreeInfo>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(format_worktree_list(&entries), expected);
     }
 
     #[test]
