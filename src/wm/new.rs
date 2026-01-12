@@ -156,10 +156,18 @@ pub struct NewArgs {
 
 /// Resolve branch name: use provided name or generate from prompt.
 fn resolve_branch_name(args: &NewArgs) -> Result<String> {
+    resolve_branch_name_with_backend(args, || detect_backend())
+}
+
+/// Internal implementation that accepts a backend factory for testability.
+fn resolve_branch_name_with_backend<F>(args: &NewArgs, backend_factory: F) -> Result<String>
+where
+    F: FnOnce() -> Box<dyn crate::name_branch::Backend>,
+{
     match (&args.name, &args.prompt) {
         (Some(name), _) => Ok(name.clone()),
         (None, Some(prompt)) => {
-            let backend = detect_backend();
+            let backend = backend_factory();
             let generated = generate_branch_name(prompt, backend.as_ref())?;
             Ok(generated)
         }
@@ -415,28 +423,44 @@ mod tests {
         assert!(worktree_dir.exists());
     }
 
-    #[test]
-    fn resolve_branch_name_with_explicit_name() {
-        let args = NewArgs {
-            name: Some("my-branch".to_string()),
-            from: None,
-            force: false,
-            prompt: None,
-        };
-        let result = resolve_branch_name(&args).unwrap();
-        assert_eq!(result, "my-branch");
+    use crate::name_branch::{Backend, Result as NameBranchResult};
+    use rstest::rstest;
+
+    /// Mock backend for testing
+    struct MockBackend {
+        response: String,
     }
 
-    #[test]
-    fn resolve_branch_name_with_name_and_prompt_uses_name() {
+    impl Backend for MockBackend {
+        fn generate(&self, _prompt: &str) -> NameBranchResult<String> {
+            Ok(self.response.clone())
+        }
+    }
+
+    fn mock_backend(response: &str) -> Box<dyn Backend> {
+        Box::new(MockBackend {
+            response: response.to_string(),
+        })
+    }
+
+    #[rstest]
+    #[case::explicit_name(Some("my-branch"), None, "my-branch")]
+    #[case::name_takes_priority_over_prompt(Some("my-branch"), Some("some task"), "my-branch")]
+    #[case::generate_from_prompt(None, Some("fix login bug"), "fix-login-bug")]
+    fn resolve_branch_name_returns_expected(
+        #[case] name: Option<&str>,
+        #[case] prompt: Option<&str>,
+        #[case] expected: &str,
+    ) {
         let args = NewArgs {
-            name: Some("my-branch".to_string()),
+            name: name.map(String::from),
             from: None,
             force: false,
-            prompt: Some("some task".to_string()),
+            prompt: prompt.map(String::from),
         };
-        let result = resolve_branch_name(&args).unwrap();
-        assert_eq!(result, "my-branch");
+        let result = resolve_branch_name_with_backend(&args, || mock_backend("fix-login-bug"));
+
+        assert_eq!(result.unwrap(), expected);
     }
 
     #[test]
@@ -447,7 +471,7 @@ mod tests {
             force: false,
             prompt: None,
         };
-        let result = resolve_branch_name(&args);
+        let result = resolve_branch_name_with_backend(&args, || mock_backend("unused"));
         assert!(matches!(result, Err(WmError::MissingBranchName)));
     }
 }
