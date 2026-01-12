@@ -18,6 +18,7 @@ See [docs/architecture.md](docs/architecture.md).
 
 - `cargo build` / `cargo test`
 - Formatting and linting run automatically via lefthook pre-commit
+- Coverage: `cargo llvm-cov` (generates lcov.info, uploaded to Codecov in CI)
 
 ## Architecture
 
@@ -37,4 +38,4 @@ Generic framework for interactive document editing:
 ## Standards
 
 - Comments: English (public repo), explain WHY not WHAT
-- Tests: Use rstest for parametrized tests (see test skill)
+- Tests: Use `test` skill when writing/running tests
