@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::git::GitError;
+use crate::name_branch;
 
 #[derive(Error, Debug)]
 pub enum WmError {
@@ -24,6 +25,12 @@ pub enum WmError {
 
     #[error("Git error: {0}")]
     Git(#[from] GitError),
+
+    #[error("Branch name is required. Provide a name or use --prompt to auto-generate.")]
+    MissingBranchName,
+
+    #[error("Branch name generation failed: {0}")]
+    NameBranch(#[from] name_branch::Error),
 }
 
 pub type Result<T> = std::result::Result<T, WmError>;
