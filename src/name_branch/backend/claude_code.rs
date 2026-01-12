@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::process::Command;
 
-use super::Backend;
+use super::{Backend, check_command_status, extract_first_line};
 use crate::name_branch::error::{Error, Result};
 
 /// Claude Code backend using `claude --model haiku --print`
@@ -29,31 +29,7 @@ impl Backend for ClaudeCode {
             .wait_with_output()
             .map_err(|e| Error::GenerationFailed(format!("Failed to wait for claude: {e}")))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::GenerationFailed(format!(
-                "claude exited with status {}: {}",
-                output.status, stderr
-            )));
-        }
-
-        extract_first_line(&output.stdout)
+        check_command_status(&output, "claude")?;
+        extract_first_line(&output.stdout, "claude")
     }
-}
-
-fn extract_first_line(stdout: &[u8]) -> Result<String> {
-    let result = String::from_utf8_lossy(stdout)
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    if result.is_empty() {
-        return Err(Error::GenerationFailed(
-            "claude returned empty output".to_string(),
-        ));
-    }
-
-    Ok(result)
 }

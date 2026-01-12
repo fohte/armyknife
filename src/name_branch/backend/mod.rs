@@ -4,7 +4,9 @@ mod opencode;
 pub use claude_code::ClaudeCode;
 pub use opencode::OpenCode;
 
-use super::error::Result;
+use std::process::Output;
+
+use super::error::{Error, Result};
 
 /// Backend trait for generating text from a prompt.
 ///
@@ -30,7 +32,55 @@ fn is_command_available(cmd: &str) -> bool {
         None => return false,
     };
 
-    std::env::split_paths(&path_var).any(|dir| dir.join(cmd).is_file())
+    std::env::split_paths(&path_var).any(|dir| {
+        let path = dir.join(cmd);
+        is_executable(&path)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && path
+            .metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// Check command output status and return error if failed.
+pub(super) fn check_command_status(output: &Output, command_name: &str) -> Result<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::GenerationFailed(format!(
+            "{command_name} exited with status {}: {}",
+            output.status, stderr
+        )));
+    }
+    Ok(())
+}
+
+/// Extract the first non-empty line from stdout.
+pub(super) fn extract_first_line(stdout: &[u8], command_name: &str) -> Result<String> {
+    let result = String::from_utf8_lossy(stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if result.is_empty() {
+        return Err(Error::GenerationFailed(format!(
+            "{command_name} returned empty output"
+        )));
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]
