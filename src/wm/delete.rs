@@ -80,12 +80,11 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
     println!("Worktree removed: {worktree_path}");
 
     // Delete the branch if it exists
-    if let Some(branch) = branch_name.filter(|b| local_branch_exists(b)) {
-        if let Ok(mut branch_ref) = main_repo.find_branch(&branch, BranchType::Local) {
-            if branch_ref.delete().is_ok() {
-                println!("Branch deleted: {branch}");
-            }
-        }
+    if let Some(branch) = branch_name.filter(|b| local_branch_exists(b))
+        && let Ok(mut branch_ref) = main_repo.find_branch(&branch, BranchType::Local)
+        && branch_ref.delete().is_ok()
+    {
+        println!("Branch deleted: {branch}");
     }
 
     // Close the original tmux window (identified by window ID)
