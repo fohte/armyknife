@@ -69,6 +69,7 @@ pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
 
     let options = format::FormatOptions {
         open_details: args.open_details,
+        skip_delta: false,
     };
 
     match (args.show_review, args.full_mode) {

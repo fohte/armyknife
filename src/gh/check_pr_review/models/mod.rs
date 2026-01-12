@@ -10,6 +10,10 @@ pub use thread::ReviewThread;
 
 #[cfg(test)]
 pub use comment::Author;
+#[cfg(test)]
+pub use comment::{PullRequestReview, ReplyTo};
+#[cfg(test)]
+pub use thread::CommentsNode;
 
 #[cfg(test)]
 mod tests;

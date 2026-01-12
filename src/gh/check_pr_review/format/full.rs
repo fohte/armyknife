@@ -1,22 +1,29 @@
 use super::color::{BG_GRAY, DIM, RESET};
 use super::{
-    FormatOptions, author_login, format_datetime, print_diff_with_delta, process_body,
+    FormatOptions, author_login, format_datetime, format_diff_with_delta, process_body,
     state_indicator,
 };
 use crate::gh::check_pr_review::models::{Comment, PrData, Review, ReviewThread};
 use crate::gh::check_pr_review::{CheckPrReviewError, Result};
 
 pub fn print_full(pr_data: &PrData, options: &FormatOptions) {
+    print!("{}", format_full(pr_data, options));
+}
+
+pub fn format_full(pr_data: &PrData, options: &FormatOptions) -> String {
+    let mut output = String::new();
     let sorted_reviews = pr_data.sorted_reviews();
 
     for review in sorted_reviews {
-        print_review_with_threads(review, pr_data, options);
+        output.push_str(&format_review_with_threads(review, pr_data, options));
     }
 
     let orphan_threads = pr_data.orphan_threads();
     for thread in orphan_threads {
-        print_thread(thread, options);
+        output.push_str(&format_thread(thread, options));
     }
+
+    output
 }
 
 pub fn print_review_details(
@@ -24,6 +31,15 @@ pub fn print_review_details(
     review_num: usize,
     options: &FormatOptions,
 ) -> Result<()> {
+    print!("{}", format_review_details(pr_data, review_num, options)?);
+    Ok(())
+}
+
+pub fn format_review_details(
+    pr_data: &PrData,
+    review_num: usize,
+    options: &FormatOptions,
+) -> Result<String> {
     if review_num == 0 {
         return Err(CheckPrReviewError::ReviewNotFound(review_num));
     }
@@ -34,82 +50,109 @@ pub fn print_review_details(
         .get(review_num - 1)
         .ok_or(CheckPrReviewError::ReviewNotFound(review_num))?;
 
-    print_review_with_threads(review, pr_data, options);
-    Ok(())
+    Ok(format_review_with_threads(review, pr_data, options))
 }
 
-fn print_review_with_threads(review: &Review, pr_data: &PrData, options: &FormatOptions) {
-    print_review(review, options);
+fn format_review_with_threads(
+    review: &Review,
+    pr_data: &PrData,
+    options: &FormatOptions,
+) -> String {
+    let mut output = format_review(review, options);
 
     let review_threads = pr_data.threads_for_review(review.database_id);
     for thread in review_threads {
-        print_thread(thread, options);
+        output.push_str(&format_thread(thread, options));
     }
+
+    output
 }
 
-fn print_review(review: &Review, options: &FormatOptions) {
+fn format_review(review: &Review, options: &FormatOptions) -> String {
+    let mut output = String::new();
     let formatted_date = format_datetime(&review.created_at);
-    println!(
-        "{BG_GRAY} @{} ({formatted_date}) {RESET} {}",
+    output.push_str(&format!(
+        "{BG_GRAY} @{} ({formatted_date}) {RESET} {}\n",
         author_login(review),
         state_indicator(review.state)
-    );
+    ));
 
     let body = process_body(&review.body, options);
     if !body.is_empty() {
-        println!("{body}");
+        output.push_str(&body);
+        output.push('\n');
     }
-    println!();
+    output.push('\n');
+
+    output
 }
 
-fn print_thread(thread: &ReviewThread, options: &FormatOptions) {
+fn format_thread(thread: &ReviewThread, options: &FormatOptions) -> String {
+    let mut output = String::new();
     if let Some(root) = thread.root_comment() {
-        print_comment(root, "", false, thread.is_resolved, options);
+        output.push_str(&format_comment(
+            root,
+            "",
+            false,
+            thread.is_resolved,
+            options,
+        ));
 
         for reply in thread.replies() {
-            print_comment(reply, "  ", true, thread.is_resolved, options);
+            output.push_str(&format_comment(
+                reply,
+                "  ",
+                true,
+                thread.is_resolved,
+                options,
+            ));
         }
     }
+    output
 }
 
-fn print_comment(
+fn format_comment(
     comment: &Comment,
     indent: &str,
     is_reply: bool,
     is_resolved: bool,
     options: &FormatOptions,
-) {
+) -> String {
+    let mut output = String::new();
     let formatted_date = format_datetime(&comment.created_at);
 
     if is_reply {
-        println!(
-            "{indent}└─ {BG_GRAY} @{} ({formatted_date}) {RESET}",
+        output.push_str(&format!(
+            "{indent}└─ {BG_GRAY} @{} ({formatted_date}) {RESET}\n",
             comment.author_login()
-        );
+        ));
     } else {
         let resolved_indicator = if is_resolved {
             format!(" {DIM}[resolved]{RESET}")
         } else {
             String::new()
         };
-        println!(
-            "{BG_GRAY} @{} ({formatted_date}) {RESET}{resolved_indicator}",
+        output.push_str(&format!(
+            "{BG_GRAY} @{} ({formatted_date}) {RESET}{resolved_indicator}\n",
             comment.author_login()
-        );
+        ));
     }
 
     if !is_reply && let Some(diff_hunk) = &comment.diff_hunk {
         let path = comment.path.as_deref().unwrap_or("unknown");
-        print_diff_with_delta(path, diff_hunk);
+        output.push_str(&format_diff_with_delta(path, diff_hunk, options.skip_delta));
     }
 
     let body = process_body(&comment.body, options);
     if is_reply {
         for line in body.lines() {
-            println!("{indent}   {line}");
+            output.push_str(&format!("{indent}   {line}\n"));
         }
     } else {
-        println!("{body}");
+        output.push_str(&body);
+        output.push('\n');
     }
-    println!();
+    output.push('\n');
+
+    output
 }

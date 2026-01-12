@@ -4,6 +4,11 @@ mod summary;
 pub use full::{print_full, print_review_details};
 pub use summary::print_summary;
 
+#[cfg(test)]
+pub use full::{format_full, format_review_details};
+#[cfg(test)]
+pub use summary::format_summary;
+
 use super::models::{Review, ReviewState};
 use regex::Regex;
 use std::io::Write;
@@ -17,8 +22,11 @@ static DETAILS_RE: LazyLock<Regex> =
 static SUMMARY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)^\s*<summary[^>]*>(.*?)</summary>").unwrap());
 
+#[derive(Default)]
 pub struct FormatOptions {
     pub open_details: bool,
+    /// Skip delta rendering and return plain diff lines instead
+    pub skip_delta: bool,
 }
 
 // ANSI color codes matching the original script
@@ -88,8 +96,9 @@ pub(super) fn render_markdown(text: &str) -> String {
     skin.term_text(text).to_string()
 }
 
-/// Print diff hunk with delta syntax highlighting (last 3 lines only)
-pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
+/// Format diff hunk with delta syntax highlighting (last 3 lines only)
+/// When skip_delta is true, returns plain text without running delta command.
+pub(super) fn format_diff_with_delta(path: &str, diff_hunk: &str, skip_delta: bool) -> String {
     let lines: Vec<&str> = diff_hunk.lines().collect();
 
     // Extract hunk header (first line if it starts with @@)
@@ -115,31 +124,48 @@ pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
         diff_input.push('\n');
     }
 
+    if skip_delta {
+        // Return plain diff lines for testing
+        let mut output = String::new();
+        for line in last_3_lines {
+            output.push_str(line);
+            output.push('\n');
+        }
+        return output;
+    }
+
     // Try to pipe through delta, fall back to plain output on any failure
-    let run_delta = || -> std::io::Result<()> {
+    let run_delta = || -> std::io::Result<String> {
         let mut child = Command::new("delta")
             .args(["--paging=never", "--line-numbers"])
             .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
+            .stdout(Stdio::piped())
             .spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(diff_input.as_bytes())?;
         }
 
-        let status = child.wait()?;
-        if !status.success() {
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
             return Err(std::io::Error::other(format!(
-                "delta exited with status: {status}"
+                "delta exited with status: {}",
+                output.status
             )));
         }
-        Ok(())
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     };
 
-    if run_delta().is_err() {
-        // delta not available or failed, show last 3 lines plain
-        for line in last_3_lines {
-            println!("{line}");
+    match run_delta() {
+        Ok(output) => output,
+        Err(_) => {
+            // delta not available or failed, show last 3 lines plain
+            let mut output = String::new();
+            for line in last_3_lines {
+                output.push_str(line);
+                output.push('\n');
+            }
+            output
         }
     }
 }
@@ -197,6 +223,59 @@ mod tests {
     use super::*;
     use crate::gh::check_pr_review::models::Author;
     use rstest::rstest;
+
+    mod test_helpers {
+        use crate::gh::check_pr_review::models::{
+            Author, Comment, CommentsNode, PrData, PullRequestReview, ReplyTo, Review, ReviewState,
+            ReviewThread,
+        };
+
+        pub fn make_comment(
+            id: i64,
+            author: &str,
+            body: &str,
+            review_id: Option<i64>,
+            is_reply: bool,
+        ) -> Comment {
+            Comment {
+                database_id: id,
+                author: Some(Author {
+                    login: author.to_string(),
+                }),
+                body: body.to_string(),
+                created_at: "2024-01-15T10:30:00Z".to_string(),
+                path: Some("src/main.rs".to_string()),
+                line: Some(42),
+                original_line: None,
+                diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old line\n+new line".to_string()),
+                reply_to: if is_reply { Some(ReplyTo {}) } else { None },
+                pull_request_review: review_id.map(|id| PullRequestReview { database_id: id }),
+            }
+        }
+
+        pub fn make_thread(comments: Vec<Comment>, is_resolved: bool) -> ReviewThread {
+            ReviewThread {
+                is_resolved,
+                comments: CommentsNode { nodes: comments },
+            }
+        }
+
+        pub fn make_review(id: i64, author: &str, body: &str, state: ReviewState) -> Review {
+            Review {
+                database_id: id,
+                author: Some(Author {
+                    login: author.to_string(),
+                }),
+                body: body.to_string(),
+                state,
+                created_at: "2024-01-15T10:00:00Z".to_string(),
+            }
+        }
+
+        pub fn make_pr_data(reviews: Vec<Review>, threads: Vec<ReviewThread>) -> PrData {
+            PrData { reviews, threads }
+        }
+    }
 
     #[rstest]
     #[case::with_summary(
@@ -264,7 +343,10 @@ mod tests {
     #[case::open(true)]
     #[case::collapsed(false)]
     fn test_process_body_details(#[case] open_details: bool) {
-        let options = FormatOptions { open_details };
+        let options = FormatOptions {
+            open_details,
+            skip_delta: true,
+        };
         let body = "<details><summary>Sum</summary>Content</details>";
         let result = process_body(body, &options);
         if open_details {
@@ -302,5 +384,239 @@ mod tests {
             created_at: String::new(),
         };
         assert_eq!(author_login(&review), expected);
+    }
+
+    // Integration tests for format output
+    mod integration {
+        use super::test_helpers::*;
+        use crate::gh::check_pr_review::format::{
+            FormatOptions, format_full, format_review_details, format_summary,
+        };
+        use crate::gh::check_pr_review::models::ReviewState;
+        use rstest::rstest;
+
+        fn test_options() -> FormatOptions {
+            FormatOptions {
+                open_details: false,
+                skip_delta: true,
+            }
+        }
+
+        #[rstest]
+        fn test_format_summary_single_review_no_threads() {
+            let pr_data = make_pr_data(
+                vec![make_review(
+                    100,
+                    "reviewer1",
+                    "LGTM!",
+                    ReviewState::Approved,
+                )],
+                vec![],
+            );
+
+            let output = format_summary(&pr_data);
+
+            assert!(output.contains("[1] @reviewer1 (approved)"));
+            assert!(output.contains("\"LGTM!\""));
+        }
+
+        #[rstest]
+        fn test_format_summary_with_threads() {
+            let pr_data = make_pr_data(
+                vec![make_review(
+                    100,
+                    "reviewer1",
+                    "",
+                    ReviewState::ChangesRequested,
+                )],
+                vec![
+                    make_thread(
+                        vec![make_comment(1, "reviewer1", "Fix this", Some(100), false)],
+                        false,
+                    ),
+                    make_thread(
+                        vec![make_comment(2, "reviewer1", "Also this", Some(100), false)],
+                        true, // resolved
+                    ),
+                ],
+            );
+
+            let output = format_summary(&pr_data);
+
+            // Should show 1/2 unresolved (1 unresolved out of 2 total)
+            assert!(output.contains("1/2 unresolved"));
+            assert!(output.contains("@reviewer1 (changes_requested)"));
+            // Thread info
+            assert!(output.contains("src/main.rs:42"));
+            assert!(output.contains("Fix this"));
+            assert!(output.contains("[resolved]"));
+        }
+
+        #[rstest]
+        fn test_format_summary_multiple_reviews() {
+            let pr_data = make_pr_data(
+                vec![
+                    make_review(100, "alice", "", ReviewState::Commented),
+                    make_review(200, "bob", "Looks good", ReviewState::Approved),
+                ],
+                vec![],
+            );
+
+            let output = format_summary(&pr_data);
+
+            assert!(output.contains("[1] @alice (commented)"));
+            assert!(output.contains("[2] @bob (approved)"));
+            assert!(output.contains("\"Looks good\""));
+        }
+
+        #[rstest]
+        fn test_format_full_with_diff_hunk() {
+            let pr_data = make_pr_data(
+                vec![make_review(
+                    100,
+                    "reviewer1",
+                    "Please fix",
+                    ReviewState::ChangesRequested,
+                )],
+                vec![make_thread(
+                    vec![make_comment(
+                        1,
+                        "reviewer1",
+                        "This line is wrong",
+                        Some(100),
+                        false,
+                    )],
+                    false,
+                )],
+            );
+
+            let output = format_full(&pr_data, &test_options());
+
+            // Review header
+            assert!(output.contains("@reviewer1"));
+            assert!(output.contains("[changes requested]"));
+            // Diff (plain text since skip_delta=true)
+            assert!(output.contains("-old line"));
+            assert!(output.contains("+new line"));
+            // Comment body
+            assert!(output.contains("This line is wrong"));
+        }
+
+        #[rstest]
+        fn test_format_full_with_replies() {
+            let pr_data = make_pr_data(
+                vec![make_review(100, "reviewer1", "", ReviewState::Commented)],
+                vec![make_thread(
+                    vec![
+                        make_comment(1, "reviewer1", "What about this?", Some(100), false),
+                        make_comment(2, "author", "Good point, fixed!", Some(100), true),
+                    ],
+                    false,
+                )],
+            );
+
+            let output = format_full(&pr_data, &test_options());
+
+            assert!(output.contains("@reviewer1"));
+            assert!(output.contains("What about this?"));
+            assert!(output.contains("└─")); // reply indicator
+            assert!(output.contains("@author"));
+            assert!(output.contains("Good point, fixed!"));
+        }
+
+        #[rstest]
+        fn test_format_review_details_specific_review() {
+            let pr_data = make_pr_data(
+                vec![
+                    make_review(100, "alice", "First review", ReviewState::Commented),
+                    make_review(200, "bob", "Second review", ReviewState::Approved),
+                ],
+                vec![
+                    make_thread(
+                        vec![make_comment(
+                            1,
+                            "alice",
+                            "Comment for review 1",
+                            Some(100),
+                            false,
+                        )],
+                        false,
+                    ),
+                    make_thread(
+                        vec![make_comment(
+                            2,
+                            "bob",
+                            "Comment for review 2",
+                            Some(200),
+                            false,
+                        )],
+                        false,
+                    ),
+                ],
+            );
+
+            // Get review #2 (bob's review)
+            let output = format_review_details(&pr_data, 2, &test_options()).unwrap();
+
+            assert!(output.contains("@bob"));
+            assert!(output.contains("Second review"));
+            assert!(output.contains("Comment for review 2"));
+            // Should not contain alice's content
+            assert!(!output.contains("@alice"));
+            assert!(!output.contains("First review"));
+            assert!(!output.contains("Comment for review 1"));
+        }
+
+        #[rstest]
+        fn test_format_review_details_not_found() {
+            let pr_data = make_pr_data(
+                vec![make_review(100, "alice", "", ReviewState::Approved)],
+                vec![],
+            );
+
+            let result = format_review_details(&pr_data, 0, &test_options());
+            assert!(result.is_err());
+
+            let result = format_review_details(&pr_data, 2, &test_options());
+            assert!(result.is_err());
+        }
+
+        #[rstest]
+        fn test_format_summary_orphan_threads() {
+            let pr_data = make_pr_data(
+                vec![make_review(100, "alice", "", ReviewState::Approved)],
+                vec![
+                    make_thread(
+                        vec![make_comment(1, "alice", "Normal thread", Some(100), false)],
+                        false,
+                    ),
+                    // Orphan thread (review_id 999 doesn't exist)
+                    make_thread(
+                        vec![make_comment(2, "bob", "Orphan comment", Some(999), false)],
+                        false,
+                    ),
+                ],
+            );
+
+            let output = format_summary(&pr_data);
+
+            assert!(output.contains("Orphan threads"));
+            assert!(output.contains("1")); // 1 orphan thread
+        }
+
+        #[rstest]
+        fn test_format_full_resolved_indicator() {
+            let pr_data = make_pr_data(
+                vec![make_review(100, "reviewer", "", ReviewState::Commented)],
+                vec![make_thread(
+                    vec![make_comment(1, "reviewer", "Fixed", Some(100), false)],
+                    true, // resolved
+                )],
+            );
+
+            let output = format_full(&pr_data, &test_options());
+
+            assert!(output.contains("[resolved]"));
+        }
     }
 }

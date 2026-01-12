@@ -2,6 +2,11 @@ use super::{author_login, truncate_text};
 use crate::gh::check_pr_review::models::{PrData, ReviewThread};
 
 pub fn print_summary(pr_data: &PrData) {
+    print!("{}", format_summary(pr_data));
+}
+
+pub fn format_summary(pr_data: &PrData) -> String {
+    let mut output = String::new();
     let sorted_reviews = pr_data.sorted_reviews();
 
     for (index, review) in sorted_reviews.iter().enumerate() {
@@ -16,38 +21,41 @@ pub fn print_summary(pr_data: &PrData) {
             String::new()
         };
 
-        println!(
-            "[{}] @{} ({}){thread_info}",
+        output.push_str(&format!(
+            "[{}] @{} ({}){thread_info}\n",
             review_num,
             author_login(review),
             review.state.as_str()
-        );
+        ));
 
         if !review.body.is_empty() {
             let body_preview = truncate_text(&review.body, 70);
-            println!("    \"{body_preview}\"");
+            output.push_str(&format!("    \"{body_preview}\"\n"));
         }
 
         for thread in &review_threads {
-            print_thread_summary(thread);
+            output.push_str(&format_thread_summary(thread));
         }
 
-        println!();
+        output.push('\n');
     }
 
     let orphan_threads = pr_data.orphan_threads();
     if !orphan_threads.is_empty() {
-        println!(
-            "Orphan threads (not associated with a review): {}",
+        output.push_str(&format!(
+            "Orphan threads (not associated with a review): {}\n",
             orphan_threads.len()
-        );
+        ));
         for thread in orphan_threads {
-            print_thread_summary(thread);
+            output.push_str(&format_thread_summary(thread));
         }
     }
+
+    output
 }
 
-fn print_thread_summary(thread: &ReviewThread) {
+fn format_thread_summary(thread: &ReviewThread) -> String {
+    let mut output = String::new();
     if let Some(root) = thread.root_comment() {
         let path = root.path.as_deref().unwrap_or("?");
         let line = root
@@ -63,7 +71,13 @@ fn print_thread_summary(thread: &ReviewThread) {
         };
 
         let body_preview = truncate_text(&root.body, 50);
-        println!("    - {path}:{line} ({comment_count} comments){resolved_mark}");
-        println!("      @{}: \"{body_preview}\"", root.author_login());
+        output.push_str(&format!(
+            "    - {path}:{line} ({comment_count} comments){resolved_mark}\n"
+        ));
+        output.push_str(&format!(
+            "      @{}: \"{body_preview}\"\n",
+            root.author_login()
+        ));
     }
+    output
 }
