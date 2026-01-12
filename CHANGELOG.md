@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.9](https://github.com/fohte/armyknife/compare/v0.1.8...v0.1.9) (2026-01-12)
+
+
+### Features
+
+* **name-branch:** add command to auto-generate branch names from task descriptions ([#41](https://github.com/fohte/armyknife/issues/41)) ([4a2e36c](https://github.com/fohte/armyknife/commit/4a2e36cd8fc3318c8d16356959b5c36d0cb5dbb7))
+
+## [0.1.8](https://github.com/fohte/armyknife/compare/v0.1.7...v0.1.8) (2026-01-12)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** restore to focused pane at review command execution instead of source pane ([#42](https://github.com/fohte/armyknife/issues/42)) ([51c3a76](https://github.com/fohte/armyknife/commit/51c3a76c63bd5bb7d89a3012e93a5d3e609caf59))
+
 ## [0.1.7](https://github.com/fohte/armyknife/compare/v0.1.6...v0.1.7) (2026-01-10)
 
 
