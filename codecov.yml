@@ -5,13 +5,10 @@
 
 coverage:
   status:
-    # Project status: measures coverage of the entire project
+    # Set project and patch status to informational mode to prevent PR blocks on coverage decrease
     project:
       default:
-        # Set to informational mode - coverage changes won't block PRs
         informational: true
-    # Patch status: measures coverage of changed lines only
     patch:
       default:
-        # Set to informational mode - coverage changes won't block PRs
         informational: true
