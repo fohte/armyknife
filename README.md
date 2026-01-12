@@ -51,6 +51,25 @@ Manage PR body drafts with human-in-the-loop review.
 | `review` | Open the draft in editor for review |
 | `submit` | Create a PR from the approved draft |
 
+### `a gh`
+
+GitHub-related utilities.
+
+#### `a gh check-pr-review`
+
+Fetch PR review comments in a concise format for AI agents.
+
+```sh
+a gh check-pr-review <pr-number> [options]
+```
+
+| Option               | Description                           |
+| -------------------- | ------------------------------------- |
+| `--review <n>`       | Show details for a specific review    |
+| `--full`             | Show full details for all reviews     |
+| `--include-resolved` | Include resolved threads              |
+| `--open-details`     | Expand `<details>` blocks in comments |
+
 ## License
 
 [MIT](LICENSE)
