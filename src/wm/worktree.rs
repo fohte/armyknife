@@ -157,8 +157,19 @@ pub fn get_main_worktree_path(repo: &Repository) -> Result<PathBuf> {
 }
 
 /// Get the branch and commit for the main worktree.
+/// If called from a linked worktree, opens the main repo to get correct info.
 pub fn get_main_worktree_info(repo: &Repository) -> (String, String) {
-    let head = repo.head().ok();
+    // If we're in a worktree, we need to open the main repo to get its HEAD
+    let main_repo = if repo.is_worktree() {
+        repo.commondir()
+            .parent()
+            .and_then(|p| Repository::open(p).ok())
+    } else {
+        None
+    };
+
+    let target_repo = main_repo.as_ref().unwrap_or(repo);
+    let head = target_repo.head().ok();
     let branch = head
         .as_ref()
         .and_then(|h| h.shorthand())
@@ -342,5 +353,18 @@ mod tests {
 
         assert_eq!(branch, "master");
         assert_eq!(commit.len(), 7);
+    }
+
+    #[test]
+    fn get_main_worktree_info_from_worktree_returns_main_branch() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+
+        // Open from worktree, not main repo
+        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+
+        // Should return main repo's branch (master), not the worktree's branch (feature)
+        let (branch, _commit) = get_main_worktree_info(&wt_repo);
+        assert_eq!(branch, "master");
     }
 }
