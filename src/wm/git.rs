@@ -2,7 +2,7 @@ use git2::{BranchType, Repository};
 use std::path::Path;
 
 use super::error::{Result, WmError};
-use crate::github::{GitHubClient, OctocrabClient, PrState};
+use crate::github::{OctocrabClient, PrClient, PrState};
 
 /// Branch prefix for new branches created by `wm new`
 pub const BRANCH_PREFIX: &str = "fohte/";
