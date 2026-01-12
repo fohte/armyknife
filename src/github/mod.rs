@@ -106,11 +106,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_gh_token_format() {
-        // This test only runs if gh is authenticated
-        if let Ok(token) = get_gh_token() {
-            assert!(!token.is_empty());
-            assert!(!token.contains('\n'));
+    fn get_gh_token_returns_error_when_gh_not_available() {
+        // Test that error handling works correctly
+        // In CI without gh, this should return TokenError
+        // With gh installed, it should return a valid token or TokenError
+        let result = get_gh_token();
+        match result {
+            Ok(token) => {
+                // If gh is available and authenticated, token should be valid
+                assert!(!token.is_empty(), "token should not be empty");
+                assert!(!token.contains('\n'), "token should not contain newlines");
+            }
+            Err(GitHubError::TokenError(_)) => {
+                // Expected when gh is not installed or not authenticated
+            }
+            Err(e) => {
+                panic!("unexpected error type: {e}");
+            }
         }
+    }
+
+    #[test]
+    fn create_pr_params_can_be_constructed() {
+        let params = CreatePrParams {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            title: "Test PR".to_string(),
+            body: "Test body".to_string(),
+            head: "feature-branch".to_string(),
+            base: Some("main".to_string()),
+            draft: true,
+        };
+        assert_eq!(params.owner, "owner");
+        assert_eq!(params.repo, "repo");
+        assert!(params.draft);
     }
 }

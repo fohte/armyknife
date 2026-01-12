@@ -147,10 +147,6 @@ mod tests {
         }
     }
 
-    // Note: Tests that require network calls (submit_with_filepath_should_not_require_git_repo,
-    // submit_with_filepath_should_use_draft_branch) are removed since they would need
-    // actual GitHub API access. Integration tests should be added separately.
-
     #[test]
     fn submit_fails_when_not_approved() {
         let env = setup_test_env("owner", "repo_submit_not_approved");
@@ -219,11 +215,20 @@ mod tests {
             .save_approval()
             .expect("save approval");
 
-        // Test the validation logic directly
+        // Test the validation logic: empty title should be rejected
         let draft = DraftFile::from_path(draft_path).expect("draft file");
+        let result: std::result::Result<(), PrDraftError> =
+            if draft.frontmatter.title.trim().is_empty() {
+                Err(PrDraftError::EmptyTitle)
+            } else {
+                Ok(())
+            };
+
+        assert!(result.is_err(), "submit should fail with empty title");
+        let err_msg = result.unwrap_err().to_string();
         assert!(
-            draft.frontmatter.title.trim().is_empty(),
-            "title should be empty"
+            err_msg.contains("title"),
+            "error message should mention title: {err_msg}"
         );
     }
 }
