@@ -62,15 +62,28 @@ pub fn get_main_branch() -> Result<String> {
     get_main_branch_for_repo(&repo)
 }
 
-/// Get the main branch name for a specific repository
+/// Get the main branch name for a specific repository.
+///
+/// Returns `Ok("main")` if `origin/main` exists, `Ok("master")` if `origin/master` exists,
+/// or `Err` if neither exists (caller should fall back to GitHub API or default).
 pub fn get_main_branch_for_repo(repo: &Repository) -> Result<String> {
     // Check for origin/main first
     if repo.find_branch("origin/main", BranchType::Remote).is_ok() {
         return Ok("main".to_string());
     }
 
-    // Fall back to master
-    Ok("master".to_string())
+    // Check for origin/master
+    if repo
+        .find_branch("origin/master", BranchType::Remote)
+        .is_ok()
+    {
+        return Ok("master".to_string());
+    }
+
+    // Neither exists - caller should fall back to GitHub API
+    Err(GitError::NotFound(
+        "Neither origin/main nor origin/master found".to_string(),
+    ))
 }
 
 /// Fetch from origin with prune to remove stale remote-tracking references
@@ -98,4 +111,46 @@ pub fn origin_url(repo: &Repository) -> Result<String> {
         .url()
         .map(str::to_string)
         .ok_or(GitError::NoOriginRemote)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::test_utils::TempRepo;
+    use rstest::rstest;
+
+    /// Helper to create remote tracking branch references in a test repo.
+    fn create_remote_branches(repo: &Repository, branches: &[&str]) {
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        for branch in branches {
+            repo.reference(
+                &format!("refs/remotes/origin/{branch}"),
+                head_commit.id(),
+                true,
+                "create fake remote branch for test",
+            )
+            .unwrap();
+        }
+    }
+
+    #[rstest]
+    #[case::only_origin_main(vec!["main"], Some("main"))]
+    #[case::only_origin_master(vec!["master"], Some("master"))]
+    #[case::both_prefers_main(vec!["main", "master"], Some("main"))]
+    #[case::no_remote_branches(vec![], None)]
+    fn test_get_main_branch_for_repo(
+        #[case] remote_branches: Vec<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let temp = TempRepo::new("owner", "repo", "master");
+        let repo = temp.open();
+
+        create_remote_branches(&repo, &remote_branches);
+
+        let result = get_main_branch_for_repo(&repo);
+        match expected {
+            Some(branch) => assert_eq!(result.unwrap(), branch),
+            None => assert!(result.is_err()),
+        }
+    }
 }

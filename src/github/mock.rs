@@ -12,6 +12,8 @@ use super::repo::RepoClient;
 pub struct MockGitHubClient {
     /// Map of "owner/repo" -> is_private
     pub private_repos: HashMap<String, bool>,
+    /// Map of "owner/repo" -> default_branch
+    pub default_branches: HashMap<String, String>,
     /// Result URL for PR creation (None = error)
     pub pr_create_result: Option<String>,
     /// Map of "owner/repo/branch" -> PrInfo
@@ -26,6 +28,7 @@ impl MockGitHubClient {
     pub fn new() -> Self {
         Self {
             private_repos: HashMap::new(),
+            default_branches: HashMap::new(),
             pr_create_result: Some("https://github.com/owner/repo/pull/1".to_string()),
             branch_prs: HashMap::new(),
             created_prs: Arc::new(Mutex::new(Vec::new())),
@@ -36,6 +39,12 @@ impl MockGitHubClient {
     pub fn with_private(mut self, owner: &str, repo: &str, is_private: bool) -> Self {
         self.private_repos
             .insert(format!("{owner}/{repo}"), is_private);
+        self
+    }
+
+    pub fn with_default_branch(mut self, owner: &str, repo: &str, branch: &str) -> Self {
+        self.default_branches
+            .insert(format!("{owner}/{repo}"), branch.to_string());
         self
     }
 
@@ -63,6 +72,15 @@ impl RepoClient for MockGitHubClient {
     async fn is_repo_private(&self, owner: &str, repo: &str) -> Result<bool> {
         let key = format!("{owner}/{repo}");
         Ok(self.private_repos.get(&key).copied().unwrap_or(true))
+    }
+
+    async fn get_default_branch(&self, owner: &str, repo: &str) -> Result<String> {
+        let key = format!("{owner}/{repo}");
+        Ok(self
+            .default_branches
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| "main".to_string()))
     }
 }
 
@@ -175,5 +193,40 @@ mod tests {
             .await
             .unwrap();
         assert!(no_pr.is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_client_returns_configured_default_branch() {
+        let client = MockGitHubClient::new()
+            .with_default_branch("owner", "main-repo", "main")
+            .with_default_branch("owner", "master-repo", "master")
+            .with_default_branch("owner", "custom-repo", "develop");
+
+        assert_eq!(
+            client
+                .get_default_branch("owner", "main-repo")
+                .await
+                .unwrap(),
+            "main"
+        );
+        assert_eq!(
+            client
+                .get_default_branch("owner", "master-repo")
+                .await
+                .unwrap(),
+            "master"
+        );
+        assert_eq!(
+            client
+                .get_default_branch("owner", "custom-repo")
+                .await
+                .unwrap(),
+            "develop"
+        );
+        // Default to "main" for unknown repos
+        assert_eq!(
+            client.get_default_branch("owner", "unknown").await.unwrap(),
+            "main"
+        );
     }
 }

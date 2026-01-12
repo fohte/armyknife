@@ -52,18 +52,23 @@ pub trait PrClient: Send + Sync {
 impl PrClient for OctocrabClient {
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
         let pulls = self.client.pulls(&params.owner, &params.repo);
-        let base = params.base.as_deref().unwrap_or("main");
+
+        // If base is not specified, find the base branch from local git info or GitHub API
+        let base = match &params.base {
+            Some(b) => b.clone(),
+            None => crate::git::find_base_branch(&params.owner, &params.repo).await,
+        };
 
         let pr = if params.draft {
             pulls
-                .create(&params.title, &params.head, base)
+                .create(&params.title, &params.head, &base)
                 .body(&params.body)
                 .draft(Some(true))
                 .send()
                 .await?
         } else {
             pulls
-                .create(&params.title, &params.head, base)
+                .create(&params.title, &params.head, &base)
                 .body(&params.body)
                 .send()
                 .await?
