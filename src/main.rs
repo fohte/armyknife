@@ -31,7 +31,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match command {
-        Commands::Ai(ai_cmd) => ai_cmd.run()?,
+        Commands::Ai(ai_cmd) => ai_cmd.run().await?,
         Commands::Gh(gh_cmd) => gh_cmd.run().await?,
         Commands::NameBranch(args) => args.run()?,
         Commands::Wm(wm_cmd) => wm_cmd.run().await?,

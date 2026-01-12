@@ -26,12 +26,12 @@ struct PrTarget {
     is_private: bool,
 }
 
-pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let client = OctocrabClient::get()?;
-    tokio::runtime::Runtime::new()?.block_on(run_async(args, client))
+    run_impl(args, client).await
 }
 
-async fn run_async(
+async fn run_impl(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -194,7 +194,7 @@ mod tests {
             draft: false,
         };
 
-        let result = run_async(&args, &env.gh_client).await;
+        let result = run_impl(&args, &env.gh_client).await;
 
         assert!(
             result.is_ok(),
@@ -220,7 +220,7 @@ mod tests {
             draft: false,
         };
 
-        let result = run_async(&args, &env.gh_client).await;
+        let result = run_impl(&args, &env.gh_client).await;
 
         assert!(
             result.is_ok(),
@@ -265,7 +265,7 @@ mod tests {
             draft: false,
         };
 
-        let result = run_async(&args, &env.gh_client).await;
+        let result = run_impl(&args, &env.gh_client).await;
 
         assert!(result.is_err(), "submit should fail when not approved");
         let err_msg = result.unwrap_err().to_string();
@@ -311,7 +311,7 @@ mod tests {
             draft: false,
         };
 
-        let result = run_async(&args, &env.gh_client).await;
+        let result = run_impl(&args, &env.gh_client).await;
 
         assert!(result.is_err(), "submit should fail with empty title");
         let err_msg = result.unwrap_err().to_string();
