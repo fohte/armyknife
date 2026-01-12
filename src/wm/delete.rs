@@ -20,7 +20,6 @@ pub struct DeleteArgs {
     pub force: bool,
 }
 
-#[tokio::main]
 pub async fn run(args: &DeleteArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     run_inner(args).await?;
     Ok(())
