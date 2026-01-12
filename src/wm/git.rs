@@ -1,9 +1,8 @@
 use git2::{BranchType, Repository};
-use serde::Deserialize;
 use std::path::Path;
-use std::process::Command;
 
 use super::error::{Result, WmError};
+use crate::github::{GitHubClient, OctocrabClient, PrState};
 
 /// Branch prefix for new branches created by `wm new`
 pub const BRANCH_PREFIX: &str = "fohte/";
@@ -103,39 +102,55 @@ impl MergeStatus {
     }
 }
 
-#[derive(Deserialize)]
-struct PrInfo {
-    state: String,
-    url: String,
+/// Get owner and repo from git remote URL.
+fn get_owner_repo() -> Option<(String, String)> {
+    let repo = Repository::open_from_env().ok()?;
+    let remote = repo.find_remote("origin").ok()?;
+    let url = remote.url()?;
+
+    // Parse GitHub URL formats:
+    // - https://github.com/owner/repo.git
+    // - git@github.com:owner/repo.git
+    let path = if let Some(rest) = url.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = url.strip_prefix("git@github.com:") {
+        rest
+    } else {
+        return None;
+    };
+
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() >= 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
 }
 
 /// Check if a branch is merged (via PR or git merge-base)
-pub fn get_merge_status(branch_name: &str) -> MergeStatus {
-    // First, check PR status via gh
-    if let Some(pr_info) = Command::new("gh")
-        .args(["pr", "view", branch_name, "--json", "state,url"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| serde_json::from_slice::<PrInfo>(&o.stdout).ok())
+pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
+    // First, check PR status via GitHub API
+    if let Some((owner, repo)) = get_owner_repo()
+        && let Ok(client) = OctocrabClient::new()
+        && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
     {
-        match pr_info.state.as_str() {
-            "MERGED" => {
+        match pr_info.state {
+            PrState::Merged => {
                 return MergeStatus::Merged {
                     reason: format!("PR {} merged", pr_info.url),
                 };
             }
-            "OPEN" => {
+            PrState::Open => {
                 return MergeStatus::NotMerged {
                     reason: format!("PR {} is open", pr_info.url),
                 };
             }
-            "CLOSED" => {
+            PrState::Closed => {
                 return MergeStatus::NotMerged {
                     reason: format!("PR {} is closed (not merged)", pr_info.url),
                 };
             }
-            _ => {}
         }
     }
 
@@ -222,13 +237,5 @@ mod tests {
 
         assert_eq!(merged.reason(), "PR merged");
         assert_eq!(not_merged.reason(), "PR is open");
-    }
-
-    #[test]
-    fn test_pr_info_deserialization() {
-        let json = r#"{"state": "MERGED", "url": "https://github.com/fohte/armyknife/pull/1"}"#;
-        let pr_info: PrInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(pr_info.state, "MERGED");
-        assert_eq!(pr_info.url, "https://github.com/fohte/armyknife/pull/1");
     }
 }

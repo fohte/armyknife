@@ -32,6 +32,21 @@ pub struct CreatePrParams {
     pub draft: bool,
 }
 
+/// PR state from GitHub API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrState {
+    Open,
+    Closed,
+    Merged,
+}
+
+/// PR information from GitHub API.
+#[derive(Debug, Clone)]
+pub struct PrInfo {
+    pub state: PrState,
+    pub url: String,
+}
+
 /// Trait for GitHub API operations.
 /// Enables dependency injection for testing without network calls.
 #[async_trait::async_trait]
@@ -41,6 +56,14 @@ pub trait GitHubClient: Send + Sync {
 
     /// Create a pull request and return its URL.
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String>;
+
+    /// Get PR state for a branch. Returns None if no PR exists.
+    async fn get_pr_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<PrInfo>>;
 
     /// Open a URL in the default browser.
     fn open_in_browser(&self, url: &str);
@@ -97,6 +120,42 @@ impl GitHubClient for OctocrabClient {
             .ok_or_else(|| GitHubError::MissingPrUrl)
     }
 
+    async fn get_pr_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<PrInfo>> {
+        // Search for PRs with this head branch
+        let pulls = self
+            .client
+            .pulls(owner, repo)
+            .list()
+            .head(format!("{owner}:{branch}"))
+            .state(octocrab::params::State::All)
+            .send()
+            .await?;
+
+        // Get the first (most recent) PR for this branch
+        let Some(pr) = pulls.items.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let state = if pr.merged_at.is_some() {
+            PrState::Merged
+        } else {
+            match pr.state {
+                Some(octocrab::models::IssueState::Open) => PrState::Open,
+                Some(octocrab::models::IssueState::Closed) => PrState::Closed,
+                _ => PrState::Closed,
+            }
+        };
+
+        let url = pr.html_url.map(|u| u.to_string()).unwrap_or_default();
+
+        Ok(Some(PrInfo { state, url }))
+    }
+
     fn open_in_browser(&self, url: &str) {
         let _ = open::that(url);
     }
@@ -141,6 +200,8 @@ pub mod test_utils {
         pub private_repos: HashMap<String, bool>,
         /// Result URL for PR creation (None = error)
         pub pr_create_result: Option<String>,
+        /// Map of "owner/repo/branch" -> PrInfo
+        pub branch_prs: HashMap<String, PrInfo>,
         /// Track created PRs for assertions
         pub created_prs: Arc<Mutex<Vec<CreatePrParams>>>,
         /// Track browser opens for assertions
@@ -152,6 +213,7 @@ pub mod test_utils {
             Self {
                 private_repos: HashMap::new(),
                 pr_create_result: Some("https://github.com/owner/repo/pull/1".to_string()),
+                branch_prs: HashMap::new(),
                 created_prs: Arc::new(Mutex::new(Vec::new())),
                 opened_urls: Arc::new(Mutex::new(Vec::new())),
             }
@@ -165,6 +227,18 @@ pub mod test_utils {
 
         pub fn with_pr_result(mut self, result: Option<String>) -> Self {
             self.pr_create_result = result;
+            self
+        }
+
+        pub fn with_branch_pr(
+            mut self,
+            owner: &str,
+            repo: &str,
+            branch: &str,
+            pr_info: PrInfo,
+        ) -> Self {
+            self.branch_prs
+                .insert(format!("{owner}/{repo}/{branch}"), pr_info);
             self
         }
     }
@@ -181,6 +255,16 @@ pub mod test_utils {
             self.pr_create_result
                 .clone()
                 .ok_or_else(|| GitHubError::TokenError("Mock PR creation failed".to_string()))
+        }
+
+        async fn get_pr_for_branch(
+            &self,
+            owner: &str,
+            repo: &str,
+            branch: &str,
+        ) -> Result<Option<PrInfo>> {
+            let key = format!("{owner}/{repo}/{branch}");
+            Ok(self.branch_prs.get(&key).cloned())
         }
 
         fn open_in_browser(&self, url: &str) {

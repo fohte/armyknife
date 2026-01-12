@@ -19,12 +19,13 @@ struct WorktreeInfo {
     reason: String,
 }
 
-pub fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_inner(args)?;
+#[tokio::main]
+pub async fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    run_inner(args).await?;
     Ok(())
 }
 
-fn run_inner(args: &CleanArgs) -> Result<()> {
+async fn run_inner(args: &CleanArgs) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
 
     // Get the main repo (if we're in a worktree, get the parent)
@@ -39,7 +40,7 @@ fn run_inner(args: &CleanArgs) -> Result<()> {
     git_fetch_prune(&main_repo)?;
 
     let repo_root = get_repo_root()?;
-    let (to_delete, to_skip) = collect_worktrees(&main_repo, &repo_root)?;
+    let (to_delete, to_skip) = collect_worktrees(&main_repo, &repo_root).await?;
 
     display_worktrees_to_keep(&to_skip);
 
@@ -170,7 +171,7 @@ fn delete_branch_if_exists(repo: &Repository, branch: &str) -> Result<()> {
 }
 
 /// Collect all worktrees and categorize them by merge status
-fn collect_worktrees(
+async fn collect_worktrees(
     repo: &Repository,
     repo_root: &str,
 ) -> Result<(Vec<WorktreeInfo>, Vec<WorktreeInfo>)> {
@@ -201,7 +202,7 @@ fn collect_worktrees(
             continue;
         }
 
-        let merge_status = get_merge_status(&branch);
+        let merge_status = get_merge_status(&branch).await;
         let wt_info = WorktreeInfo {
             name: name.to_string(),
             path: wt_path,

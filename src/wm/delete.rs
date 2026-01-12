@@ -16,12 +16,13 @@ pub struct DeleteArgs {
     pub force: bool,
 }
 
-pub fn run(args: &DeleteArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_inner(args)?;
+#[tokio::main]
+pub async fn run(args: &DeleteArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    run_inner(args).await?;
     Ok(())
 }
 
-fn run_inner(args: &DeleteArgs) -> Result<()> {
+async fn run_inner(args: &DeleteArgs) -> Result<()> {
     let worktree_path = resolve_worktree_path(args.worktree.as_deref())?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
@@ -46,7 +47,7 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
 
     // Check if the branch can be safely deleted before deleting worktree
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
-        let merge_status = get_merge_status(branch);
+        let merge_status = get_merge_status(branch).await;
         if !merge_status.is_merged() && !args.force {
             eprintln!(
                 "Warning: Branch '{}' is not merged ({})",
