@@ -1,33 +1,10 @@
-use std::process::Command;
-
-/// Tmux format string for getting the current target.
+/// Get the tmux pane ID where this process is running.
 ///
-/// Uses unique IDs (`window_id` and `pane_id`) instead of indices to ensure
-/// correct restoration even when windows/panes are created or deleted.
-/// - `window_id`: Unique ID like `@5` (stable across window reordering)
-/// - `pane_id`: Unique ID like `%10` (stable across pane reordering)
-const TMUX_TARGET_FORMAT: &str = "#{session_name}:#{window_id}.#{pane_id}";
-
-/// Get the current tmux session target for later restoration.
+/// Returns `Some("%pane_id")` if running inside tmux, `None` otherwise.
 ///
-/// Returns `Some("session:@window_id.%pane_id")` if running inside tmux,
-/// `None` otherwise.
-///
-/// Uses unique IDs (`window_id` and `pane_id`) instead of indices to ensure
-/// correct restoration even when windows/panes are created or deleted.
+/// Uses `TMUX_PANE` environment variable which is set by tmux when the pane
+/// is created. This identifies the actual pane where the command was executed,
+/// not the currently focused pane.
 pub fn get_tmux_target() -> Option<String> {
-    if std::env::var("TMUX").is_err() {
-        return None;
-    }
-
-    let output = Command::new("tmux")
-        .args(["display-message", "-p", TMUX_TARGET_FORMAT])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
+    std::env::var("TMUX_PANE").ok()
 }
