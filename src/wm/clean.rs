@@ -1,9 +1,12 @@
 use clap::Args;
-use git2::{BranchType, Repository, WorktreePruneOptions};
+use git2::Repository;
 use std::io::{self, Write};
 
 use super::error::{Result, WmError};
-use super::git::{get_merge_status, get_repo_root, local_branch_exists};
+use super::git::{get_merge_status, get_repo_root};
+use super::worktree::{
+    delete_branch_if_exists, delete_worktree, get_main_repo, get_worktree_branch,
+};
 use crate::git::fetch_with_prune;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -28,15 +31,7 @@ pub async fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error
 
 async fn run_inner(args: &CleanArgs) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
-
-    // Get the main repo (if we're in a worktree, get the parent)
-    let main_repo = if repo.is_worktree() {
-        let commondir = repo.commondir();
-        Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
-            .map_err(|_| WmError::NotInGitRepo)?
-    } else {
-        repo
-    };
+    let main_repo = get_main_repo(&repo)?;
 
     fetch_with_prune(&main_repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
@@ -103,54 +98,21 @@ fn confirm_deletion() -> bool {
 
 /// Delete all worktrees and their branches
 fn delete_worktrees(repo: &Repository, worktrees: &[WorktreeInfo]) -> Result<()> {
+    let mut deleted_count = 0;
+
     for wt in worktrees {
-        if delete_single_worktree(repo, wt)? {
-            delete_branch_if_exists(repo, &wt.branch)?;
+        if delete_worktree(repo, &wt.name)? {
+            println!("Deleted: {} ({})", wt.path, wt.reason);
+            deleted_count += 1;
+
+            if delete_branch_if_exists(repo, &wt.branch) {
+                println!("  Branch deleted: {}", wt.branch);
+            }
         }
     }
 
     println!();
-    println!("Done. Deleted {} worktree(s).", worktrees.len());
-
-    Ok(())
-}
-
-/// Delete a single worktree. Returns true if successful.
-fn delete_single_worktree(repo: &Repository, wt: &WorktreeInfo) -> Result<bool> {
-    let worktree = match repo.find_worktree(&wt.name) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to find worktree {}: {}", wt.path, e);
-            return Ok(false);
-        }
-    };
-
-    let mut prune_opts = WorktreePruneOptions::new();
-    prune_opts.valid(true).working_tree(true);
-
-    match worktree.prune(Some(&mut prune_opts)) {
-        Ok(()) => {
-            println!("Deleted: {} ({})", wt.path, wt.reason);
-            Ok(true)
-        }
-        Err(e) => {
-            eprintln!("Failed to delete {}: {}", wt.path, e);
-            Ok(false)
-        }
-    }
-}
-
-/// Delete a branch if it exists locally
-fn delete_branch_if_exists(repo: &Repository, branch: &str) -> Result<()> {
-    if branch.is_empty() || !local_branch_exists(branch) {
-        return Ok(());
-    }
-
-    if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local)
-        && branch_ref.delete().is_ok()
-    {
-        println!("  Branch deleted: {branch}");
-    }
+    println!("Done. Deleted {deleted_count} worktree(s).");
 
     Ok(())
 }
@@ -203,12 +165,4 @@ async fn collect_worktrees(
     }
 
     Ok((to_delete, to_skip))
-}
-
-/// Get the branch name associated with a worktree
-fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Option<String> {
-    let worktree = repo.find_worktree(worktree_name).ok()?;
-    let wt_repo = Repository::open_from_worktree(&worktree).ok()?;
-    let head = wt_repo.head().ok()?;
-    head.shorthand().map(|s| s.to_string())
 }

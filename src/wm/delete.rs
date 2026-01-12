@@ -1,9 +1,13 @@
 use clap::Args;
-use git2::{BranchType, Repository, WorktreePruneOptions};
+use git2::Repository;
 use std::io::{self, Write};
 
 use super::error::{Result, WmError};
 use super::git::{branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists};
+use super::worktree::{
+    delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
+    get_worktree_branch,
+};
 use crate::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -26,21 +30,10 @@ async fn run_inner(args: &DeleteArgs) -> Result<()> {
     let worktree_path = resolve_worktree_path(args.worktree.as_deref())?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let main_repo = get_main_repo(&repo)?;
 
-    // Get the main repo (if we're in a worktree, get the parent)
-    let main_repo = if repo.is_worktree() {
-        let commondir = repo.commondir();
-        Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
-            .map_err(|_| WmError::NotInGitRepo)?
-    } else {
-        repo
-    };
-
-    // Verify this is actually a worktree by checking against the worktree list
     let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
-
-    // Get the branch name associated with this worktree
-    let branch_name = get_worktree_branch(&main_repo, &worktree_name)?;
+    let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
     // Check if we're in a tmux session and current pane is in the worktree
     let target_window_id = tmux::get_window_id_if_in_path(&worktree_path);
@@ -66,24 +59,17 @@ async fn run_inner(args: &DeleteArgs) -> Result<()> {
         }
     }
 
-    // Remove the worktree using git2
-    let worktree = main_repo
-        .find_worktree(&worktree_name)
-        .map_err(|e| WmError::CommandFailed(format!("Failed to find worktree: {e}")))?;
-
-    let mut prune_opts = WorktreePruneOptions::new();
-    prune_opts.valid(true).working_tree(true);
-
-    worktree
-        .prune(Some(&mut prune_opts))
-        .map_err(|e| WmError::CommandFailed(format!("Failed to remove worktree: {e}")))?;
-
+    // Remove the worktree
+    if !delete_worktree(&main_repo, &worktree_name)? {
+        return Err(WmError::CommandFailed(format!(
+            "Failed to remove worktree: {worktree_path}"
+        )));
+    }
     println!("Worktree removed: {worktree_path}");
 
     // Delete the branch if it exists
-    if let Some(branch) = branch_name.filter(|b| local_branch_exists(b))
-        && let Ok(mut branch_ref) = main_repo.find_branch(&branch, BranchType::Local)
-        && branch_ref.delete().is_ok()
+    if let Some(branch) = branch_name
+        && delete_branch_if_exists(&main_repo, &branch)
     {
         println!("Branch deleted: {branch}");
     }
@@ -122,46 +108,4 @@ fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
             .map(|p| p.to_string_lossy().to_string())
             .map_err(|e| WmError::CommandFailed(e.to_string()))
     }
-}
-
-/// Find the worktree name from its path
-fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<String> {
-    let worktrees = repo
-        .worktrees()
-        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
-
-    for name in worktrees.iter().flatten() {
-        if let Ok(wt) = repo.find_worktree(name) {
-            let wt_path = wt.path().to_string_lossy();
-            // Compare paths (handle trailing slash differences)
-            let wt_path_normalized = wt_path.trim_end_matches('/');
-            let worktree_path_normalized = worktree_path.trim_end_matches('/');
-            if wt_path_normalized == worktree_path_normalized {
-                return Ok(name.to_string());
-            }
-        }
-    }
-
-    Err(WmError::WorktreeNotFound(worktree_path.to_string()))
-}
-
-/// Get the branch name associated with a worktree
-fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Result<Option<String>> {
-    let worktree = match repo.find_worktree(worktree_name) {
-        Ok(wt) => wt,
-        Err(_) => return Ok(None),
-    };
-
-    // Open the worktree repository to get its HEAD
-    let wt_repo = match Repository::open_from_worktree(&worktree) {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
-
-    let head = match wt_repo.head() {
-        Ok(h) => h,
-        Err(_) => return Ok(None),
-    };
-
-    Ok(head.shorthand().map(|s| s.to_string()))
 }

@@ -4,6 +4,7 @@ mod error;
 mod git;
 mod list;
 mod new;
+mod worktree;
 
 #[cfg(test)]
 mod tests;

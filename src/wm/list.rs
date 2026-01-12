@@ -11,13 +11,9 @@ pub struct ListArgs {}
 pub fn run(_args: &ListArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let entries = list_worktrees(&repo)?;
-    for entry in entries {
-        println!(
-            "{:<50} {} [{}]",
-            entry.path.display(),
-            entry.commit,
-            entry.branch
-        );
+    print!("{}", format_worktree_list(&entries));
+    if !entries.is_empty() {
+        println!();
     }
     Ok(())
 }
@@ -28,6 +24,28 @@ pub struct WorktreeInfo {
     pub path: PathBuf,
     pub branch: String,
     pub commit: String,
+}
+
+impl WorktreeInfo {
+    /// Format a single worktree entry for display.
+    /// Format: `{path:<50} {commit} [{branch}]`
+    pub fn format_line(&self) -> String {
+        format!(
+            "{:<50} {} [{}]",
+            self.path.display(),
+            self.commit,
+            self.branch
+        )
+    }
+}
+
+/// Format multiple worktree entries for display.
+pub fn format_worktree_list(entries: &[WorktreeInfo]) -> String {
+    entries
+        .iter()
+        .map(|e| e.format_line())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// List all worktrees (main + linked) for a repository.
@@ -101,6 +119,7 @@ pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
 mod tests {
     use super::*;
     use crate::testing::TestRepo;
+    use rstest::rstest;
 
     #[test]
     fn list_worktrees_returns_main_repo() {
@@ -139,5 +158,87 @@ mod tests {
 
         // Should still list both worktrees
         assert_eq!(entries.len(), 2);
+    }
+
+    // Output format spec tests
+
+    #[rstest]
+    #[case::short_path(
+        "/tmp/repo",
+        "abc1234",
+        "main",
+        "/tmp/repo                                          abc1234 [main]"
+    )]
+    #[case::long_path(
+        "/home/user/projects/very-long-repository-name-here",
+        "def5678",
+        "feature",
+        "/home/user/projects/very-long-repository-name-here def5678 [feature]"
+    )]
+    #[case::exact_50_chars(
+        "/home/user/projects/exactly-fifty-chars-path-here",
+        "1234567",
+        "dev",
+        "/home/user/projects/exactly-fifty-chars-path-here  1234567 [dev]"
+    )]
+    fn format_line_produces_expected_output(
+        #[case] path: &str,
+        #[case] commit: &str,
+        #[case] branch: &str,
+        #[case] expected: &str,
+    ) {
+        let info = WorktreeInfo {
+            path: PathBuf::from(path),
+            branch: branch.to_string(),
+            commit: commit.to_string(),
+        };
+        assert_eq!(info.format_line(), expected);
+    }
+
+    #[test]
+    fn format_line_pads_path_to_50_chars() {
+        let info = WorktreeInfo {
+            path: PathBuf::from("/short"),
+            branch: "main".to_string(),
+            commit: "abc1234".to_string(),
+        };
+        let line = info.format_line();
+
+        // Path should be padded to 50 chars, then space, commit, space, [branch]
+        assert!(line.starts_with("/short"));
+        // Find where the commit hash starts (after 50 chars of path area)
+        let parts: Vec<&str> = line.splitn(2, "abc1234").collect();
+        assert_eq!(parts[0].len(), 51); // 50 chars path + 1 space
+    }
+
+    #[test]
+    fn format_worktree_list_joins_with_newlines() {
+        let entries = vec![
+            WorktreeInfo {
+                path: PathBuf::from("/repo1"),
+                branch: "main".to_string(),
+                commit: "1111111".to_string(),
+            },
+            WorktreeInfo {
+                path: PathBuf::from("/repo2"),
+                branch: "feature".to_string(),
+                commit: "2222222".to_string(),
+            },
+        ];
+
+        let output = format_worktree_list(&entries);
+        let lines: Vec<&str> = output.lines().collect();
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("/repo1"));
+        assert!(lines[0].contains("[main]"));
+        assert!(lines[1].contains("/repo2"));
+        assert!(lines[1].contains("[feature]"));
+    }
+
+    #[test]
+    fn format_worktree_list_empty_returns_empty_string() {
+        let entries: Vec<WorktreeInfo> = vec![];
+        assert_eq!(format_worktree_list(&entries), "");
     }
 }

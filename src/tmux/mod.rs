@@ -192,41 +192,32 @@ pub fn create_split_window(
     left_cmd: &str,
     right_cmd: &str,
 ) -> Result<()> {
+    // Build tmux command chain. Each sub-array is one tmux command.
+    let commands: &[&[&str]] = &[
+        &["new-window", "-t", session, "-c", cwd, "-n", window_name],
+        &["split-window", "-h", "-c", cwd],
+        &["select-pane", "-t", "1"],
+        &["send-keys", left_cmd, "C-m"],
+        &["select-pane", "-t", "2"],
+        &["send-keys", right_cmd, "C-m"],
+        &["select-pane", "-t", "1"],
+    ];
+
+    // Interleave commands with ";" separator for tmux chaining
+    let args: Vec<&str> = commands
+        .iter()
+        .enumerate()
+        .flat_map(|(i, cmd)| {
+            if i > 0 {
+                [&[";"] as &[&str], *cmd].concat()
+            } else {
+                cmd.to_vec()
+            }
+        })
+        .collect();
+
     let status = Command::new("tmux")
-        .args([
-            "new-window",
-            "-t",
-            session,
-            "-c",
-            cwd,
-            "-n",
-            window_name,
-            ";",
-            "split-window",
-            "-h",
-            "-c",
-            cwd,
-            ";",
-            "select-pane",
-            "-t",
-            "1",
-            ";",
-            "send-keys",
-            left_cmd,
-            "C-m",
-            ";",
-            "select-pane",
-            "-t",
-            "2",
-            ";",
-            "send-keys",
-            right_cmd,
-            "C-m",
-            ";",
-            "select-pane",
-            "-t",
-            "1",
-        ])
+        .args(&args)
         .status()
         .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
 
