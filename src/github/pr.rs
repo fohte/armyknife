@@ -52,18 +52,26 @@ pub trait PrClient: Send + Sync {
 impl PrClient for OctocrabClient {
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
         let pulls = self.client.pulls(&params.owner, &params.repo);
-        let base = params.base.as_deref().unwrap_or("main");
+
+        // If base is not specified, fetch the repository's default branch
+        let base = match &params.base {
+            Some(b) => b.clone(),
+            None => {
+                let repo = self.client.repos(&params.owner, &params.repo).get().await?;
+                repo.default_branch.unwrap_or_else(|| "main".to_string())
+            }
+        };
 
         let pr = if params.draft {
             pulls
-                .create(&params.title, &params.head, base)
+                .create(&params.title, &params.head, &base)
                 .body(&params.body)
                 .draft(Some(true))
                 .send()
                 .await?
         } else {
             pulls
-                .create(&params.title, &params.head, base)
+                .create(&params.title, &params.head, &base)
                 .body(&params.body)
                 .send()
                 .await?

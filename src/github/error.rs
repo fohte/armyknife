@@ -7,11 +7,48 @@ pub enum GitHubError {
     #[error("Failed to get GitHub token: {0}")]
     TokenError(String),
 
-    #[error("GitHub API error: {0}")]
+    #[error("{}", format_octocrab_error(.0))]
     ApiError(#[from] octocrab::Error),
 
     #[error("PR created but no URL in response")]
     MissingPrUrl,
+}
+
+/// Format octocrab::Error to extract detailed error information from GitHub API responses.
+fn format_octocrab_error(err: &octocrab::Error) -> String {
+    match err {
+        octocrab::Error::GitHub { source, .. } => {
+            let mut msg = format!("GitHub API error: {}", source.message);
+
+            // Add HTTP status code
+            msg.push_str(&format!(" (HTTP {})", source.status_code.as_u16()));
+
+            // Add detailed error information if available
+            if let Some(errors) = &source.errors {
+                let error_details: Vec<String> = errors
+                    .iter()
+                    .filter_map(|e| {
+                        let field = e.get("field").and_then(|v| v.as_str());
+                        let code = e.get("code").and_then(|v| v.as_str());
+                        match (field, code) {
+                            (Some(f), Some(c)) => Some(format!("{} is {}", f, c)),
+                            (Some(f), None) => Some(f.to_string()),
+                            (None, Some(c)) => Some(c.to_string()),
+                            (None, None) => None,
+                        }
+                    })
+                    .collect();
+
+                if !error_details.is_empty() {
+                    msg.push_str(&format!(" [{}]", error_details.join(", ")));
+                }
+            }
+
+            msg
+        }
+        // For other error types, use the default Display implementation
+        _ => format!("GitHub API error: {err}"),
+    }
 }
 
 pub type Result<T> = std::result::Result<T, GitHubError>;
