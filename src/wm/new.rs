@@ -8,6 +8,7 @@ use super::git::{
     local_branch_exists, remote_branch_exists,
 };
 use crate::git::fetch_with_prune;
+use crate::name_branch::{detect_backend, generate_branch_name};
 use crate::tmux;
 
 /// Mode for creating a worktree
@@ -135,8 +136,9 @@ fn add_worktree_for_branch(repo: &Repository, worktree_dir: &Path, branch: &str)
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
     /// Branch name (existing branch will be checked out,
-    /// non-existing branch will be created with fohte/ prefix)
-    pub name: String,
+    /// non-existing branch will be created with fohte/ prefix).
+    /// Optional when --prompt is provided (auto-generated from prompt).
+    pub name: Option<String>,
 
     /// Base branch for new branch creation (default: origin/main or origin/master)
     #[arg(long)]
@@ -146,9 +148,23 @@ pub struct NewArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Initial prompt to send to Claude Code
+    /// Initial prompt to send to Claude Code.
+    /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
     pub prompt: Option<String>,
+}
+
+/// Resolve branch name: use provided name or generate from prompt.
+fn resolve_branch_name(args: &NewArgs) -> Result<String> {
+    match (&args.name, &args.prompt) {
+        (Some(name), _) => Ok(name.clone()),
+        (None, Some(prompt)) => {
+            let backend = detect_backend();
+            let generated = generate_branch_name(prompt, backend.as_ref())?;
+            Ok(generated)
+        }
+        (None, None) => Err(WmError::MissingBranchName),
+    }
 }
 
 pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -157,13 +173,13 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
-    let name = &args.name;
+    let name = resolve_branch_name(args)?;
     let repo_root = get_repo_root()?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
 
     // Determine worktree directory name from branch name
-    let worktree_name = branch_to_worktree_name(name);
+    let worktree_name = branch_to_worktree_name(&name);
     let worktrees_dir = format!("{repo_root}/.worktrees");
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
@@ -176,7 +192,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     fetch_with_prune(&repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     // Remove BRANCH_PREFIX to avoid double prefix
-    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
+    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(&name);
 
     // Determine action based on branch existence and flags
     if args.force {
@@ -196,9 +212,9 @@ fn run_inner(args: &NewArgs) -> Result<()> {
                 base: &base_branch,
             },
         )?;
-    } else if branch_exists(name) {
+    } else if branch_exists(&name) {
         // Branch exists with the exact name provided
-        add_worktree_for_branch(&repo, &worktree_dir, name)?;
+        add_worktree_for_branch(&repo, &worktree_dir, &name)?;
     } else {
         let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
@@ -397,5 +413,41 @@ mod tests {
         .unwrap();
 
         assert!(worktree_dir.exists());
+    }
+
+    #[test]
+    fn resolve_branch_name_with_explicit_name() {
+        let args = NewArgs {
+            name: Some("my-branch".to_string()),
+            from: None,
+            force: false,
+            prompt: None,
+        };
+        let result = resolve_branch_name(&args).unwrap();
+        assert_eq!(result, "my-branch");
+    }
+
+    #[test]
+    fn resolve_branch_name_with_name_and_prompt_uses_name() {
+        let args = NewArgs {
+            name: Some("my-branch".to_string()),
+            from: None,
+            force: false,
+            prompt: Some("some task".to_string()),
+        };
+        let result = resolve_branch_name(&args).unwrap();
+        assert_eq!(result, "my-branch");
+    }
+
+    #[test]
+    fn resolve_branch_name_without_name_and_prompt_returns_error() {
+        let args = NewArgs {
+            name: None,
+            from: None,
+            force: false,
+            prompt: None,
+        };
+        let result = resolve_branch_name(&args);
+        assert!(matches!(result, Err(WmError::MissingBranchName)));
     }
 }
