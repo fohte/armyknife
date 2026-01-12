@@ -1,6 +1,6 @@
 use clap::Args;
+use git2::{BranchType, FetchOptions, Repository, WorktreePruneOptions};
 use std::io::{self, Write};
-use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{get_merge_status, get_repo_root, local_branch_exists};
@@ -13,6 +13,7 @@ pub struct CleanArgs {
 }
 
 struct WorktreeInfo {
+    name: String,
     path: String,
     branch: String,
     reason: String,
@@ -24,10 +25,21 @@ pub fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Erro
 }
 
 fn run_inner(args: &CleanArgs) -> Result<()> {
-    git_fetch_prune()?;
+    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+
+    // Get the main repo (if we're in a worktree, get the parent)
+    let main_repo = if repo.is_worktree() {
+        let commondir = repo.commondir();
+        Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
+            .map_err(|_| WmError::NotInGitRepo)?
+    } else {
+        repo
+    };
+
+    git_fetch_prune(&main_repo)?;
 
     let repo_root = get_repo_root()?;
-    let (to_delete, to_skip) = collect_worktrees(&repo_root)?;
+    let (to_delete, to_skip) = collect_worktrees(&main_repo, &repo_root)?;
 
     display_worktrees_to_keep(&to_skip);
 
@@ -50,21 +62,23 @@ fn run_inner(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees(&to_delete)?;
+    delete_worktrees(&main_repo, &to_delete)?;
 
     Ok(())
 }
 
 /// Run `git fetch -p` to prune stale remote-tracking references
-fn git_fetch_prune() -> Result<()> {
-    let status = Command::new("git")
-        .args(["fetch", "-p"])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+fn git_fetch_prune(repo: &Repository) -> Result<()> {
+    let mut remote = repo
+        .find_remote("origin")
+        .map_err(|e| WmError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
 
-    if !status.success() {
-        return Err(WmError::CommandFailed("git fetch failed".into()));
-    }
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.prune(git2::FetchPrune::On);
+
+    remote
+        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+        .map_err(|e| WmError::CommandFailed(format!("git fetch failed: {e}")))?;
 
     Ok(())
 }
@@ -102,10 +116,10 @@ fn confirm_deletion() -> bool {
 }
 
 /// Delete all worktrees and their branches
-fn delete_worktrees(worktrees: &[WorktreeInfo]) -> Result<()> {
+fn delete_worktrees(repo: &Repository, worktrees: &[WorktreeInfo]) -> Result<()> {
     for wt in worktrees {
-        if delete_single_worktree(wt)? {
-            delete_branch_if_exists(&wt.branch)?;
+        if delete_single_worktree(repo, wt)? {
+            delete_branch_if_exists(repo, &wt.branch)?;
         }
     }
 
@@ -116,106 +130,99 @@ fn delete_worktrees(worktrees: &[WorktreeInfo]) -> Result<()> {
 }
 
 /// Delete a single worktree. Returns true if successful.
-fn delete_single_worktree(wt: &WorktreeInfo) -> Result<bool> {
-    let has_submodules = std::path::Path::new(&wt.path).join(".gitmodules").exists();
+fn delete_single_worktree(repo: &Repository, wt: &WorktreeInfo) -> Result<bool> {
+    let worktree = match repo.find_worktree(&wt.name) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("Failed to find worktree {}: {}", wt.path, e);
+            return Ok(false);
+        }
+    };
 
-    let mut args = vec!["worktree", "remove"];
-    if has_submodules {
-        args.push("--force");
-    }
-    args.push(&wt.path);
+    let mut prune_opts = WorktreePruneOptions::new();
+    prune_opts.valid(true).working_tree(true);
 
-    let status = Command::new("git")
-        .args(&args)
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if status.success() {
-        println!("Deleted: {} ({})", wt.path, wt.reason);
-        Ok(true)
-    } else {
-        eprintln!("Failed to delete: {}", wt.path);
-        Ok(false)
+    match worktree.prune(Some(&mut prune_opts)) {
+        Ok(()) => {
+            println!("Deleted: {} ({})", wt.path, wt.reason);
+            Ok(true)
+        }
+        Err(e) => {
+            eprintln!("Failed to delete {}: {}", wt.path, e);
+            Ok(false)
+        }
     }
 }
 
 /// Delete a branch if it exists locally
-fn delete_branch_if_exists(branch: &str) -> Result<()> {
+fn delete_branch_if_exists(repo: &Repository, branch: &str) -> Result<()> {
     if branch.is_empty() || !local_branch_exists(branch) {
         return Ok(());
     }
 
-    let status = Command::new("git")
-        .args(["branch", "-D", branch])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if status.success() {
-        println!("  Branch deleted: {branch}");
+    if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local) {
+        if branch_ref.delete().is_ok() {
+            println!("  Branch deleted: {branch}");
+        }
     }
 
     Ok(())
 }
 
 /// Collect all worktrees and categorize them by merge status
-fn collect_worktrees(repo_root: &str) -> Result<(Vec<WorktreeInfo>, Vec<WorktreeInfo>)> {
-    let output = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        return Err(WmError::CommandFailed(
-            "git worktree list --porcelain failed".into(),
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+fn collect_worktrees(
+    repo: &Repository,
+    repo_root: &str,
+) -> Result<(Vec<WorktreeInfo>, Vec<WorktreeInfo>)> {
+    let worktrees = repo
+        .worktrees()
+        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
 
     let mut to_delete = Vec::new();
     let mut to_skip = Vec::new();
 
-    let mut current_path: Option<String> = None;
-    let mut current_branch: Option<String> = None;
+    for name in worktrees.iter().flatten() {
+        let wt = match repo.find_worktree(name) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
 
-    // Closure to process a worktree entry and categorize by merge status
-    let mut process_entry = |path: String, branch: String| {
-        if path == repo_root {
-            return;
+        let wt_path = wt.path().to_string_lossy().to_string();
+
+        // Skip the main worktree
+        if wt_path.trim_end_matches('/') == repo_root.trim_end_matches('/') {
+            continue;
         }
+
+        // Get the branch name from the worktree
+        let branch = get_worktree_branch(repo, name).unwrap_or_default();
+
+        if branch.is_empty() {
+            continue;
+        }
+
         let merge_status = get_merge_status(&branch);
-        let wt = WorktreeInfo {
-            path,
+        let wt_info = WorktreeInfo {
+            name: name.to_string(),
+            path: wt_path,
             branch,
             reason: merge_status.reason().to_string(),
         };
+
         if merge_status.is_merged() {
-            to_delete.push(wt);
+            to_delete.push(wt_info);
         } else {
-            to_skip.push(wt);
+            to_skip.push(wt_info);
         }
-    };
-
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_path = Some(path.to_string());
-            current_branch = None;
-        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            // Remove refs/heads/ prefix
-            let branch = branch_ref.strip_prefix("refs/heads/").unwrap_or(branch_ref);
-            current_branch = Some(branch.to_string());
-        } else if line.is_empty() {
-            // End of worktree entry
-            if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
-                process_entry(path, branch);
-            }
-        }
-    }
-
-    // Handle the last entry if there's no trailing newline
-    if let (Some(path), Some(branch)) = (current_path, current_branch) {
-        process_entry(path, branch);
     }
 
     Ok((to_delete, to_skip))
+}
+
+/// Get the branch name associated with a worktree
+fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Option<String> {
+    let worktree = repo.find_worktree(worktree_name).ok()?;
+    let wt_repo = Repository::open_from_worktree(&worktree).ok()?;
+    let head = wt_repo.head().ok()?;
+    head.shorthand().map(|s| s.to_string())
 }

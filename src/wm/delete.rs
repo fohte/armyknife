@@ -1,4 +1,5 @@
 use clap::Args;
+use git2::{BranchType, Repository, WorktreePruneOptions};
 use std::io::{self, Write};
 use std::process::Command;
 
@@ -23,30 +24,22 @@ pub fn run(args: &DeleteArgs) -> std::result::Result<(), Box<dyn std::error::Err
 fn run_inner(args: &DeleteArgs) -> Result<()> {
     let worktree_path = resolve_worktree_path(args.worktree.as_deref())?;
 
-    // Verify this is actually a worktree
-    let worktree_list = Command::new("git")
-        .args(["worktree", "list"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
 
-    if !worktree_list.status.success() {
-        return Err(WmError::CommandFailed("git worktree list failed".into()));
-    }
+    // Get the main repo (if we're in a worktree, get the parent)
+    let main_repo = if repo.is_worktree() {
+        let commondir = repo.commondir();
+        Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
+            .map_err(|_| WmError::NotInGitRepo)?
+    } else {
+        repo
+    };
 
-    // Check if the worktree path exists in the list (exact path match, not substring)
-    // Format: "/path/to/worktree  abc123 [branch]"
-    let list_output = String::from_utf8_lossy(&worktree_list.stdout);
-    let is_valid_worktree = list_output.lines().any(|line| {
-        line.split_whitespace()
-            .next()
-            .is_some_and(|path| path == worktree_path)
-    });
-    if !is_valid_worktree {
-        return Err(WmError::WorktreeNotFound(worktree_path));
-    }
+    // Verify this is actually a worktree by checking against the worktree list
+    let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
 
     // Get the branch name associated with this worktree
-    let branch_name = get_worktree_branch(&worktree_path)?;
+    let branch_name = get_worktree_branch(&main_repo, &worktree_name)?;
 
     // Check if we're in a tmux session and current pane is in the worktree
     let target_window_id = get_current_tmux_window_if_in_worktree(&worktree_path);
@@ -72,37 +65,26 @@ fn run_inner(args: &DeleteArgs) -> Result<()> {
         }
     }
 
-    // Remove the worktree (force if submodules exist)
-    let has_submodules = std::path::Path::new(&worktree_path)
-        .join(".gitmodules")
-        .exists();
+    // Remove the worktree using git2
+    let worktree = main_repo
+        .find_worktree(&worktree_name)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to find worktree: {e}")))?;
 
-    let worktree_remove_args = if has_submodules {
-        vec!["worktree", "remove", "--force", &worktree_path]
-    } else {
-        vec!["worktree", "remove", &worktree_path]
-    };
+    let mut prune_opts = WorktreePruneOptions::new();
+    prune_opts.valid(true).working_tree(true);
 
-    let status = Command::new("git")
-        .args(&worktree_remove_args)
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if !status.success() {
-        return Err(WmError::CommandFailed("git worktree remove failed".into()));
-    }
+    worktree
+        .prune(Some(&mut prune_opts))
+        .map_err(|e| WmError::CommandFailed(format!("Failed to remove worktree: {e}")))?;
 
     println!("Worktree removed: {worktree_path}");
 
     // Delete the branch if it exists
     if let Some(branch) = branch_name.filter(|b| local_branch_exists(b)) {
-        let status = Command::new("git")
-            .args(["branch", "-D", &branch])
-            .status()
-            .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-        if status.success() {
-            println!("Branch deleted: {branch}");
+        if let Ok(mut branch_ref) = main_repo.find_branch(&branch, BranchType::Local) {
+            if branch_ref.delete().is_ok() {
+                println!("Branch deleted: {branch}");
+            }
         }
     }
 
@@ -145,33 +127,46 @@ fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
     }
 }
 
-/// Get the branch name associated with a worktree
-fn get_worktree_branch(worktree_path: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+/// Find the worktree name from its path
+fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<String> {
+    let worktrees = repo
+        .worktrees()
+        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
 
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut current_worktree: Option<&str> = None;
-
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_worktree = Some(path);
-        } else if line.strip_prefix("branch ").is_some() && current_worktree == Some(worktree_path)
-        {
-            // Remove refs/heads/ prefix
-            let branch_ref = line.strip_prefix("branch ").unwrap();
-            let branch = branch_ref.strip_prefix("refs/heads/").unwrap_or(branch_ref);
-            return Ok(Some(branch.to_string()));
+    for name in worktrees.iter().flatten() {
+        if let Ok(wt) = repo.find_worktree(name) {
+            let wt_path = wt.path().to_string_lossy();
+            // Compare paths (handle trailing slash differences)
+            let wt_path_normalized = wt_path.trim_end_matches('/');
+            let worktree_path_normalized = worktree_path.trim_end_matches('/');
+            if wt_path_normalized == worktree_path_normalized {
+                return Ok(name.to_string());
+            }
         }
     }
 
-    Ok(None)
+    Err(WmError::WorktreeNotFound(worktree_path.to_string()))
+}
+
+/// Get the branch name associated with a worktree
+fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Result<Option<String>> {
+    let worktree = match repo.find_worktree(worktree_name) {
+        Ok(wt) => wt,
+        Err(_) => return Ok(None),
+    };
+
+    // Open the worktree repository to get its HEAD
+    let wt_repo = match Repository::open_from_worktree(&worktree) {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    let head = match wt_repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(None),
+    };
+
+    Ok(head.shorthand().map(|s| s.to_string()))
 }
 
 /// Get the current tmux window ID if we're in a tmux session and in the worktree
