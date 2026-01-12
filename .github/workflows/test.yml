@@ -41,6 +41,9 @@ jobs:
 
       - run: rustup show
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Run lefthook
         id: lefthook
         continue-on-error: true
