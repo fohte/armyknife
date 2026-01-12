@@ -1,5 +1,5 @@
 use clap::Args;
-use git2::{BranchType, FetchOptions, Repository, WorktreeAddOptions};
+use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::Path;
 use std::process::Command;
 
@@ -8,6 +8,7 @@ use super::git::{
     BRANCH_PREFIX, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
     local_branch_exists, remote_branch_exists,
 };
+use crate::git::fetch_with_prune;
 
 /// Mode for creating a worktree
 enum WorktreeAddMode<'a> {
@@ -119,22 +120,6 @@ fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMod
     Ok(())
 }
 
-/// Fetch from origin with prune
-fn fetch_with_prune(repo: &Repository) -> Result<()> {
-    let mut remote = repo
-        .find_remote("origin")
-        .map_err(|e| WmError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
-
-    let mut fetch_opts = FetchOptions::new();
-    fetch_opts.prune(git2::FetchPrune::On);
-
-    remote
-        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
-        .map_err(|e| WmError::CommandFailed(format!("git fetch failed: {e}")))?;
-
-    Ok(())
-}
-
 /// Add a worktree for an existing branch (local or remote)
 fn add_worktree_for_branch(repo: &Repository, worktree_dir: &Path, branch: &str) -> Result<()> {
     if local_branch_exists(branch) {
@@ -188,7 +173,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     })?;
 
     // Fetch with prune
-    fetch_with_prune(&repo)?;
+    fetch_with_prune(&repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     // Remove BRANCH_PREFIX to avoid double prefix
     let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);

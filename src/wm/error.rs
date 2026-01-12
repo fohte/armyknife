@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::git::GitError;
+
 #[derive(Error, Debug)]
 pub enum WmError {
     #[error("Not in a git repository")]
@@ -19,6 +21,9 @@ pub enum WmError {
 
     #[error("JSON parse error: {0}")]
     JsonParse(#[from] serde_json::Error),
+
+    #[error("Git error: {0}")]
+    Git(#[from] GitError),
 }
 
 pub type Result<T> = std::result::Result<T, WmError>;

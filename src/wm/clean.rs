@@ -1,9 +1,10 @@
 use clap::Args;
-use git2::{BranchType, FetchOptions, Repository, WorktreePruneOptions};
+use git2::{BranchType, Repository, WorktreePruneOptions};
 use std::io::{self, Write};
 
 use super::error::{Result, WmError};
 use super::git::{get_merge_status, get_repo_root, local_branch_exists};
+use crate::git::fetch_with_prune;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -37,7 +38,7 @@ async fn run_inner(args: &CleanArgs) -> Result<()> {
         repo
     };
 
-    git_fetch_prune(&main_repo)?;
+    fetch_with_prune(&main_repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     let repo_root = get_repo_root()?;
     let (to_delete, to_skip) = collect_worktrees(&main_repo, &repo_root).await?;
@@ -64,22 +65,6 @@ async fn run_inner(args: &CleanArgs) -> Result<()> {
 
     println!();
     delete_worktrees(&main_repo, &to_delete)?;
-
-    Ok(())
-}
-
-/// Run `git fetch -p` to prune stale remote-tracking references
-fn git_fetch_prune(repo: &Repository) -> Result<()> {
-    let mut remote = repo
-        .find_remote("origin")
-        .map_err(|e| WmError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
-
-    let mut fetch_opts = FetchOptions::new();
-    fetch_opts.prune(git2::FetchPrune::On);
-
-    remote
-        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
-        .map_err(|e| WmError::CommandFailed(format!("git fetch failed: {e}")))?;
 
     Ok(())
 }

@@ -1,5 +1,6 @@
+use crate::git::get_repo_root_in;
 use crate::testing::TestRepo;
-use crate::wm::git::{branch_to_worktree_name, get_repo_root_in};
+use crate::wm::git::branch_to_worktree_name;
 
 #[test]
 fn get_repo_root_from_main_returns_main_path() {
