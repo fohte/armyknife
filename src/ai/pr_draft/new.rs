@@ -5,7 +5,7 @@ use std::fs;
 use super::common::{
     DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
 };
-use crate::github::{GitHubClient, OctocrabClient};
+use crate::github::{OctocrabClient, RepoClient};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
@@ -25,7 +25,7 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
 
 async fn run_async(
     args: &NewArgs,
-    gh_client: &impl GitHubClient,
+    gh_client: &impl RepoClient,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let repo_info = RepoInfo::from_git_only()?;
     let draft_path = DraftFile::path_for(&repo_info);
@@ -107,7 +107,7 @@ fn format_diff(old: &str, new: &str, use_color: bool) -> String {
 mod tests {
     use super::*;
     use crate::git::test_utils::TempRepo;
-    use crate::github::test_utils::MockGitHubClient;
+    use crate::github::MockGitHubClient;
     use rstest::rstest;
     use std::fs;
     use std::path::Path;
@@ -143,7 +143,7 @@ mod tests {
     async fn run_with_mock(
         args: &NewArgs,
         repo_path: &Path,
-        gh_client: &impl GitHubClient,
+        gh_client: &impl RepoClient,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let repo_info = RepoInfo::from_path(repo_path)?;
         let draft_path = DraftFile::path_for(&repo_info);

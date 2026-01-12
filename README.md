@@ -14,7 +14,7 @@ Download from [GitHub Releases](https://github.com/fohte/armyknife/releases/late
 
 Available for:
 
-- macOS (Apple Silicon, Intel)
+- macOS (Apple Silicon)
 - Linux (x86_64, aarch64)
 
 ### Build from source
@@ -74,6 +74,17 @@ a gh check-pr-review <pr-number> [options]
 | `--full`             | Show full details for all reviews     |
 | `--include-resolved` | Include resolved threads              |
 | `--open-details`     | Expand `<details>` blocks in comments |
+
+### `a wm`
+
+Git worktree management with tmux integration.
+
+| Action              | Description                                |
+| ------------------- | ------------------------------------------ |
+| `list`              | List all worktrees                         |
+| `new <branch>`      | Create a new worktree and open tmux window |
+| `delete [worktree]` | Delete a worktree and its branch           |
+| `clean`             | Bulk delete merged worktrees               |
 
 ## License
 

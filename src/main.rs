@@ -5,7 +5,11 @@ mod git;
 mod github;
 mod human_in_the_loop;
 mod name_branch;
+#[cfg(test)]
+mod testing;
+mod tmux;
 mod update;
+mod wm;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -30,6 +34,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
         Commands::Gh(gh_cmd) => gh_cmd.run().await?,
         Commands::NameBranch(args) => args.run()?,
+        Commands::Wm(wm_cmd) => wm_cmd.run()?,
         Commands::Update => update::do_update()?,
     }
 
