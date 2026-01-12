@@ -1,7 +1,6 @@
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::Path;
-use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{
@@ -9,6 +8,7 @@ use super::git::{
     local_branch_exists, remote_branch_exists,
 };
 use crate::git::fetch_with_prune;
+use crate::tmux;
 
 /// Mode for creating a worktree
 enum WorktreeAddMode<'a> {
@@ -274,138 +274,21 @@ fn setup_tmux_window(
     prompt: Option<&str>,
 ) -> Result<()> {
     let claude_cmd = build_claude_command(prompt)?;
-    let target_session = get_tmux_session_name(repo_root);
+    let target_session = tmux::get_session_name(repo_root);
 
-    ensure_tmux_session_exists(&target_session, repo_root)?;
-    create_split_window(&target_session, worktree_dir, worktree_name, &claude_cmd)?;
-    switch_to_session_if_needed(&target_session)?;
-
-    Ok(())
-}
-
-/// Ensure the tmux session exists, creating it if necessary
-fn ensure_tmux_session_exists(session: &str, cwd: &str) -> Result<()> {
-    let exists = Command::new("tmux")
-        .args(["has-session", "-t", session])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if exists {
-        return Ok(());
-    }
-
-    let status = Command::new("tmux")
-        .args(["new-session", "-ds", session, "-c", cwd])
-        .status()
+    tmux::ensure_session(&target_session, repo_root)
         .map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
-    if !status.success() {
-        return Err(WmError::CommandFailed("tmux new-session failed".into()));
-    }
+    tmux::create_split_window(
+        &target_session,
+        worktree_dir,
+        worktree_name,
+        "nvim",
+        &claude_cmd,
+    )
+    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+
+    tmux::switch_to_session(&target_session).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     Ok(())
-}
-
-/// Create a split window with nvim on left, claude on right
-fn create_split_window(
-    session: &str,
-    cwd: &str,
-    window_name: &str,
-    claude_cmd: &str,
-) -> Result<()> {
-    let status = Command::new("tmux")
-        .args([
-            "new-window",
-            "-t",
-            session,
-            "-c",
-            cwd,
-            "-n",
-            window_name,
-            ";",
-            "split-window",
-            "-h",
-            "-c",
-            cwd,
-            ";",
-            "select-pane",
-            "-t",
-            "1",
-            ";",
-            "send-keys",
-            "nvim",
-            "C-m",
-            ";",
-            "select-pane",
-            "-t",
-            "2",
-            ";",
-            "send-keys",
-            claude_cmd,
-            "C-m",
-            ";",
-            "select-pane",
-            "-t",
-            "1",
-        ])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if !status.success() {
-        return Err(WmError::CommandFailed("tmux new-window failed".into()));
-    }
-
-    Ok(())
-}
-
-/// Switch to session if we're in tmux and not already in the target session
-fn switch_to_session_if_needed(target_session: &str) -> Result<()> {
-    if std::env::var("TMUX").is_err() {
-        return Ok(());
-    }
-
-    let output = Command::new("tmux")
-        .args(["display-message", "-p", "#{session_name}"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        return Ok(());
-    }
-
-    let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if current == target_session {
-        return Ok(());
-    }
-
-    Command::new("tmux")
-        .args(["switch-client", "-t", target_session])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
-
-    Ok(())
-}
-
-/// Get tmux session name from repository root (equivalent to tmux-name session)
-fn get_tmux_session_name(repo_root: &str) -> String {
-    // Try tmux-name command first
-    if let Some(output) = Command::new("tmux-name")
-        .args(["session", repo_root])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-    {
-        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !name.is_empty() {
-            return name;
-        }
-    }
-
-    // Fallback: use the directory name
-    Path::new(repo_root)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("default")
-        .to_string()
 }

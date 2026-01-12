@@ -21,6 +21,3 @@ pub use repo::{current_branch, fetch_with_prune, get_main_branch, get_repo_root,
 // Re-export for test utilities
 #[cfg(test)]
 pub use repo::{get_repo_root_in, open_repo_at};
-
-#[cfg(test)]
-pub use test_utils::TempRepo;

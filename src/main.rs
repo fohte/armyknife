@@ -6,6 +6,7 @@ mod human_in_the_loop;
 mod name_branch;
 #[cfg(test)]
 mod testing;
+mod tmux;
 mod update;
 mod wm;
 

@@ -1,10 +1,10 @@
 use clap::Args;
 use git2::{BranchType, Repository, WorktreePruneOptions};
 use std::io::{self, Write};
-use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists};
+use crate::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {
@@ -43,7 +43,7 @@ async fn run_inner(args: &DeleteArgs) -> Result<()> {
     let branch_name = get_worktree_branch(&main_repo, &worktree_name)?;
 
     // Check if we're in a tmux session and current pane is in the worktree
-    let target_window_id = get_current_tmux_window_if_in_worktree(&worktree_path);
+    let target_window_id = tmux::get_window_id_if_in_path(&worktree_path);
 
     // Check if the branch can be safely deleted before deleting worktree
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
@@ -90,10 +90,7 @@ async fn run_inner(args: &DeleteArgs) -> Result<()> {
 
     // Close the original tmux window (identified by window ID)
     if let Some(window_id) = target_window_id {
-        Command::new("tmux")
-            .args(["kill-window", "-t", &window_id])
-            .status()
-            .ok();
+        tmux::kill_window(&window_id);
     }
 
     Ok(())
@@ -167,42 +164,4 @@ fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Result<Option<
     };
 
     Ok(head.shorthand().map(|s| s.to_string()))
-}
-
-/// Get the current tmux window ID if we're in a tmux session and in the worktree
-fn get_current_tmux_window_if_in_worktree(worktree_path: &str) -> Option<String> {
-    if std::env::var("TMUX").is_err() {
-        return None;
-    }
-
-    let pane_path = Command::new("tmux")
-        .args(["display-message", "-p", "#{pane_current_path}"])
-        .output()
-        .ok()?;
-
-    if !pane_path.status.success() {
-        return None;
-    }
-
-    let current_path = String::from_utf8_lossy(&pane_path.stdout)
-        .trim()
-        .to_string();
-
-    // Use Path::starts_with for proper path comparison (avoids /tmp/foo matching /tmp/foo2)
-    if std::path::Path::new(&current_path).starts_with(worktree_path) {
-        let window_id = Command::new("tmux")
-            .args(["display-message", "-p", "#{window_id}"])
-            .output()
-            .ok()?;
-
-        if window_id.status.success() {
-            return Some(
-                String::from_utf8_lossy(&window_id.stdout)
-                    .trim()
-                    .to_string(),
-            );
-        }
-    }
-
-    None
 }
