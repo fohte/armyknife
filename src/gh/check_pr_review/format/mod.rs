@@ -115,19 +115,29 @@ pub(super) fn print_diff_with_delta(path: &str, diff_hunk: &str) {
         diff_input.push('\n');
     }
 
-    // Try to pipe through delta, fall back to plain output
-    if let Ok(mut child) = Command::new("delta")
-        .args(["--paging=never", "--line-numbers"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .spawn()
-    {
+    // Try to pipe through delta, fall back to plain output on any failure
+    let run_delta = || -> std::io::Result<()> {
+        let mut child = Command::new("delta")
+            .args(["--paging=never", "--line-numbers"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .spawn()?;
+
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(diff_input.as_bytes());
+            stdin.write_all(diff_input.as_bytes())?;
         }
-        let _ = child.wait();
-    } else {
-        // delta not available, show last 3 lines plain
+
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!(
+                "delta exited with status: {status}"
+            )));
+        }
+        Ok(())
+    };
+
+    if run_delta().is_err() {
+        // delta not available or failed, show last 3 lines plain
         for line in last_3_lines {
             println!("{line}");
         }

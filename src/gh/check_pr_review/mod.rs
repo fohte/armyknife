@@ -40,7 +40,7 @@ pub struct CheckPrReviewArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Include resolved comments
+    /// Include resolved threads
     #[arg(short = 'a', long = "all")]
     pub include_resolved: bool,
 
