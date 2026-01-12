@@ -22,12 +22,12 @@ pub enum PrDraftCommands {
 }
 
 impl PrDraftCommands {
-    pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Self::New(args) => new::run(args),
+            Self::New(args) => new::run(args).await,
             Self::Review(args) => review::run(args),
             Self::ReviewComplete(args) => review::run_complete(args),
-            Self::Submit(args) => submit::run(args),
+            Self::Submit(args) => submit::run(args).await,
         }
     }
 }

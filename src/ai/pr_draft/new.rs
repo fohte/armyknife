@@ -18,12 +18,12 @@ pub struct NewArgs {
     pub force: bool,
 }
 
-pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let client = OctocrabClient::get()?;
-    tokio::runtime::Runtime::new()?.block_on(run_async(args, client))
+    run_impl(args, client).await
 }
 
-async fn run_async(
+async fn run_impl(
     args: &NewArgs,
     gh_client: &impl RepoClient,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
