@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/fohte/armyknife/compare/v0.1.10...v0.1.11) (2026-01-12)
+
+
+### Features
+
+* **gh:** add `a gh check-pr-review` command ([#37](https://github.com/fohte/armyknife/issues/37)) ([73ea430](https://github.com/fohte/armyknife/commit/73ea4308c860b7ce29cf27f49579d8b5da90b2fa))
+
 ## [0.1.10](https://github.com/fohte/armyknife/compare/v0.1.9...v0.1.10) (2026-01-12)
 
 
