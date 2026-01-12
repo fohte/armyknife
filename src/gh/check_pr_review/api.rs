@@ -1,8 +1,9 @@
 use super::models::{PrData, Review, ReviewThread};
 use super::{CheckPrReviewError, Result};
+use crate::github::OctocrabClient;
 use indoc::indoc;
 use serde::Deserialize;
-use std::process::Command;
+use serde_json::json;
 
 // Note: comments(first: 100) doesn't paginate, so threads with 100+ comments
 // will be truncated. This is an acceptable limitation as such threads are rare.
@@ -131,18 +132,20 @@ impl PaginationState {
     }
 }
 
-pub fn fetch_pr_data(
+pub async fn fetch_pr_data(
     owner: &str,
     repo: &str,
     pr_number: u64,
     include_resolved: bool,
 ) -> Result<PrData> {
+    let client = OctocrabClient::new()?;
     let mut threads: Vec<ReviewThread> = Vec::new();
     let mut reviews: Vec<Review> = Vec::new();
     let mut pagination = PaginationState::default();
 
     while pagination.has_more() {
-        let pr = execute_graphql(owner, repo, pr_number, &pagination)?
+        let pr = execute_graphql(&client, owner, repo, pr_number, &pagination)
+            .await?
             .repository
             .and_then(|r| r.pull_request)
             .ok_or_else(|| {
@@ -167,35 +170,22 @@ pub fn fetch_pr_data(
     Ok(PrData { reviews, threads })
 }
 
-fn execute_graphql(
+async fn execute_graphql(
+    client: &OctocrabClient,
     owner: &str,
     repo: &str,
     pr_number: u64,
     pagination: &PaginationState,
 ) -> Result<GraphQLData> {
-    let mut cmd = Command::new("gh");
-    cmd.args(["api", "graphql"]);
-    cmd.args(["-f", &format!("query={GRAPHQL_QUERY}")]);
-    cmd.args(["-f", &format!("owner={owner}")]);
-    cmd.args(["-f", &format!("repo={repo}")]);
-    cmd.args(["-F", &format!("pr={pr_number}")]);
+    let variables = json!({
+        "owner": owner,
+        "repo": repo,
+        "pr": pr_number,
+        "threadCursor": pagination.thread_cursor,
+        "reviewCursor": pagination.review_cursor,
+    });
 
-    if let Some(cursor) = &pagination.thread_cursor {
-        cmd.args(["-f", &format!("threadCursor={cursor}")]);
-    }
-    if let Some(cursor) = &pagination.review_cursor {
-        cmd.args(["-f", &format!("reviewCursor={cursor}")]);
-    }
-
-    let output = cmd.output().map_err(CheckPrReviewError::IoError)?;
-
-    if !output.status.success() {
-        return Err(CheckPrReviewError::GraphQLError(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    let response: GraphQLResponse = serde_json::from_slice(&output.stdout)?;
+    let response: GraphQLResponse = client.graphql(GRAPHQL_QUERY, variables).await?;
 
     if let Some(errors) = response.errors {
         let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();

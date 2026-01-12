@@ -62,6 +62,20 @@ impl OctocrabClient {
             })?;
         Ok(Self { client })
     }
+
+    /// Execute a GraphQL query and deserialize the response.
+    pub async fn graphql<T: serde::de::DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<T> {
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+        let response: T = self.client.graphql(&body).await?;
+        Ok(response)
+    }
 }
 
 #[async_trait::async_trait]
@@ -163,6 +177,7 @@ pub mod test_utils {
             self
         }
 
+        #[allow(dead_code)]
         pub fn with_pr_result(mut self, result: Option<String>) -> Self {
             self.pr_create_result = result;
             self

@@ -2,6 +2,7 @@ mod api;
 mod format;
 mod models;
 
+use crate::git;
 use clap::Args;
 use thiserror::Error;
 
@@ -12,14 +13,17 @@ pub enum CheckPrReviewError {
     #[error("Failed to get repository info: {0}")]
     RepoInfoError(String),
 
+    #[error("Git error: {0}")]
+    GitError(#[from] git::GitError),
+
+    #[error("GitHub API error: {0}")]
+    GitHubError(#[from] crate::github::GitHubError),
+
     #[error("GraphQL API error: {0}")]
     GraphQLError(String),
 
     #[error("JSON parse error: {0}")]
     JsonError(#[from] serde_json::Error),
-
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
 
     #[error("Review [{0}] not found. Run without --review to see available reviews.")]
     ReviewNotFound(usize),
@@ -53,10 +57,10 @@ pub struct CheckPrReviewArgs {
     pub open_details: bool,
 }
 
-pub fn run(args: &CheckPrReviewArgs) -> Result<()> {
+pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
     let (owner, repo) = get_repo_owner_and_name(args.repo.as_deref())?;
 
-    let pr_data = fetch_pr_data(&owner, &repo, args.pr_number, args.include_resolved)?;
+    let pr_data = fetch_pr_data(&owner, &repo, args.pr_number, args.include_resolved).await?;
 
     if pr_data.reviews.is_empty() && pr_data.threads.is_empty() {
         println!("No review comments found.");
@@ -93,32 +97,8 @@ fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
         )));
     }
 
-    // Get from current repo using gh CLI
-    let output = std::process::Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "nameWithOwner",
-            "-q",
-            ".nameWithOwner",
-        ])
-        .output()
-        .map_err(|e| CheckPrReviewError::RepoInfoError(e.to_string()))?;
-
-    if !output.status.success() {
-        return Err(CheckPrReviewError::RepoInfoError(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-
-    let name_with_owner = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let parts: Vec<&str> = name_with_owner.split('/').collect();
-    if parts.len() == 2 {
-        Ok((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        Err(CheckPrReviewError::RepoInfoError(format!(
-            "Unexpected repo format: {name_with_owner}"
-        )))
-    }
+    // Get from current repo using git2
+    let repo = git::open_repo()?;
+    let (owner, name) = git::github_owner_and_repo(&repo)?;
+    Ok((owner, name))
 }

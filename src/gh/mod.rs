@@ -9,10 +9,10 @@ pub enum GhCommands {
 }
 
 impl GhCommands {
-    pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::CheckPrReview(args) => {
-                check_pr_review::run(args)?;
+                check_pr_review::run(args).await?;
                 Ok(())
             }
         }
