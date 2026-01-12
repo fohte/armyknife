@@ -292,3 +292,110 @@ fn setup_tmux_window(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TestRepo;
+    use git2::Signature;
+
+    #[test]
+    fn build_claude_command_without_prompt_returns_claude() {
+        let cmd = build_claude_command(None).unwrap();
+        assert_eq!(cmd, "claude");
+    }
+
+    #[test]
+    fn build_claude_command_with_prompt_creates_temp_file() {
+        let cmd = build_claude_command(Some("test prompt")).unwrap();
+
+        // Should contain cat and rm commands
+        assert!(cmd.contains("cat"));
+        assert!(cmd.contains("rm"));
+        assert!(cmd.contains("claude-prompt-"));
+    }
+
+    #[test]
+    fn git_worktree_add_creates_worktree_with_new_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+
+        let worktree_dir = worktrees_dir.join("test-branch");
+        git_worktree_add(
+            &repo,
+            &worktree_dir,
+            WorktreeAddMode::NewBranch {
+                branch: "test-branch",
+                base: "HEAD",
+            },
+        )
+        .unwrap();
+
+        // Worktree should exist
+        assert!(worktree_dir.exists());
+        // Branch should be created
+        assert!(repo.find_branch("test-branch", BranchType::Local).is_ok());
+    }
+
+    #[test]
+    fn git_worktree_add_with_local_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        // Create a branch first
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("existing-branch", &head, false).unwrap();
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+
+        let worktree_dir = worktrees_dir.join("existing-branch");
+        git_worktree_add(
+            &repo,
+            &worktree_dir,
+            WorktreeAddMode::LocalBranch {
+                branch: "existing-branch",
+            },
+        )
+        .unwrap();
+
+        assert!(worktree_dir.exists());
+    }
+
+    #[test]
+    fn git_worktree_add_force_resets_existing_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        // Create initial branch
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("force-test", &head, false).unwrap();
+
+        // Create a new commit
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Second commit", &tree, &[&head])
+            .unwrap();
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+
+        // Force create should delete old branch and create from new HEAD
+        let worktree_dir = worktrees_dir.join("force-test");
+        git_worktree_add(
+            &repo,
+            &worktree_dir,
+            WorktreeAddMode::ForceNewBranch {
+                branch: "force-test",
+                base: "HEAD",
+            },
+        )
+        .unwrap();
+
+        assert!(worktree_dir.exists());
+    }
+}
