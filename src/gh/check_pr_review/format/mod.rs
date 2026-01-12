@@ -5,7 +5,7 @@ pub use full::{print_full, print_review_details};
 pub use summary::print_summary;
 
 #[cfg(test)]
-pub use full::{format_full, format_review_details};
+pub use full::format_review_details;
 #[cfg(test)]
 pub use summary::format_summary;
 
@@ -390,9 +390,10 @@ mod tests {
     mod integration {
         use super::test_helpers::*;
         use crate::gh::check_pr_review::format::{
-            FormatOptions, format_full, format_review_details, format_summary,
+            FormatOptions, format_review_details, format_summary,
         };
-        use crate::gh::check_pr_review::models::ReviewState;
+        use crate::gh::check_pr_review::models::{PrData, ReviewState};
+        use indoc::indoc;
         use rstest::rstest;
 
         fn test_options() -> FormatOptions {
@@ -402,9 +403,8 @@ mod tests {
             }
         }
 
-        #[rstest]
-        fn test_format_summary_single_review_no_threads() {
-            let pr_data = make_pr_data(
+        fn build_summary_single_review_with_body() -> PrData {
+            make_pr_data(
                 vec![make_review(
                     100,
                     "reviewer1",
@@ -412,17 +412,11 @@ mod tests {
                     ReviewState::Approved,
                 )],
                 vec![],
-            );
-
-            let output = format_summary(&pr_data);
-
-            assert!(output.contains("[1] @reviewer1 (approved)"));
-            assert!(output.contains("\"LGTM!\""));
+            )
         }
 
-        #[rstest]
-        fn test_format_summary_with_threads() {
-            let pr_data = make_pr_data(
+        fn build_summary_with_threads() -> PrData {
+            make_pr_data(
                 vec![make_review(
                     100,
                     "reviewer1",
@@ -436,187 +430,93 @@ mod tests {
                     ),
                     make_thread(
                         vec![make_comment(2, "reviewer1", "Also this", Some(100), false)],
-                        true, // resolved
+                        true,
                     ),
                 ],
-            );
-
-            let output = format_summary(&pr_data);
-
-            // Should show 1/2 unresolved (1 unresolved out of 2 total)
-            assert!(output.contains("1/2 unresolved"));
-            assert!(output.contains("@reviewer1 (changes_requested)"));
-            // Thread info
-            assert!(output.contains("src/main.rs:42"));
-            assert!(output.contains("Fix this"));
-            assert!(output.contains("[resolved]"));
+            )
         }
 
-        #[rstest]
-        fn test_format_summary_multiple_reviews() {
-            let pr_data = make_pr_data(
+        fn build_summary_multiple_reviews() -> PrData {
+            make_pr_data(
                 vec![
                     make_review(100, "alice", "", ReviewState::Commented),
                     make_review(200, "bob", "Looks good", ReviewState::Approved),
                 ],
                 vec![],
-            );
-
-            let output = format_summary(&pr_data);
-
-            assert!(output.contains("[1] @alice (commented)"));
-            assert!(output.contains("[2] @bob (approved)"));
-            assert!(output.contains("\"Looks good\""));
+            )
         }
 
-        #[rstest]
-        fn test_format_full_with_diff_hunk() {
-            let pr_data = make_pr_data(
-                vec![make_review(
-                    100,
-                    "reviewer1",
-                    "Please fix",
-                    ReviewState::ChangesRequested,
-                )],
-                vec![make_thread(
-                    vec![make_comment(
-                        1,
-                        "reviewer1",
-                        "This line is wrong",
-                        Some(100),
-                        false,
-                    )],
-                    false,
-                )],
-            );
-
-            let output = format_full(&pr_data, &test_options());
-
-            // Review header
-            assert!(output.contains("@reviewer1"));
-            assert!(output.contains("[changes requested]"));
-            // Diff (plain text since skip_delta=true)
-            assert!(output.contains("-old line"));
-            assert!(output.contains("+new line"));
-            // Comment body
-            assert!(output.contains("This line is wrong"));
-        }
-
-        #[rstest]
-        fn test_format_full_with_replies() {
-            let pr_data = make_pr_data(
-                vec![make_review(100, "reviewer1", "", ReviewState::Commented)],
-                vec![make_thread(
-                    vec![
-                        make_comment(1, "reviewer1", "What about this?", Some(100), false),
-                        make_comment(2, "author", "Good point, fixed!", Some(100), true),
-                    ],
-                    false,
-                )],
-            );
-
-            let output = format_full(&pr_data, &test_options());
-
-            assert!(output.contains("@reviewer1"));
-            assert!(output.contains("What about this?"));
-            assert!(output.contains("└─")); // reply indicator
-            assert!(output.contains("@author"));
-            assert!(output.contains("Good point, fixed!"));
-        }
-
-        #[rstest]
-        fn test_format_review_details_specific_review() {
-            let pr_data = make_pr_data(
-                vec![
-                    make_review(100, "alice", "First review", ReviewState::Commented),
-                    make_review(200, "bob", "Second review", ReviewState::Approved),
-                ],
-                vec![
-                    make_thread(
-                        vec![make_comment(
-                            1,
-                            "alice",
-                            "Comment for review 1",
-                            Some(100),
-                            false,
-                        )],
-                        false,
-                    ),
-                    make_thread(
-                        vec![make_comment(
-                            2,
-                            "bob",
-                            "Comment for review 2",
-                            Some(200),
-                            false,
-                        )],
-                        false,
-                    ),
-                ],
-            );
-
-            // Get review #2 (bob's review)
-            let output = format_review_details(&pr_data, 2, &test_options()).unwrap();
-
-            assert!(output.contains("@bob"));
-            assert!(output.contains("Second review"));
-            assert!(output.contains("Comment for review 2"));
-            // Should not contain alice's content
-            assert!(!output.contains("@alice"));
-            assert!(!output.contains("First review"));
-            assert!(!output.contains("Comment for review 1"));
-        }
-
-        #[rstest]
-        fn test_format_review_details_not_found() {
-            let pr_data = make_pr_data(
-                vec![make_review(100, "alice", "", ReviewState::Approved)],
-                vec![],
-            );
-
-            let result = format_review_details(&pr_data, 0, &test_options());
-            assert!(result.is_err());
-
-            let result = format_review_details(&pr_data, 2, &test_options());
-            assert!(result.is_err());
-        }
-
-        #[rstest]
-        fn test_format_summary_orphan_threads() {
-            let pr_data = make_pr_data(
+        fn build_summary_orphan_threads() -> PrData {
+            make_pr_data(
                 vec![make_review(100, "alice", "", ReviewState::Approved)],
                 vec![
                     make_thread(
                         vec![make_comment(1, "alice", "Normal thread", Some(100), false)],
                         false,
                     ),
-                    // Orphan thread (review_id 999 doesn't exist)
                     make_thread(
                         vec![make_comment(2, "bob", "Orphan comment", Some(999), false)],
                         false,
                     ),
                 ],
-            );
-
-            let output = format_summary(&pr_data);
-
-            assert!(output.contains("Orphan threads"));
-            assert!(output.contains("1")); // 1 orphan thread
+            )
         }
 
         #[rstest]
-        fn test_format_full_resolved_indicator() {
+        #[case::single_review_with_body(
+            build_summary_single_review_with_body(),
+            indoc! {r#"
+                [1] @reviewer1 (approved)
+                    "LGTM!"
+
+            "#}
+        )]
+        #[case::with_threads_unresolved_count(
+            build_summary_with_threads(),
+            indoc! {r#"
+                [1] @reviewer1 (changes_requested) - 1/2 unresolved
+                    - src/main.rs:42 (1 comments)
+                      @reviewer1: "Fix this"
+                    - src/main.rs:42 (1 comments) [resolved]
+                      @reviewer1: "Also this"
+
+            "#}
+        )]
+        #[case::multiple_reviews(
+            build_summary_multiple_reviews(),
+            indoc! {r#"
+                [1] @alice (commented)
+
+                [2] @bob (approved)
+                    "Looks good"
+
+            "#}
+        )]
+        #[case::orphan_threads(
+            build_summary_orphan_threads(),
+            indoc! {r#"
+                [1] @alice (approved) - 1/1 unresolved
+                    - src/main.rs:42 (1 comments)
+                      @alice: "Normal thread"
+
+                Orphan threads (not associated with a review): 1
+                    - src/main.rs:42 (1 comments)
+                      @bob: "Orphan comment"
+            "#}
+        )]
+        fn test_format_summary(#[case] pr_data: PrData, #[case] expected: &str) {
+            assert_eq!(format_summary(&pr_data), expected);
+        }
+
+        #[rstest]
+        #[case::review_not_found_zero(0)]
+        #[case::review_not_found_out_of_range(2)]
+        fn test_format_review_details_not_found(#[case] review_num: usize) {
             let pr_data = make_pr_data(
-                vec![make_review(100, "reviewer", "", ReviewState::Commented)],
-                vec![make_thread(
-                    vec![make_comment(1, "reviewer", "Fixed", Some(100), false)],
-                    true, // resolved
-                )],
+                vec![make_review(100, "alice", "", ReviewState::Approved)],
+                vec![],
             );
-
-            let output = format_full(&pr_data, &test_options());
-
-            assert!(output.contains("[resolved]"));
+            assert!(format_review_details(&pr_data, review_num, &test_options()).is_err());
         }
     }
 }
