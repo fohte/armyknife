@@ -102,3 +102,33 @@ fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
     let (owner, name) = git::github_owner_and_repo(&repo)?;
     Ok((owner, name))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::valid("owner/repo", "owner", "repo")]
+    #[case::with_dashes("my-org/my-repo", "my-org", "my-repo")]
+    #[case::with_numbers("user123/project456", "user123", "project456")]
+    fn test_get_repo_owner_and_name_with_arg(
+        #[case] input: &str,
+        #[case] expected_owner: &str,
+        #[case] expected_repo: &str,
+    ) {
+        let (owner, repo) = get_repo_owner_and_name(Some(input)).unwrap();
+        assert_eq!(owner, expected_owner);
+        assert_eq!(repo, expected_repo);
+    }
+
+    #[rstest]
+    #[case::no_slash("invalid")]
+    #[case::too_many_slashes("a/b/c")]
+    #[case::empty("")]
+    fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
+        let result = get_repo_owner_and_name(Some(input));
+        assert!(result.is_err());
+        assert!(matches!(result, Err(CheckPrReviewError::RepoInfoError(_))));
+    }
+}

@@ -9,4 +9,7 @@ pub use review::{Review, ReviewState};
 pub use thread::ReviewThread;
 
 #[cfg(test)]
+pub use comment::Author;
+
+#[cfg(test)]
 mod tests;

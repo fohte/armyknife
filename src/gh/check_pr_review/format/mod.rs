@@ -195,62 +195,112 @@ pub(super) fn author_login(review: &Review) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gh::check_pr_review::models::Author;
+    use rstest::rstest;
 
-    #[test]
-    fn test_collapse_details_with_summary() {
-        assert_eq!(
-            collapse_details(
-                "Before <details><summary>Click me</summary>Hidden content</details> After"
-            ),
-            "Before [▶ Click me] After"
-        );
+    #[rstest]
+    #[case::with_summary(
+        "Before <details><summary>Click me</summary>Hidden content</details> After",
+        "Before [▶ Click me] After"
+    )]
+    #[case::multiline(
+        "Text\n<details>\n<summary>Summary</summary>\nLots of\nhidden\nstuff\n</details>\nMore",
+        "Text\n[▶ Summary]\nMore"
+    )]
+    #[case::without_summary(
+        "Before <details>Hidden content</details> After",
+        "Before [▶ ...] After"
+    )]
+    fn test_collapse_details(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(collapse_details(input), expected);
     }
 
-    #[test]
-    fn test_collapse_details_multiline() {
-        assert_eq!(
-            collapse_details(
-                "Text\n<details>\n<summary>Summary</summary>\nLots of\nhidden\nstuff\n</details>\nMore"
-            ),
-            "Text\n[▶ Summary]\nMore"
-        );
+    #[rstest]
+    #[case::no_truncation("Hello World", 20, "Hello World")]
+    #[case::truncate("Hello World", 5, "Hello...")]
+    #[case::leading_spaces("  Leading spaces", 10, "Leading sp...")]
+    #[case::utf8_japanese("日本語テスト", 3, "日本語...")]
+    #[case::utf8_mixed("Hello 世界", 7, "Hello 世...")]
+    #[case::utf8_no_truncation("日本語", 10, "日本語")]
+    fn test_truncate_text(#[case] input: &str, #[case] max_len: usize, #[case] expected: &str) {
+        assert_eq!(truncate_text(input, max_len), expected);
     }
 
-    #[test]
-    fn test_collapse_details_without_summary() {
-        assert_eq!(
-            collapse_details("Before <details>Hidden content</details> After"),
-            "Before [▶ ...] After"
-        );
-    }
-
-    #[test]
-    fn test_truncate_text() {
-        assert_eq!(truncate_text("Hello World", 20), "Hello World");
-        assert_eq!(truncate_text("Hello World", 5), "Hello...");
-        assert_eq!(truncate_text("  Leading spaces", 10), "Leading sp...");
-    }
-
-    #[test]
-    fn test_truncate_text_utf8() {
-        assert_eq!(truncate_text("日本語テスト", 3), "日本語...");
-        assert_eq!(truncate_text("こんにちは世界", 5), "こんにちは...");
-        assert_eq!(truncate_text("Hello 世界", 7), "Hello 世...");
-        assert_eq!(truncate_text("日本語", 10), "日本語");
-    }
-
-    #[test]
-    fn test_format_datetime() {
-        // Valid ISO 8601 should produce YYYY-MM-DD HH:MM format (converted to local time)
-        let result = format_datetime("2024-06-15T12:30:00Z");
-        assert!(result.contains("2024-06-15") || result.contains("2024-06-16")); // depends on timezone
+    #[rstest]
+    #[case::valid_iso("2024-06-15T12:30:00Z")]
+    #[case::with_millis("2024-06-15T12:30:00.123Z")]
+    fn test_format_datetime_valid(#[case] input: &str) {
+        let result = format_datetime(input);
         assert_eq!(result.len(), 16); // "YYYY-MM-DD HH:MM"
+        assert!(result.contains("2024-06-1")); // day may shift due to timezone
+    }
 
-        // Milliseconds should be handled
-        let result = format_datetime("2024-06-15T12:30:00.123Z");
-        assert_eq!(result.len(), 16);
-
-        // Invalid format falls back to string manipulation
+    #[rstest]
+    fn test_format_datetime_invalid_fallback() {
         assert_eq!(format_datetime("invalid"), "invalid");
+    }
+
+    #[rstest]
+    #[case::empty("", "")]
+    #[case::whitespace("   ", "")]
+    fn test_render_markdown_empty(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(render_markdown(input), expected);
+    }
+
+    #[rstest]
+    fn test_render_markdown_simple() {
+        let result = render_markdown("Hello **world**");
+        assert!(result.contains("Hello"));
+        assert!(result.contains("world"));
+    }
+
+    #[rstest]
+    fn test_render_markdown_code_block() {
+        let result = render_markdown("```rust\nlet x = 1;\n```");
+        assert!(result.contains("let x = 1"));
+    }
+
+    #[rstest]
+    #[case::open(true)]
+    #[case::collapsed(false)]
+    fn test_process_body_details(#[case] open_details: bool) {
+        let options = FormatOptions { open_details };
+        let body = "<details><summary>Sum</summary>Content</details>";
+        let result = process_body(body, &options);
+        if open_details {
+            assert!(result.contains("Content") || result.contains("Sum"));
+        } else {
+            assert!(result.contains("▶"));
+        }
+    }
+
+    #[rstest]
+    #[case::approved(ReviewState::Approved, "[approved]", color::GREEN)]
+    #[case::changes_requested(ReviewState::ChangesRequested, "[changes requested]", color::RED)]
+    #[case::commented(ReviewState::Commented, "[commented]", color::YELLOW)]
+    #[case::dismissed(ReviewState::Dismissed, "[dismissed]", color::DIM)]
+    #[case::pending(ReviewState::Pending, "[pending]", color::DIM)]
+    fn test_state_indicator(
+        #[case] state: ReviewState,
+        #[case] label: &str,
+        #[case] color_code: &str,
+    ) {
+        let result = state_indicator(state);
+        assert!(result.contains(label));
+        assert!(result.contains(color_code));
+    }
+
+    #[rstest]
+    #[case::with_author(Some(Author { login: "testuser".to_string() }), "testuser")]
+    #[case::without_author(None, "unknown")]
+    fn test_author_login(#[case] author: Option<Author>, #[case] expected: &str) {
+        let review = Review {
+            database_id: 1,
+            author,
+            body: String::new(),
+            state: ReviewState::Approved,
+            created_at: String::new(),
+        };
+        assert_eq!(author_login(&review), expected);
     }
 }

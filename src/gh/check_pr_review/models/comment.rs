@@ -44,3 +44,53 @@ pub struct ReplyTo {}
 pub struct PullRequestReview {
     pub database_id: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::with_author(Some(Author { login: "user1".to_string() }), "user1")]
+    #[case::without_author(None, "unknown")]
+    fn test_author_login(#[case] author: Option<Author>, #[case] expected: &str) {
+        let comment = Comment {
+            database_id: 1,
+            author,
+            body: String::new(),
+            created_at: String::new(),
+            path: None,
+            line: None,
+            original_line: None,
+            diff_hunk: None,
+            reply_to: None,
+            pull_request_review: None,
+        };
+        assert_eq!(comment.author_login(), expected);
+    }
+
+    #[rstest]
+    #[case::line_only(Some(10), None, Some(10))]
+    #[case::original_line_only(None, Some(20), Some(20))]
+    #[case::both(Some(10), Some(20), Some(10))]
+    #[case::neither(None, None, None)]
+    fn test_effective_line(
+        #[case] line: Option<i64>,
+        #[case] original_line: Option<i64>,
+        #[case] expected: Option<i64>,
+    ) {
+        let comment = Comment {
+            database_id: 1,
+            author: None,
+            body: String::new(),
+            created_at: String::new(),
+            path: None,
+            line,
+            original_line,
+            diff_hunk: None,
+            reply_to: None,
+            pull_request_review: None,
+        };
+        assert_eq!(comment.effective_line(), expected);
+    }
+}
