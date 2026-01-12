@@ -12,8 +12,7 @@ Rust CLI toolkit for AI-assisted development workflows.
 
 ## Directory Structure
 
-- Organized by subcommand (e.g., `ai/pr_draft/` for `a ai pr-draft`)
-- Shared modules extracted when reusable (e.g., `human_in_the_loop/`)
+See [docs/architecture.md](docs/architecture.md).
 
 ## Development
 
