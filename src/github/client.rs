@@ -1,6 +1,7 @@
 //! GitHub API client implementation using octocrab.
 
 use std::process::Command;
+use std::sync::OnceLock;
 
 use super::error::{GitHubError, Result};
 
@@ -9,8 +10,16 @@ pub struct OctocrabClient {
     pub(crate) client: octocrab::Octocrab,
 }
 
+/// Global singleton instance of OctocrabClient, initialized lazily.
+///
+/// Stores the `Result` of initialization. Using a single `OnceLock` for the result
+/// ensures initialization logic runs only once, even across multiple threads.
+static OCTOCRAB_CLIENT: OnceLock<std::result::Result<OctocrabClient, String>> = OnceLock::new();
+
 impl OctocrabClient {
-    pub fn new() -> Result<Self> {
+    /// Create a new OctocrabClient instance.
+    /// Prefer using `OctocrabClient::get()` to reuse the singleton instance.
+    fn new() -> Result<Self> {
         let token = get_gh_token()?;
         let client = octocrab::Octocrab::builder()
             .personal_token(token)
@@ -19,6 +28,16 @@ impl OctocrabClient {
                 GitHubError::TokenError(format!("Failed to build octocrab client: {e}"))
             })?;
         Ok(Self { client })
+    }
+
+    /// Get the singleton instance of OctocrabClient.
+    /// Initializes the client on first call (runs `gh auth token` once).
+    pub fn get() -> Result<&'static Self> {
+        // get_or_init ensures the closure is only run once across all threads
+        OCTOCRAB_CLIENT
+            .get_or_init(|| Self::new().map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| GitHubError::TokenError(e.clone()))
     }
 
     /// Execute a GraphQL query and deserialize the response.

@@ -138,13 +138,13 @@ pub async fn fetch_pr_data(
     pr_number: u64,
     include_resolved: bool,
 ) -> Result<PrData> {
-    let client = OctocrabClient::new()?;
+    let client = OctocrabClient::get()?;
     let mut threads: Vec<ReviewThread> = Vec::new();
     let mut reviews: Vec<Review> = Vec::new();
     let mut pagination = PaginationState::default();
 
     while pagination.has_more() {
-        let pr = execute_graphql(&client, owner, repo, pr_number, &pagination)
+        let pr = execute_graphql(client, owner, repo, pr_number, &pagination)
             .await?
             .repository
             .and_then(|r| r.pull_request)

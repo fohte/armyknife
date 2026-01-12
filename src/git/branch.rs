@@ -77,7 +77,7 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
 
     // First, check PR status via GitHub API
     if let Some((owner, repo)) = get_owner_repo()
-        && let Ok(client) = OctocrabClient::new()
+        && let Ok(client) = OctocrabClient::get()
         && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
     {
         match pr_info.state {

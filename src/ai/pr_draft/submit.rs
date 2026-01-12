@@ -27,8 +27,8 @@ struct PrTarget {
 }
 
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let client = OctocrabClient::new()?;
-    tokio::runtime::Runtime::new()?.block_on(run_async(args, &client))
+    let client = OctocrabClient::get()?;
+    tokio::runtime::Runtime::new()?.block_on(run_async(args, client))
 }
 
 async fn run_async(
