@@ -1,6 +1,6 @@
 [package]
 name = "armyknife"
-version = "0.1.7"
+version = "0.1.9"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
@@ -12,10 +12,14 @@ name = "a"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "=0.1.89"
 chrono = "=0.4.42"
 clap = { version = "=4.5.54", features = ["derive"] }
 dirs = "=6.0.0"
-git2 = "=0.20.3"
+git2 = { version = "=0.20.3", default-features = false, features = ["vendored-libgit2"] }
+octocrab = "=0.49.5"
+open = "=5.3.3"
+tokio = { version = "=1.49.0", features = ["rt-multi-thread", "macros"] }
 indoc = "=2.0.7"
 regex = "=1.12.2"
 self_update = { version = "=0.42.0", features = ["rustls", "compression-flate2"], default-features = false }
