@@ -13,6 +13,9 @@ pub enum GitHubError {
 
     #[error("GitHub API error: {0}")]
     ApiError(#[from] octocrab::Error),
+
+    #[error("PR created but no URL in response")]
+    MissingPrUrl,
 }
 
 pub type Result<T> = std::result::Result<T, GitHubError>;
@@ -65,7 +68,9 @@ impl OctocrabClient {
 impl GitHubClient for OctocrabClient {
     async fn is_repo_private(&self, owner: &str, repo: &str) -> Result<bool> {
         let repository = self.client.repos(owner, repo).get().await?;
-        Ok(repository.private.unwrap_or(false))
+        // Default to private for safety (e.g., to avoid incorrectly flagging
+        // Japanese text in a private repo as an error)
+        Ok(repository.private.unwrap_or(true))
     }
 
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
@@ -87,7 +92,9 @@ impl GitHubClient for OctocrabClient {
                 .await?
         };
 
-        Ok(pr.html_url.map(|u| u.to_string()).unwrap_or_default())
+        pr.html_url
+            .map(|u| u.to_string())
+            .ok_or_else(|| GitHubError::MissingPrUrl)
     }
 
     fn open_in_browser(&self, url: &str) {
