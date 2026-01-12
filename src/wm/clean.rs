@@ -160,10 +160,10 @@ fn delete_branch_if_exists(repo: &Repository, branch: &str) -> Result<()> {
         return Ok(());
     }
 
-    if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local) {
-        if branch_ref.delete().is_ok() {
-            println!("  Branch deleted: {branch}");
-        }
+    if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local)
+        && branch_ref.delete().is_ok()
+    {
+        println!("  Branch deleted: {branch}");
     }
 
     Ok(())
