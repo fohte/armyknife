@@ -1,3 +1,4 @@
+use git2::{BranchType, Repository};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
@@ -6,6 +7,16 @@ use super::error::{Result, WmError};
 
 /// Branch prefix for new branches created by `wm new`
 pub const BRANCH_PREFIX: &str = "fohte/";
+
+/// Open a git repository from a path.
+fn open_repo(path: &Path) -> Result<Repository> {
+    Repository::open_ext(
+        path,
+        git2::RepositoryOpenFlags::empty(),
+        std::iter::empty::<&Path>(),
+    )
+    .map_err(|_| WmError::NotInGitRepo)
+}
 
 /// Get the main worktree root (the first entry in `git worktree list`).
 /// This is always the main repository, regardless of which worktree we're in.
@@ -16,44 +27,35 @@ pub fn get_repo_root() -> Result<String> {
     get_repo_root_in(&cwd)
 }
 
-/// Get the main worktree root, running git from the specified directory.
+/// Get the main worktree root from the specified directory.
 pub fn get_repo_root_in(cwd: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .current_dir(cwd)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    let repo = open_repo(cwd)?;
 
-    if !output.status.success() {
-        return Err(WmError::NotInGitRepo);
-    }
+    let path = if repo.is_worktree() {
+        // For worktrees, commondir() points to the main repo's .git
+        // The main worktree's workdir is the parent of commondir
+        let commondir = repo.commondir();
+        commondir.parent().ok_or(WmError::NotInGitRepo)?
+    } else {
+        // For the main repo, workdir() gives us the working directory
+        repo.workdir().ok_or(WmError::NotInGitRepo)?
+    };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // The first "worktree <path>" line is always the main worktree
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            return Ok(path.to_string());
-        }
-    }
-
-    Err(WmError::NotInGitRepo)
+    // Normalize path: remove trailing slash for consistency
+    let path_str = path.to_string_lossy();
+    Ok(path_str.trim_end_matches('/').to_string())
 }
 
 /// Get the main branch name (main or master)
 pub fn get_main_branch() -> Result<String> {
-    // Check for origin/main first
-    let main = Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/main",
-        ])
-        .status()
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    get_main_branch_for_repo(&repo)
+}
 
-    if main.success() {
+/// Get the main branch name for a specific repository
+fn get_main_branch_for_repo(repo: &Repository) -> Result<String> {
+    // Check for origin/main first
+    if repo.find_branch("origin/main", BranchType::Remote).is_ok() {
         return Ok("main".to_string());
     }
 
@@ -68,30 +70,19 @@ pub fn branch_exists(branch: &str) -> bool {
 
 /// Check if a local branch exists
 pub fn local_branch_exists(branch: &str) -> bool {
-    Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let Ok(repo) = Repository::open_from_env() else {
+        return false;
+    };
+    repo.find_branch(branch, BranchType::Local).is_ok()
 }
 
 /// Check if a remote branch exists
 pub fn remote_branch_exists(branch: &str) -> bool {
-    Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/remotes/origin/{branch}"),
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let Ok(repo) = Repository::open_from_env() else {
+        return false;
+    };
+    let remote_branch = format!("origin/{branch}");
+    repo.find_branch(&remote_branch, BranchType::Remote).is_ok()
 }
 
 #[derive(Debug, Clone)]
@@ -148,25 +139,42 @@ pub fn get_merge_status(branch_name: &str) -> MergeStatus {
         }
     }
 
-    // Fallback: check using git merge-base
+    // Fallback: check using git2 merge-base
     let main_branch = get_main_branch().unwrap_or_else(|_| "main".to_string());
     let base_branch = format!("origin/{main_branch}");
 
-    let merge_base = Command::new("git")
-        .args(["merge-base", "--is-ancestor", branch_name, &base_branch])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if merge_base {
-        return MergeStatus::Merged {
-            reason: format!("ancestor of {base_branch}"),
-        };
+    if let Some(is_ancestor) = check_is_ancestor(branch_name, &base_branch) {
+        if is_ancestor {
+            return MergeStatus::Merged {
+                reason: format!("ancestor of {base_branch}"),
+            };
+        }
     }
 
     MergeStatus::NotMerged {
         reason: "not merged (no PR found, not ancestor of base branch)".to_string(),
     }
+}
+
+/// Check if `branch` is an ancestor of `base` (equivalent to `git merge-base --is-ancestor`)
+fn check_is_ancestor(branch: &str, base: &str) -> Option<bool> {
+    let repo = Repository::open_from_env().ok()?;
+
+    // Resolve branch to commit
+    let branch_oid = repo
+        .revparse_single(branch)
+        .ok()?
+        .peel_to_commit()
+        .ok()?
+        .id();
+
+    // Resolve base to commit
+    let base_oid = repo.revparse_single(base).ok()?.peel_to_commit().ok()?.id();
+
+    // `--is-ancestor A B` checks if A is ancestor of B
+    // This means B descends from A
+    // graph_descendant_of(descendant, ancestor) returns true if descendant is from ancestor
+    repo.graph_descendant_of(base_oid, branch_oid).ok()
 }
 
 /// Normalize a branch name to a worktree directory name

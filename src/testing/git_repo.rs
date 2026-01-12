@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use git2::{Repository, Signature};
+use std::path::PathBuf;
 
 /// A temporary git repository for testing.
 pub struct TestRepo {
@@ -7,45 +7,19 @@ pub struct TestRepo {
 }
 
 impl TestRepo {
-    /// Create a git Command with isolated config (ignores global/system settings).
-    fn git_command(dir: &Path) -> Command {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(dir);
-        // Ignore global/system git config to ensure tests are isolated from
-        // local settings (e.g., GPG signing, aliases, hooks).
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
-        cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
-        cmd
-    }
-
     /// Create a new test repository with an initial commit.
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
 
-        // Initialize git repo
-        let status = Self::git_command(dir.path())
-            .args(["init"])
-            .status()
-            .expect("Failed to run git init");
-        assert!(status.success(), "git init failed");
-
-        // Configure git user for commits
-        Self::git_command(dir.path())
-            .args(["config", "user.email", "test@example.com"])
-            .status()
-            .expect("Failed to configure git email");
-
-        Self::git_command(dir.path())
-            .args(["config", "user.name", "Test User"])
-            .status()
-            .expect("Failed to configure git name");
+        // Initialize git repo using git2
+        let repo = Repository::init(dir.path()).expect("Failed to init repo");
 
         // Create initial commit
-        let status = Self::git_command(dir.path())
-            .args(["commit", "--allow-empty", "-m", "Initial commit"])
-            .status()
-            .expect("Failed to run git commit");
-        assert!(status.success(), "git commit failed");
+        let sig = Signature::now("Test User", "test@example.com").expect("Failed to create sig");
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .expect("Failed to create initial commit");
 
         Self { dir }
     }
@@ -59,6 +33,11 @@ impl TestRepo {
             .expect("Failed to canonicalize path")
     }
 
+    /// Open the repository.
+    pub fn open(&self) -> Repository {
+        Repository::open(self.path()).expect("Failed to open repo")
+    }
+
     /// Create a worktree with the given branch name.
     pub fn create_worktree(&self, branch_name: &str) {
         let worktree_path = self.worktree_path(branch_name);
@@ -67,17 +46,11 @@ impl TestRepo {
         let worktrees_dir = self.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).expect("Failed to create .worktrees dir");
 
-        let status = Self::git_command(&self.path())
-            .args([
-                "worktree",
-                "add",
-                worktree_path.to_str().unwrap(),
-                "-b",
-                branch_name,
-            ])
-            .status()
-            .expect("Failed to run git worktree add");
-        assert!(status.success(), "git worktree add failed");
+        let repo = self.open();
+
+        // Create worktree using git2
+        repo.worktree(branch_name, &worktree_path, None)
+            .expect("Failed to create worktree");
     }
 
     /// Get the path to a worktree.
