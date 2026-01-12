@@ -1,6 +1,7 @@
 mod ai;
 mod cli;
 mod gh;
+mod git;
 mod human_in_the_loop;
 mod update;
 
