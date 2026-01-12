@@ -34,12 +34,10 @@ impl OctocrabClient {
     /// Initializes the client on first call (runs `gh auth token` once).
     pub fn get() -> Result<&'static Self> {
         // get_or_init ensures the closure is only run once across all threads
-        let result = OCTOCRAB_CLIENT.get_or_init(|| Self::new().map_err(|e| e.to_string()));
-
-        match result {
-            Ok(client) => Ok(client),
-            Err(e) => Err(GitHubError::TokenError(e.clone())),
-        }
+        OCTOCRAB_CLIENT
+            .get_or_init(|| Self::new().map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| GitHubError::TokenError(e.clone()))
     }
 }
 
