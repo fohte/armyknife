@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/fohte/armyknife/compare/v0.1.9...v0.1.10) (2026-01-12)
+
+
+### Features
+
+* **wm:** add git worktree management command ([#36](https://github.com/fohte/armyknife/issues/36)) ([259a8f2](https://github.com/fohte/armyknife/commit/259a8f29cf19cf9be13ddebe2c35bbe25943bc0e))
+
 ## [0.1.9](https://github.com/fohte/armyknife/compare/v0.1.8...v0.1.9) (2026-01-12)
 
 
