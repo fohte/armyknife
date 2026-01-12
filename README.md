@@ -60,12 +60,12 @@ Manage PR body drafts with human-in-the-loop review.
 
 Git worktree management with tmux integration.
 
-| Action              | Description                                          |
-| ------------------- | ---------------------------------------------------- |
-| `list`              | List all worktrees                                   |
-| `new <branch>`      | Create a new worktree and open tmux window           |
-| `delete [worktree]` | Delete a worktree (moves to main if run from within) |
-| `clean`             | Bulk delete merged worktrees                         |
+| Action              | Description                                |
+| ------------------- | ------------------------------------------ |
+| `list`              | List all worktrees                         |
+| `new <branch>`      | Create a new worktree and open tmux window |
+| `delete [worktree]` | Delete a worktree and its branch           |
+| `clean`             | Bulk delete merged worktrees               |
 
 ## License
 

@@ -204,17 +204,13 @@ pub fn create_split_window(
     ];
 
     // Interleave commands with ";" separator for tmux chaining
-    let args: Vec<&str> = commands
-        .iter()
-        .enumerate()
-        .flat_map(|(i, cmd)| {
-            if i > 0 {
-                [&[";"] as &[&str], *cmd].concat()
-            } else {
-                cmd.to_vec()
-            }
-        })
-        .collect();
+    let mut args = Vec::new();
+    for (i, cmd) in commands.iter().enumerate() {
+        if i > 0 {
+            args.push(";");
+        }
+        args.extend_from_slice(cmd);
+    }
 
     let status = Command::new("tmux")
         .args(&args)
