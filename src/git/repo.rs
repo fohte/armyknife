@@ -104,60 +104,34 @@ pub fn origin_url(repo: &Repository) -> Result<String> {
 mod tests {
     use super::*;
     use crate::git::test_utils::TempRepo;
+    use rstest::rstest;
 
-    #[test]
-    fn test_get_main_branch_for_repo_returns_master_when_no_origin_main() {
-        // Create a temp repo without origin/main remote branch
+    /// Helper to create remote tracking branch references in a test repo.
+    fn create_remote_branches(repo: &Repository, branches: &[&str]) {
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        for branch in branches {
+            repo.reference(
+                &format!("refs/remotes/origin/{branch}"),
+                head_commit.id(),
+                true,
+                "create fake remote branch for test",
+            )
+            .unwrap();
+        }
+    }
+
+    #[rstest]
+    #[case::no_remote_branches(vec![], "master")]
+    #[case::only_origin_main(vec!["main"], "main")]
+    #[case::only_origin_master(vec!["master"], "master")]
+    #[case::both_prefers_main(vec!["main", "master"], "main")]
+    fn test_get_main_branch_for_repo(#[case] remote_branches: Vec<&str>, #[case] expected: &str) {
         let temp = TempRepo::new("owner", "repo", "master");
         let repo = temp.open();
 
-        let result = get_main_branch_for_repo(&repo).unwrap();
-        assert_eq!(result, "master");
-    }
-
-    #[test]
-    fn test_get_main_branch_for_repo_returns_main_when_origin_main_exists() {
-        let temp = TempRepo::new("owner", "repo", "main");
-        let repo = temp.open();
-
-        // Create a fake origin/main remote tracking branch
-        // We need to create a reference that looks like a remote branch
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.reference(
-            "refs/remotes/origin/main",
-            head_commit.id(),
-            true,
-            "create fake remote branch for test",
-        )
-        .unwrap();
+        create_remote_branches(&repo, &remote_branches);
 
         let result = get_main_branch_for_repo(&repo).unwrap();
-        assert_eq!(result, "main");
-    }
-
-    #[test]
-    fn test_get_main_branch_for_repo_prefers_main_over_master() {
-        let temp = TempRepo::new("owner", "repo", "master");
-        let repo = temp.open();
-
-        // Create both origin/main and origin/master
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.reference(
-            "refs/remotes/origin/main",
-            head_commit.id(),
-            true,
-            "create fake origin/main",
-        )
-        .unwrap();
-        repo.reference(
-            "refs/remotes/origin/master",
-            head_commit.id(),
-            true,
-            "create fake origin/master",
-        )
-        .unwrap();
-
-        let result = get_main_branch_for_repo(&repo).unwrap();
-        assert_eq!(result, "main");
+        assert_eq!(result, expected);
     }
 }
