@@ -28,20 +28,39 @@ cargo install --git https://github.com/fohte/armyknife
 a <command>
 ```
 
-### Commands
+## Commands
 
-- `a update` - Update to the latest version
-- `a ai pr-draft <subcommand>` - Manage PR body drafts for AI-assisted PR creation
-  - `new` - Create a new PR body draft file
-  - `review` - Open the draft in Neovim for review (via WezTerm)
-  - `submit` - Create a PR from the approved draft
-- `a wm <subcommand>` - Git worktree management with tmux integration
-  - `list` - List all worktrees
-  - `new <branch>` - Create a new worktree and open tmux window with nvim + claude
-  - `delete [worktree]` - Delete a worktree (moves to main if run from within)
-  - `clean` - Bulk delete merged worktrees
+### `a update`
+
+Update to the latest version.
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
+
+### `a ai`
+
+Commands designed for AI agents (e.g., Claude Code) to call programmatically.
+These provide structured inputs/outputs suitable for AI workflows.
+
+#### `a ai pr-draft`
+
+Manage PR body drafts with human-in-the-loop review.
+
+| Action   | Description                         |
+| -------- | ----------------------------------- |
+| `new`    | Create a new PR body draft file     |
+| `review` | Open the draft in editor for review |
+| `submit` | Create a PR from the approved draft |
+
+### `a wm`
+
+Git worktree management with tmux integration.
+
+| Action              | Description                                          |
+| ------------------- | ---------------------------------------------------- |
+| `list`              | List all worktrees                                   |
+| `new <branch>`      | Create a new worktree and open tmux window           |
+| `delete [worktree]` | Delete a worktree (moves to main if run from within) |
+| `clean`             | Bulk delete merged worktrees                         |
 
 ## License
 

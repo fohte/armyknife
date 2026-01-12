@@ -1,5 +1,6 @@
 mod ai;
 mod cli;
+mod git;
 mod human_in_the_loop;
 #[cfg(test)]
 mod testing;
