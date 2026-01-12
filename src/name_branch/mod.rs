@@ -57,11 +57,25 @@ IMPORTANT: Output ONLY the branch name. Do not analyze, explain, or investigate 
 }
 
 fn sanitize_branch_name(name: &str) -> String {
-    name.trim()
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-        .collect()
+    let name = name.trim().to_lowercase();
+    let mut result = String::with_capacity(name.len());
+    let mut last_was_sep = true;
+
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            result.push(ch);
+            last_was_sep = false;
+        } else if !last_was_sep {
+            result.push('-');
+            last_was_sep = true;
+        }
+    }
+
+    if result.ends_with('-') {
+        result.pop();
+    }
+
+    result
 }
 
 fn validate_branch_name(name: &str) -> Result<()> {
@@ -94,8 +108,11 @@ mod tests {
     #[case::simple("fix-login", "fix-login")]
     #[case::with_whitespace("  fix-login  ", "fix-login")]
     #[case::with_uppercase("Fix-Login", "fix-login")]
-    #[case::with_invalid_chars("fix/login@bug", "fixloginbug")]
+    #[case::with_invalid_chars("fix/login@bug", "fix-login-bug")]
+    #[case::with_spaces("fix login bug", "fix-login-bug")]
     #[case::with_newline("fix-login\n", "fix-login")]
+    #[case::leading_separator("/fix-login", "fix-login")]
+    #[case::trailing_separator("fix-login/", "fix-login")]
     fn test_sanitize_branch_name(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sanitize_branch_name(input), expected);
     }

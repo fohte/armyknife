@@ -21,8 +21,9 @@ pub fn detect_backend() -> Box<dyn Backend> {
 }
 
 fn is_command_available(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {cmd}"))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -67,11 +68,13 @@ impl Backend for ClaudeCode {
             .spawn()
             .map_err(|e| Error::GenerationFailed(format!("Failed to spawn claude: {e}")))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(prompt.as_bytes())
-                .map_err(|e| Error::GenerationFailed(format!("Failed to write to stdin: {e}")))?;
-        }
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            Error::GenerationFailed("Failed to get stdin handle for claude process".to_string())
+        })?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| Error::GenerationFailed(format!("Failed to write to stdin: {e}")))?;
+        drop(stdin);
 
         let output = child
             .wait_with_output()
