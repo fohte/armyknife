@@ -1,4 +1,6 @@
-//! Common worktree operations shared between delete and clean commands.
+//! Common worktree operations shared between delete, clean, and list commands.
+
+use std::path::PathBuf;
 
 use git2::{BranchType, Repository, WorktreePruneOptions};
 
@@ -79,4 +81,94 @@ pub fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<Stri
     }
 
     Err(WmError::WorktreeNotFound(worktree_path.to_string()))
+}
+
+/// Basic information about a linked worktree.
+#[derive(Debug, Clone)]
+pub struct LinkedWorktree {
+    /// The worktree name (used by git internally).
+    pub name: String,
+    /// The worktree path on disk.
+    pub path: PathBuf,
+    /// The branch name checked out in this worktree.
+    pub branch: String,
+    /// The short commit hash (7 chars).
+    pub commit: String,
+}
+
+/// List all linked worktrees (excludes main worktree).
+pub fn list_linked_worktrees(repo: &Repository) -> Result<Vec<LinkedWorktree>> {
+    let worktrees = repo
+        .worktrees()
+        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
+
+    let mut result = Vec::new();
+
+    for name in worktrees.iter().flatten() {
+        let wt = match repo.find_worktree(name) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+
+        let wt_path = wt.path().to_path_buf();
+
+        // Open the worktree repository to get its HEAD
+        let wt_repo = match Repository::open(&wt_path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let wt_head = wt_repo.head().ok();
+        let branch = wt_head
+            .as_ref()
+            .and_then(|h| h.shorthand())
+            .unwrap_or("(unknown)")
+            .to_string();
+        let commit = wt_head
+            .as_ref()
+            .and_then(|h| h.peel_to_commit().ok())
+            .map(|c| c.id().to_string())
+            .map(|s| s[..7].to_string())
+            .unwrap_or_else(|| "(none)".to_string());
+
+        result.push(LinkedWorktree {
+            name: name.to_string(),
+            path: wt_path,
+            branch,
+            commit,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Get the main worktree path.
+pub fn get_main_worktree_path(repo: &Repository) -> Result<PathBuf> {
+    if repo.is_worktree() {
+        repo.commondir()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or(WmError::NotInGitRepo)
+    } else {
+        repo.workdir()
+            .map(|p| p.to_path_buf())
+            .ok_or(WmError::NotInGitRepo)
+    }
+}
+
+/// Get the branch and commit for the main worktree.
+pub fn get_main_worktree_info(repo: &Repository) -> (String, String) {
+    let head = repo.head().ok();
+    let branch = head
+        .as_ref()
+        .and_then(|h| h.shorthand())
+        .unwrap_or("(unknown)")
+        .to_string();
+    let commit = head
+        .as_ref()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.id().to_string())
+        .map(|s| s[..7].to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+    (branch, commit)
 }

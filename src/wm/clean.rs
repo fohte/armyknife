@@ -3,9 +3,9 @@ use git2::Repository;
 use std::io::{self, Write};
 
 use super::error::{Result, WmError};
-use super::git::{get_merge_status, get_repo_root};
+use super::git::get_merge_status;
 use super::worktree::{
-    delete_branch_if_exists, delete_worktree, get_main_repo, get_worktree_branch,
+    LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
 };
 use crate::git::fetch_with_prune;
 
@@ -16,10 +16,9 @@ pub struct CleanArgs {
     pub dry_run: bool,
 }
 
-struct WorktreeInfo {
-    name: String,
-    path: String,
-    branch: String,
+/// Worktree with merge status for clean command.
+struct CleanWorktreeInfo {
+    wt: LinkedWorktree,
     reason: String,
 }
 
@@ -35,8 +34,7 @@ async fn run_inner(args: &CleanArgs) -> Result<()> {
 
     fetch_with_prune(&main_repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
-    let repo_root = get_repo_root()?;
-    let (to_delete, to_skip) = collect_worktrees(&main_repo, &repo_root).await?;
+    let (to_delete, to_skip) = collect_worktrees(&main_repo).await?;
 
     display_worktrees_to_keep(&to_skip);
 
@@ -65,23 +63,23 @@ async fn run_inner(args: &CleanArgs) -> Result<()> {
 }
 
 /// Display worktrees that will be kept
-fn display_worktrees_to_keep(worktrees: &[WorktreeInfo]) {
+fn display_worktrees_to_keep(worktrees: &[CleanWorktreeInfo]) {
     if worktrees.is_empty() {
         return;
     }
 
     println!("Worktrees to keep:");
-    for wt in worktrees {
-        println!("  {} ({})", wt.path, wt.reason);
+    for info in worktrees {
+        println!("  {} ({})", info.wt.path.display(), info.reason);
     }
     println!();
 }
 
 /// Display worktrees that will be deleted
-fn display_worktrees_to_delete(worktrees: &[WorktreeInfo]) {
+fn display_worktrees_to_delete(worktrees: &[CleanWorktreeInfo]) {
     println!("Worktrees to delete:");
-    for wt in worktrees {
-        println!("  {} ({})", wt.path, wt.reason);
+    for info in worktrees {
+        println!("  {} ({})", info.wt.path.display(), info.reason);
     }
 }
 
@@ -97,16 +95,16 @@ fn confirm_deletion() -> bool {
 }
 
 /// Delete all worktrees and their branches
-fn delete_worktrees(repo: &Repository, worktrees: &[WorktreeInfo]) -> Result<()> {
+fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
     let mut deleted_count = 0;
 
-    for wt in worktrees {
-        if delete_worktree(repo, &wt.name)? {
-            println!("Deleted: {} ({})", wt.path, wt.reason);
+    for info in worktrees {
+        if delete_worktree(repo, &info.wt.name)? {
+            println!("Deleted: {} ({})", info.wt.path.display(), info.reason);
             deleted_count += 1;
 
-            if delete_branch_if_exists(repo, &wt.branch) {
-                println!("  Branch deleted: {}", wt.branch);
+            if delete_branch_if_exists(repo, &info.wt.branch) {
+                println!("  Branch deleted: {}", info.wt.branch);
             }
         }
     }
@@ -120,47 +118,25 @@ fn delete_worktrees(repo: &Repository, worktrees: &[WorktreeInfo]) -> Result<()>
 /// Collect all worktrees and categorize them by merge status
 async fn collect_worktrees(
     repo: &Repository,
-    repo_root: &str,
-) -> Result<(Vec<WorktreeInfo>, Vec<WorktreeInfo>)> {
-    let worktrees = repo
-        .worktrees()
-        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
-
+) -> Result<(Vec<CleanWorktreeInfo>, Vec<CleanWorktreeInfo>)> {
     let mut to_delete = Vec::new();
     let mut to_skip = Vec::new();
 
-    for name in worktrees.iter().flatten() {
-        let wt = match repo.find_worktree(name) {
-            Ok(w) => w,
-            Err(_) => continue,
-        };
-
-        let wt_path = wt.path().to_string_lossy().to_string();
-
-        // Skip the main worktree
-        if wt_path.trim_end_matches('/') == repo_root.trim_end_matches('/') {
+    for wt in list_linked_worktrees(repo)? {
+        if wt.branch.is_empty() || wt.branch == "(unknown)" {
             continue;
         }
 
-        // Get the branch name from the worktree
-        let branch = get_worktree_branch(repo, name).unwrap_or_default();
-
-        if branch.is_empty() {
-            continue;
-        }
-
-        let merge_status = get_merge_status(&branch).await;
-        let wt_info = WorktreeInfo {
-            name: name.to_string(),
-            path: wt_path,
-            branch,
+        let merge_status = get_merge_status(&wt.branch).await;
+        let info = CleanWorktreeInfo {
+            wt,
             reason: merge_status.reason().to_string(),
         };
 
         if merge_status.is_merged() {
-            to_delete.push(wt_info);
+            to_delete.push(info);
         } else {
-            to_skip.push(wt_info);
+            to_skip.push(info);
         }
     }
 

@@ -4,6 +4,7 @@ use clap::Args;
 use git2::Repository;
 
 use super::error::{Result, WmError};
+use super::worktree::{get_main_worktree_info, get_main_worktree_path, list_linked_worktrees};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}
@@ -26,24 +27,30 @@ pub struct WorktreeInfo {
     pub commit: String,
 }
 
-impl WorktreeInfo {
-    /// Format a single worktree entry for display.
-    /// Format: `{path:<50} {commit} [{branch}]`
-    pub fn format_line(&self) -> String {
-        format!(
-            "{:<50} {} [{}]",
-            self.path.display(),
-            self.commit,
-            self.branch
-        )
-    }
-}
-
 /// Format multiple worktree entries for display.
+/// Uses dynamic width based on the longest path.
 pub fn format_worktree_list(entries: &[WorktreeInfo]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let max_path_len = entries
+        .iter()
+        .map(|e| e.path.display().to_string().len())
+        .max()
+        .unwrap_or(0);
+
     entries
         .iter()
-        .map(|e| e.format_line())
+        .map(|e| {
+            format!(
+                "{:<width$} {} [{}]",
+                e.path.display(),
+                e.commit,
+                e.branch,
+                width = max_path_len
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -52,64 +59,22 @@ pub fn format_worktree_list(entries: &[WorktreeInfo]) -> String {
 pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
     let mut entries = Vec::new();
 
-    // Get the main worktree path
-    let main_path = if repo.is_worktree() {
-        repo.commondir()
-            .parent()
-            .ok_or(WmError::NotInGitRepo)?
-            .to_path_buf()
-    } else {
-        repo.workdir().ok_or(WmError::NotInGitRepo)?.to_path_buf()
-    };
-
     // Add main worktree
-    let head = repo.head().ok();
-    let main_branch = head
-        .as_ref()
-        .and_then(|h| h.shorthand())
-        .unwrap_or("(unknown)")
-        .to_string();
-    let main_commit = head
-        .as_ref()
-        .and_then(|h| h.peel_to_commit().ok())
-        .map(|c| c.id().to_string())
-        .map(|s| s[..7].to_string())
-        .unwrap_or_else(|| "(none)".to_string());
-
+    let main_path = get_main_worktree_path(repo)?;
+    let (main_branch, main_commit) = get_main_worktree_info(repo);
     entries.push(WorktreeInfo {
         path: main_path,
         branch: main_branch,
         commit: main_commit,
     });
 
-    // List linked worktrees
-    let worktrees = repo
-        .worktrees()
-        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
-    for name in worktrees.iter().flatten() {
-        if let Ok(wt) = repo.find_worktree(name) {
-            let wt_path = wt.path().to_path_buf();
-            // Open the worktree repository to get its HEAD
-            if let Ok(wt_repo) = Repository::open(&wt_path) {
-                let wt_head = wt_repo.head().ok();
-                let branch = wt_head
-                    .as_ref()
-                    .and_then(|h| h.shorthand())
-                    .unwrap_or("(unknown)")
-                    .to_string();
-                let commit = wt_head
-                    .as_ref()
-                    .and_then(|h| h.peel_to_commit().ok())
-                    .map(|c| c.id().to_string())
-                    .map(|s| s[..7].to_string())
-                    .unwrap_or_else(|| "(none)".to_string());
-                entries.push(WorktreeInfo {
-                    path: wt_path,
-                    branch,
-                    commit,
-                });
-            }
-        }
+    // Add linked worktrees
+    for wt in list_linked_worktrees(repo)? {
+        entries.push(WorktreeInfo {
+            path: wt.path,
+            branch: wt.branch,
+            commit: wt.commit,
+        });
     }
 
     Ok(entries)
@@ -119,7 +84,6 @@ pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
 mod tests {
     use super::*;
     use crate::testing::TestRepo;
-    use rstest::rstest;
 
     #[test]
     fn list_worktrees_returns_main_repo() {
@@ -162,53 +126,58 @@ mod tests {
 
     // Output format spec tests
 
-    #[rstest]
-    #[case::short_path(
-        "/tmp/repo",
-        "abc1234",
-        "main",
-        "/tmp/repo                                          abc1234 [main]"
-    )]
-    #[case::long_path(
-        "/home/user/projects/very-long-repository-name-here",
-        "def5678",
-        "feature",
-        "/home/user/projects/very-long-repository-name-here def5678 [feature]"
-    )]
-    #[case::exact_50_chars(
-        "/home/user/projects/exactly-fifty-chars-path-here",
-        "1234567",
-        "dev",
-        "/home/user/projects/exactly-fifty-chars-path-here  1234567 [dev]"
-    )]
-    fn format_line_produces_expected_output(
-        #[case] path: &str,
-        #[case] commit: &str,
-        #[case] branch: &str,
-        #[case] expected: &str,
-    ) {
-        let info = WorktreeInfo {
-            path: PathBuf::from(path),
-            branch: branch.to_string(),
-            commit: commit.to_string(),
-        };
-        assert_eq!(info.format_line(), expected);
+    #[test]
+    fn format_worktree_list_uses_dynamic_width() {
+        let entries = vec![
+            WorktreeInfo {
+                path: PathBuf::from("/short"),
+                branch: "main".to_string(),
+                commit: "1111111".to_string(),
+            },
+            WorktreeInfo {
+                path: PathBuf::from("/much-longer-path"),
+                branch: "feature".to_string(),
+                commit: "2222222".to_string(),
+            },
+        ];
+
+        let output = format_worktree_list(&entries);
+        let lines: Vec<&str> = output.lines().collect();
+
+        // Both lines should align commits at the same column
+        let commit_pos_1 = lines[0].find("1111111").unwrap();
+        let commit_pos_2 = lines[1].find("2222222").unwrap();
+        assert_eq!(commit_pos_1, commit_pos_2);
+
+        // Width should match the longest path (17 chars) + 1 space
+        assert_eq!(commit_pos_1, 18);
     }
 
     #[test]
-    fn format_line_pads_path_to_50_chars() {
-        let info = WorktreeInfo {
-            path: PathBuf::from("/short"),
+    fn format_worktree_list_single_entry_no_padding() {
+        let entries = vec![WorktreeInfo {
+            path: PathBuf::from("/repo"),
             branch: "main".to_string(),
             commit: "abc1234".to_string(),
-        };
-        let line = info.format_line();
+        }];
 
-        // Path should be padded to 50 chars, then space, commit, space, [branch]
-        assert!(line.starts_with("/short"));
-        // Find where the commit hash starts (after 50 chars of path area)
-        let parts: Vec<&str> = line.splitn(2, "abc1234").collect();
-        assert_eq!(parts[0].len(), 51); // 50 chars path + 1 space
+        let output = format_worktree_list(&entries);
+        assert_eq!(output, "/repo abc1234 [main]");
+    }
+
+    #[test]
+    fn format_worktree_list_format_structure() {
+        let entries = vec![WorktreeInfo {
+            path: PathBuf::from("/path/to/repo"),
+            branch: "feature-branch".to_string(),
+            commit: "abc1234".to_string(),
+        }];
+
+        let output = format_worktree_list(&entries);
+        // Format: "{path} {commit} [{branch}]"
+        assert!(output.starts_with("/path/to/repo"));
+        assert!(output.contains("abc1234"));
+        assert!(output.ends_with("[feature-branch]"));
     }
 
     #[test]
