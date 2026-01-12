@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/fohte/armyknife/compare/v0.1.13...v0.1.14) (2026-01-12)
+
+
+### Features
+
+* **wm:** support auto-generating branch name from prompt in `wm new` ([#59](https://github.com/fohte/armyknife/issues/59)) ([8813f9d](https://github.com/fohte/armyknife/commit/8813f9db08ad9e8feb5186ebee6ae650370a4923))
+
 ## [0.1.13](https://github.com/fohte/armyknife/compare/v0.1.12...v0.1.13) (2026-01-12)
 
 
