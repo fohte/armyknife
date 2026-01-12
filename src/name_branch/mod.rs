@@ -5,6 +5,7 @@ pub use backend::{Backend, detect_backend};
 pub use error::{Error, Result};
 
 use clap::Args;
+use indoc::formatdoc;
 
 /// Branch prefix for new branches
 pub const BRANCH_PREFIX: &str = "fohte/";
@@ -40,20 +41,20 @@ pub fn generate_branch_name(
 }
 
 fn build_prompt(description: &str) -> String {
-    format!(
-        r#"Task: Convert the following user task description to a git branch name.
+    formatdoc! {r#"
+        Task: Convert the following user task description to a git branch name.
 
-Requirements:
-- 2-4 words separated by hyphens (e.g., "fix-auth-timeout", "add-user-dashboard")
-- All lowercase
-- Use hyphens between words, never concatenate words
+        Requirements:
+        - 2-4 words separated by hyphens (e.g., "fix-auth-timeout", "add-user-dashboard")
+        - All lowercase
+        - Use hyphens between words, never concatenate words
 
-<user-task-description>
-{description}
-</user-task-description>
+        <user-task-description>
+        {description}
+        </user-task-description>
 
-IMPORTANT: Output ONLY the branch name. Do not analyze, explain, or investigate the task. Just generate the name."#
-    )
+        IMPORTANT: Output ONLY the branch name. Do not analyze, explain, or investigate the task. Just generate the name."#
+    }
 }
 
 fn sanitize_branch_name(name: &str) -> String {
@@ -113,6 +114,8 @@ mod tests {
     #[case::with_newline("fix-login\n", "fix-login")]
     #[case::leading_separator("/fix-login", "fix-login")]
     #[case::trailing_separator("fix-login/", "fix-login")]
+    #[case::with_backticks("`fix-login`", "fix-login")]
+    #[case::code_block_style("```\nfix-login\n```", "fix-login")]
     fn test_sanitize_branch_name(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sanitize_branch_name(input), expected);
     }

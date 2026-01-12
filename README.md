@@ -34,11 +34,11 @@ a <command>
 
 Update to the latest version.
 
+The CLI automatically checks for updates and prompts you to update when a new version is available.
+
 ### `a name-branch <description>`
 
 Generate a branch name from a description using AI.
-
-The CLI automatically checks for updates and prompts you to update when a new version is available.
 
 ### `a ai`
 
