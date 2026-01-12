@@ -36,6 +36,10 @@ Update to the latest version.
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
+### `a name-branch <description>`
+
+Generate a branch name from a description using AI.
+
 ### `a ai`
 
 Commands designed for AI agents (e.g., Claude Code) to call programmatically.

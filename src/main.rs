@@ -2,6 +2,7 @@ mod ai;
 mod cli;
 mod git;
 mod human_in_the_loop;
+mod name_branch;
 mod update;
 
 use clap::Parser;
@@ -24,6 +25,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
+        Commands::NameBranch(args) => args.run()?,
         Commands::Update => update::do_update()?,
     }
 
