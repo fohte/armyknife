@@ -27,12 +27,12 @@ pub enum WmCommands {
 }
 
 impl WmCommands {
-    pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::List(args) => list::run(args),
             Self::New(args) => new::run(args),
-            Self::Delete(args) => delete::run(args),
-            Self::Clean(args) => clean::run(args),
+            Self::Delete(args) => delete::run(args).await,
+            Self::Clean(args) => clean::run(args).await,
         }
     }
 }

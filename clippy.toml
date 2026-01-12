@@ -1,0 +1,7 @@
+# Prevent Tokio runtime nesting issues.
+# Only main() should create a runtime via #[tokio::main].
+# All other async code should use async fn and .await.
+
+[[disallowed-methods]]
+path = "tokio::runtime::Runtime::new"
+reason = "Do not create new runtimes. Use async fn and .await with the existing runtime from main()"

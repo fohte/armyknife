@@ -22,7 +22,6 @@ struct CleanWorktreeInfo {
     reason: String,
 }
 
-#[tokio::main]
 pub async fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
     run_inner(args).await?;
     Ok(())
