@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/fohte/armyknife/compare/v0.1.11...v0.1.12) (2026-01-12)
+
+
+### Bug Fixes
+
+* **wm:** prevent nested Tokio runtime ([#55](https://github.com/fohte/armyknife/issues/55)) ([dab4f28](https://github.com/fohte/armyknife/commit/dab4f286d15928612d8ab0c6d4f0aee89ed695f7))
+
 ## [0.1.11](https://github.com/fohte/armyknife/compare/v0.1.10...v0.1.11) (2026-01-12)
 
 
