@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use thiserror::Error;
 
 use crate::git;
-use crate::github;
+use crate::github::{self, GitHubClient};
 use crate::human_in_the_loop::{Document, DocumentSchema};
 
 static FRONTMATTER_RE: LazyLock<Regex> =
@@ -68,9 +68,9 @@ pub struct RepoInfo {
 
 impl RepoInfo {
     /// Get repo info with is_private check via GitHub API (async)
-    pub async fn from_current_dir_async() -> Result<Self> {
+    pub async fn from_current_dir_async(gh_client: &impl GitHubClient) -> Result<Self> {
         let repo = git::open_repo()?;
-        Self::from_git2_repo_async(&repo, true).await
+        Self::from_git2_repo_async(&repo, Some(gh_client)).await
     }
 
     /// Get repo info from git only (no network call, is_private defaults to false)
@@ -89,7 +89,7 @@ impl RepoInfo {
     /// Get repo info from a git2 Repository at a specific path.
     /// Used for testing with temporary repositories.
     #[cfg(test)]
-    pub fn from_path(path: &Path, check_private: bool) -> Result<Self> {
+    pub fn from_path(path: &Path) -> Result<Self> {
         let repo = git::open_repo_at(path)?;
         let branch = git::current_branch(&repo)?;
         let (owner, repo_name) = git::github_owner_and_repo(&repo)?;
@@ -97,17 +97,19 @@ impl RepoInfo {
             owner,
             repo: repo_name,
             branch,
-            is_private: if check_private { false } else { false },
+            is_private: false,
         })
     }
 
-    async fn from_git2_repo_async(repo: &git2::Repository, check_private: bool) -> Result<Self> {
+    async fn from_git2_repo_async(
+        repo: &git2::Repository,
+        gh_client: Option<&impl GitHubClient>,
+    ) -> Result<Self> {
         let branch = git::current_branch(repo)?;
         let (owner, repo_name) = git::github_owner_and_repo(repo)?;
-        let is_private = if check_private {
-            check_is_private(&owner, &repo_name).await?
-        } else {
-            false
+        let is_private = match gh_client {
+            Some(client) => client.is_repo_private(&owner, &repo_name).await?,
+            None => false,
         };
 
         Ok(Self {
@@ -117,13 +119,6 @@ impl RepoInfo {
             is_private,
         })
     }
-}
-
-/// Check if a repository is private using GitHub API.
-pub async fn check_is_private(owner: &str, repo: &str) -> Result<bool> {
-    let client = github::create_client()?;
-    let is_private = github::is_repo_private(&client, owner, repo).await?;
-    Ok(is_private)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

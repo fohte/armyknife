@@ -89,6 +89,7 @@ dependencies = [
 name = "armyknife"
 version = "0.1.7"
 dependencies = [
+ "async-trait",
  "clap",
  "dirs",
  "git2",

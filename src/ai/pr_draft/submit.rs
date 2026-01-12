@@ -1,8 +1,8 @@
 use clap::Args;
 use std::path::PathBuf;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, check_is_private, contains_japanese};
-use crate::github::{self, CreatePrParams};
+use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
+use crate::github::{CreatePrParams, GitHubClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -27,10 +27,14 @@ struct PrTarget {
 }
 
 pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    tokio::runtime::Runtime::new()?.block_on(run_async(args))
+    let client = OctocrabClient::new()?;
+    tokio::runtime::Runtime::new()?.block_on(run_async(args, &client))
 }
 
-async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn run_async(
+    args: &SubmitArgs,
+    gh_client: &impl GitHubClient,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
         Some(path) => {
@@ -38,7 +42,7 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
             })?;
-            let is_private = check_is_private(&owner, &repo).await?;
+            let is_private = gh_client.is_repo_private(&owner, &repo).await?;
             (
                 path.clone(),
                 PrTarget {
@@ -51,7 +55,7 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
         }
         None => {
             // Auto-detect from current git repo
-            let repo_info = RepoInfo::from_current_dir_async().await?;
+            let repo_info = RepoInfo::from_current_dir_async(gh_client).await?;
             let target = PrTarget {
                 owner: repo_info.owner.clone(),
                 repo: repo_info.repo.clone(),
@@ -91,10 +95,8 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
     }
 
     // Create PR using GitHub API
-    let client = github::create_client()?;
-    let pr_url = github::create_pull_request(
-        &client,
-        CreatePrParams {
+    let pr_url = gh_client
+        .create_pull_request(CreatePrParams {
             owner: target.owner.clone(),
             repo: target.repo.clone(),
             title: draft.frontmatter.title.clone(),
@@ -102,9 +104,8 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
             head: target.branch.clone(),
             base: args.base.clone(),
             draft: args.draft,
-        },
-    )
-    .await?;
+        })
+        .await?;
 
     println!("{pr_url}");
 
@@ -112,7 +113,7 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
     draft.cleanup()?;
 
     // Open PR in browser
-    github::open_in_browser(&pr_url);
+    gh_client.open_in_browser(&pr_url);
 
     Ok(())
 }
@@ -120,10 +121,12 @@ async fn run_async(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::test_utils::MockGitHubClient;
     use indoc::indoc;
     use std::fs;
 
     struct TestEnv {
+        gh_client: MockGitHubClient,
         owner: String,
         repo: String,
         draft_dir: std::path::PathBuf,
@@ -136,19 +139,102 @@ mod tests {
     }
 
     fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
+        let gh_client = MockGitHubClient::new().with_private(owner, repo, true);
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
         }
         TestEnv {
+            gh_client,
             owner: owner.to_string(),
             repo: repo.to_string(),
             draft_dir,
         }
     }
 
-    #[test]
-    fn submit_fails_when_not_approved() {
+    fn create_approved_draft(env: &TestEnv, branch: &str, title: &str, body: &str) -> PathBuf {
+        let repo_info = RepoInfo {
+            owner: env.owner.clone(),
+            repo: env.repo.clone(),
+            branch: branch.to_string(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = draft_path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        let content = format!(
+            indoc! {r#"
+                ---
+                title: "{title}"
+                steps:
+                  submit: true
+                ---
+                {body}
+            "#},
+            title = title,
+            body = body
+        );
+        fs::write(&draft_path, content).expect("write draft");
+        DraftFile::from_path(draft_path.clone())
+            .expect("draft file")
+            .save_approval()
+            .expect("save approval");
+        draft_path
+    }
+
+    #[tokio::test]
+    async fn submit_with_filepath_should_not_require_git_repo() {
+        let env = setup_test_env("owner", "repo_submit_no_git");
+        let draft_path = create_approved_draft(&env, "feature/test", "Ready title", "Body content");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let result = run_async(&args, &env.gh_client).await;
+
+        assert!(
+            result.is_ok(),
+            "submit should work with MockGitHubClient: {:?}",
+            result.err()
+        );
+
+        // Verify PR was created
+        let created = env.gh_client.created_prs.lock().unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].title, "Ready title");
+    }
+
+    #[tokio::test]
+    async fn submit_with_filepath_should_use_draft_branch() {
+        let env = setup_test_env("owner", "repo_submit_branch");
+        let draft_path =
+            create_approved_draft(&env, "feature/missing-head", "Ready title", "Body content");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let result = run_async(&args, &env.gh_client).await;
+
+        assert!(
+            result.is_ok(),
+            "submit should pass the draft branch when --filepath is used: {:?}",
+            result.err()
+        );
+
+        // Verify correct branch was used
+        let created = env.gh_client.created_prs.lock().unwrap();
+        assert_eq!(created[0].head, "feature/missing-head");
+    }
+
+    #[tokio::test]
+    async fn submit_fails_when_not_approved() {
         let env = setup_test_env("owner", "repo_submit_not_approved");
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
@@ -173,9 +259,13 @@ mod tests {
         )
         .expect("write draft");
 
-        // Test the validation logic directly without network calls
-        let draft = DraftFile::from_path(draft_path).expect("draft file");
-        let result = draft.verify_approval();
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let result = run_async(&args, &env.gh_client).await;
 
         assert!(result.is_err(), "submit should fail when not approved");
         let err_msg = result.unwrap_err().to_string();
@@ -185,8 +275,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn submit_fails_with_empty_title() {
+    #[tokio::test]
+    async fn submit_fails_with_empty_title() {
         let env = setup_test_env("owner", "repo_submit_empty_title");
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
@@ -215,14 +305,13 @@ mod tests {
             .save_approval()
             .expect("save approval");
 
-        // Test the validation logic: empty title should be rejected
-        let draft = DraftFile::from_path(draft_path).expect("draft file");
-        let result: std::result::Result<(), PrDraftError> =
-            if draft.frontmatter.title.trim().is_empty() {
-                Err(PrDraftError::EmptyTitle)
-            } else {
-                Ok(())
-            };
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let result = run_async(&args, &env.gh_client).await;
 
         assert!(result.is_err(), "submit should fail with empty title");
         let err_msg = result.unwrap_err().to_string();

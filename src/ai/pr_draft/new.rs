@@ -3,9 +3,9 @@ use similar::{ChangeTag, TextDiff};
 use std::fs;
 
 use super::common::{
-    DraftFile, PrDraftError, RepoInfo, check_is_private, generate_frontmatter,
-    read_stdin_if_available,
+    DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
 };
+use crate::github::{GitHubClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
@@ -19,10 +19,14 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    tokio::runtime::Runtime::new()?.block_on(run_async(args))
+    let client = OctocrabClient::new()?;
+    tokio::runtime::Runtime::new()?.block_on(run_async(args, &client))
 }
 
-async fn run_async(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn run_async(
+    args: &NewArgs,
+    gh_client: &impl GitHubClient,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let repo_info = RepoInfo::from_git_only()?;
     let draft_path = DraftFile::path_for(&repo_info);
 
@@ -42,7 +46,10 @@ async fn run_async(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error
     }
 
     // Check if the repo is private (defaults to true if network is unavailable)
-    let is_private = match check_is_private(&repo_info.owner, &repo_info.repo).await {
+    let is_private = match gh_client
+        .is_repo_private(&repo_info.owner, &repo_info.repo)
+        .await
+    {
         Ok(private) => private,
         Err(e) => {
             eprintln!("Warning: Failed to check repository visibility, assuming private: {e}");
@@ -100,12 +107,13 @@ fn format_diff(old: &str, new: &str, use_color: bool) -> String {
 mod tests {
     use super::*;
     use crate::git::test_utils::TempRepo;
+    use crate::github::test_utils::MockGitHubClient;
     use rstest::rstest;
     use std::fs;
     use std::path::Path;
 
     struct TestEnv {
-        is_private: bool,
+        gh_client: MockGitHubClient,
         temp_repo: TempRepo,
         draft_dir: std::path::PathBuf,
     }
@@ -117,6 +125,7 @@ mod tests {
     }
 
     fn setup_test_env(owner: &str, repo: &str, is_private: bool) -> TestEnv {
+        let gh_client = MockGitHubClient::new().with_private(owner, repo, is_private);
         let temp_repo = TempRepo::new(owner, repo, "feature-test");
 
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
@@ -124,19 +133,19 @@ mod tests {
             let _ = fs::remove_dir_all(&draft_dir);
         }
         TestEnv {
-            is_private,
+            gh_client,
             temp_repo,
             draft_dir,
         }
     }
 
-    /// Run new command with a specific repo path (for testing, no network calls)
-    fn run_with_path(
+    /// Run new command with a specific repo path using mock GitHub client
+    async fn run_with_mock(
         args: &NewArgs,
         repo_path: &Path,
-        is_private: bool,
+        gh_client: &impl GitHubClient,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let repo_info = RepoInfo::from_path(repo_path, false)?;
+        let repo_info = RepoInfo::from_path(repo_path)?;
         let draft_path = DraftFile::path_for(&repo_info);
 
         // Check if the draft file already exists
@@ -153,6 +162,12 @@ mod tests {
         if let Some(parent) = draft_path.parent() {
             fs::create_dir_all(parent)?;
         }
+
+        // Check if the repo is private using mock client
+        let is_private = gh_client
+            .is_repo_private(&repo_info.owner, &repo_info.repo)
+            .await
+            .unwrap_or(true);
 
         let title = args.title.as_deref().unwrap_or("");
         let frontmatter = generate_frontmatter(title, is_private);
@@ -181,7 +196,8 @@ mod tests {
     #[rstest]
     #[case::private(true, false)]
     #[case::public(false, true)]
-    fn new_generates_correct_frontmatter(
+    #[tokio::test]
+    async fn new_generates_correct_frontmatter(
         #[case] is_private: bool,
         #[case] expect_ready_for_translation: bool,
     ) {
@@ -189,17 +205,18 @@ mod tests {
         let repo = format!("repo_frontmatter_{}", is_private);
         let env = setup_test_env("owner", &repo, is_private);
 
-        run_with_path(
+        run_with_mock(
             &NewArgs {
                 title: Some("Test Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            env.is_private,
+            &env.gh_client,
         )
+        .await
         .expect("run should succeed");
 
-        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), false).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path()).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
 
@@ -210,35 +227,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn new_fails_when_file_exists_without_force() {
+    #[tokio::test]
+    async fn new_fails_when_file_exists_without_force() {
         let env = setup_test_env("owner", "repo_exists_no_force", true);
 
-        run_with_path(
+        run_with_mock(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            env.is_private,
+            &env.gh_client,
         )
+        .await
         .expect("first run should succeed");
 
-        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), false).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path()).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         assert!(
             draft_path.exists(),
             "draft file should exist after first run"
         );
 
-        let result = run_with_path(
+        let result = run_with_mock(
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            env.is_private,
-        );
+            &env.gh_client,
+        )
+        .await;
         assert!(result.is_err(), "second run without --force should fail");
 
         let err_msg = result.unwrap_err().to_string();
@@ -283,31 +302,33 @@ mod tests {
         assert!(result.contains("\x1b[0m"), "should contain reset code");
     }
 
-    #[test]
-    fn new_overwrites_when_file_exists_with_force() {
+    #[tokio::test]
+    async fn new_overwrites_when_file_exists_with_force() {
         let env = setup_test_env("owner", "repo_overwrite", true);
 
-        run_with_path(
+        run_with_mock(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            env.is_private,
+            &env.gh_client,
         )
+        .await
         .expect("first run should succeed");
 
-        run_with_path(
+        run_with_mock(
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: true,
             },
             &env.temp_repo.path(),
-            env.is_private,
+            &env.gh_client,
         )
+        .await
         .expect("second run with --force should succeed");
 
-        let repo_info = RepoInfo::from_path(&env.temp_repo.path(), false).unwrap();
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path()).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
         assert!(
