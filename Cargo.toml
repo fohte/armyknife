@@ -1,6 +1,6 @@
 [package]
 name = "armyknife"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
@@ -23,8 +23,10 @@ indoc = "=2.0.7"
 regex = "=1.12.2"
 self_update = { version = "=0.42.0", features = ["rustls", "compression-flate2"], default-features = false }
 serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
 serde_yaml = "=0.9.34"
 sha2 = "=0.10.9"
+shlex = "=1.3.0"
 similar = "=2.7.0"
 tempfile = "=3.24.0"
 thiserror = "=2.0.17"

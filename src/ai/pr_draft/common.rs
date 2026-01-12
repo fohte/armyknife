@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use thiserror::Error;
 
 use crate::git;
-use crate::github::{self, GitHubClient};
+use crate::github::{self, RepoClient};
 use crate::human_in_the_loop::{Document, DocumentSchema};
 
 static FRONTMATTER_RE: LazyLock<Regex> =
@@ -68,7 +68,7 @@ pub struct RepoInfo {
 
 impl RepoInfo {
     /// Get repo info with is_private check via GitHub API (async)
-    pub async fn from_current_dir_async(gh_client: &impl GitHubClient) -> Result<Self> {
+    pub async fn from_current_dir_async(gh_client: &impl RepoClient) -> Result<Self> {
         let repo = git::open_repo()?;
         Self::from_git2_repo_async(&repo, Some(gh_client)).await
     }
@@ -103,7 +103,7 @@ impl RepoInfo {
 
     async fn from_git2_repo_async(
         repo: &git2::Repository,
-        gh_client: Option<&impl GitHubClient>,
+        gh_client: Option<&impl RepoClient>,
     ) -> Result<Self> {
         let branch = git::current_branch(repo)?;
         let (owner, repo_name) = git::github_owner_and_repo(repo)?;

@@ -4,7 +4,11 @@ mod git;
 mod github;
 mod human_in_the_loop;
 mod name_branch;
+#[cfg(test)]
+mod testing;
+mod tmux;
 mod update;
+mod wm;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -27,6 +31,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run()?,
         Commands::NameBranch(args) => args.run()?,
+        Commands::Wm(wm_cmd) => wm_cmd.run()?,
         Commands::Update => update::do_update()?,
     }
 

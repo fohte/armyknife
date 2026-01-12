@@ -56,6 +56,17 @@ Manage PR body drafts with human-in-the-loop review.
 | `review` | Open the draft in editor for review |
 | `submit` | Create a PR from the approved draft |
 
+### `a wm`
+
+Git worktree management with tmux integration.
+
+| Action              | Description                                |
+| ------------------- | ------------------------------------------ |
+| `list`              | List all worktrees                         |
+| `new <branch>`      | Create a new worktree and open tmux window |
+| `delete [worktree]` | Delete a worktree and its branch           |
+| `clean`             | Bulk delete merged worktrees               |
+
 ## License
 
 [MIT](LICENSE)

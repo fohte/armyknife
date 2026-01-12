@@ -2,7 +2,7 @@ use clap::Args;
 use std::path::PathBuf;
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
-use crate::github::{CreatePrParams, GitHubClient, OctocrabClient};
+use crate::github::{CreatePrParams, OctocrabClient, PrClient, RepoClient};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -33,7 +33,7 @@ pub fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Err
 
 async fn run_async(
     args: &SubmitArgs,
-    gh_client: &impl GitHubClient,
+    gh_client: &(impl PrClient + RepoClient),
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
@@ -121,7 +121,7 @@ async fn run_async(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::test_utils::MockGitHubClient;
+    use crate::github::MockGitHubClient;
     use indoc::indoc;
     use std::fs;
 
