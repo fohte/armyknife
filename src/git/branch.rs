@@ -34,16 +34,25 @@ pub fn remote_branch_exists(branch: &str) -> bool {
 /// 3. Fallback to GitHub API to get the repository's default branch
 ///
 /// This avoids unnecessary API calls when the base branch can be determined locally.
-pub async fn find_base_branch(owner: &str, repo: &str) -> String {
-    // Try to determine base branch from local git info first
-    if let Ok(branch) = get_main_branch() {
+pub async fn find_base_branch(owner: &str, repo_name: &str) -> String {
+    find_base_branch_with_local(owner, repo_name, get_main_branch().ok()).await
+}
+
+/// Internal implementation that accepts optional local branch for testability.
+async fn find_base_branch_with_local(
+    owner: &str,
+    repo_name: &str,
+    local_branch: Option<String>,
+) -> String {
+    // Try to use local git info first
+    if let Some(branch) = local_branch {
         return branch;
     }
 
     // Fallback to GitHub API
     use crate::github::{OctocrabClient, RepoClient};
     if let Ok(client) = OctocrabClient::get()
-        && let Ok(default_branch) = client.get_default_branch(owner, repo).await
+        && let Ok(default_branch) = client.get_default_branch(owner, repo_name).await
     {
         return default_branch;
     }
@@ -168,5 +177,25 @@ mod tests {
 
         assert_eq!(merged.reason(), "PR merged");
         assert_eq!(not_merged.reason(), "PR is open");
+    }
+
+    #[tokio::test]
+    async fn test_find_base_branch_with_local_uses_local_branch() {
+        let result = find_base_branch_with_local("owner", "repo", Some("master".to_string())).await;
+        assert_eq!(result, "master");
+
+        let result = find_base_branch_with_local("owner", "repo", Some("main".to_string())).await;
+        assert_eq!(result, "main");
+
+        let result =
+            find_base_branch_with_local("owner", "repo", Some("develop".to_string())).await;
+        assert_eq!(result, "develop");
+    }
+
+    #[tokio::test]
+    async fn test_find_base_branch_with_local_fallback_to_main() {
+        // When local branch is None and no GitHub API available, falls back to "main"
+        let result = find_base_branch_with_local("owner", "repo", None).await;
+        assert_eq!(result, "main");
     }
 }
