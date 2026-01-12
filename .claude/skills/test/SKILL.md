@@ -16,6 +16,18 @@ cargo test <test_name>         # Run specific test
 cargo test -- --nocapture      # Show stdout
 ```
 
+## Coverage
+
+Use cargo-llvm-cov to measure test coverage locally:
+
+```bash
+cargo llvm-cov                           # Run tests with coverage (text summary)
+cargo llvm-cov --html                    # Generate HTML report in target/llvm-cov/html/
+cargo llvm-cov --lcov --output-path lcov.info  # Generate LCOV format (used in CI)
+```
+
+Coverage is automatically measured and uploaded to Codecov in CI.
+
 ## Writing Tests
 
 ### Always prefer rstest over plain #[test]
