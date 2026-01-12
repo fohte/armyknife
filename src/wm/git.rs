@@ -143,12 +143,10 @@ pub fn get_merge_status(branch_name: &str) -> MergeStatus {
     let main_branch = get_main_branch().unwrap_or_else(|_| "main".to_string());
     let base_branch = format!("origin/{main_branch}");
 
-    if let Some(is_ancestor) = check_is_ancestor(branch_name, &base_branch) {
-        if is_ancestor {
-            return MergeStatus::Merged {
-                reason: format!("ancestor of {base_branch}"),
-            };
-        }
+    if let Some(true) = check_is_ancestor(branch_name, &base_branch) {
+        return MergeStatus::Merged {
+            reason: format!("ancestor of {base_branch}"),
+        };
     }
 
     MergeStatus::NotMerged {
