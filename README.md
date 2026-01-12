@@ -14,7 +14,7 @@ Download from [GitHub Releases](https://github.com/fohte/armyknife/releases/late
 
 Available for:
 
-- macOS (Apple Silicon, Intel)
+- macOS (Apple Silicon)
 - Linux (x86_64, aarch64)
 
 ### Build from source
