@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/fohte/armyknife/compare/v0.1.12...v0.1.13) (2026-01-12)
+
+
+### Bug Fixes
+
+* **github:** show detailed API error messages and auto-detect default branch ([#57](https://github.com/fohte/armyknife/issues/57)) ([9e61a8a](https://github.com/fohte/armyknife/commit/9e61a8a24025dacd89b09129054ba00ab262e91a))
+
 ## [0.1.12](https://github.com/fohte/armyknife/compare/v0.1.11...v0.1.12) (2026-01-12)
 
 
