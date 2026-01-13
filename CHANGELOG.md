@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/fohte/armyknife/compare/v0.1.14...v0.1.15) (2026-01-13)
+
+
+### Bug Fixes
+
+* **wm:** support authentication for HTTPS private repositories ([#61](https://github.com/fohte/armyknife/issues/61)) ([e24fa1a](https://github.com/fohte/armyknife/commit/e24fa1aae1e1e916679553fde1c01af33c7eb9e5))
+
 ## [0.1.14](https://github.com/fohte/armyknife/compare/v0.1.13...v0.1.14) (2026-01-12)
 
 
