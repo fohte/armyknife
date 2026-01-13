@@ -52,7 +52,7 @@ pub struct CheckPrReviewArgs {
     #[arg(short = 'f', long = "full")]
     pub full_mode: bool,
 
-    /// Expand <details> blocks
+    /// Expand HTML details blocks
     #[arg(short = 'd', long = "open-details")]
     pub open_details: bool,
 }
