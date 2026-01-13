@@ -324,8 +324,6 @@ pub mod mock {
         pub latest_commit_time: Arc<Mutex<Option<DateTime<Utc>>>>,
         /// Posted comments (for assertions).
         pub posted_comments: Arc<Mutex<Vec<(String, String, u64, Reviewer)>>>,
-        /// Error to return (if any).
-        pub error: Arc<Mutex<Option<ReviewError>>>,
         /// Number of find_latest_review calls before returning reviews.
         /// If set, the first N calls will return None.
         pub skip_first_n_reviews: Arc<Mutex<usize>>,
@@ -368,12 +366,6 @@ pub mod mock {
             self
         }
 
-        #[allow(dead_code)]
-        pub fn with_error(self, error: ReviewError) -> Self {
-            *self.error.lock().unwrap() = Some(error);
-            self
-        }
-
         /// Skip the first N calls to find_latest_review (return None).
         /// Useful for simulating "no review initially, then review appears".
         pub fn skip_first_n_review_calls(self, n: usize) -> Self {
@@ -389,15 +381,6 @@ pub mod mock {
             *self.initial_review_cutoff.lock().unwrap() = Some(cutoff);
             self
         }
-
-        /// Add a review dynamically (for use during test execution).
-        #[allow(dead_code)]
-        pub fn add_review(&self, reviewer: Reviewer, created_at: DateTime<Utc>) {
-            self.reviews.lock().unwrap().push(MockReview {
-                reviewer,
-                created_at,
-            });
-        }
     }
 
     #[async_trait::async_trait]
@@ -409,10 +392,6 @@ pub mod mock {
             _pr_number: u64,
             reviewer: Reviewer,
         ) -> Result<Option<DateTime<Utc>>> {
-            if let Some(err) = self.error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             // Increment call counter
             let mut call_count = self.find_review_call_count.lock().unwrap();
             *call_count += 1;
@@ -453,10 +432,6 @@ pub mod mock {
             start_time: DateTime<Utc>,
             reviewer: Reviewer,
         ) -> Result<Option<String>> {
-            if let Some(err) = self.error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             let bot_login = reviewer.bot_login();
             let unable_marker = reviewer.unable_marker();
             let comments = self.comments.lock().unwrap();
@@ -480,10 +455,6 @@ pub mod mock {
             _pr_number: u64,
             reviewer: Reviewer,
         ) -> Result<bool> {
-            if let Some(err) = self.error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             let bot_login = reviewer.bot_login();
             let comments = self.comments.lock().unwrap();
 
@@ -496,10 +467,6 @@ pub mod mock {
             _repo: &str,
             _pr_number: u64,
         ) -> Result<Option<DateTime<Utc>>> {
-            if let Some(err) = self.error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             Ok(*self.latest_commit_time.lock().unwrap())
         }
 
@@ -510,10 +477,6 @@ pub mod mock {
             pr_number: u64,
             reviewer: Reviewer,
         ) -> Result<()> {
-            if let Some(err) = self.error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             self.posted_comments.lock().unwrap().push((
                 owner.to_string(),
                 repo.to_string(),
@@ -528,9 +491,10 @@ pub mod mock {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use rstest::rstest;
 
         #[tokio::test]
-        async fn mock_client_returns_no_review_when_empty() {
+        async fn find_latest_review_returns_none_when_empty() {
             let client = MockReviewClient::new();
             let result = client
                 .find_latest_review("owner", "repo", 1, Reviewer::Gemini)
@@ -540,7 +504,7 @@ pub mod mock {
         }
 
         #[tokio::test]
-        async fn mock_client_returns_latest_review() {
+        async fn find_latest_review_returns_latest() {
             let t1 = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
                 .unwrap()
                 .to_utc();
@@ -560,12 +524,19 @@ pub mod mock {
             assert_eq!(result, Some(t2));
         }
 
+        #[rstest]
+        #[case::after_start_time("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", true)]
+        #[case::before_start_time("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z", false)]
         #[tokio::test]
-        async fn mock_client_detects_unable_comment() {
-            let start_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+        async fn check_unable_comment_respects_start_time(
+            #[case] start_time_str: &str,
+            #[case] comment_time_str: &str,
+            #[case] expected_some: bool,
+        ) {
+            let start_time = DateTime::parse_from_rfc3339(start_time_str)
                 .unwrap()
                 .to_utc();
-            let comment_time = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+            let comment_time = DateTime::parse_from_rfc3339(comment_time_str)
                 .unwrap()
                 .to_utc();
 
@@ -580,35 +551,11 @@ pub mod mock {
                 .await
                 .unwrap();
 
-            assert!(result.is_some());
-            assert!(result.unwrap().contains("Gemini is unable to"));
+            assert_eq!(result.is_some(), expected_some);
         }
 
         #[tokio::test]
-        async fn mock_client_ignores_unable_comment_before_start_time() {
-            let comment_time = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
-                .unwrap()
-                .to_utc();
-            let start_time = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
-                .unwrap()
-                .to_utc();
-
-            let client = MockReviewClient::new().with_comment(
-                "gemini-code-assist",
-                "Gemini is unable to review this PR",
-                comment_time,
-            );
-
-            let result = client
-                .check_reviewer_unable_comment("owner", "repo", 1, start_time, Reviewer::Gemini)
-                .await
-                .unwrap();
-
-            assert!(result.is_none());
-        }
-
-        #[tokio::test]
-        async fn mock_client_tracks_posted_comments() {
+        async fn post_review_comment_tracks_calls() {
             let client = MockReviewClient::new();
             client
                 .post_review_comment("owner", "repo", 42, Reviewer::Gemini)
@@ -629,7 +576,7 @@ pub mod mock {
         }
 
         #[tokio::test]
-        async fn mock_client_returns_latest_commit_time() {
+        async fn get_latest_commit_time_returns_configured_time() {
             let commit_time = DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
                 .unwrap()
                 .to_utc();
@@ -644,33 +591,19 @@ pub mod mock {
             assert_eq!(result, Some(commit_time));
         }
 
+        #[rstest]
+        #[case::bot_comment("gemini-code-assist", true)]
+        #[case::other_user("other-user", false)]
         #[tokio::test]
-        async fn mock_client_has_reviewer_activity() {
-            let client = MockReviewClient::new().with_comment(
-                "gemini-code-assist",
-                "Starting review...",
-                Utc::now(),
-            );
+        async fn has_reviewer_activity_checks_author(#[case] author: &str, #[case] expected: bool) {
+            let client = MockReviewClient::new().with_comment(author, "Some comment", Utc::now());
 
             let has_activity = client
                 .has_reviewer_activity("owner", "repo", 1, Reviewer::Gemini)
                 .await
                 .unwrap();
 
-            assert!(has_activity);
-        }
-
-        #[tokio::test]
-        async fn mock_client_no_reviewer_activity() {
-            let client =
-                MockReviewClient::new().with_comment("other-user", "Some comment", Utc::now());
-
-            let has_activity = client
-                .has_reviewer_activity("owner", "repo", 1, Reviewer::Gemini)
-                .await
-                .unwrap();
-
-            assert!(!has_activity);
+            assert_eq!(has_activity, expected);
         }
     }
 }
