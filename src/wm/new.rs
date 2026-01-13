@@ -601,8 +601,4 @@ mod tests {
         assert_eq!(result.branch_name, expected_branch);
         assert_eq!(result.prompt.as_deref(), expected_prompt);
     }
-
-    // Note: Testing the no-args case (editor prompt) is not done here
-    // because it requires launching an actual editor.
-    // The behavior is tested manually or through integration tests.
 }
