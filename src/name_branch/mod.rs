@@ -4,6 +4,8 @@ mod error;
 pub use backend::{Backend, detect_backend};
 pub use error::{Error, Result};
 
+use std::io::IsTerminal;
+
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 use indoc::formatdoc;
@@ -21,15 +23,20 @@ impl NameBranchArgs {
     pub fn run(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let backend = detect_backend();
 
-        let spinner = ProgressBar::new_spinner();
-        spinner.set_style(
-            ProgressStyle::default_spinner()
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
-                .template("{spinner} {msg}")
-                .unwrap(),
-        );
-        spinner.set_message("Generating branch name...");
-        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        let spinner = if std::io::stderr().is_terminal() {
+            let s = ProgressBar::new_spinner();
+            s.set_style(
+                ProgressStyle::default_spinner()
+                    .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                    .template("{spinner} {msg}")
+                    .unwrap(),
+            );
+            s.set_message("Generating branch name...");
+            s.enable_steady_tick(std::time::Duration::from_millis(80));
+            s
+        } else {
+            ProgressBar::hidden()
+        };
 
         let name = generate_branch_name(&self.description, backend.as_ref());
 
