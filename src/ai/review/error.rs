@@ -1,9 +1,9 @@
-//! Error types for review-gemini command.
+//! Error types for review command.
 
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum ReviewGeminiError {
+pub enum ReviewError {
     #[error("Failed to get repository info: {0}")]
     RepoInfoError(String),
 
@@ -16,7 +16,7 @@ pub enum ReviewGeminiError {
     #[error("Failed to post comment: {0}")]
     CommentError(String),
 
-    #[error("Timeout waiting for Gemini review after {0} seconds")]
+    #[error("Timeout waiting for review after {0} seconds")]
     Timeout(u64),
 
     #[error("No open PR found for current branch")]
@@ -25,8 +25,11 @@ pub enum ReviewGeminiError {
     #[error("Failed to parse review timestamp: {0}")]
     TimestampParseError(String),
 
-    #[error("Gemini is unable to review this PR: {0}")]
-    GeminiUnable(String),
+    #[error("Reviewer is unable to review this PR: {0}")]
+    ReviewerUnable(String),
+
+    #[error("Review has not started yet")]
+    ReviewNotStarted,
 }
 
-pub type Result<T> = std::result::Result<T, ReviewGeminiError>;
+pub type Result<T> = std::result::Result<T, ReviewError>;
