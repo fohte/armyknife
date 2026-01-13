@@ -1,6 +1,6 @@
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::error::{Result, WmError};
@@ -11,6 +11,43 @@ use super::git::{
 use crate::git::fetch_with_prune;
 use crate::name_branch::{detect_backend, generate_branch_name};
 use crate::tmux;
+
+/// Get the path to store the prompt for a repository.
+/// Uses XDG state directory: ~/.local/state/armyknife/<repo-name>/prompt.md
+fn get_prompt_state_path(repo_root: &str) -> Option<PathBuf> {
+    let state_dir = dirs::state_dir()?;
+    let repo_name = Path::new(repo_root).file_name()?.to_str()?.to_string();
+    Some(
+        state_dir
+            .join("armyknife")
+            .join(repo_name)
+            .join("prompt.md"),
+    )
+}
+
+/// Save prompt to state directory for recovery.
+fn save_prompt_state(repo_root: &str, prompt: &str) -> Result<PathBuf> {
+    let path = get_prompt_state_path(repo_root)
+        .ok_or_else(|| WmError::CommandFailed("Failed to determine state directory".into()))?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            WmError::CommandFailed(format!("Failed to create state directory: {e}"))
+        })?;
+    }
+
+    std::fs::write(&path, prompt)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to save prompt: {e}")))?;
+
+    Ok(path)
+}
+
+/// Delete the saved prompt state after successful completion.
+fn delete_prompt_state(repo_root: &str) {
+    if let Some(path) = get_prompt_state_path(repo_root) {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 /// Open $EDITOR to let user input a prompt.
 /// Returns the prompt text, or None if the user didn't provide any input.
@@ -249,10 +286,35 @@ fn run_inner(args: &NewArgs) -> Result<()> {
 
     let repo_root = get_repo_root()?;
 
+    // Save prompt to state directory for recovery in case of failure
+    let prompt_state_path = if let Some(ref p) = prompt {
+        Some(save_prompt_state(&repo_root, p)?)
+    } else {
+        None
+    };
+
+    // Run the actual worktree creation, cleaning up prompt state on success
+    let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root);
+
+    if result.is_ok() {
+        delete_prompt_state(&repo_root);
+    } else if let Some(path) = prompt_state_path {
+        eprintln!("Prompt saved to: {}", path.display());
+    }
+
+    result
+}
+
+fn run_worktree_creation(
+    args: &NewArgs,
+    name: &str,
+    prompt: Option<&str>,
+    repo_root: &str,
+) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
 
     // Determine worktree directory name from branch name
-    let worktree_name = branch_to_worktree_name(&name);
+    let worktree_name = branch_to_worktree_name(name);
     let worktrees_dir = format!("{repo_root}/.worktrees");
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
@@ -265,7 +327,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     fetch_with_prune(&repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     // Remove BRANCH_PREFIX to avoid double prefix
-    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(&name);
+    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
 
     // Determine action based on branch existence and flags
     if args.force {
@@ -285,9 +347,9 @@ fn run_inner(args: &NewArgs) -> Result<()> {
                 base: &base_branch,
             },
         )?;
-    } else if branch_exists(&name) {
+    } else if branch_exists(name) {
         // Branch exists with the exact name provided
-        add_worktree_for_branch(&repo, &worktree_dir, &name)?;
+        add_worktree_for_branch(&repo, &worktree_dir, name)?;
     } else {
         let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
@@ -315,10 +377,10 @@ fn run_inner(args: &NewArgs) -> Result<()> {
 
     // Setup tmux window with nvim + claude
     setup_tmux_window(
-        &repo_root,
+        repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
-        prompt.as_deref(),
+        prompt,
     )?;
 
     Ok(())
