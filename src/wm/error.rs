@@ -11,7 +11,7 @@ pub enum WmError {
     #[error("Worktree not found: {0}")]
     WorktreeNotFound(String),
 
-    #[error("Operation cancelled")]
+    #[error("Cancelled: no prompt provided")]
     Cancelled,
 
     #[error("Command failed: {0}")]
