@@ -1,5 +1,6 @@
 //! Review commands for bot reviewers.
 
+pub mod client;
 mod common;
 mod error;
 pub mod request;
