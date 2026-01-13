@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/fohte/armyknife/compare/v0.1.15...v0.1.16) (2026-01-13)
+
+
+### Bug Fixes
+
+* **wm:** include macOS system gitconfig paths in credential helper lookup ([#63](https://github.com/fohte/armyknife/issues/63)) ([4545eb4](https://github.com/fohte/armyknife/commit/4545eb4b779ebba74cee91b118ecd4c97ad9dd9d))
+
 ## [0.1.15](https://github.com/fohte/armyknife/compare/v0.1.14...v0.1.15) (2026-01-13)
 
 
