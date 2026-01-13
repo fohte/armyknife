@@ -2,6 +2,7 @@
 
 use super::common::{
     check_reviewer_unable_comment, find_latest_review, get_pr_number, get_repo_owner_and_name,
+    has_reviewer_activity,
 };
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
@@ -61,13 +62,13 @@ pub async fn run(args: &WaitArgs) -> Result<()> {
     // Use a time in the past to check for any existing "unable" comment
     let past_time = chrono::DateTime::<Utc>::MIN_UTC;
     if let Some(unable_msg) =
-        check_reviewer_unable_comment(&owner, &repo, pr_number, past_time, args.reviewer)?
+        check_reviewer_unable_comment(&owner, &repo, pr_number, past_time, args.reviewer).await?
     {
         return Err(ReviewError::ReviewerUnable(unable_msg));
     }
 
     // Check if review has started by looking for any comment from the reviewer
-    if !has_reviewer_activity(&owner, &repo, pr_number, args.reviewer)? {
+    if !has_reviewer_activity(&owner, &repo, pr_number, args.reviewer).await? {
         return Err(ReviewError::ReviewNotStarted);
     }
 
@@ -78,41 +79,6 @@ pub async fn run(args: &WaitArgs) -> Result<()> {
 
     println!("\n{:?} review completed!", args.reviewer);
     Ok(())
-}
-
-/// Check if the reviewer has any activity (comments) on the PR
-fn has_reviewer_activity(
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
-    reviewer: Reviewer,
-) -> Result<bool> {
-    let bot_login = reviewer.bot_login();
-
-    let output = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &pr_number.to_string(),
-            "--json",
-            "comments",
-            "--jq",
-            &format!(r#".comments[] | select(.author.login == "{bot_login}") | .author.login"#),
-            "-R",
-            &format!("{owner}/{repo}"),
-        ])
-        .output()
-        .map_err(|e| ReviewError::CommentError(format!("Failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ReviewError::CommentError(format!(
-            "gh pr view failed: {stderr}"
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(!stdout.trim().is_empty())
 }
 
 /// Poll until reviewer posts a review after start_time
@@ -143,7 +109,7 @@ async fn wait_for_review(
 
         // Check if reviewer posted an "unable to" comment
         if let Some(unable_msg) =
-            check_reviewer_unable_comment(owner, repo, pr_number, start_time, args.reviewer)?
+            check_reviewer_unable_comment(owner, repo, pr_number, start_time, args.reviewer).await?
         {
             return Err(ReviewError::ReviewerUnable(unable_msg));
         }

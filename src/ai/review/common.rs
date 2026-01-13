@@ -6,7 +6,9 @@ use crate::gh::check_pr_review::fetch_pr_data;
 use crate::git;
 use crate::github::{OctocrabClient, PrClient, PrState};
 use chrono::{DateTime, Utc};
-use std::process::Command;
+use indoc::indoc;
+use serde::Deserialize;
+use serde_json::json;
 
 /// Get repository owner and name from argument or git remote
 pub fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
@@ -90,8 +92,106 @@ pub async fn find_latest_review(
     Ok(latest)
 }
 
+// GraphQL query for PR comments and commits
+const PR_INFO_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $pr: Int!) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pr) {
+                comments(first: 100) {
+                    nodes {
+                        author { login }
+                        body
+                        createdAt
+                    }
+                }
+                commits(last: 1) {
+                    nodes {
+                        commit {
+                            committedDate
+                        }
+                    }
+                }
+            }
+        }
+    }
+"};
+
+#[derive(Debug, Deserialize)]
+struct PrInfoResponse {
+    data: Option<PrInfoData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoData {
+    repository: Option<PrInfoRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrInfoRepository {
+    pull_request: Option<PrInfoPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoPullRequest {
+    comments: PrInfoComments,
+    commits: PrInfoCommits,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoComments {
+    nodes: Vec<PrInfoComment>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrInfoComment {
+    author: Option<PrInfoAuthor>,
+    body: String,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoAuthor {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoCommits {
+    nodes: Vec<PrInfoCommitNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrInfoCommitNode {
+    commit: PrInfoCommit,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrInfoCommit {
+    committed_date: String,
+}
+
+/// Fetch PR info (comments and latest commit) using GraphQL
+async fn fetch_pr_info(owner: &str, repo: &str, pr_number: u64) -> Result<PrInfoPullRequest> {
+    let client = OctocrabClient::get()?;
+    let variables = json!({
+        "owner": owner,
+        "repo": repo,
+        "pr": pr_number,
+    });
+
+    let response: PrInfoResponse = client.graphql(PR_INFO_QUERY, variables).await?;
+
+    response
+        .data
+        .and_then(|d| d.repository)
+        .and_then(|r| r.pull_request)
+        .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()))
+}
+
 /// Check if the reviewer posted an "unable to" comment after start_time
-pub fn check_reviewer_unable_comment(
+pub async fn check_reviewer_unable_comment(
     owner: &str,
     repo: &str,
     pr_number: u64,
@@ -101,77 +201,75 @@ pub fn check_reviewer_unable_comment(
     let bot_login = reviewer.bot_login();
     let unable_marker = reviewer.unable_marker();
 
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &pr_number.to_string(),
-            "--json",
-            "comments",
-            "--jq",
-            &format!(
-                r#".comments[] | select(.author.login == "{bot_login}") | {{body: .body, createdAt: .createdAt}}"#
-            ),
-            "-R",
-            &format!("{owner}/{repo}"),
-        ])
-        .output()
-        .map_err(|e| ReviewError::CommentError(format!("Failed to run gh: {e}")))?;
+    let pr_info = fetch_pr_info(owner, repo, pr_number).await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ReviewError::CommentError(format!(
-            "gh pr view failed: {stderr}"
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines() {
-        if let Ok(comment) = serde_json::from_str::<serde_json::Value>(line) {
-            let body = comment["body"].as_str().unwrap_or("");
-            let created_at_str = comment["createdAt"].as_str().unwrap_or("");
-
-            if let Ok(created_at) = created_at_str.parse::<DateTime<Utc>>()
-                && created_at > start_time
-                && body.contains(unable_marker)
-            {
-                return Ok(Some(body.to_string()));
-            }
+    for comment in &pr_info.comments.nodes {
+        if let Some(author) = &comment.author
+            && author.login == bot_login
+            && comment.body.contains(unable_marker)
+            && let Ok(created_at) = comment.created_at.parse::<DateTime<Utc>>()
+            && created_at > start_time
+        {
+            return Ok(Some(comment.body.clone()));
         }
     }
 
     Ok(None)
 }
 
-/// Post a review request comment using gh CLI
-pub fn post_review_comment(
+/// Check if the reviewer has any activity (comments) on the PR
+pub async fn has_reviewer_activity(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    reviewer: Reviewer,
+) -> Result<bool> {
+    let bot_login = reviewer.bot_login();
+    let pr_info = fetch_pr_info(owner, repo, pr_number).await?;
+
+    Ok(pr_info
+        .comments
+        .nodes
+        .iter()
+        .any(|c| c.author.as_ref().is_some_and(|a| a.login == bot_login)))
+}
+
+/// Get the latest commit timestamp on the PR
+pub async fn get_latest_commit_time(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+) -> Result<Option<DateTime<Utc>>> {
+    let pr_info = fetch_pr_info(owner, repo, pr_number).await?;
+
+    let Some(commit_node) = pr_info.commits.nodes.first() else {
+        return Ok(None);
+    };
+
+    commit_node
+        .commit
+        .committed_date
+        .parse::<DateTime<Utc>>()
+        .map(Some)
+        .map_err(|_| ReviewError::TimestampParseError(commit_node.commit.committed_date.clone()))
+}
+
+/// Post a review request comment using octocrab
+pub async fn post_review_comment(
     owner: &str,
     repo: &str,
     pr_number: u64,
     reviewer: Reviewer,
 ) -> Result<()> {
     let review_command = reviewer.review_command();
+    let client = OctocrabClient::get()?;
 
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "comment",
-            &pr_number.to_string(),
-            "--body",
-            review_command,
-            "-R",
-            &format!("{owner}/{repo}"),
-        ])
-        .output()
-        .map_err(|e| ReviewError::CommentError(format!("Failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ReviewError::CommentError(format!(
-            "gh pr comment failed: {stderr}"
-        )));
-    }
+    client
+        .client
+        .issues(owner, repo)
+        .create_comment(pr_number, review_command)
+        .await
+        .map_err(|e| ReviewError::CommentError(format!("Failed to post comment: {e}")))?;
 
     Ok(())
 }

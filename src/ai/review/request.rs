@@ -1,8 +1,8 @@
 //! Request a review from a bot reviewer.
 
 use super::common::{
-    check_reviewer_unable_comment, find_latest_review, get_pr_number, get_repo_owner_and_name,
-    post_review_comment,
+    check_reviewer_unable_comment, find_latest_review, get_latest_commit_time, get_pr_number,
+    get_repo_owner_and_name, post_review_comment,
 };
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
@@ -48,13 +48,27 @@ pub async fn run(args: &RequestArgs) -> Result<()> {
     // Check if reviewer has already posted a review
     let existing_review = find_latest_review(&owner, &repo, pr_number, args.reviewer).await?;
 
-    if existing_review.is_none() {
+    if let Some(review_time) = existing_review {
+        // Check if there are new commits after the last review
+        let latest_commit_time = get_latest_commit_time(&owner, &repo, pr_number).await?;
+
+        if let Some(commit_time) = latest_commit_time
+            && commit_time <= review_time
+        {
+            // No new commits since last review
+            println!(
+                "{:?} has already reviewed this PR (no new commits since last review)",
+                args.reviewer
+            );
+            return Ok(());
+        }
+
+        // New commits exist, request re-review
+        println!("Posting {:?} review command...", args.reviewer);
+        post_review_comment(&owner, &repo, pr_number, args.reviewer).await?;
+    } else {
         // First call: Reviewer hasn't reviewed yet, just wait
         println!("Waiting for {:?} to post initial review...", args.reviewer);
-    } else {
-        // Subsequent call: Post review command to trigger re-review
-        println!("Posting {:?} review command...", args.reviewer);
-        post_review_comment(&owner, &repo, pr_number, args.reviewer)?;
     }
 
     // Poll for new review
@@ -92,7 +106,7 @@ async fn wait_for_review(
 
         // Check if reviewer posted an "unable to" comment
         if let Some(unable_msg) =
-            check_reviewer_unable_comment(owner, repo, pr_number, start_time, args.reviewer)?
+            check_reviewer_unable_comment(owner, repo, pr_number, start_time, args.reviewer).await?
         {
             return Err(ReviewError::ReviewerUnable(unable_msg));
         }
