@@ -164,111 +164,88 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn request_first_review_waits_and_succeeds() {
-        // Scenario: No existing review initially, review appears after polling
-        // Use skip_first_n_review_calls to simulate: first call returns None, second returns review
-        let review_time = Utc::now() + ChronoDuration::milliseconds(100);
-
-        let client = MockReviewClient::new()
-            .with_review(Reviewer::Gemini, review_time)
-            .skip_first_n_review_calls(1); // First call returns None, second returns the review
-
-        let args = make_args(1, 5);
-        let result = run_request(&args, &client, "owner", "repo", 1).await;
-
-        assert!(result.is_ok());
-        // No comment posted since this is first review (no existing_review at first check)
-        assert!(client.posted_comments.lock().unwrap().is_empty());
+    /// Helper to build a mock client for success cases.
+    fn build_success_client(scenario: &str) -> MockReviewClient {
+        let now = Utc::now();
+        match scenario {
+            "first_review" => {
+                // No existing review, review appears after polling
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now + ChronoDuration::milliseconds(100))
+                    .skip_first_n_review_calls(1)
+            }
+            "already_reviewed" => {
+                // Review exists, commit older than review -> skip
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_latest_commit_time(now - ChronoDuration::hours(2))
+            }
+            "re_review" => {
+                // Old review exists, new commit -> post comment, wait for new review
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(2))
+                    .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+                    .with_latest_commit_time(now - ChronoDuration::hours(1))
+                    .with_initial_review_cutoff(now)
+            }
+            _ => panic!("Unknown scenario: {scenario}"),
+        }
     }
 
+    #[rstest]
+    #[case::first_review("first_review", false)]
+    #[case::already_reviewed("already_reviewed", false)]
+    #[case::re_review("re_review", true)]
     #[tokio::test]
-    async fn request_already_reviewed_no_new_commits() {
-        // Scenario: Review exists, commit is older than review -> skip
-        let review_time = Utc::now() - ChronoDuration::hours(1);
-        let commit_time = Utc::now() - ChronoDuration::hours(2);
-
-        let client = MockReviewClient::new()
-            .with_review(Reviewer::Gemini, review_time)
-            .with_latest_commit_time(commit_time);
-
+    async fn request_succeeds(#[case] scenario: &str, #[case] expects_comment: bool) {
+        let client = build_success_client(scenario);
         let args = make_args(1, 5);
+
         let result = run_request(&args, &client, "owner", "repo", 1).await;
 
         assert!(result.is_ok());
-        // No comment posted since already reviewed
-        assert!(client.posted_comments.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn request_re_review_with_new_commits() {
-        // Scenario: Review exists (past), but new commit after review -> post comment and wait
-        // Use initial_review_cutoff to only return old review on first call
-
-        let old_review_time = Utc::now() - ChronoDuration::hours(2);
-        let commit_time = Utc::now() - ChronoDuration::hours(1); // after old review
-        let new_review_time = Utc::now() + ChronoDuration::seconds(1); // future review
-        let cutoff = Utc::now(); // Only return reviews before now on first call
-
-        let client = MockReviewClient::new()
-            .with_review(Reviewer::Gemini, old_review_time)
-            .with_review(Reviewer::Gemini, new_review_time)
-            .with_latest_commit_time(commit_time)
-            .with_initial_review_cutoff(cutoff);
-
-        let args = make_args(1, 5);
-        let result = run_request(&args, &client, "owner", "repo", 1).await;
-
-        assert!(result.is_ok());
-        // Comment posted for re-review
         let posted = client.posted_comments.lock().unwrap();
-        assert_eq!(posted.len(), 1);
-        assert_eq!(posted[0].3, Reviewer::Gemini);
+        assert_eq!(!posted.is_empty(), expects_comment);
     }
 
-    #[tokio::test]
-    async fn request_timeout() {
-        // Scenario: No review appears within timeout
-        let client = MockReviewClient::new();
-
-        let args = make_args(1, 1); // 1 second timeout
-        let result = run_request(&args, &client, "owner", "repo", 1).await;
-
-        assert!(matches!(result, Err(ReviewError::Timeout(1))));
-    }
-
-    #[tokio::test]
-    async fn request_unable_to_review() {
-        // Scenario: Reviewer posts "unable to" comment
-        let unable_time = Utc::now() + ChronoDuration::milliseconds(100);
-
-        let client = MockReviewClient::new().with_comment(
+    #[rstest]
+    #[case::timeout(MockReviewClient::new(), 1, "Timeout")]
+    #[case::unable_to_review(
+        MockReviewClient::new().with_comment(
             "gemini-code-assist",
-            "Gemini is unable to review this PR due to size limitations.",
-            unable_time,
-        );
-
-        let args = make_args(1, 5);
+            "Gemini is unable to review this PR.",
+            Utc::now() + ChronoDuration::milliseconds(100),
+        ),
+        5,
+        "ReviewerUnable"
+    )]
+    #[tokio::test]
+    async fn request_fails(
+        #[case] client: MockReviewClient,
+        #[case] timeout: u64,
+        #[case] expected_error: &str,
+    ) {
+        let args = make_args(1, timeout);
         let result = run_request(&args, &client, "owner", "repo", 1).await;
 
-        assert!(matches!(result, Err(ReviewError::ReviewerUnable(_))));
+        let err = result.unwrap_err();
+        let err_name = format!("{err:?}");
+        assert!(
+            err_name.starts_with(expected_error),
+            "Expected {expected_error}, got {err_name}"
+        );
     }
 
     #[rstest]
     #[case::gemini(Reviewer::Gemini)]
     #[tokio::test]
     async fn request_posts_correct_reviewer_command(#[case] reviewer: Reviewer) {
-        // Scenario: Re-review needed, verify correct reviewer is used
-        let old_review_time = Utc::now() - ChronoDuration::hours(2);
-        let commit_time = Utc::now() - ChronoDuration::hours(1);
-        let new_review_time = Utc::now() + ChronoDuration::seconds(1);
-        let cutoff = Utc::now();
-
+        let now = Utc::now();
         let client = MockReviewClient::new()
-            .with_review(reviewer, old_review_time)
-            .with_review(reviewer, new_review_time)
-            .with_latest_commit_time(commit_time)
-            .with_initial_review_cutoff(cutoff);
+            .with_review(reviewer, now - ChronoDuration::hours(2))
+            .with_review(reviewer, now + ChronoDuration::seconds(1))
+            .with_latest_commit_time(now - ChronoDuration::hours(1))
+            .with_initial_review_cutoff(now);
 
         let args = RequestArgs {
             pr: Some(42),
@@ -283,9 +260,14 @@ mod tests {
         assert!(result.is_ok());
         let posted = client.posted_comments.lock().unwrap();
         assert_eq!(posted.len(), 1);
-        assert_eq!(posted[0].0, "test-owner");
-        assert_eq!(posted[0].1, "test-repo");
-        assert_eq!(posted[0].2, 42);
-        assert_eq!(posted[0].3, reviewer);
+        assert_eq!(
+            posted[0],
+            (
+                "test-owner".to_string(),
+                "test-repo".to_string(),
+                42,
+                reviewer
+            )
+        );
     }
 }

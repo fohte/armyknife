@@ -167,104 +167,104 @@ mod tests {
         }
     }
 
+    /// Helper to build a mock client for success cases.
+    fn build_success_client(scenario: &str) -> MockReviewClient {
+        let now = Utc::now();
+        match scenario {
+            "already_completed" => {
+                // Review already exists
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+            }
+            "in_progress_completes" => {
+                // Reviewer has activity, review appears after polling
+                MockReviewClient::new()
+                    .with_comment("gemini-code-assist", "Starting review...", now)
+                    .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+            }
+            _ => panic!("Unknown scenario: {scenario}"),
+        }
+    }
+
+    #[rstest]
+    #[case::already_completed("already_completed")]
+    #[case::in_progress_completes("in_progress_completes")]
     #[tokio::test]
-    async fn wait_already_completed() {
-        // Scenario: Review already exists
-        let review_time = Utc::now() - ChronoDuration::hours(1);
-
-        let client = MockReviewClient::new().with_review(Reviewer::Gemini, review_time);
-
+    async fn wait_succeeds(#[case] scenario: &str) {
+        let client = build_success_client(scenario);
         let args = make_args(1, 5);
+
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn wait_review_not_started() {
-        // Scenario: No review and no activity from reviewer
-        let client = MockReviewClient::new();
-
-        let args = make_args(1, 5);
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        assert!(matches!(result, Err(ReviewError::ReviewNotStarted)));
+    /// Helper to build a mock client for error cases.
+    fn build_error_client(scenario: &str) -> (MockReviewClient, u64) {
+        let now = Utc::now();
+        match scenario {
+            "not_started" => (MockReviewClient::new(), 5),
+            "not_started_other_bot" => (
+                MockReviewClient::new().with_comment("other-bot", "Some comment", now),
+                5,
+            ),
+            "unable_existing" => (
+                MockReviewClient::new().with_comment(
+                    "gemini-code-assist",
+                    "Gemini is unable to review this PR.",
+                    now - ChronoDuration::hours(1),
+                ),
+                5,
+            ),
+            "unable_during_wait" => (
+                MockReviewClient::new()
+                    .with_comment("gemini-code-assist", "Starting review...", now)
+                    .with_comment(
+                        "gemini-code-assist",
+                        "Gemini is unable to review this PR.",
+                        now + ChronoDuration::milliseconds(100),
+                    ),
+                5,
+            ),
+            "timeout" => (
+                MockReviewClient::new().with_comment(
+                    "gemini-code-assist",
+                    "Starting review...",
+                    now,
+                ),
+                1, // 1 second timeout
+            ),
+            _ => panic!("Unknown scenario: {scenario}"),
+        }
     }
 
+    #[rstest]
+    #[case::not_started("not_started", "ReviewNotStarted")]
+    #[case::not_started_other_bot("not_started_other_bot", "ReviewNotStarted")]
+    #[case::unable_existing("unable_existing", "ReviewerUnable")]
+    #[case::unable_during_wait("unable_during_wait", "ReviewerUnable")]
+    #[case::timeout("timeout", "Timeout")]
     #[tokio::test]
-    async fn wait_in_progress_then_completes() {
-        // Scenario: Reviewer has activity (started) but no review yet, then completes
-        let review_time = Utc::now() + ChronoDuration::seconds(1);
+    async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
+        let (client, timeout) = build_error_client(scenario);
+        let args = make_args(1, timeout);
 
-        let client = MockReviewClient::new()
-            .with_comment("gemini-code-assist", "Starting review...", Utc::now())
-            .with_review(Reviewer::Gemini, review_time);
-
-        let args = make_args(1, 5);
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn wait_unable_to_review_existing() {
-        // Scenario: "Unable to" comment already exists
-        let unable_time = Utc::now() - ChronoDuration::hours(1);
-
-        let client = MockReviewClient::new().with_comment(
-            "gemini-code-assist",
-            "Gemini is unable to review this PR.",
-            unable_time,
+        let err = result.unwrap_err();
+        let err_name = format!("{err:?}");
+        assert!(
+            err_name.starts_with(expected_error),
+            "Expected {expected_error}, got {err_name}"
         );
-
-        let args = make_args(1, 5);
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        assert!(matches!(result, Err(ReviewError::ReviewerUnable(_))));
-    }
-
-    #[tokio::test]
-    async fn wait_unable_to_review_during_wait() {
-        // Scenario: Review started, then "unable to" comment appears during wait
-        let unable_time = Utc::now() + ChronoDuration::milliseconds(100);
-
-        let client = MockReviewClient::new()
-            .with_comment("gemini-code-assist", "Starting review...", Utc::now())
-            .with_comment(
-                "gemini-code-assist",
-                "Gemini is unable to review this PR.",
-                unable_time,
-            );
-
-        let args = make_args(1, 5);
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        assert!(matches!(result, Err(ReviewError::ReviewerUnable(_))));
-    }
-
-    #[tokio::test]
-    async fn wait_timeout() {
-        // Scenario: Review started but never completes
-        let client = MockReviewClient::new().with_comment(
-            "gemini-code-assist",
-            "Starting review...",
-            Utc::now(),
-        );
-
-        let args = make_args(1, 1); // 1 second timeout
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        assert!(matches!(result, Err(ReviewError::Timeout(1))));
     }
 
     #[rstest]
     #[case::gemini(Reviewer::Gemini)]
     #[tokio::test]
     async fn wait_detects_correct_reviewer(#[case] reviewer: Reviewer) {
-        // Scenario: Only detect reviews from the specified reviewer
-        let review_time = Utc::now() - ChronoDuration::hours(1);
-
-        let client = MockReviewClient::new().with_review(reviewer, review_time);
+        let client =
+            MockReviewClient::new().with_review(reviewer, Utc::now() - ChronoDuration::hours(1));
 
         let args = WaitArgs {
             pr: Some(1),
@@ -276,17 +276,5 @@ mod tests {
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn wait_ignores_other_reviewers_activity() {
-        // Scenario: Another bot has activity, but not the requested reviewer
-        let client = MockReviewClient::new().with_comment("other-bot", "Some comment", Utc::now());
-
-        let args = make_args(1, 5);
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        // Should fail because gemini-code-assist has no activity
-        assert!(matches!(result, Err(ReviewError::ReviewNotStarted)));
     }
 }
