@@ -56,6 +56,33 @@ pub fn current_branch(repo: &Repository) -> Result<String> {
     Ok(head.shorthand().unwrap_or("HEAD").to_string())
 }
 
+/// Build a git config that includes macOS system gitconfig paths.
+///
+/// libgit2 only looks at /etc/gitconfig for system config, but macOS has
+/// credential.helper configured in Homebrew or Xcode paths.
+/// See: https://github.com/libgit2/libgit2/issues/6883
+fn build_config_with_system_paths(repo: &Repository) -> Result<git2::Config> {
+    let mut config = repo
+        .config()
+        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
+
+    // macOS-specific system gitconfig paths that libgit2 doesn't recognize
+    let macos_system_configs = [
+        "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
+        "/usr/local/etc/gitconfig",    // Homebrew (Intel)
+        "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
+    ];
+
+    for path in macos_system_configs {
+        if std::path::Path::new(path).exists() {
+            // Add at system level so it has lowest priority
+            let _ = config.add_file(std::path::Path::new(path), git2::ConfigLevel::System, false);
+        }
+    }
+
+    Ok(config)
+}
+
 /// Get the main branch name (main or master)
 pub fn get_main_branch() -> Result<String> {
     let repo = open_repo()?;
@@ -92,9 +119,7 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
         .find_remote("origin")
         .map_err(|e| GitError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
 
-    let config = repo
-        .config()
-        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
+    let config = build_config_with_system_paths(repo)?;
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed_types| {
