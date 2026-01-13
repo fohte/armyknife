@@ -5,6 +5,7 @@ pub use backend::{Backend, detect_backend};
 pub use error::{Error, Result};
 
 use clap::Args;
+use indicatif::{ProgressBar, ProgressStyle};
 use indoc::formatdoc;
 
 /// Branch prefix for new branches
@@ -19,7 +20,22 @@ pub struct NameBranchArgs {
 impl NameBranchArgs {
     pub fn run(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let backend = detect_backend();
-        let name = generate_branch_name(&self.description, backend.as_ref())?;
+
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                .template("{spinner} {msg}")
+                .unwrap(),
+        );
+        spinner.set_message("Generating branch name...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+        let name = generate_branch_name(&self.description, backend.as_ref());
+
+        spinner.finish_and_clear();
+
+        let name = name?;
         println!("{BRANCH_PREFIX}{name}");
         Ok(())
     }
