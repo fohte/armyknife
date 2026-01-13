@@ -1,6 +1,6 @@
 //! Repository operations.
 
-use git2::{BranchType, FetchOptions, Repository};
+use git2::{BranchType, Cred, FetchOptions, RemoteCallbacks, Repository};
 use std::path::Path;
 
 use super::error::{GitError, Result};
@@ -92,8 +92,34 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
         .find_remote("origin")
         .map_err(|e| GitError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
 
+    let config = repo
+        .config()
+        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
+
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        // Try SSH agent first for SSH URLs
+        if allowed_types.contains(git2::CredentialType::SSH_KEY)
+            && let Some(username) = username_from_url
+            && let Ok(cred) = Cred::ssh_key_from_agent(username)
+        {
+            return Ok(cred);
+        }
+
+        // For HTTPS, use git2's native credential helper support
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+            && let Ok(cred) = Cred::credential_helper(&config, url, username_from_url)
+        {
+            return Ok(cred);
+        }
+
+        // Fallback to default credentials
+        Cred::default()
+    });
+
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.prune(git2::FetchPrune::On);
+    fetch_opts.remote_callbacks(callbacks);
 
     remote
         .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
