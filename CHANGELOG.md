@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.20](https://github.com/fohte/armyknife/compare/v0.1.19...v0.1.20) (2026-01-13)
+
+
+### Features
+
+* **name-branch:** improve UX ([#73](https://github.com/fohte/armyknife/issues/73)) ([c403059](https://github.com/fohte/armyknife/commit/c403059f616cb0cb931b2dd858217900d431f3d3))
+
 ## [0.1.19](https://github.com/fohte/armyknife/compare/v0.1.18...v0.1.19) (2026-01-13)
 
 
