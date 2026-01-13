@@ -24,6 +24,9 @@ pub enum ReviewGeminiError {
 
     #[error("Failed to parse review timestamp: {0}")]
     TimestampParseError(String),
+
+    #[error("Gemini is unable to review this PR: {0}")]
+    GeminiUnable(String),
 }
 
 pub type Result<T> = std::result::Result<T, ReviewGeminiError>;

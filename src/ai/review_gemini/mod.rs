@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 const GEMINI_BOT_LOGIN: &str = "gemini-code-assist";
 const GEMINI_REVIEW_COMMAND: &str = "/gemini review";
+const GEMINI_UNABLE_MARKER: &str = "Gemini is unable to";
 const POLL_INTERVAL_SECS: u64 = 15;
 const TIMEOUT_SECS: u64 = 300; // 5 minutes
 
@@ -144,6 +145,56 @@ async fn find_latest_gemini_review(
     Ok(latest)
 }
 
+/// Check if Gemini posted an "unable to" comment after start_time
+fn check_gemini_unable_comment(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    start_time: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &pr_number.to_string(),
+            "--json",
+            "comments",
+            "--jq",
+            &format!(
+                r#".comments[] | select(.author.login == "{GEMINI_BOT_LOGIN}") | {{body: .body, createdAt: .createdAt}}"#
+            ),
+            "-R",
+            &format!("{owner}/{repo}"),
+        ])
+        .output()
+        .map_err(|e| ReviewGeminiError::CommentError(format!("Failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ReviewGeminiError::CommentError(format!(
+            "gh pr view failed: {stderr}"
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for line in stdout.lines() {
+        if let Ok(comment) = serde_json::from_str::<serde_json::Value>(line) {
+            let body = comment["body"].as_str().unwrap_or("");
+            let created_at_str = comment["createdAt"].as_str().unwrap_or("");
+
+            if let Ok(created_at) = created_at_str.parse::<DateTime<Utc>>()
+                && created_at > start_time
+                && body.contains(GEMINI_UNABLE_MARKER)
+            {
+                return Ok(Some(body.to_string()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 /// Post /gemini review comment using gh CLI
 fn post_gemini_review_comment(owner: &str, repo: &str, pr_number: u64) -> Result<()> {
     let output = Command::new("gh")
@@ -193,6 +244,11 @@ async fn wait_for_gemini_review(
             && review_time > start_time
         {
             return Ok(());
+        }
+
+        // Check if Gemini posted an "unable to" comment
+        if let Some(unable_msg) = check_gemini_unable_comment(owner, repo, pr_number, start_time)? {
+            return Err(ReviewGeminiError::GeminiUnable(unable_msg));
         }
 
         // Print progress
