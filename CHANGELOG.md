@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/fohte/armyknife/compare/v0.1.16...v0.1.17) (2026-01-13)
+
+
+### Bug Fixes
+
+* **update:** prevent panic from nested tokio runtime ([#66](https://github.com/fohte/armyknife/issues/66)) ([0dadbb6](https://github.com/fohte/armyknife/commit/0dadbb601c6c1da04ad159f826244e58076d1283))
+
 ## [0.1.16](https://github.com/fohte/armyknife/compare/v0.1.15...v0.1.16) (2026-01-13)
 
 
