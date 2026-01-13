@@ -240,13 +240,18 @@ struct ResolvedArgs {
 /// Resolve branch name: use provided name or generate from prompt.
 /// If no name and no prompt provided, opens editor to get prompt.
 fn resolve_args(args: &NewArgs) -> Result<ResolvedArgs> {
-    resolve_args_with_backend(args, || detect_backend())
+    resolve_args_with_deps(args, || detect_backend(), open_editor_for_prompt)
 }
 
-/// Internal implementation that accepts a backend factory for testability.
-fn resolve_args_with_backend<F>(args: &NewArgs, backend_factory: F) -> Result<ResolvedArgs>
+/// Internal implementation that accepts dependencies for testability.
+fn resolve_args_with_deps<F, E>(
+    args: &NewArgs,
+    backend_factory: F,
+    editor_fn: E,
+) -> Result<ResolvedArgs>
 where
     F: FnOnce() -> Box<dyn crate::name_branch::Backend>,
+    E: FnOnce() -> Result<Option<String>>,
 {
     match (&args.name, &args.prompt) {
         (Some(name), prompt) => Ok(ResolvedArgs {
@@ -263,7 +268,7 @@ where
         }
         (None, None) => {
             // Open editor to get prompt
-            let prompt = open_editor_for_prompt()?.ok_or(WmError::Cancelled)?;
+            let prompt = editor_fn()?.ok_or(WmError::Cancelled)?;
             let backend = backend_factory();
             let generated = generate_branch_name(&prompt, backend.as_ref())?;
             Ok(ResolvedArgs {
@@ -596,9 +601,46 @@ mod tests {
             force: false,
             prompt: prompt.map(String::from),
         };
-        let result = resolve_args_with_backend(&args, || mock_backend("fix-login-bug")).unwrap();
+        let result = resolve_args_with_deps(
+            &args,
+            || mock_backend("fix-login-bug"),
+            || panic!("editor should not be called"),
+        )
+        .unwrap();
 
         assert_eq!(result.branch_name, expected_branch);
         assert_eq!(result.prompt.as_deref(), expected_prompt);
+    }
+
+    #[test]
+    fn resolve_args_opens_editor_when_no_args() {
+        let args = NewArgs {
+            name: None,
+            from: None,
+            force: false,
+            prompt: None,
+        };
+        let result = resolve_args_with_deps(
+            &args,
+            || mock_backend("editor-branch"),
+            || Ok(Some("prompt from editor".to_string())),
+        )
+        .unwrap();
+
+        assert_eq!(result.branch_name, "editor-branch");
+        assert_eq!(result.prompt.as_deref(), Some("prompt from editor"));
+    }
+
+    #[test]
+    fn resolve_args_returns_cancelled_when_editor_empty() {
+        let args = NewArgs {
+            name: None,
+            from: None,
+            force: false,
+            prompt: None,
+        };
+        let result = resolve_args_with_deps(&args, || mock_backend("unused"), || Ok(None));
+
+        assert!(matches!(result, Err(WmError::Cancelled)));
     }
 }
