@@ -2,7 +2,6 @@
 
 use git2::{BranchType, Cred, FetchOptions, RemoteCallbacks, Repository};
 use std::path::Path;
-use std::process::Command;
 
 use super::error::{GitError, Result};
 
@@ -87,54 +86,15 @@ pub fn get_main_branch_for_repo(repo: &Repository) -> Result<String> {
     ))
 }
 
-/// Get credentials using `git credential fill` command.
-/// This allows git2 to use the same credential helpers as git CLI.
-fn get_credential_from_git(url: &str) -> Option<(String, String)> {
-    let parsed = url::Url::parse(url).ok()?;
-    let host = parsed.host_str()?;
-    let protocol = parsed.scheme();
-
-    let input = format!("protocol={protocol}\nhost={host}\n");
-
-    let output = Command::new("git")
-        .args(["credential", "fill"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(input.as_bytes()).ok()?;
-            }
-            child.wait_with_output().ok()
-        })?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut username = None;
-    let mut password = None;
-
-    for line in stdout.lines() {
-        if let Some(user) = line.strip_prefix("username=") {
-            username = Some(user.to_string());
-        } else if let Some(pass) = line.strip_prefix("password=") {
-            password = Some(pass.to_string());
-        }
-    }
-
-    username.zip(password)
-}
-
 /// Fetch from origin with prune to remove stale remote-tracking references
 pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
     let mut remote = repo
         .find_remote("origin")
         .map_err(|e| GitError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
+
+    let config = repo
+        .config()
+        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed_types| {
@@ -145,10 +105,10 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
             }
         }
 
-        // For HTTPS, use git credential helper
+        // For HTTPS, use git2's native credential helper support
         if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            if let Some((username, password)) = get_credential_from_git(url) {
-                return Cred::userpass_plaintext(&username, &password);
+            if let Ok(cred) = Cred::credential_helper(&config, url, username_from_url) {
+                return Ok(cred);
             }
         }
 

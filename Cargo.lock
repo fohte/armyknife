@@ -110,7 +110,6 @@ dependencies = [
  "termimad",
  "thiserror",
  "tokio",
- "url",
 ]
 
 [[package]]
