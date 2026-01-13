@@ -67,16 +67,22 @@ fn build_config_with_system_paths(repo: &Repository) -> Result<git2::Config> {
         .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
 
     // macOS-specific system gitconfig paths that libgit2 doesn't recognize
-    let macos_system_configs = [
-        "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
-        "/usr/local/etc/gitconfig",    // Homebrew (Intel)
-        "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
-    ];
+    #[cfg(target_os = "macos")]
+    {
+        const MACOS_SYSTEM_CONFIGS: [&str; 3] = [
+            "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
+            "/usr/local/etc/gitconfig",    // Homebrew (Intel)
+            "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
+        ];
 
-    for path in macos_system_configs {
-        if std::path::Path::new(path).exists() {
-            // Add at system level so it has lowest priority
-            let _ = config.add_file(std::path::Path::new(path), git2::ConfigLevel::System, false);
+        for path in MACOS_SYSTEM_CONFIGS {
+            let path = std::path::Path::new(path);
+            if path.exists() {
+                // Add at system level so it has lowest priority.
+                // Intentionally ignore errors: if the file is unreadable or malformed,
+                // we should still attempt the fetch with the remaining config.
+                let _ = config.add_file(path, git2::ConfigLevel::System, false);
+            }
         }
     }
 
