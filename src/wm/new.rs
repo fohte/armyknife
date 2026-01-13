@@ -1,6 +1,7 @@
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::Path;
+use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{
@@ -10,6 +11,45 @@ use super::git::{
 use crate::git::fetch_with_prune;
 use crate::name_branch::{detect_backend, generate_branch_name};
 use crate::tmux;
+
+/// Open $EDITOR to let user input a prompt.
+/// Returns the prompt text, or None if the user didn't provide any input.
+fn open_editor_for_prompt() -> Result<Option<String>> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    // Create an empty temp file for the prompt
+    let temp_file = tempfile::Builder::new()
+        .prefix("wm-prompt-")
+        .suffix(".md")
+        .tempfile()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+
+    let temp_path = temp_file.path().to_path_buf();
+
+    // Launch editor
+    let status = Command::new(&editor)
+        .arg(&temp_path)
+        .status()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to launch editor '{editor}': {e}")))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed(format!(
+            "Editor exited with status: {status}"
+        )));
+    }
+
+    // Read the content
+    let content = std::fs::read_to_string(&temp_path)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to read temp file: {e}")))?;
+
+    let prompt = content.trim().to_string();
+
+    if prompt.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(prompt))
+    }
+}
 
 /// Mode for creating a worktree
 enum WorktreeAddMode<'a> {
@@ -154,24 +194,46 @@ pub struct NewArgs {
     pub prompt: Option<String>,
 }
 
+/// Resolved branch name and prompt information
+struct ResolvedArgs {
+    branch_name: String,
+    prompt: Option<String>,
+}
+
 /// Resolve branch name: use provided name or generate from prompt.
-fn resolve_branch_name(args: &NewArgs) -> Result<String> {
-    resolve_branch_name_with_backend(args, || detect_backend())
+/// If no name and no prompt provided, opens editor to get prompt.
+fn resolve_args(args: &NewArgs) -> Result<ResolvedArgs> {
+    resolve_args_with_backend(args, || detect_backend())
 }
 
 /// Internal implementation that accepts a backend factory for testability.
-fn resolve_branch_name_with_backend<F>(args: &NewArgs, backend_factory: F) -> Result<String>
+fn resolve_args_with_backend<F>(args: &NewArgs, backend_factory: F) -> Result<ResolvedArgs>
 where
     F: FnOnce() -> Box<dyn crate::name_branch::Backend>,
 {
     match (&args.name, &args.prompt) {
-        (Some(name), _) => Ok(name.clone()),
+        (Some(name), prompt) => Ok(ResolvedArgs {
+            branch_name: name.clone(),
+            prompt: prompt.clone(),
+        }),
         (None, Some(prompt)) => {
             let backend = backend_factory();
             let generated = generate_branch_name(prompt, backend.as_ref())?;
-            Ok(generated)
+            Ok(ResolvedArgs {
+                branch_name: generated,
+                prompt: Some(prompt.clone()),
+            })
         }
-        (None, None) => Err(WmError::MissingBranchName),
+        (None, None) => {
+            // Open editor to get prompt
+            let prompt = open_editor_for_prompt()?.ok_or(WmError::Cancelled)?;
+            let backend = backend_factory();
+            let generated = generate_branch_name(&prompt, backend.as_ref())?;
+            Ok(ResolvedArgs {
+                branch_name: generated,
+                prompt: Some(prompt),
+            })
+        }
     }
 }
 
@@ -181,7 +243,10 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
-    let name = resolve_branch_name(args)?;
+    let resolved = resolve_args(args)?;
+    let name = resolved.branch_name;
+    let prompt = resolved.prompt;
+
     let repo_root = get_repo_root()?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
@@ -253,7 +318,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         &repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
-        args.prompt.as_deref(),
+        prompt.as_deref(),
     )?;
 
     Ok(())
@@ -444,13 +509,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_name(Some("my-branch"), None, "my-branch")]
-    #[case::name_takes_priority_over_prompt(Some("my-branch"), Some("some task"), "my-branch")]
-    #[case::generate_from_prompt(None, Some("fix login bug"), "fix-login-bug")]
-    fn resolve_branch_name_returns_expected(
+    #[case::explicit_name(Some("my-branch"), None, "my-branch", None)]
+    #[case::name_takes_priority_over_prompt(
+        Some("my-branch"),
+        Some("some task"),
+        "my-branch",
+        Some("some task")
+    )]
+    #[case::generate_from_prompt(
+        None,
+        Some("fix login bug"),
+        "fix-login-bug",
+        Some("fix login bug")
+    )]
+    fn resolve_args_returns_expected(
         #[case] name: Option<&str>,
         #[case] prompt: Option<&str>,
-        #[case] expected: &str,
+        #[case] expected_branch: &str,
+        #[case] expected_prompt: Option<&str>,
     ) {
         let args = NewArgs {
             name: name.map(String::from),
@@ -458,20 +534,13 @@ mod tests {
             force: false,
             prompt: prompt.map(String::from),
         };
-        let result = resolve_branch_name_with_backend(&args, || mock_backend("fix-login-bug"));
+        let result = resolve_args_with_backend(&args, || mock_backend("fix-login-bug")).unwrap();
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result.branch_name, expected_branch);
+        assert_eq!(result.prompt.as_deref(), expected_prompt);
     }
 
-    #[test]
-    fn resolve_branch_name_without_name_and_prompt_returns_error() {
-        let args = NewArgs {
-            name: None,
-            from: None,
-            force: false,
-            prompt: None,
-        };
-        let result = resolve_branch_name_with_backend(&args, || mock_backend("unused"));
-        assert!(matches!(result, Err(WmError::MissingBranchName)));
-    }
+    // Note: Testing the no-args case (editor prompt) is not done here
+    // because it requires launching an actual editor.
+    // The behavior is tested manually or through integration tests.
 }
