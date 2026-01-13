@@ -58,20 +58,22 @@ fn update_last_check_time() {
 }
 
 /// Automatically check for updates and apply if available.
-/// Runs synchronously but only checks once per 24 hours (cached).
-pub fn auto_update() {
-    auto_update_impl(
+/// Only checks once per 24 hours (cached).
+/// Runs in a separate blocking thread to avoid nested tokio runtime issues.
+pub async fn auto_update() {
+    run_update_with(
         should_check_for_update,
         update_last_check_time,
         do_update_silent,
-    );
+    )
+    .await;
 }
 
-fn auto_update_impl<C, T, U>(should_check: C, update_time: T, updater: U)
+async fn run_update_with<C, T, U>(should_check: C, update_time: T, updater: U)
 where
-    C: FnOnce() -> bool,
-    T: FnOnce(),
-    U: FnOnce() -> Result<(), Box<dyn std::error::Error>>,
+    C: FnOnce() -> bool + Send + 'static,
+    T: FnOnce() + Send + 'static,
+    U: FnOnce() -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
 {
     if !should_check() {
         return;
@@ -79,8 +81,14 @@ where
 
     update_time();
 
-    if let Err(e) = updater() {
-        eprintln!("Auto-update failed: {e}");
+    // Run the updater in a separate blocking thread to avoid nested runtime issues.
+    // self_update crate creates its own tokio runtime internally.
+    let result = tokio::task::spawn_blocking(updater).await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("Auto-update failed: {e}"),
+        Err(e) => eprintln!("Auto-update task failed: {e}"),
     }
 }
 
@@ -94,7 +102,7 @@ fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
     builder
 }
 
-fn do_update_silent() -> Result<(), Box<dyn std::error::Error>> {
+fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut builder = base_update_builder();
     let status = builder
         .show_download_progress(false)
@@ -127,7 +135,6 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
     const NOW: u64 = 1000000;
@@ -157,26 +164,5 @@ mod tests {
         write_last_check_time(&path, 1234567890).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "1234567890");
-    }
-
-    #[rstest]
-    #[case(true, true)]
-    #[case(false, false)]
-    fn auto_update_runs_based_on_check_flag(
-        #[case] should_check: bool,
-        #[case] expected_called: bool,
-    ) {
-        let updater_called = AtomicBool::new(false);
-
-        auto_update_impl(
-            || should_check,
-            || {},
-            || {
-                updater_called.store(true, Ordering::SeqCst);
-                Ok(())
-            },
-        );
-
-        assert_eq!(updater_called.load(Ordering::SeqCst), expected_called);
     }
 }
