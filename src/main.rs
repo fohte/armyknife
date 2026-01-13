@@ -11,7 +11,8 @@ mod tmux;
 mod update;
 mod wm;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::aot::generate;
 use cli::{Cli, Commands};
 
 #[tokio::main]
@@ -25,8 +26,9 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Cli { command } = Cli::parse();
 
-    if !matches!(command, Commands::Update) {
-        // Avoid running the updater twice when `a update` was requested.
+    if !matches!(command, Commands::Update | Commands::Completions { .. }) {
+        // Avoid running the updater twice when `a update` was requested,
+        // and skip for completions to keep output clean.
         update::auto_update();
     }
 
@@ -36,6 +38,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::NameBranch(args) => args.run()?,
         Commands::Wm(wm_cmd) => wm_cmd.run().await?,
         Commands::Update => update::do_update()?,
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "a", &mut std::io::stdout());
+        }
     }
 
     Ok(())

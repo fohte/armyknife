@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 use crate::ai::AiCommands;
 use crate::gh::GhCommands;
@@ -7,7 +8,7 @@ use crate::wm::WmCommands;
 
 #[derive(Parser)]
 #[command(
-    name = "Fohte's armyknife",
+    name = "armyknife",
     bin_name = "a",
     version,
     about,
@@ -38,4 +39,11 @@ pub enum Commands {
 
     /// Update to the latest version
     Update,
+
+    /// Generate shell completion scripts
+    Completions {
+        /// Target shell
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
