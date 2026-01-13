@@ -612,8 +612,16 @@ mod tests {
         assert_eq!(result.prompt.as_deref(), expected_prompt);
     }
 
-    #[test]
-    fn resolve_args_opens_editor_when_no_args() {
+    #[rstest]
+    #[case::editor_returns_prompt(
+        Some("prompt from editor"),
+        Ok(("editor-branch", Some("prompt from editor")))
+    )]
+    #[case::editor_returns_empty(None, Err(WmError::Cancelled))]
+    fn resolve_args_with_editor(
+        #[case] editor_input: Option<&str>,
+        #[case] expected: std::result::Result<(&str, Option<&str>), WmError>,
+    ) {
         let args = NewArgs {
             name: None,
             from: None,
@@ -623,24 +631,18 @@ mod tests {
         let result = resolve_args_with_deps(
             &args,
             || mock_backend("editor-branch"),
-            || Ok(Some("prompt from editor".to_string())),
-        )
-        .unwrap();
+            || Ok(editor_input.map(String::from)),
+        );
 
-        assert_eq!(result.branch_name, "editor-branch");
-        assert_eq!(result.prompt.as_deref(), Some("prompt from editor"));
-    }
-
-    #[test]
-    fn resolve_args_returns_cancelled_when_editor_empty() {
-        let args = NewArgs {
-            name: None,
-            from: None,
-            force: false,
-            prompt: None,
-        };
-        let result = resolve_args_with_deps(&args, || mock_backend("unused"), || Ok(None));
-
-        assert!(matches!(result, Err(WmError::Cancelled)));
+        match expected {
+            Ok((branch, prompt)) => {
+                let resolved = result.unwrap();
+                assert_eq!(resolved.branch_name, branch);
+                assert_eq!(resolved.prompt.as_deref(), prompt);
+            }
+            Err(_) => {
+                assert!(matches!(result, Err(WmError::Cancelled)));
+            }
+        }
     }
 }
