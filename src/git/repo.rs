@@ -101,8 +101,9 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
         // Try SSH agent first for SSH URLs
         if allowed_types.contains(git2::CredentialType::SSH_KEY)
             && let Some(username) = username_from_url
+            && let Ok(cred) = Cred::ssh_key_from_agent(username)
         {
-            return Cred::ssh_key_from_agent(username);
+            return Ok(cred);
         }
 
         // For HTTPS, use git2's native credential helper support
