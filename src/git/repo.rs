@@ -99,17 +99,17 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed_types| {
         // Try SSH agent first for SSH URLs
-        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
-            if let Some(username) = username_from_url {
-                return Cred::ssh_key_from_agent(username);
-            }
+        if allowed_types.contains(git2::CredentialType::SSH_KEY)
+            && let Some(username) = username_from_url
+        {
+            return Cred::ssh_key_from_agent(username);
         }
 
         // For HTTPS, use git2's native credential helper support
-        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            if let Ok(cred) = Cred::credential_helper(&config, url, username_from_url) {
-                return Ok(cred);
-            }
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+            && let Ok(cred) = Cred::credential_helper(&config, url, username_from_url)
+        {
+            return Ok(cred);
         }
 
         // Fallback to default credentials
