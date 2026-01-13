@@ -16,12 +16,12 @@ pub trait Backend {
 }
 
 /// Detect and return the best available backend.
-/// Priority: OpenCode > Claude Code
+/// Priority: Claude Code > OpenCode
 pub fn detect_backend() -> Box<dyn Backend> {
-    if is_command_available("opencode") {
-        Box::new(OpenCode)
-    } else {
+    if is_command_available("claude") {
         Box::new(ClaudeCode)
+    } else {
+        Box::new(OpenCode)
     }
 }
 
