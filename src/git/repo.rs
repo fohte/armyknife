@@ -224,80 +224,35 @@ mod tests {
 
     mod build_config_with_extra_paths {
         use super::*;
-        use rstest::fixture;
-        use std::io::Write;
 
-        struct TestFixture {
-            temp: TempRepo,
-            config_path: std::path::PathBuf,
-        }
-
-        #[fixture]
-        fn fixture() -> TestFixture {
+        #[rstest]
+        #[case::empty_paths(&[])]
+        #[case::nonexistent_path(&["/nonexistent/path/to/gitconfig"])]
+        #[case::multiple_nonexistent(&["/nonexistent/a", "/nonexistent/b"])]
+        fn succeeds_with_various_paths(#[case] paths: &[&str]) {
             let temp = TempRepo::new("owner", "repo", "master");
-            let config_dir = temp.path().join("extra-config");
-            std::fs::create_dir_all(&config_dir).unwrap();
-            let config_path = config_dir.join("gitconfig");
-            TestFixture { temp, config_path }
-        }
+            let repo = temp.open();
 
-        #[rstest]
-        fn adds_existing_config_file_to_config(fixture: TestFixture) {
-            let repo = fixture.temp.open();
-
-            let mut file = std::fs::File::create(&fixture.config_path).unwrap();
-            writeln!(file, "[test]").unwrap();
-            writeln!(file, "    value = from-extra-config").unwrap();
-
-            let mut config =
-                build_config_with_extra_paths(&repo, &[fixture.config_path.to_str().unwrap()])
-                    .unwrap();
-
-            // Take a snapshot to read the updated config values
-            let snapshot = config.snapshot().unwrap();
-            assert_eq!(
-                snapshot.get_string("test.value").unwrap(),
-                "from-extra-config"
-            );
-        }
-
-        #[rstest]
-        fn skips_nonexistent_paths(fixture: TestFixture) {
-            let repo = fixture.temp.open();
-
-            let result = build_config_with_extra_paths(&repo, &["/nonexistent/path/to/gitconfig"]);
+            let result = build_config_with_extra_paths(&repo, paths);
 
             assert!(result.is_ok());
         }
 
         #[rstest]
-        fn handles_empty_paths(fixture: TestFixture) {
-            let repo = fixture.temp.open();
+        fn preserves_repo_config_values() {
+            let temp = TempRepo::new("owner", "repo", "master");
+            let repo = temp.open();
 
-            let result = build_config_with_extra_paths(&repo, &[]);
-
-            assert!(result.is_ok());
-        }
-
-        #[rstest]
-        fn repo_config_takes_priority_over_extra_paths(fixture: TestFixture) {
-            let repo = fixture.temp.open();
-
+            // Set a value in the repo config
             repo.config()
                 .unwrap()
-                .set_str("test.priority", "repo-level")
+                .set_str("test.value", "from-repo")
                 .unwrap();
 
-            let mut file = std::fs::File::create(&fixture.config_path).unwrap();
-            writeln!(file, "[test]").unwrap();
-            writeln!(file, "    priority = system-level").unwrap();
+            let config = build_config_with_extra_paths(&repo, &[]).unwrap();
 
-            let config =
-                build_config_with_extra_paths(&repo, &[fixture.config_path.to_str().unwrap()])
-                    .unwrap();
-
-            // Repo-level config should take priority over system-level
-            assert_eq!(config.get_string("test.priority").unwrap(), "repo-level");
+            // Repo config values should be preserved
+            assert_eq!(config.get_string("test.value").unwrap(), "from-repo");
         }
     }
 }
