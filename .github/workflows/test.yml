@@ -2,6 +2,9 @@ name: Test
 
 on:
   push:
+    branches-ignore:
+      # Skip release-please branches (Release PRs) since they only update CHANGELOG and version
+      - release-please--branches--*
 
 permissions:
   contents: write

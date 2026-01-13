@@ -33,6 +33,16 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # Auto-merge release PR to enable automatic releases on every merge to master
+      - name: Auto-merge release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
+        run: |
+          PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
+          gh pr merge "$PR_NUMBER" --squash --auto
+
   build-release:
     needs: release-please
     # always() is required because release-please job is skipped on workflow_dispatch,
