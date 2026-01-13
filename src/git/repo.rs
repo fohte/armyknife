@@ -83,9 +83,7 @@ fn build_config_with_system_paths(repo: &Repository) -> Result<git2::Config> {
 /// Files are added at the system level (lowest priority) so they don't
 /// override user or repo-level settings.
 fn build_config_with_extra_paths(repo: &Repository, extra_paths: &[&str]) -> Result<git2::Config> {
-    let mut config = repo
-        .config()
-        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
+    let mut config = repo.config()?;
 
     for path_str in extra_paths {
         let path = std::path::Path::new(path_str);
