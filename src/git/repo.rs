@@ -249,12 +249,14 @@ mod tests {
             writeln!(file, "[test]").unwrap();
             writeln!(file, "    value = from-extra-config").unwrap();
 
-            let config =
+            let mut config =
                 build_config_with_extra_paths(&repo, &[fixture.config_path.to_str().unwrap()])
                     .unwrap();
 
+            // Take a snapshot to read the updated config values
+            let snapshot = config.snapshot().unwrap();
             assert_eq!(
-                config.get_string("test.value").unwrap(),
+                snapshot.get_string("test.value").unwrap(),
                 "from-extra-config"
             );
         }
