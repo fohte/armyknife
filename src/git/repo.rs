@@ -56,6 +56,48 @@ pub fn current_branch(repo: &Repository) -> Result<String> {
     Ok(head.shorthand().unwrap_or("HEAD").to_string())
 }
 
+/// macOS-specific system gitconfig paths that libgit2 doesn't recognize.
+/// libgit2 only looks at /etc/gitconfig for system config, but macOS has
+/// credential.helper configured in these paths.
+/// See: https://github.com/libgit2/libgit2/issues/6883
+#[cfg(target_os = "macos")]
+const MACOS_SYSTEM_CONFIGS: &[&str] = &[
+    "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
+    "/usr/local/etc/gitconfig",    // Homebrew (Intel)
+    "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
+];
+
+/// Build a git config that includes additional system gitconfig paths.
+fn build_config_with_system_paths(repo: &Repository) -> Result<git2::Config> {
+    #[cfg(target_os = "macos")]
+    let extra_paths = MACOS_SYSTEM_CONFIGS;
+    #[cfg(not(target_os = "macos"))]
+    let extra_paths: &[&str] = &[];
+
+    build_config_with_extra_paths(repo, extra_paths)
+}
+
+/// Build a git config with additional config file paths.
+///
+/// This function adds extra gitconfig files to the repository's config.
+/// Files are added at the system level (lowest priority) so they don't
+/// override user or repo-level settings.
+fn build_config_with_extra_paths(repo: &Repository, extra_paths: &[&str]) -> Result<git2::Config> {
+    let mut config = repo.config()?;
+
+    for path_str in extra_paths {
+        let path = std::path::Path::new(path_str);
+        if path.exists() {
+            // Add at system level so it has lowest priority.
+            // Intentionally ignore errors: if the file is unreadable or malformed,
+            // we should still attempt the fetch with the remaining config.
+            let _ = config.add_file(path, git2::ConfigLevel::System, false);
+        }
+    }
+
+    Ok(config)
+}
+
 /// Get the main branch name (main or master)
 pub fn get_main_branch() -> Result<String> {
     let repo = open_repo()?;
@@ -92,9 +134,7 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
         .find_remote("origin")
         .map_err(|e| GitError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
 
-    let config = repo
-        .config()
-        .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
+    let config = build_config_with_system_paths(repo)?;
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed_types| {
@@ -177,6 +217,40 @@ mod tests {
         match expected {
             Some(branch) => assert_eq!(result.unwrap(), branch),
             None => assert!(result.is_err()),
+        }
+    }
+
+    mod build_config_with_extra_paths {
+        use super::*;
+
+        #[rstest]
+        #[case::empty_paths(&[])]
+        #[case::nonexistent_path(&["/nonexistent/path/to/gitconfig"])]
+        #[case::multiple_nonexistent(&["/nonexistent/a", "/nonexistent/b"])]
+        fn succeeds_with_various_paths(#[case] paths: &[&str]) {
+            let temp = TempRepo::new("owner", "repo", "master");
+            let repo = temp.open();
+
+            let result = build_config_with_extra_paths(&repo, paths);
+
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn preserves_repo_config_values() {
+            let temp = TempRepo::new("owner", "repo", "master");
+            let repo = temp.open();
+
+            // Set a value in the repo config
+            repo.config()
+                .unwrap()
+                .set_str("test.value", "from-repo")
+                .unwrap();
+
+            let config = build_config_with_extra_paths(&repo, &[]).unwrap();
+
+            // Repo config values should be preserved
+            assert_eq!(config.get_string("test.value").unwrap(), "from-repo");
         }
     }
 }
