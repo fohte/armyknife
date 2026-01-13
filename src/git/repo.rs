@@ -56,33 +56,44 @@ pub fn current_branch(repo: &Repository) -> Result<String> {
     Ok(head.shorthand().unwrap_or("HEAD").to_string())
 }
 
-/// Build a git config that includes macOS system gitconfig paths.
-///
+/// macOS-specific system gitconfig paths that libgit2 doesn't recognize.
 /// libgit2 only looks at /etc/gitconfig for system config, but macOS has
-/// credential.helper configured in Homebrew or Xcode paths.
+/// credential.helper configured in these paths.
 /// See: https://github.com/libgit2/libgit2/issues/6883
+#[cfg(target_os = "macos")]
+const MACOS_SYSTEM_CONFIGS: &[&str] = &[
+    "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
+    "/usr/local/etc/gitconfig",    // Homebrew (Intel)
+    "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
+];
+
+/// Build a git config that includes additional system gitconfig paths.
 fn build_config_with_system_paths(repo: &Repository) -> Result<git2::Config> {
+    #[cfg(target_os = "macos")]
+    let extra_paths = MACOS_SYSTEM_CONFIGS;
+    #[cfg(not(target_os = "macos"))]
+    let extra_paths: &[&str] = &[];
+
+    build_config_with_extra_paths(repo, extra_paths)
+}
+
+/// Build a git config with additional config file paths.
+///
+/// This function adds extra gitconfig files to the repository's config.
+/// Files are added at the system level (lowest priority) so they don't
+/// override user or repo-level settings.
+fn build_config_with_extra_paths(repo: &Repository, extra_paths: &[&str]) -> Result<git2::Config> {
     let mut config = repo
         .config()
         .map_err(|e| GitError::CommandFailed(format!("Failed to get git config: {e}")))?;
 
-    // macOS-specific system gitconfig paths that libgit2 doesn't recognize
-    #[cfg(target_os = "macos")]
-    {
-        const MACOS_SYSTEM_CONFIGS: [&str; 3] = [
-            "/opt/homebrew/etc/gitconfig", // Homebrew (Apple Silicon)
-            "/usr/local/etc/gitconfig",    // Homebrew (Intel)
-            "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig", // Xcode CLT
-        ];
-
-        for path in MACOS_SYSTEM_CONFIGS {
-            let path = std::path::Path::new(path);
-            if path.exists() {
-                // Add at system level so it has lowest priority.
-                // Intentionally ignore errors: if the file is unreadable or malformed,
-                // we should still attempt the fetch with the remaining config.
-                let _ = config.add_file(path, git2::ConfigLevel::System, false);
-            }
+    for path_str in extra_paths {
+        let path = std::path::Path::new(path_str);
+        if path.exists() {
+            // Add at system level so it has lowest priority.
+            // Intentionally ignore errors: if the file is unreadable or malformed,
+            // we should still attempt the fetch with the remaining config.
+            let _ = config.add_file(path, git2::ConfigLevel::System, false);
         }
     }
 
@@ -208,6 +219,83 @@ mod tests {
         match expected {
             Some(branch) => assert_eq!(result.unwrap(), branch),
             None => assert!(result.is_err()),
+        }
+    }
+
+    mod build_config_with_extra_paths {
+        use super::*;
+        use rstest::fixture;
+        use std::io::Write;
+
+        struct TestFixture {
+            temp: TempRepo,
+            config_path: std::path::PathBuf,
+        }
+
+        #[fixture]
+        fn fixture() -> TestFixture {
+            let temp = TempRepo::new("owner", "repo", "master");
+            let config_dir = temp.path().join("extra-config");
+            std::fs::create_dir_all(&config_dir).unwrap();
+            let config_path = config_dir.join("gitconfig");
+            TestFixture { temp, config_path }
+        }
+
+        #[rstest]
+        fn adds_existing_config_file_to_config(fixture: TestFixture) {
+            let repo = fixture.temp.open();
+
+            let mut file = std::fs::File::create(&fixture.config_path).unwrap();
+            writeln!(file, "[test]").unwrap();
+            writeln!(file, "    value = from-extra-config").unwrap();
+
+            let config =
+                build_config_with_extra_paths(&repo, &[fixture.config_path.to_str().unwrap()])
+                    .unwrap();
+
+            assert_eq!(
+                config.get_string("test.value").unwrap(),
+                "from-extra-config"
+            );
+        }
+
+        #[rstest]
+        fn skips_nonexistent_paths(fixture: TestFixture) {
+            let repo = fixture.temp.open();
+
+            let result = build_config_with_extra_paths(&repo, &["/nonexistent/path/to/gitconfig"]);
+
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn handles_empty_paths(fixture: TestFixture) {
+            let repo = fixture.temp.open();
+
+            let result = build_config_with_extra_paths(&repo, &[]);
+
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn repo_config_takes_priority_over_extra_paths(fixture: TestFixture) {
+            let repo = fixture.temp.open();
+
+            repo.config()
+                .unwrap()
+                .set_str("test.priority", "repo-level")
+                .unwrap();
+
+            let mut file = std::fs::File::create(&fixture.config_path).unwrap();
+            writeln!(file, "[test]").unwrap();
+            writeln!(file, "    priority = system-level").unwrap();
+
+            let config =
+                build_config_with_extra_paths(&repo, &[fixture.config_path.to_str().unwrap()])
+                    .unwrap();
+
+            // Repo-level config should take priority over system-level
+            assert_eq!(config.get_string("test.priority").unwrap(), "repo-level");
         }
     }
 }
