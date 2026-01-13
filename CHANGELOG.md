@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.18](https://github.com/fohte/armyknife/compare/v0.1.17...v0.1.18) (2026-01-13)
+
+
+### Features
+
+* **cli:** support shell completion ([#69](https://github.com/fohte/armyknife/issues/69)) ([7898861](https://github.com/fohte/armyknife/commit/78988618373f108368c806e76d1ed96a72910cb9))
+
 ## [0.1.17](https://github.com/fohte/armyknife/compare/v0.1.16...v0.1.17) (2026-01-13)
 
 
