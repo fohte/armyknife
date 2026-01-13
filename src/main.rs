@@ -29,7 +29,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !matches!(command, Commands::Update | Commands::Completions { .. }) {
         // Avoid running the updater twice when `a update` was requested,
         // and skip for completions to keep output clean.
-        update::auto_update();
+        update::auto_update().await;
     }
 
     match command {
