@@ -1,4 +1,5 @@
 mod ai;
+mod cache;
 mod cli;
 mod gh;
 mod git;

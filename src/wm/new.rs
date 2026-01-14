@@ -8,31 +8,25 @@ use super::git::{
     BRANCH_PREFIX, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
     local_branch_exists, remote_branch_exists,
 };
+use crate::cache;
 use crate::git::fetch_with_prune;
 use crate::name_branch::{detect_backend, generate_branch_name};
 use crate::tmux;
 
-/// Get the path to store the prompt for a repository.
-/// Uses XDG state directory: ~/.local/state/armyknife/<repo-name>/prompt.md
-fn get_prompt_state_path(repo_root: &str) -> Option<PathBuf> {
-    let state_dir = dirs::state_dir()?;
-    let repo_name = Path::new(repo_root).file_name()?.to_str()?.to_string();
-    Some(
-        state_dir
-            .join("armyknife")
-            .join(repo_name)
-            .join("prompt.md"),
-    )
+/// Get the cache path for prompt recovery.
+fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
+    let repo_name = Path::new(repo_root).file_name()?.to_str()?;
+    cache::wm_prompt(repo_name)
 }
 
-/// Save prompt to state directory for recovery.
-fn save_prompt_state(repo_root: &str, prompt: &str) -> Result<PathBuf> {
-    let path = get_prompt_state_path(repo_root)
-        .ok_or_else(|| WmError::CommandFailed("Failed to determine state directory".into()))?;
+/// Save prompt to cache directory for recovery.
+fn save_prompt_cache(repo_root: &str, prompt: &str) -> Result<PathBuf> {
+    let path = get_prompt_cache_path(repo_root)
+        .ok_or_else(|| WmError::CommandFailed("Failed to determine cache directory".into()))?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            WmError::CommandFailed(format!("Failed to create state directory: {e}"))
+            WmError::CommandFailed(format!("Failed to create cache directory: {e}"))
         })?;
     }
 
@@ -42,9 +36,9 @@ fn save_prompt_state(repo_root: &str, prompt: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Delete the saved prompt state after successful completion.
-fn delete_prompt_state(repo_root: &str) {
-    if let Some(path) = get_prompt_state_path(repo_root) {
+/// Delete the saved prompt cache after successful completion.
+fn delete_prompt_cache(repo_root: &str) {
+    if let Some(path) = get_prompt_cache_path(repo_root) {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -291,18 +285,18 @@ fn run_inner(args: &NewArgs) -> Result<()> {
 
     let repo_root = get_repo_root()?;
 
-    // Save prompt to state directory for recovery in case of failure
-    let prompt_state_path = prompt
+    // Save prompt to cache directory for recovery in case of failure
+    let prompt_cache_path = prompt
         .as_ref()
-        .map(|p| save_prompt_state(&repo_root, p))
+        .map(|p| save_prompt_cache(&repo_root, p))
         .transpose()?;
 
-    // Run the actual worktree creation, cleaning up prompt state on success
+    // Run the actual worktree creation, cleaning up prompt cache on success
     let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root);
 
     if result.is_ok() {
-        delete_prompt_state(&repo_root);
-    } else if let Some(path) = prompt_state_path {
+        delete_prompt_cache(&repo_root);
+    } else if let Some(path) = prompt_cache_path {
         eprintln!("Prompt saved to: {}", path.display());
     }
 

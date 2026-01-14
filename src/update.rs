@@ -1,21 +1,15 @@
 use self_update::cargo_crate_version;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::cache;
 
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
 const BIN_NAME: &str = "a";
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
-
-fn cache_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("armyknife"))
-}
-
-fn last_check_file() -> Option<PathBuf> {
-    cache_dir().map(|d| d.join("last_update_check"))
-}
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
     fs::read_to_string(path)
@@ -25,7 +19,7 @@ fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
 }
 
 fn should_check_for_update() -> bool {
-    let Some(path) = last_check_file() else {
+    let Some(path) = cache::update_last_check() else {
         return true;
     };
 
@@ -44,7 +38,7 @@ fn write_last_check_time(path: &Path, timestamp: u64) -> std::io::Result<()> {
 }
 
 fn update_last_check_time() {
-    let Some(path) = last_check_file() else {
+    let Some(path) = cache::update_last_check() else {
         return;
     };
 
