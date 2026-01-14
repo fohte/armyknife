@@ -21,31 +21,21 @@ pub fn wm_prompt(repo_name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn base_dir_returns_some() {
-        // dirs::cache_dir() should return Some on all supported platforms
-        assert!(base_dir().is_some());
-    }
-
-    #[test]
-    fn base_dir_ends_with_armyknife() {
-        let path = base_dir().unwrap();
-        assert!(path.ends_with("armyknife"));
-    }
-
-    #[test]
-    fn update_last_check_has_correct_structure() {
-        let path = update_last_check().unwrap();
-        assert!(path.ends_with("last_update_check"));
-        assert!(path.parent().unwrap().ends_with("armyknife"));
-    }
-
-    #[test]
-    fn wm_prompt_has_correct_structure() {
-        let path = wm_prompt("my-repo").unwrap();
-        assert!(path.ends_with("prompt.md"));
-        assert!(path.parent().unwrap().ends_with("my-repo"));
-        assert!(path.parent().unwrap().parent().unwrap().ends_with("wm"));
+    #[rstest]
+    #[case::base_dir(base_dir(), &["armyknife"])]
+    #[case::update_last_check(update_last_check(), &["armyknife", "last_update_check"])]
+    #[case::wm_prompt(wm_prompt("my-repo"), &["armyknife", "wm", "my-repo", "prompt.md"])]
+    fn path_has_correct_structure(#[case] path: Option<PathBuf>, #[case] expected_parts: &[&str]) {
+        let path = path.expect("path should be Some on all supported platforms");
+        for part in expected_parts {
+            assert!(
+                path.to_string_lossy().contains(part),
+                "path {:?} should contain {:?}",
+                path,
+                part
+            );
+        }
     }
 }

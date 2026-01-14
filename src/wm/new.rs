@@ -640,20 +640,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn get_prompt_cache_path_extracts_repo_name() {
-        let path = get_prompt_cache_path("/home/user/projects/my-repo").unwrap();
-        assert!(path.ends_with("prompt.md"));
-        assert!(path.parent().unwrap().ends_with("my-repo"));
+    #[rstest]
+    #[case::extracts_repo_name("/home/user/projects/my-repo", Some("my-repo"))]
+    #[case::root_returns_none("/", None)]
+    fn get_prompt_cache_path_behavior(
+        #[case] repo_root: &str,
+        #[case] expected_repo: Option<&str>,
+    ) {
+        let path = get_prompt_cache_path(repo_root);
+        match expected_repo {
+            Some(repo) => {
+                let p = path.unwrap();
+                assert!(p.ends_with("prompt.md"));
+                assert!(p.parent().unwrap().ends_with(repo));
+            }
+            None => assert!(path.is_none()),
+        }
     }
 
-    #[test]
-    fn get_prompt_cache_path_returns_none_for_root() {
-        // Root path has no file_name component
-        assert!(get_prompt_cache_path("/").is_none());
-    }
-
-    #[test]
+    #[rstest]
     fn save_and_delete_prompt_cache() {
         let temp_dir = TempDir::new().unwrap();
         let repo_root = temp_dir.path().join("test-repo");
@@ -671,7 +676,7 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[test]
+    #[rstest]
     fn save_prompt_cache_creates_parent_directories() {
         let temp_dir = TempDir::new().unwrap();
         let repo_root = temp_dir.path().join("nested").join("path").join("repo");
@@ -681,7 +686,7 @@ mod tests {
         assert!(path.exists());
     }
 
-    #[test]
+    #[rstest]
     fn delete_prompt_cache_does_not_fail_for_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
         let repo_root = temp_dir.path().join("nonexistent-repo");
