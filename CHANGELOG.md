@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.22](https://github.com/fohte/armyknife/compare/v0.1.21...v0.1.22) (2026-01-14)
+
+
+### Features
+
+* **ai:** add command to wait for Gemini Code Assist review ([#77](https://github.com/fohte/armyknife/issues/77)) ([058ff99](https://github.com/fohte/armyknife/commit/058ff996fb7a71dfe335a740872786e8956a4f2b))
+
 ## [0.1.21](https://github.com/fohte/armyknife/compare/v0.1.20...v0.1.21) (2026-01-14)
 
 
