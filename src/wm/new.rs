@@ -1,6 +1,7 @@
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{
@@ -10,6 +11,82 @@ use super::git::{
 use crate::git::fetch_with_prune;
 use crate::name_branch::{detect_backend, generate_branch_name};
 use crate::tmux;
+
+/// Get the path to store the prompt for a repository.
+/// Uses XDG state directory: ~/.local/state/armyknife/<repo-name>/prompt.md
+fn get_prompt_state_path(repo_root: &str) -> Option<PathBuf> {
+    let state_dir = dirs::state_dir()?;
+    let repo_name = Path::new(repo_root).file_name()?.to_str()?.to_string();
+    Some(
+        state_dir
+            .join("armyknife")
+            .join(repo_name)
+            .join("prompt.md"),
+    )
+}
+
+/// Save prompt to state directory for recovery.
+fn save_prompt_state(repo_root: &str, prompt: &str) -> Result<PathBuf> {
+    let path = get_prompt_state_path(repo_root)
+        .ok_or_else(|| WmError::CommandFailed("Failed to determine state directory".into()))?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            WmError::CommandFailed(format!("Failed to create state directory: {e}"))
+        })?;
+    }
+
+    std::fs::write(&path, prompt)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to save prompt: {e}")))?;
+
+    Ok(path)
+}
+
+/// Delete the saved prompt state after successful completion.
+fn delete_prompt_state(repo_root: &str) {
+    if let Some(path) = get_prompt_state_path(repo_root) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Open $EDITOR to let user input a prompt.
+/// Returns the prompt text, or None if the user didn't provide any input.
+fn open_editor_for_prompt() -> Result<Option<String>> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    // Create an empty temp file for the prompt
+    let temp_file = tempfile::Builder::new()
+        .prefix("wm-prompt-")
+        .suffix(".md")
+        .tempfile()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+
+    let temp_path = temp_file.path().to_path_buf();
+
+    // Launch editor
+    let status = Command::new(&editor)
+        .arg(&temp_path)
+        .status()
+        .map_err(|e| WmError::CommandFailed(format!("Failed to launch editor '{editor}': {e}")))?;
+
+    if !status.success() {
+        return Err(WmError::CommandFailed(format!(
+            "Editor exited with status: {status}"
+        )));
+    }
+
+    // Read the content
+    let content = std::fs::read_to_string(&temp_path)
+        .map_err(|e| WmError::CommandFailed(format!("Failed to read temp file: {e}")))?;
+
+    let prompt = content.trim().to_string();
+
+    if prompt.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(prompt))
+    }
+}
 
 /// Mode for creating a worktree
 enum WorktreeAddMode<'a> {
@@ -154,24 +231,51 @@ pub struct NewArgs {
     pub prompt: Option<String>,
 }
 
-/// Resolve branch name: use provided name or generate from prompt.
-fn resolve_branch_name(args: &NewArgs) -> Result<String> {
-    resolve_branch_name_with_backend(args, || detect_backend())
+/// Resolved branch name and prompt information
+struct ResolvedArgs {
+    branch_name: String,
+    prompt: Option<String>,
 }
 
-/// Internal implementation that accepts a backend factory for testability.
-fn resolve_branch_name_with_backend<F>(args: &NewArgs, backend_factory: F) -> Result<String>
+/// Resolve branch name: use provided name or generate from prompt.
+/// If no name and no prompt provided, opens editor to get prompt.
+fn resolve_args(args: &NewArgs) -> Result<ResolvedArgs> {
+    resolve_args_with_deps(args, || detect_backend(), open_editor_for_prompt)
+}
+
+/// Internal implementation that accepts dependencies for testability.
+fn resolve_args_with_deps<F, E>(
+    args: &NewArgs,
+    backend_factory: F,
+    editor_fn: E,
+) -> Result<ResolvedArgs>
 where
     F: FnOnce() -> Box<dyn crate::name_branch::Backend>,
+    E: FnOnce() -> Result<Option<String>>,
 {
     match (&args.name, &args.prompt) {
-        (Some(name), _) => Ok(name.clone()),
+        (Some(name), prompt) => Ok(ResolvedArgs {
+            branch_name: name.clone(),
+            prompt: prompt.clone(),
+        }),
         (None, Some(prompt)) => {
             let backend = backend_factory();
             let generated = generate_branch_name(prompt, backend.as_ref())?;
-            Ok(generated)
+            Ok(ResolvedArgs {
+                branch_name: generated,
+                prompt: Some(prompt.clone()),
+            })
         }
-        (None, None) => Err(WmError::MissingBranchName),
+        (None, None) => {
+            // Open editor to get prompt
+            let prompt = editor_fn()?.ok_or(WmError::Cancelled)?;
+            let backend = backend_factory();
+            let generated = generate_branch_name(&prompt, backend.as_ref())?;
+            Ok(ResolvedArgs {
+                branch_name: generated,
+                prompt: Some(prompt),
+            })
+        }
     }
 }
 
@@ -181,13 +285,40 @@ pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
-    let name = resolve_branch_name(args)?;
+    let resolved = resolve_args(args)?;
+    let name = resolved.branch_name;
+    let prompt = resolved.prompt;
+
     let repo_root = get_repo_root()?;
 
+    // Save prompt to state directory for recovery in case of failure
+    let prompt_state_path = prompt
+        .as_ref()
+        .map(|p| save_prompt_state(&repo_root, p))
+        .transpose()?;
+
+    // Run the actual worktree creation, cleaning up prompt state on success
+    let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root);
+
+    if result.is_ok() {
+        delete_prompt_state(&repo_root);
+    } else if let Some(path) = prompt_state_path {
+        eprintln!("Prompt saved to: {}", path.display());
+    }
+
+    result
+}
+
+fn run_worktree_creation(
+    args: &NewArgs,
+    name: &str,
+    prompt: Option<&str>,
+    repo_root: &str,
+) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
 
     // Determine worktree directory name from branch name
-    let worktree_name = branch_to_worktree_name(&name);
+    let worktree_name = branch_to_worktree_name(name);
     let worktrees_dir = format!("{repo_root}/.worktrees");
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
@@ -200,7 +331,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     fetch_with_prune(&repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
 
     // Remove BRANCH_PREFIX to avoid double prefix
-    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(&name);
+    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
 
     // Determine action based on branch existence and flags
     if args.force {
@@ -220,9 +351,9 @@ fn run_inner(args: &NewArgs) -> Result<()> {
                 base: &base_branch,
             },
         )?;
-    } else if branch_exists(&name) {
+    } else if branch_exists(name) {
         // Branch exists with the exact name provided
-        add_worktree_for_branch(&repo, &worktree_dir, &name)?;
+        add_worktree_for_branch(&repo, &worktree_dir, name)?;
     } else {
         let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
@@ -250,10 +381,10 @@ fn run_inner(args: &NewArgs) -> Result<()> {
 
     // Setup tmux window with nvim + claude
     setup_tmux_window(
-        &repo_root,
+        repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
-        args.prompt.as_deref(),
+        prompt,
     )?;
 
     Ok(())
@@ -444,13 +575,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_name(Some("my-branch"), None, "my-branch")]
-    #[case::name_takes_priority_over_prompt(Some("my-branch"), Some("some task"), "my-branch")]
-    #[case::generate_from_prompt(None, Some("fix login bug"), "fix-login-bug")]
-    fn resolve_branch_name_returns_expected(
+    #[case::explicit_name(Some("my-branch"), None, "my-branch", None)]
+    #[case::name_takes_priority_over_prompt(
+        Some("my-branch"),
+        Some("some task"),
+        "my-branch",
+        Some("some task")
+    )]
+    #[case::generate_from_prompt(
+        None,
+        Some("fix login bug"),
+        "fix-login-bug",
+        Some("fix login bug")
+    )]
+    fn resolve_args_returns_expected(
         #[case] name: Option<&str>,
         #[case] prompt: Option<&str>,
-        #[case] expected: &str,
+        #[case] expected_branch: &str,
+        #[case] expected_prompt: Option<&str>,
     ) {
         let args = NewArgs {
             name: name.map(String::from),
@@ -458,20 +600,48 @@ mod tests {
             force: false,
             prompt: prompt.map(String::from),
         };
-        let result = resolve_branch_name_with_backend(&args, || mock_backend("fix-login-bug"));
+        let result = resolve_args_with_deps(
+            &args,
+            || mock_backend("fix-login-bug"),
+            || panic!("editor should not be called"),
+        )
+        .unwrap();
 
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result.branch_name, expected_branch);
+        assert_eq!(result.prompt.as_deref(), expected_prompt);
     }
 
-    #[test]
-    fn resolve_branch_name_without_name_and_prompt_returns_error() {
+    #[rstest]
+    #[case::editor_returns_prompt(
+        Some("prompt from editor"),
+        Ok(("editor-branch", Some("prompt from editor")))
+    )]
+    #[case::editor_returns_empty(None, Err(WmError::Cancelled))]
+    fn resolve_args_with_editor(
+        #[case] editor_input: Option<&str>,
+        #[case] expected: std::result::Result<(&str, Option<&str>), WmError>,
+    ) {
         let args = NewArgs {
             name: None,
             from: None,
             force: false,
             prompt: None,
         };
-        let result = resolve_branch_name_with_backend(&args, || mock_backend("unused"));
-        assert!(matches!(result, Err(WmError::MissingBranchName)));
+        let result = resolve_args_with_deps(
+            &args,
+            || mock_backend("editor-branch"),
+            || Ok(editor_input.map(String::from)),
+        );
+
+        match expected {
+            Ok((branch, prompt)) => {
+                let resolved = result.unwrap();
+                assert_eq!(resolved.branch_name, branch);
+                assert_eq!(resolved.prompt.as_deref(), prompt);
+            }
+            Err(_) => {
+                assert!(matches!(result, Err(WmError::Cancelled)));
+            }
+        }
     }
 }

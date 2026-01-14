@@ -11,7 +11,7 @@ pub enum WmError {
     #[error("Worktree not found: {0}")]
     WorktreeNotFound(String),
 
-    #[error("Operation cancelled")]
+    #[error("Cancelled: no prompt provided")]
     Cancelled,
 
     #[error("Command failed: {0}")]
@@ -25,9 +25,6 @@ pub enum WmError {
 
     #[error("Git error: {0}")]
     Git(#[from] GitError),
-
-    #[error("Branch name is required. Provide a name or use --prompt to auto-generate.")]
-    MissingBranchName,
 
     #[error("Branch name generation failed: {0}")]
     NameBranch(#[from] name_branch::Error),
