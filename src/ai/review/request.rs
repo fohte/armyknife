@@ -1,13 +1,11 @@
 //! Request a review from a bot reviewer.
 
 use super::client::{ReviewClient, get_client};
-use super::common::{get_pr_number, get_repo_owner_and_name};
-use super::error::{Result, ReviewError};
+use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_review};
+use super::error::Result;
 use super::reviewer::Reviewer;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::Args;
-use std::io::Write;
-use std::time::{Duration, Instant};
 
 const POLL_INTERVAL_SECS: u64 = 15;
 const TIMEOUT_SECS: u64 = 300; // 5 minutes
@@ -91,60 +89,15 @@ pub(crate) async fn run_request(
     }
 
     // Poll for new review
-    wait_for_review(client, owner, repo, pr_number, start_time, args).await?;
+    let config = WaitConfig {
+        reviewer: args.reviewer,
+        interval: args.interval,
+        timeout: args.timeout,
+    };
+    wait_for_review(client, owner, repo, pr_number, start_time, &config).await?;
 
     println!("\n{:?} review completed!", args.reviewer);
     Ok(())
-}
-
-/// Poll until reviewer posts a review after start_time
-async fn wait_for_review(
-    client: &dyn ReviewClient,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
-    start_time: DateTime<Utc>,
-    args: &RequestArgs,
-) -> Result<()> {
-    let poll_interval = Duration::from_secs(args.interval);
-    let timeout = Duration::from_secs(args.timeout);
-    let started_at = Instant::now();
-
-    loop {
-        // Check timeout
-        let elapsed = started_at.elapsed();
-        if elapsed >= timeout {
-            return Err(ReviewError::Timeout(args.timeout));
-        }
-
-        // Check for new review
-        if let Some(review_time) = client
-            .find_latest_review(owner, repo, pr_number, args.reviewer)
-            .await?
-            && review_time > start_time
-        {
-            return Ok(());
-        }
-
-        // Check if reviewer posted an "unable to" comment
-        if let Some(unable_msg) = client
-            .check_reviewer_unable_comment(owner, repo, pr_number, start_time, args.reviewer)
-            .await?
-        {
-            return Err(ReviewError::ReviewerUnable(unable_msg));
-        }
-
-        // Print progress
-        let elapsed_secs = elapsed.as_secs();
-        print!(
-            "\rWaiting for {:?} review... ({elapsed_secs}s elapsed, timeout: {}s)   ",
-            args.reviewer, args.timeout
-        );
-        std::io::stdout().flush().ok();
-
-        // Wait before next poll
-        tokio::time::sleep(poll_interval).await;
-    }
 }
 
 #[cfg(test)]

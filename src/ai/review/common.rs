@@ -1,8 +1,13 @@
 //! Common utilities for review commands.
 
+use super::client::ReviewClient;
 use super::error::{Result, ReviewError};
+use super::reviewer::Reviewer;
 use crate::git;
 use crate::github::{OctocrabClient, PrClient, PrState};
+use chrono::{DateTime, Utc};
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 /// Get repository owner and name from argument or git remote
 pub fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
@@ -49,6 +54,63 @@ pub async fn get_pr_number(owner: &str, repo: &str, pr_arg: Option<u64>) -> Resu
             Ok(pr_number)
         }
         _ => Err(ReviewError::NoPrFound),
+    }
+}
+
+/// Configuration for polling a review
+pub struct WaitConfig {
+    pub reviewer: Reviewer,
+    pub interval: u64,
+    pub timeout: u64,
+}
+
+/// Poll until reviewer posts a review after start_time
+pub async fn wait_for_review(
+    client: &dyn ReviewClient,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    start_time: DateTime<Utc>,
+    config: &WaitConfig,
+) -> Result<()> {
+    let poll_interval = Duration::from_secs(config.interval);
+    let timeout_duration = Duration::from_secs(config.timeout);
+    let started_at = Instant::now();
+
+    loop {
+        // Check timeout
+        let elapsed = started_at.elapsed();
+        if elapsed >= timeout_duration {
+            return Err(ReviewError::Timeout(config.timeout));
+        }
+
+        // Check for new review
+        if let Some(review_time) = client
+            .find_latest_review(owner, repo, pr_number, config.reviewer)
+            .await?
+            && review_time > start_time
+        {
+            return Ok(());
+        }
+
+        // Check if reviewer posted an "unable to" comment
+        if let Some(unable_msg) = client
+            .check_reviewer_unable_comment(owner, repo, pr_number, start_time, config.reviewer)
+            .await?
+        {
+            return Err(ReviewError::ReviewerUnable(unable_msg));
+        }
+
+        // Print progress
+        let elapsed_secs = elapsed.as_secs();
+        print!(
+            "\rWaiting for {:?} review... ({elapsed_secs}s elapsed, timeout: {}s)   ",
+            config.reviewer, config.timeout
+        );
+        std::io::stdout().flush().ok();
+
+        // Wait before next poll
+        tokio::time::sleep(poll_interval).await;
     }
 }
 

@@ -190,11 +190,7 @@ impl ReviewClient for OctocrabReviewClient {
                     .parse()
                     .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()))?;
 
-                latest = Some(match latest {
-                    Some(prev) if created_at > prev => created_at,
-                    Some(prev) => prev,
-                    None => created_at,
-                });
+                latest = Some(latest.map_or(created_at, |prev| prev.max(created_at)));
             }
         }
 
