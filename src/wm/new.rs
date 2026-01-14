@@ -292,11 +292,10 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     let repo_root = get_repo_root()?;
 
     // Save prompt to state directory for recovery in case of failure
-    let prompt_state_path = if let Some(ref p) = prompt {
-        Some(save_prompt_state(&repo_root, p)?)
-    } else {
-        None
-    };
+    let prompt_state_path = prompt
+        .as_ref()
+        .map(|p| save_prompt_state(&repo_root, p))
+        .transpose()?;
 
     // Run the actual worktree creation, cleaning up prompt state on success
     let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root);
