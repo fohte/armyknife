@@ -179,22 +179,20 @@ impl ReviewClient for OctocrabReviewClient {
             .map_err(|e| ReviewError::RepoInfoError(e.to_string()))?;
 
         let bot_login = reviewer.bot_login();
-        let mut latest: Option<DateTime<Utc>> = None;
 
-        for review in &pr_data.reviews {
-            if let Some(author) = &review.author
-                && author.login == bot_login
-            {
-                let created_at: DateTime<Utc> = review
+        pr_data
+            .reviews
+            .iter()
+            .filter(|review| review.author.as_ref().is_some_and(|a| a.login == bot_login))
+            .try_fold(None, |acc, review| {
+                review
                     .created_at
-                    .parse()
-                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()))?;
-
-                latest = Some(latest.map_or(created_at, |prev| prev.max(created_at)));
-            }
-        }
-
-        Ok(latest)
+                    .parse::<DateTime<Utc>>()
+                    .map(|created_at| {
+                        Some(acc.map_or(created_at, |prev: DateTime<Utc>| prev.max(created_at)))
+                    })
+                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()))
+            })
     }
 
     async fn check_reviewer_unable_comment(
@@ -210,18 +208,22 @@ impl ReviewClient for OctocrabReviewClient {
 
         let pr_info = self.fetch_pr_info(owner, repo, pr_number).await?;
 
-        for comment in &pr_info.comments.nodes {
-            if let Some(author) = &comment.author
-                && author.login == bot_login
-                && comment.body.contains(unable_marker)
-                && let Ok(created_at) = comment.created_at.parse::<DateTime<Utc>>()
-                && created_at > start_time
-            {
-                return Ok(Some(comment.body.clone()));
-            }
-        }
-
-        Ok(None)
+        Ok(pr_info
+            .comments
+            .nodes
+            .iter()
+            .find(|comment| {
+                comment
+                    .author
+                    .as_ref()
+                    .is_some_and(|a| a.login == bot_login)
+                    && comment.body.contains(unable_marker)
+                    && comment
+                        .created_at
+                        .parse::<DateTime<Utc>>()
+                        .is_ok_and(|created_at| created_at > start_time)
+            })
+            .map(|comment| comment.body.clone()))
     }
 
     async fn has_reviewer_activity(
@@ -249,18 +251,20 @@ impl ReviewClient for OctocrabReviewClient {
     ) -> Result<Option<DateTime<Utc>>> {
         let pr_info = self.fetch_pr_info(owner, repo, pr_number).await?;
 
-        let Some(commit_node) = pr_info.commits.nodes.first() else {
-            return Ok(None);
-        };
-
-        commit_node
-            .commit
-            .committed_date
-            .parse::<DateTime<Utc>>()
-            .map(Some)
-            .map_err(|_| {
-                ReviewError::TimestampParseError(commit_node.commit.committed_date.clone())
+        pr_info
+            .commits
+            .nodes
+            .first()
+            .map(|commit_node| {
+                commit_node
+                    .commit
+                    .committed_date
+                    .parse::<DateTime<Utc>>()
+                    .map_err(|_| {
+                        ReviewError::TimestampParseError(commit_node.commit.committed_date.clone())
+                    })
             })
+            .transpose()
     }
 
     async fn post_review_comment(
