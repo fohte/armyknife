@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.21](https://github.com/fohte/armyknife/compare/v0.1.20...v0.1.21) (2026-01-14)
+
+
+### Features
+
+* **wm:** support editor input for prompt when `wm new` is invoked without arguments ([#75](https://github.com/fohte/armyknife/issues/75)) ([b16aea9](https://github.com/fohte/armyknife/commit/b16aea92b6bfa049afb018d9889f46f67d2eccc1))
+
 ## [0.1.20](https://github.com/fohte/armyknife/compare/v0.1.19...v0.1.20) (2026-01-13)
 
 
