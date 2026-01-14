@@ -447,6 +447,7 @@ mod tests {
     use super::*;
     use crate::testing::TestRepo;
     use git2::Signature;
+    use tempfile::TempDir;
 
     #[test]
     fn build_claude_command_without_prompt_returns_claude() {
@@ -637,5 +638,56 @@ mod tests {
                 assert!(matches!(result, Err(WmError::Cancelled)));
             }
         }
+    }
+
+    #[test]
+    fn get_prompt_cache_path_extracts_repo_name() {
+        let path = get_prompt_cache_path("/home/user/projects/my-repo").unwrap();
+        assert!(path.ends_with("prompt.md"));
+        assert!(path.parent().unwrap().ends_with("my-repo"));
+    }
+
+    #[test]
+    fn get_prompt_cache_path_returns_none_for_root() {
+        // Root path has no file_name component
+        assert!(get_prompt_cache_path("/").is_none());
+    }
+
+    #[test]
+    fn save_and_delete_prompt_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_root = temp_dir.path().join("test-repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let prompt = "test prompt content";
+        let path = save_prompt_cache(repo_root.to_str().unwrap(), prompt).unwrap();
+
+        // File should exist with correct content
+        assert!(path.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), prompt);
+
+        // Delete should remove the file
+        delete_prompt_cache(repo_root.to_str().unwrap());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_prompt_cache_creates_parent_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_root = temp_dir.path().join("nested").join("path").join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let path = save_prompt_cache(repo_root.to_str().unwrap(), "test").unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn delete_prompt_cache_does_not_fail_for_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_root = temp_dir.path().join("nonexistent-repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        // Should not panic or error
+        delete_prompt_cache(repo_root.to_str().unwrap());
     }
 }
