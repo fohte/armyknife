@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.23](https://github.com/fohte/armyknife/compare/v0.1.22...v0.1.23) (2026-01-15)
+
+
+### Bug Fixes
+
+* **wm:** use cache directory instead of state directory for macOS compatibility ([#81](https://github.com/fohte/armyknife/issues/81)) ([fb08e18](https://github.com/fohte/armyknife/commit/fb08e1847b3afdbf78066bd49680a86d29cf2c0b))
+
 ## [0.1.22](https://github.com/fohte/armyknife/compare/v0.1.21...v0.1.22) (2026-01-14)
 
 
