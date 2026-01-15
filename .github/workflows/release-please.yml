@@ -41,7 +41,15 @@ jobs:
           PR_JSON: ${{ steps.release.outputs.pr }}
         run: |
           PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
-          gh pr merge "$PR_NUMBER" --squash --auto -R "${{ github.repository }}"
+          # Check if PR is in clean status (all CI passed or no CI required)
+          # If clean, merge directly; otherwise use --auto to merge when CI passes
+          # CheckRun uses "conclusion", StatusContext uses "state"
+          PR_STATUS=$(gh pr view "$PR_NUMBER" --json statusCheckRollup --jq '.statusCheckRollup | if length == 0 then "clean" elif all((.conclusion // .state) == "SUCCESS" or (.conclusion // .state) == "NEUTRAL" or (.conclusion // .state) == "SKIPPED") then "clean" else "pending" end' -R "${{ github.repository }}")
+          if [ "$PR_STATUS" = "clean" ]; then
+            gh pr merge "$PR_NUMBER" --squash -R "${{ github.repository }}"
+          else
+            gh pr merge "$PR_NUMBER" --squash --auto -R "${{ github.repository }}"
+          fi
 
   build-release:
     needs: release-please
