@@ -43,7 +43,8 @@ jobs:
           PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
           # Check if PR is in clean status (all CI passed or no CI required)
           # If clean, merge directly; otherwise use --auto to merge when CI passes
-          PR_STATUS=$(gh pr view "$PR_NUMBER" --json statusCheckRollup --jq '.statusCheckRollup | if length == 0 then "clean" elif all(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED") then "clean" else "pending" end' -R "${{ github.repository }}")
+          # CheckRun uses "conclusion", StatusContext uses "state"
+          PR_STATUS=$(gh pr view "$PR_NUMBER" --json statusCheckRollup --jq '.statusCheckRollup | if length == 0 then "clean" elif all((.conclusion // .state) == "SUCCESS" or (.conclusion // .state) == "NEUTRAL" or (.conclusion // .state) == "SKIPPED") then "clean" else "pending" end' -R "${{ github.repository }}")
           if [ "$PR_STATUS" = "clean" ]; then
             gh pr merge "$PR_NUMBER" --squash -R "${{ github.repository }}"
           else
