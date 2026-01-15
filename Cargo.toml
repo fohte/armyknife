@@ -1,6 +1,6 @@
 [package]
 name = "armyknife"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
