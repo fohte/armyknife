@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.24](https://github.com/fohte/armyknife/compare/v0.1.23...v0.1.24) (2026-01-15)
+
+
+### Bug Fixes
+
+* **ci:** merge release-please PR directly when already in clean status ([#83](https://github.com/fohte/armyknife/issues/83)) ([196a892](https://github.com/fohte/armyknife/commit/196a89249e81c3054be47ef4f33eb55dc563d4fa))
+
 ## [0.1.23](https://github.com/fohte/armyknife/compare/v0.1.22...v0.1.23) (2026-01-15)
 
 
