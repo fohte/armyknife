@@ -1,4 +1,5 @@
 pub mod check_pr_review;
+pub mod issue_agent;
 
 use clap::Subcommand;
 
