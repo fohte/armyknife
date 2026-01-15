@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use super::author::WithAuthor;
+use super::issue::Issue;
+
 /// Metadata stored locally in metadata.json for an issue.
 /// This is a flattened representation suitable for local storage.
 #[allow(dead_code)]
@@ -20,7 +23,7 @@ pub struct IssueMetadata {
 #[allow(dead_code)]
 impl IssueMetadata {
     /// Create metadata from an Issue, flattening nested structures.
-    pub fn from_issue(issue: &super::issue::Issue) -> Self {
+    pub fn from_issue(issue: &Issue) -> Self {
         Self {
             number: issue.number,
             title: issue.title.clone(),
@@ -29,8 +32,8 @@ impl IssueMetadata {
             assignees: issue.assignees.iter().map(|a| a.login.clone()).collect(),
             milestone: issue.milestone.as_ref().map(|m| m.title.clone()),
             author: issue.author_login().to_string(),
-            created_at: issue.created_at.clone(),
-            updated_at: issue.updated_at.clone(),
+            created_at: issue.created_at.to_rfc3339(),
+            updated_at: issue.updated_at.to_rfc3339(),
         }
     }
 }

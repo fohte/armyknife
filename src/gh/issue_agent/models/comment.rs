@@ -1,6 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::issue::Author;
+use super::author::{Author, WithAuthor};
 
 /// Represents a comment on a GitHub Issue.
 #[allow(dead_code)]
@@ -12,16 +13,13 @@ pub struct Comment {
     /// REST API database ID
     pub database_id: i64,
     pub author: Option<Author>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
     pub body: String,
 }
 
 #[allow(dead_code)]
-impl Comment {
-    pub fn author_login(&self) -> &str {
-        self.author
-            .as_ref()
-            .map(|a| a.login.as_str())
-            .unwrap_or("unknown")
+impl WithAuthor for Comment {
+    fn author(&self) -> Option<&Author> {
+        self.author.as_ref()
     }
 }
