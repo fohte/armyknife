@@ -37,4 +37,3 @@ indicatif = "=0.18.3"
 
 [dev-dependencies]
 rstest = "=0.26.1"
-serial_test = "=3.2.0"

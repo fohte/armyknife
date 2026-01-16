@@ -3,9 +3,14 @@ use std::path::PathBuf;
 /// Returns the cache directory for gh-issue-agent.
 /// Uses XDG_CACHE_HOME if set, otherwise defaults to ~/.cache/gh-issue-agent
 pub fn get_cache_dir() -> PathBuf {
-    if let Ok(xdg_cache) = std::env::var("XDG_CACHE_HOME") {
+    get_cache_dir_with_env(std::env::var("XDG_CACHE_HOME").ok(), dirs::home_dir())
+}
+
+/// Internal function for testability without environment variable mutation.
+fn get_cache_dir_with_env(xdg_cache_home: Option<String>, home_dir: Option<PathBuf>) -> PathBuf {
+    if let Some(xdg_cache) = xdg_cache_home {
         PathBuf::from(xdg_cache).join("gh-issue-agent")
-    } else if let Some(home) = dirs::home_dir() {
+    } else if let Some(home) = home_dir {
         home.join(".cache").join("gh-issue-agent")
     } else {
         // Fallback to current directory if home is not available
@@ -19,54 +24,46 @@ pub fn get_issue_dir(repo: &str, issue_number: i64) -> PathBuf {
     get_cache_dir().join(repo).join(issue_number.to_string())
 }
 
+/// Internal function for testability.
+fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i64) -> PathBuf {
+    cache_dir.join(repo).join(issue_number.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     #[test]
-    #[serial]
-    fn test_get_issue_dir() {
-        // Ensure XDG_CACHE_HOME is not set for this test
-        let original = std::env::var("XDG_CACHE_HOME").ok();
-        // SAFETY: Test is serialized and we restore the original value after
-        unsafe {
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
-
-        let dir = get_issue_dir("owner/repo", 123);
-        let cache_dir = get_cache_dir();
-        assert_eq!(dir, cache_dir.join("owner/repo").join("123"));
-
-        // Restore env
-        // SAFETY: Test is serialized and we're restoring the original value
-        unsafe {
-            if let Some(val) = original {
-                std::env::set_var("XDG_CACHE_HOME", val);
-            }
-        }
+    fn test_get_cache_dir_with_xdg() {
+        let dir = get_cache_dir_with_env(Some("/tmp/test-cache".to_string()), None);
+        assert_eq!(dir, PathBuf::from("/tmp/test-cache/gh-issue-agent"));
     }
 
     #[test]
-    #[serial]
-    fn test_get_cache_dir_with_xdg() {
-        // Save current env
-        let original = std::env::var("XDG_CACHE_HOME").ok();
+    fn test_get_cache_dir_with_home() {
+        let dir = get_cache_dir_with_env(None, Some(PathBuf::from("/home/user")));
+        assert_eq!(dir, PathBuf::from("/home/user/.cache/gh-issue-agent"));
+    }
 
-        // SAFETY: Test is serialized and we restore the original value after
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", "/tmp/test-cache");
-        }
-        let dir = get_cache_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/test-cache/gh-issue-agent"));
+    #[test]
+    fn test_get_cache_dir_xdg_takes_priority() {
+        let dir = get_cache_dir_with_env(
+            Some("/custom/cache".to_string()),
+            Some(PathBuf::from("/home/user")),
+        );
+        assert_eq!(dir, PathBuf::from("/custom/cache/gh-issue-agent"));
+    }
 
-        // Restore env
-        // SAFETY: Test is serialized and we're restoring the original value
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("XDG_CACHE_HOME", val),
-                None => std::env::remove_var("XDG_CACHE_HOME"),
-            }
-        }
+    #[test]
+    fn test_get_cache_dir_fallback() {
+        let dir = get_cache_dir_with_env(None, None);
+        assert_eq!(dir, PathBuf::from(".cache/gh-issue-agent"));
+    }
+
+    #[test]
+    fn test_get_issue_dir() {
+        let cache_dir = PathBuf::from("/cache");
+        let dir = get_issue_dir_with_cache_dir(cache_dir, "owner/repo", 123);
+        assert_eq!(dir, PathBuf::from("/cache/owner/repo/123"));
     }
 }
