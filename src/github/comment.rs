@@ -1,5 +1,6 @@
 //! Comment operations.
 
+use indoc::indoc;
 use serde::Deserialize;
 
 use super::client::OctocrabClient;
@@ -80,23 +81,23 @@ struct GraphQLAuthor {
 }
 
 #[allow(dead_code)]
-const GET_COMMENTS_QUERY: &str = r#"
-query($owner: String!, $repo: String!, $number: Int!) {
-    repository(owner: $owner, name: $repo) {
-        issue(number: $number) {
-            comments(first: 100) {
-                nodes {
-                    id
-                    databaseId
-                    author { login }
-                    createdAt
-                    body
+const GET_COMMENTS_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+                comments(first: 100) {
+                    nodes {
+                        id
+                        databaseId
+                        author { login }
+                        createdAt
+                        body
+                    }
                 }
             }
         }
     }
-}
-"#;
+"};
 
 #[async_trait::async_trait]
 impl CommentClient for OctocrabClient {
