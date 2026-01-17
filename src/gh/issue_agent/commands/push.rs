@@ -52,11 +52,12 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Check if remote has changed since pull
     let local_metadata = storage.read_metadata()?;
-    if !args.force && local_metadata.updated_at != remote_issue.updated_at.to_rfc3339() {
+    let remote_updated_at = remote_issue.updated_at.to_rfc3339();
+    if let Err(msg) =
+        check_remote_unchanged(&local_metadata.updated_at, &remote_updated_at, args.force)
+    {
         eprintln!();
-        eprintln!("Remote has changed since pull:");
-        eprintln!("  Local:  {}", local_metadata.updated_at);
-        eprintln!("  Remote: {}", remote_issue.updated_at.to_rfc3339());
+        eprintln!("{}", msg);
         eprintln!();
         return Err(
             "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
@@ -123,20 +124,19 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!();
             println!("Updating labels...");
 
-            for label in remote_labels.difference(&local_labels) {
+            let (labels_to_remove, labels_to_add) =
+                compute_label_changes(&local_labels, &remote_labels);
+
+            for label in labels_to_remove {
                 client
                     .remove_label(owner, repo_name, issue_number, label)
                     .await?;
             }
 
-            let labels_to_add: Vec<String> = local_labels
-                .difference(&remote_labels)
-                .map(|s| s.to_string())
-                .collect();
-
             if !labels_to_add.is_empty() {
+                let labels: Vec<String> = labels_to_add.iter().map(|s| s.to_string()).collect();
                 client
-                    .add_labels(owner, repo_name, issue_number, &labels_to_add)
+                    .add_labels(owner, repo_name, issue_number, &labels)
                     .await?;
             }
         }
@@ -188,12 +188,13 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or("unknown");
 
             // Check if editing other user's comment
-            if author != current_user && !args.edit_others {
-                return Err(format!(
-                    "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
-                    local_comment.filename, author
-                )
-                .into());
+            if let Err(msg) = check_can_edit_comment(
+                author,
+                &current_user,
+                args.edit_others,
+                &local_comment.filename,
+            ) {
+                return Err(msg.into());
             }
 
             println!();
@@ -308,6 +309,52 @@ fn print_diff(old: &str, new: &str) {
     }
 }
 
+/// Check if remote has changed since the last pull.
+/// Returns Ok(()) if no conflict, Err with message if changed.
+fn check_remote_unchanged(
+    local_updated_at: &str,
+    remote_updated_at: &str,
+    force: bool,
+) -> Result<(), String> {
+    if force || local_updated_at == remote_updated_at {
+        Ok(())
+    } else {
+        Err(format!(
+            "Remote has changed since pull. Local: {}, Remote: {}",
+            local_updated_at, remote_updated_at
+        ))
+    }
+}
+
+/// Check if the user can edit a comment.
+/// Returns Ok(()) if allowed, Err with message if not.
+fn check_can_edit_comment(
+    comment_author: &str,
+    current_user: &str,
+    edit_others: bool,
+    filename: &str,
+) -> Result<(), String> {
+    if comment_author == current_user || edit_others {
+        Ok(())
+    } else {
+        Err(format!(
+            "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
+            filename, comment_author
+        ))
+    }
+}
+
+/// Compute label changes between local and remote.
+/// Returns (labels_to_remove, labels_to_add).
+fn compute_label_changes<'a>(
+    local_labels: &'a HashSet<&'a str>,
+    remote_labels: &'a HashSet<&'a str>,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let to_remove: Vec<&str> = remote_labels.difference(local_labels).copied().collect();
+    let to_add: Vec<&str> = local_labels.difference(remote_labels).copied().collect();
+    (to_remove, to_add)
+}
+
 /// Format diff as a string (for testing).
 #[cfg(test)]
 fn format_diff(old: &str, new: &str) -> String {
@@ -330,6 +377,127 @@ fn format_diff(old: &str, new: &str) -> String {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    mod check_remote_unchanged_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::same_timestamp("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", false)]
+        #[case::force_with_different("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", true)]
+        #[case::force_with_same("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", true)]
+        fn test_ok(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
+            assert!(check_remote_unchanged(local, remote, force).is_ok());
+        }
+
+        #[rstest]
+        #[case::different_timestamp("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", false)]
+        #[case::local_newer("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z", false)]
+        fn test_err(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
+            let result = check_remote_unchanged(local, remote, force);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(err.contains("Remote has changed"));
+            assert!(err.contains(local));
+            assert!(err.contains(remote));
+        }
+    }
+
+    mod check_can_edit_comment_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::own_comment("alice", "alice", false, "001_comment.md")]
+        #[case::other_comment_with_edit_others("bob", "alice", true, "001_comment.md")]
+        #[case::own_comment_with_edit_others("alice", "alice", true, "001_comment.md")]
+        fn test_allowed(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] edit_others: bool,
+            #[case] filename: &str,
+        ) {
+            assert!(check_can_edit_comment(author, current_user, edit_others, filename).is_ok());
+        }
+
+        #[rstest]
+        #[case::other_comment_without_flag("bob", "alice", false, "001_comment.md")]
+        #[case::unknown_author("unknown", "alice", false, "002_comment.md")]
+        fn test_denied(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] edit_others: bool,
+            #[case] filename: &str,
+        ) {
+            let result = check_can_edit_comment(author, current_user, edit_others, filename);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(err.contains("Cannot edit other user's comment"));
+            assert!(err.contains(filename));
+            assert!(err.contains(author));
+            assert!(err.contains("--edit-others"));
+        }
+    }
+
+    mod compute_label_changes_tests {
+        use super::*;
+
+        #[test]
+        fn test_no_changes() {
+            let local: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let (to_remove, to_add) = compute_label_changes(&local, &remote);
+            assert!(to_remove.is_empty());
+            assert!(to_add.is_empty());
+        }
+
+        #[test]
+        fn test_add_labels() {
+            let local: HashSet<&str> = ["bug", "feature", "new-label"].into_iter().collect();
+            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let (to_remove, to_add) = compute_label_changes(&local, &remote);
+            assert!(to_remove.is_empty());
+            assert_eq!(to_add, vec!["new-label"]);
+        }
+
+        #[test]
+        fn test_remove_labels() {
+            let local: HashSet<&str> = ["bug"].into_iter().collect();
+            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let (to_remove, to_add) = compute_label_changes(&local, &remote);
+            assert_eq!(to_remove, vec!["feature"]);
+            assert!(to_add.is_empty());
+        }
+
+        #[test]
+        fn test_add_and_remove_labels() {
+            let local: HashSet<&str> = ["bug", "new-label"].into_iter().collect();
+            let remote: HashSet<&str> = ["bug", "old-label"].into_iter().collect();
+            let (mut to_remove, mut to_add) = compute_label_changes(&local, &remote);
+            to_remove.sort();
+            to_add.sort();
+            assert_eq!(to_remove, vec!["old-label"]);
+            assert_eq!(to_add, vec!["new-label"]);
+        }
+
+        #[test]
+        fn test_empty_local() {
+            let local: HashSet<&str> = HashSet::new();
+            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let (mut to_remove, to_add) = compute_label_changes(&local, &remote);
+            to_remove.sort();
+            assert_eq!(to_remove, vec!["bug", "feature"]);
+            assert!(to_add.is_empty());
+        }
+
+        #[test]
+        fn test_empty_remote() {
+            let local: HashSet<&str> = ["bug", "feature"].into_iter().collect();
+            let remote: HashSet<&str> = HashSet::new();
+            let (to_remove, mut to_add) = compute_label_changes(&local, &remote);
+            to_add.sort();
+            assert!(to_remove.is_empty());
+            assert_eq!(to_add, vec!["bug", "feature"]);
+        }
+    }
 
     mod parse_repo_tests {
         use super::*;
