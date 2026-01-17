@@ -123,19 +123,20 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!();
             println!("Updating labels...");
 
-            let labels_to_remove: Vec<_> = remote_labels.difference(&local_labels).collect();
-            let labels_to_add: Vec<_> = local_labels.difference(&remote_labels).collect();
-
-            for label in labels_to_remove {
+            for label in remote_labels.difference(&local_labels) {
                 client
                     .remove_label(owner, repo_name, issue_number, label)
                     .await?;
             }
 
+            let labels_to_add: Vec<String> = local_labels
+                .difference(&remote_labels)
+                .map(|s| s.to_string())
+                .collect();
+
             if !labels_to_add.is_empty() {
-                let labels: Vec<String> = labels_to_add.iter().map(|s| s.to_string()).collect();
                 client
-                    .add_labels(owner, repo_name, issue_number, &labels)
+                    .add_labels(owner, repo_name, issue_number, &labels_to_add)
                     .await?;
             }
         }
@@ -149,84 +150,76 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     for local_comment in &local_comments {
         if local_comment.is_new() {
-            // Will handle new comments later
-            continue;
-        }
+            // New comment
+            println!();
+            println!("=== New Comment: {} ===", local_comment.filename);
+            println!("{}", local_comment.body);
 
-        let Some(comment_id) = &local_comment.metadata.id else {
-            continue;
-        };
+            if !args.dry_run {
+                println!();
+                println!("Creating comment...");
+                client
+                    .create_comment(owner, repo_name, issue_number, &local_comment.body)
+                    .await?;
 
-        let Some(remote_comment) = remote_comments_map.get(comment_id.as_str()) else {
-            continue;
-        };
-
-        if local_comment.body == remote_comment.body {
-            continue;
-        }
-
-        let author = local_comment
-            .metadata
-            .author
-            .as_deref()
-            .unwrap_or("unknown");
-
-        // Check if editing other user's comment
-        if author != current_user && !args.edit_others {
-            return Err(format!(
-                "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
-                local_comment.filename, author
-            )
-            .into());
-        }
-
-        println!();
-        if author != current_user {
-            println!(
-                "=== Comment: {} (author: {}) ===",
-                local_comment.filename, author
-            );
+                // Remove the new comment file after successful creation
+                let comment_path = storage.dir().join("comments").join(&local_comment.filename);
+                std::fs::remove_file(&comment_path)?;
+            }
+            has_changes = true;
         } else {
-            println!("=== Comment: {} ===", local_comment.filename);
-        }
-        print_diff(&remote_comment.body, &local_comment.body);
+            // Existing comment
+            let Some(comment_id) = &local_comment.metadata.id else {
+                continue;
+            };
 
-        if !args.dry_run {
-            println!();
-            println!("Updating comment...");
-            let database_id = local_comment
+            let Some(remote_comment) = remote_comments_map.get(comment_id.as_str()) else {
+                continue;
+            };
+
+            if local_comment.body == remote_comment.body {
+                continue;
+            }
+
+            let author = local_comment
                 .metadata
-                .database_id
-                .ok_or("Comment missing databaseId")?;
-            client
-                .update_comment(owner, repo_name, database_id as u64, &local_comment.body)
-                .await?;
-        }
-        has_changes = true;
-    }
+                .author
+                .as_deref()
+                .unwrap_or("unknown");
 
-    // New comments
-    for local_comment in &local_comments {
-        if !local_comment.is_new() {
-            continue;
-        }
+            // Check if editing other user's comment
+            if author != current_user && !args.edit_others {
+                return Err(format!(
+                    "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
+                    local_comment.filename, author
+                )
+                .into());
+            }
 
-        println!();
-        println!("=== New Comment: {} ===", local_comment.filename);
-        println!("{}", local_comment.body);
-
-        if !args.dry_run {
             println!();
-            println!("Creating comment...");
-            client
-                .create_comment(owner, repo_name, issue_number, &local_comment.body)
-                .await?;
+            if author != current_user {
+                println!(
+                    "=== Comment: {} (author: {}) ===",
+                    local_comment.filename, author
+                );
+            } else {
+                println!("=== Comment: {} ===", local_comment.filename);
+            }
+            print_diff(&remote_comment.body, &local_comment.body);
 
-            // Remove the new comment file after successful creation
-            let comment_path = storage.dir().join("comments").join(&local_comment.filename);
-            std::fs::remove_file(&comment_path)?;
+            if !args.dry_run {
+                println!();
+                println!("Updating comment...");
+                let database_id = local_comment
+                    .metadata
+                    .database_id
+                    .ok_or("Comment missing databaseId")?;
+                client
+                    .update_comment(owner, repo_name, database_id as u64, &local_comment.body)
+                    .await?;
+            }
+            has_changes = true;
         }
-        has_changes = true;
     }
 
     // 5-6. Show result
@@ -282,11 +275,8 @@ fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Err
 
 /// Parse owner/repo string into (owner, repo) tuple.
 fn parse_repo(repo: &str) -> Result<(&str, &str), Box<dyn std::error::Error>> {
-    let parts: Vec<&str> = repo.split('/').collect();
-    if parts.len() != 2 {
-        return Err(format!("Invalid repository format: {}. Expected owner/repo.", repo).into());
-    }
-    Ok((parts[0], parts[1]))
+    repo.split_once('/')
+        .ok_or_else(|| format!("Invalid repository format: {}. Expected owner/repo.", repo).into())
 }
 
 /// Get current GitHub user from `gh api user`.
