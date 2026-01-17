@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 
 use clap::Args;
 use similar::{ChangeTag, TextDiff};
 
 use crate::gh::issue_agent::models::{Comment, IssueMetadata};
 use crate::gh::issue_agent::storage::IssueStorage;
+use crate::git::get_owner_repo;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -66,7 +66,7 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 4. Detect and display changes
-    let current_user = get_current_user()?;
+    let current_user = get_current_user(client).await?;
     let mut has_changes = false;
 
     // Compare issue body
@@ -250,28 +250,11 @@ fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Err
         return Ok(repo.clone());
     }
 
-    // Use `gh repo view` to get current repo
-    let output = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "nameWithOwner",
-            "--jq",
-            ".nameWithOwner",
-        ])
-        .output()?;
+    // Get from git remote origin
+    let (owner, repo) =
+        get_owner_repo().ok_or("Failed to determine current repository. Use -R to specify.")?;
 
-    if !output.status.success() {
-        return Err("Failed to determine current repository. Use -R to specify.".into());
-    }
-
-    let repo = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if repo.is_empty() {
-        return Err("Failed to determine current repository. Use -R to specify.".into());
-    }
-
-    Ok(repo)
+    Ok(format!("{}/{}", owner, repo))
 }
 
 /// Parse owner/repo string into (owner, repo) tuple.
@@ -280,18 +263,10 @@ fn parse_repo(repo: &str) -> Result<(&str, &str), Box<dyn std::error::Error>> {
         .ok_or_else(|| format!("Invalid repository format: {}. Expected owner/repo.", repo).into())
 }
 
-/// Get current GitHub user from `gh api user`.
-fn get_current_user() -> Result<String, Box<dyn std::error::Error>> {
-    let output = Command::new("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .output()?;
-
-    if !output.status.success() {
-        return Err("Failed to get current GitHub user".into());
-    }
-
-    let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(user)
+/// Get current GitHub user from the API.
+async fn get_current_user(client: &OctocrabClient) -> Result<String, Box<dyn std::error::Error>> {
+    let user = client.client.current().user().await?;
+    Ok(user.login)
 }
 
 /// Print unified diff between old and new text.
