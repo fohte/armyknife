@@ -87,6 +87,7 @@ mod tests {
     use super::*;
     use crate::gh::issue_agent::models::{Author, Label};
     use chrono::{TimeZone, Utc};
+    use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
@@ -137,7 +138,9 @@ mod tests {
         fs::write(test_dir.path().join("issue.md"), "Original body\n").unwrap();
         fs::write(
             test_dir.path().join("metadata.json"),
-            r#"{"number":123,"title":"Test Issue","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}"#,
+            indoc! {r#"
+                {"number":123,"title":"Test Issue","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}
+            "#}.trim(),
         )
         .unwrap();
 
@@ -145,7 +148,14 @@ mod tests {
         fs::create_dir(&comments_dir).unwrap();
         fs::write(
             comments_dir.join("001_comment_12345.md"),
-            "<!-- author: testuser -->\n<!-- createdAt: 2024-01-01T00:00:00Z -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nOriginal comment",
+            indoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T00:00:00Z -->
+                <!-- id: IC_abc123 -->
+                <!-- databaseId: 12345 -->
+
+                Original comment
+            "},
         )
         .unwrap();
 
@@ -170,7 +180,9 @@ mod tests {
         let storage = IssueStorage::from_dir(test_dir.path());
         fs::write(
             test_dir.path().join("metadata.json"),
-            r#"{"number":123,"title":"Modified Title","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}"#,
+            indoc! {r#"
+                {"number":123,"title":"Modified Title","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}
+            "#}.trim(),
         )
         .unwrap();
 
@@ -186,7 +198,14 @@ mod tests {
         fs::create_dir(&comments_dir).unwrap();
         fs::write(
             comments_dir.join("001_comment_12345.md"),
-            "<!-- author: testuser -->\n<!-- createdAt: 2024-01-01T00:00:00Z -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nModified comment",
+            indoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T00:00:00Z -->
+                <!-- id: IC_abc123 -->
+                <!-- databaseId: 12345 -->
+
+                Modified comment
+            "},
         )
         .unwrap();
 

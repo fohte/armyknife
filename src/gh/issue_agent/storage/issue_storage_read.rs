@@ -63,39 +63,37 @@ impl IssueStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::{fixture, rstest};
+    use indoc::indoc;
     use std::fs;
-    use tempfile::TempDir;
 
-    #[fixture]
-    fn test_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    #[rstest]
-    fn test_read_body(test_dir: TempDir) {
-        let storage = IssueStorage::from_dir(test_dir.path());
-        fs::write(test_dir.path().join("issue.md"), "Test issue body\n").unwrap();
+    #[test]
+    fn test_read_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+        fs::write(dir.path().join("issue.md"), "Test issue body\n").unwrap();
 
         let body = storage.read_body().unwrap();
         assert_eq!(body, "Test issue body");
     }
 
-    #[rstest]
-    fn test_read_metadata(test_dir: TempDir) {
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let metadata_json = r#"{
-            "number": 123,
-            "title": "Test Issue",
-            "state": "OPEN",
-            "labels": ["bug"],
-            "assignees": ["user1"],
-            "milestone": null,
-            "author": "author1",
-            "createdAt": "2024-01-01T00:00:00Z",
-            "updatedAt": "2024-01-02T00:00:00Z"
-        }"#;
-        fs::write(test_dir.path().join("metadata.json"), metadata_json).unwrap();
+    #[test]
+    fn test_read_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+        let metadata_json = indoc! {r#"
+            {
+                "number": 123,
+                "title": "Test Issue",
+                "state": "OPEN",
+                "labels": ["bug"],
+                "assignees": ["user1"],
+                "milestone": null,
+                "author": "author1",
+                "createdAt": "2024-01-01T00:00:00Z",
+                "updatedAt": "2024-01-02T00:00:00Z"
+            }
+        "#};
+        fs::write(dir.path().join("metadata.json"), metadata_json).unwrap();
 
         let metadata = storage.read_metadata().unwrap();
         assert_eq!(metadata.number, 123);
@@ -103,19 +101,21 @@ mod tests {
         assert_eq!(metadata.state, "OPEN");
     }
 
-    #[rstest]
-    fn test_read_comments(test_dir: TempDir) {
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let comments_dir = test_dir.path().join("comments");
+    #[test]
+    fn test_read_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+        let comments_dir = dir.path().join("comments");
         fs::create_dir(&comments_dir).unwrap();
 
-        let comment_content = r#"<!-- author: testuser -->
-<!-- createdAt: 2024-01-01T00:00:00Z -->
-<!-- id: IC_abc123 -->
-<!-- databaseId: 12345 -->
+        let comment_content = indoc! {"
+            <!-- author: testuser -->
+            <!-- createdAt: 2024-01-01T00:00:00Z -->
+            <!-- id: IC_abc123 -->
+            <!-- databaseId: 12345 -->
 
-This is the comment body."#;
-
+            This is the comment body.
+        "};
         fs::write(comments_dir.join("001_comment_12345.md"), comment_content).unwrap();
 
         let comments = storage.read_comments().unwrap();
@@ -129,10 +129,11 @@ This is the comment body."#;
         assert!(!comment.is_new());
     }
 
-    #[rstest]
-    fn test_read_new_comment(test_dir: TempDir) {
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let comments_dir = test_dir.path().join("comments");
+    #[test]
+    fn test_read_new_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+        let comments_dir = dir.path().join("comments");
         fs::create_dir(&comments_dir).unwrap();
 
         fs::write(
