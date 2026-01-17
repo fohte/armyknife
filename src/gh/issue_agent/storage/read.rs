@@ -85,11 +85,10 @@ pub fn read_comments_from_dir(issue_dir: &Path) -> Result<Vec<LocalComment>> {
         let path = entry.path();
 
         if path.extension().is_some_and(|ext| ext == "md") {
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
+            let filename = match path.file_name().and_then(|n| n.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue, // Skip files with non-UTF8 names
+            };
 
             let content = fs::read_to_string(&path)?;
             let (metadata, body) = parse_comment_content(&content, &path)?;
@@ -169,17 +168,11 @@ fn parse_comment_content(content: &str, path: &Path) -> Result<(CommentFileMetad
 /// Extract value from a metadata comment line.
 /// Format: <!-- key: value -->
 fn extract_metadata_value(line: &str, key: &str) -> Option<String> {
-    let prefix = format!("<!-- {}: ", key);
-    let suffix = " -->";
-
-    if line.starts_with(&prefix) && line.ends_with(suffix) {
-        let start = prefix.len();
-        let end = line.len() - suffix.len();
-        if start < end {
-            return Some(line[start..end].to_string());
-        }
-    }
-    None
+    line.strip_prefix("<!-- ")
+        .and_then(|s| s.strip_suffix(" -->"))
+        .and_then(|s| s.strip_prefix(key))
+        .and_then(|s| s.strip_prefix(": "))
+        .map(str::to_string)
 }
 
 #[cfg(test)]

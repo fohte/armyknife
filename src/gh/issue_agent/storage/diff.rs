@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use super::error::Result;
@@ -74,8 +75,11 @@ pub fn detect_local_changes_from_dir(
         changes.title_changed = true;
     }
 
-    // Check comments
+    // Check comments using HashMap for O(1) lookups
     if let Ok(local_comments) = read_comments_from_dir(issue_dir) {
+        let remote_comments_map: HashMap<&str, &Comment> =
+            remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+
         for local_comment in &local_comments {
             if local_comment.is_new() {
                 // New comment file
@@ -83,7 +87,7 @@ pub fn detect_local_changes_from_dir(
                     .new_comment_files
                     .push(local_comment.filename.clone());
             } else if let Some(comment_id) = &local_comment.metadata.id
-                && let Some(remote_comment) = remote_comments.iter().find(|c| &c.id == comment_id)
+                && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
                 && local_comment.body != remote_comment.body
             {
                 // Local comment differs from remote
