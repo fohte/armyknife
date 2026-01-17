@@ -114,3 +114,41 @@ fn print_comments(comments: &[Comment]) {
         println!("{}", indent_text(&comment.body, "  "));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::valid("owner/repo", "owner", "repo")]
+    #[case::with_dashes("my-org/my-repo", "my-org", "my-repo")]
+    #[case::with_numbers("user123/project456", "user123", "project456")]
+    #[case::with_dots("owner/repo.name", "owner", "repo.name")]
+    fn test_get_repo_owner_and_name_with_arg(
+        #[case] input: &str,
+        #[case] expected_owner: &str,
+        #[case] expected_repo: &str,
+    ) {
+        let (owner, repo) = get_repo_owner_and_name(Some(input)).unwrap();
+        assert_eq!(owner, expected_owner);
+        assert_eq!(repo, expected_repo);
+    }
+
+    #[rstest]
+    #[case::no_slash("invalid")]
+    #[case::empty("")]
+    fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
+        let result = get_repo_owner_and_name(Some(input));
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    #[case::open("OPEN", "Open")]
+    #[case::closed("CLOSED", "Closed")]
+    #[case::unknown("UNKNOWN", "UNKNOWN")]
+    #[case::other("other", "other")]
+    fn test_format_state(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(format_state(input), expected);
+    }
+}
