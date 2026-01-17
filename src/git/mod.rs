@@ -16,7 +16,7 @@ pub use branch::{
     remote_branch_exists,
 };
 pub use error::GitError;
-pub use github::github_owner_and_repo;
+pub use github::{get_owner_repo, github_owner_and_repo};
 pub use repo::{current_branch, fetch_with_prune, get_main_branch, get_repo_root, open_repo};
 
 // Re-export for test utilities
