@@ -45,57 +45,61 @@ pub struct MockGitHubClient {
     pub current_user: Option<String>,
 }
 
-/// Parameters for tracking update_issue_body calls.
+/// Common fields for issue-related API calls.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UpdateIssueBodyParams {
+pub struct IssueRef {
     pub owner: String,
     pub repo: String,
     pub issue_number: u64,
+}
+
+/// Common fields for comment-related API calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentRef {
+    pub owner: String,
+    pub repo: String,
+    pub comment_id: u64,
+}
+
+/// Parameters for tracking update_issue_body calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateIssueBodyParams {
+    pub issue: IssueRef,
     pub body: String,
 }
 
 /// Parameters for tracking update_issue_title calls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateIssueTitleParams {
-    pub owner: String,
-    pub repo: String,
-    pub issue_number: u64,
+    pub issue: IssueRef,
     pub title: String,
 }
 
 /// Parameters for tracking add_labels calls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddLabelsParams {
-    pub owner: String,
-    pub repo: String,
-    pub issue_number: u64,
+    pub issue: IssueRef,
     pub labels: Vec<String>,
 }
 
 /// Parameters for tracking remove_label calls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoveLabelParams {
-    pub owner: String,
-    pub repo: String,
-    pub issue_number: u64,
+    pub issue: IssueRef,
     pub label: String,
 }
 
 /// Parameters for tracking update_comment calls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateCommentParams {
-    pub owner: String,
-    pub repo: String,
-    pub comment_id: u64,
+    pub comment: CommentRef,
     pub body: String,
 }
 
 /// Parameters for tracking create_comment calls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateCommentParams {
-    pub owner: String,
-    pub repo: String,
-    pub issue_number: u64,
+    pub issue: IssueRef,
     pub body: String,
 }
 
@@ -242,9 +246,11 @@ impl IssueClient for MockGitHubClient {
             .lock()
             .unwrap()
             .push(UpdateIssueBodyParams {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                issue_number,
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
                 body: body.to_string(),
             });
         Ok(())
@@ -261,9 +267,11 @@ impl IssueClient for MockGitHubClient {
             .lock()
             .unwrap()
             .push(UpdateIssueTitleParams {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                issue_number,
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
                 title: title.to_string(),
             });
         Ok(())
@@ -277,9 +285,11 @@ impl IssueClient for MockGitHubClient {
         labels: &[String],
     ) -> Result<()> {
         self.added_labels.lock().unwrap().push(AddLabelsParams {
-            owner: owner.to_string(),
-            repo: repo.to_string(),
-            issue_number,
+            issue: IssueRef {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                issue_number,
+            },
             labels: labels.to_vec(),
         });
         Ok(())
@@ -293,9 +303,11 @@ impl IssueClient for MockGitHubClient {
         label: &str,
     ) -> Result<()> {
         self.removed_labels.lock().unwrap().push(RemoveLabelParams {
-            owner: owner.to_string(),
-            repo: repo.to_string(),
-            issue_number,
+            issue: IssueRef {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                issue_number,
+            },
             label: label.to_string(),
         });
         Ok(())
@@ -325,9 +337,11 @@ impl CommentClient for MockGitHubClient {
             .lock()
             .unwrap()
             .push(UpdateCommentParams {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                comment_id,
+                comment: CommentRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    comment_id,
+                },
                 body: body.to_string(),
             });
         Ok(())
@@ -344,9 +358,11 @@ impl CommentClient for MockGitHubClient {
             .lock()
             .unwrap()
             .push(CreateCommentParams {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                issue_number,
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
                 body: body.to_string(),
             });
         // Return a mock comment
