@@ -22,4 +22,8 @@ pub use pr::{CreatePrParams, PrClient, PrState};
 pub use repo::RepoClient;
 
 #[cfg(test)]
-pub use mock::MockGitHubClient;
+#[allow(unused_imports)]
+pub use mock::{
+    AddLabelsParams, CreateCommentParams, MockGitHubClient, RemoveLabelParams, UpdateCommentParams,
+    UpdateIssueBodyParams, UpdateIssueTitleParams,
+};

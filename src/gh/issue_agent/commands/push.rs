@@ -45,6 +45,37 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Fetch latest from GitHub
     let client = OctocrabClient::get()?;
+    let current_user = get_current_user(client).await?;
+
+    run_with_client_and_user(args, client, &storage, &current_user).await
+}
+
+/// Internal implementation that accepts a client and user for testability.
+#[cfg(test)]
+pub(super) async fn run_with_client_and_storage<C>(
+    args: &PushArgs,
+    client: &C,
+    storage: &IssueStorage,
+    current_user: &str,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    C: IssueClient + CommentClient,
+{
+    run_with_client_and_user(args, client, storage, current_user).await
+}
+
+async fn run_with_client_and_user<C>(
+    args: &PushArgs,
+    client: &C,
+    storage: &IssueStorage,
+    current_user: &str,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    C: IssueClient + CommentClient,
+{
+    let repo = get_repo(&args.issue.repo)?;
+    let issue_number = args.issue.issue_number;
+
     let (owner, repo_name) = parse_repo(&repo)?;
 
     let remote_issue = client.get_issue(owner, repo_name, issue_number).await?;
@@ -66,7 +97,6 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 4. Detect and display changes
-    let current_user = get_current_user(client).await?;
     let mut has_changes = false;
 
     // Compare issue body
@@ -190,7 +220,7 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
             // Check if editing other user's comment
             if let Err(msg) = check_can_edit_comment(
                 author,
-                &current_user,
+                current_user,
                 args.edit_others,
                 &local_comment.filename,
             ) {
@@ -544,6 +574,364 @@ mod tests {
         fn test_with_arg_returns_as_is(#[case] repo: &str) {
             let result = get_repo(&Some(repo.to_string())).unwrap();
             assert_eq!(result, repo);
+        }
+    }
+
+    mod run_with_client_and_storage_tests {
+        use super::*;
+        use crate::gh::issue_agent::commands::IssueArgs;
+        use crate::gh::issue_agent::models::{Author, Issue, Label};
+        use crate::github::MockGitHubClient;
+        use chrono::{TimeZone, Utc};
+        use rstest::fixture;
+        use std::fs;
+        use tempfile::TempDir;
+
+        fn create_test_issue(number: i64, title: &str, body: &str, updated_at: &str) -> Issue {
+            Issue {
+                number,
+                title: title.to_string(),
+                body: Some(body.to_string()),
+                state: "OPEN".to_string(),
+                labels: vec![Label {
+                    name: "bug".to_string(),
+                }],
+                assignees: vec![],
+                milestone: None,
+                author: Some(Author {
+                    login: "testuser".to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+                updated_at: chrono::DateTime::parse_from_rfc3339(updated_at)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            }
+        }
+
+        fn create_metadata_json(
+            number: i64,
+            title: &str,
+            updated_at: &str,
+            labels: &[&str],
+        ) -> String {
+            let labels_json: Vec<String> = labels.iter().map(|l| format!("\"{}\"", l)).collect();
+            // Use camelCase as per IssueMetadata's serde rename_all attribute
+            format!(
+                r#"{{"number":{},"title":"{}","state":"OPEN","labels":[{}],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00+00:00","updatedAt":"{}"}}"#,
+                number,
+                title,
+                labels_json.join(","),
+                updated_at
+            )
+        }
+
+        #[fixture]
+        fn test_dir() -> TempDir {
+            tempfile::tempdir().unwrap()
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_dry_run_detects_body_change(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Remote body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with different body
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Local body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: true,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // In dry-run mode, no API calls should be made
+            assert!(client.updated_issue_bodies.lock().unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_updates_issue_body(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Remote body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with different body
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Local body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // Verify API was called
+            let updated = client.updated_issue_bodies.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+            assert_eq!(updated[0].body, "Local body");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_updates_title(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Old Title", "Body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with different title
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "New Title", updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            let updated = client.updated_issue_titles.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+            assert_eq!(updated[0].title, "New Title");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_updates_labels(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with different labels
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["enhancement"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // "bug" should be removed, "enhancement" should be added
+            let removed = client.removed_labels.lock().unwrap();
+            assert_eq!(removed.len(), 1);
+            assert_eq!(removed[0].label, "bug");
+
+            let added = client.added_labels.lock().unwrap();
+            assert_eq!(added.len(), 1);
+            assert_eq!(added[0].labels, vec!["enhancement"]);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_fails_when_remote_changed(test_dir: TempDir) {
+            let local_updated_at = "2024-01-01T00:00:00+00:00";
+            let remote_updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", remote_updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with older timestamp
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", local_updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Remote has changed")
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_force_overrides_remote_changed(test_dir: TempDir) {
+            let local_updated_at = "2024-01-01T00:00:00+00:00";
+            let remote_updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Remote body", remote_updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with older timestamp but different body
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Local body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", local_updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: true, // Force flag
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // Body should be updated despite timestamp mismatch
+            let updated = client.updated_issue_bodies.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_no_changes_to_push(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Same body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with identical content
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Same body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // No API calls should be made
+            assert!(client.updated_issue_bodies.lock().unwrap().is_empty());
+            assert!(client.updated_issue_titles.lock().unwrap().is_empty());
+            assert!(client.added_labels.lock().unwrap().is_empty());
+            assert!(client.removed_labels.lock().unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_fails_with_invalid_repo_format(test_dir: TempDir) {
+            let client = MockGitHubClient::new();
+
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test", "2024-01-01T00:00:00+00:00", &[]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("invalid-format".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
         }
     }
 
