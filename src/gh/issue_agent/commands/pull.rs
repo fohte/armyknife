@@ -79,11 +79,11 @@ fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Err
 
 /// Parse "owner/repo" into (owner, repo) tuple.
 fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let parts: Vec<&str> = repo.split('/').collect();
-    if parts.len() != 2 {
-        return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
+    if let Some((owner, repo_name)) = repo.split_once('/') {
+        Ok((owner.to_string(), repo_name.to_string()))
+    } else {
+        Err(format!("Invalid repository format: {repo}. Expected owner/repo").into())
     }
-    Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
 /// Save issue data to local storage.
