@@ -253,57 +253,43 @@ mod tests {
         assert!(output.contains("5 comments"));
     }
 
-    #[test]
-    fn test_format_issue_single_comment() {
-        let issue = create_test_issue("Title", "CLOSED", None, None, vec![], vec![]);
-
-        let output = format_issue(&issue, 1, 1);
-
-        assert!(output.contains("1 comment\n")); // singular
-        assert!(!output.contains("1 comments"));
+    #[rstest]
+    #[case::zero(0, "0 comments")]
+    #[case::one(1, "1 comment\n")]
+    #[case::two(2, "2 comments")]
+    #[case::many(10, "10 comments")]
+    fn test_format_issue_comment_count(#[case] count: usize, #[case] expected: &str) {
+        let issue = create_test_issue("Title", "OPEN", Some("body"), Some("user"), vec![], vec![]);
+        let output = format_issue(&issue, 1, count);
+        assert!(output.contains(expected));
     }
 
-    #[test]
-    fn test_format_issue_no_body() {
-        let issue = create_test_issue("Title", "OPEN", None, Some("user"), vec![], vec![]);
-
+    #[rstest]
+    #[case::none(None, "No description provided.")]
+    #[case::empty(Some(""), "No description provided.")]
+    #[case::with_body(Some("Issue body"), "  Issue body")]
+    fn test_format_issue_body(#[case] body: Option<&str>, #[case] expected: &str) {
+        let issue = create_test_issue("Title", "OPEN", body, Some("user"), vec![], vec![]);
         let output = format_issue(&issue, 1, 0);
-
-        assert!(output.contains("No description provided."));
+        assert!(output.contains(expected));
     }
 
-    #[test]
-    fn test_format_issue_empty_body() {
-        let issue = create_test_issue("Title", "OPEN", Some(""), Some("user"), vec![], vec![]);
-
+    #[rstest]
+    #[case::with_author(Some("testuser"), "testuser opened")]
+    #[case::no_author(None, "unknown opened")]
+    fn test_format_issue_author(#[case] author: Option<&str>, #[case] expected: &str) {
+        let issue = create_test_issue("Title", "OPEN", Some("body"), author, vec![], vec![]);
         let output = format_issue(&issue, 1, 0);
-
-        assert!(output.contains("No description provided."));
+        assert!(output.contains(expected));
     }
 
-    #[test]
-    fn test_format_issue_unknown_author() {
-        let issue = create_test_issue("Title", "OPEN", Some("body"), None, vec![], vec![]);
-
+    #[rstest]
+    #[case::open("OPEN", "Open")]
+    #[case::closed("CLOSED", "Closed")]
+    fn test_format_issue_state_display(#[case] state: &str, #[case] expected: &str) {
+        let issue = create_test_issue("Title", state, Some("body"), Some("user"), vec![], vec![]);
         let output = format_issue(&issue, 1, 0);
-
-        assert!(output.contains("unknown opened"));
-    }
-
-    #[test]
-    fn test_format_issue_closed_state() {
-        let issue = create_test_issue(
-            "Title",
-            "CLOSED",
-            Some("body"),
-            Some("user"),
-            vec![],
-            vec![],
-        );
-
-        let output = format_issue(&issue, 1, 0);
-
-        assert!(output.contains("Closed"));
+        assert!(output.contains(expected));
     }
 
     #[test]
@@ -345,13 +331,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_format_comments_unknown_author() {
-        let comments = vec![create_test_comment(None, "Anonymous comment.")];
-
+    #[rstest]
+    #[case::with_author(Some("commenter"), "commenter •")]
+    #[case::no_author(None, "unknown •")]
+    fn test_format_comments_author(#[case] author: Option<&str>, #[case] expected: &str) {
+        let comments = vec![create_test_comment(author, "Comment body.")];
         let output = format_comments(&comments);
-
-        assert!(output.contains("unknown •"));
+        assert!(output.contains(expected));
     }
 
     #[test]
