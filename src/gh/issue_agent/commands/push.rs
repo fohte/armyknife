@@ -331,76 +331,171 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
-    #[rstest]
-    #[case("owner/repo", Ok(("owner", "repo")))]
-    #[case("fohte/armyknife", Ok(("fohte", "armyknife")))]
-    #[case("org-name/repo-name", Ok(("org-name", "repo-name")))]
-    fn test_parse_repo_valid(#[case] input: &str, #[case] expected: Result<(&str, &str), ()>) {
-        let result = parse_repo(input);
-        match expected {
-            Ok((owner, repo)) => {
-                let (actual_owner, actual_repo) = result.unwrap();
-                assert_eq!(actual_owner, owner);
-                assert_eq!(actual_repo, repo);
-            }
-            Err(_) => {
-                assert!(result.is_err());
-            }
+    mod parse_repo_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::simple("owner/repo", "owner", "repo")]
+        #[case::real_repo("fohte/armyknife", "fohte", "armyknife")]
+        #[case::with_dashes("org-name/repo-name", "org-name", "repo-name")]
+        #[case::with_underscores("my_org/my_repo", "my_org", "my_repo")]
+        #[case::with_dots("org.name/repo.name", "org.name", "repo.name")]
+        #[case::with_numbers("user123/project456", "user123", "project456")]
+        fn test_valid(
+            #[case] input: &str,
+            #[case] expected_owner: &str,
+            #[case] expected_repo: &str,
+        ) {
+            let (owner, repo) = parse_repo(input).unwrap();
+            assert_eq!(owner, expected_owner);
+            assert_eq!(repo, expected_repo);
+        }
+
+        #[rstest]
+        #[case::no_slash("noslash")]
+        #[case::empty("")]
+        #[case::only_owner("owner")]
+        fn test_invalid(#[case] input: &str) {
+            let result = parse_repo(input);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Invalid repository format"));
+        }
+
+        // split_once accepts these as valid splits, resulting in empty strings
+        #[rstest]
+        #[case::only_slash("/", "", "")]
+        #[case::trailing_slash("owner/", "owner", "")]
+        #[case::leading_slash("/repo", "", "repo")]
+        fn test_edge_cases_with_slash(
+            #[case] input: &str,
+            #[case] expected_owner: &str,
+            #[case] expected_repo: &str,
+        ) {
+            let (owner, repo) = parse_repo(input).unwrap();
+            assert_eq!(owner, expected_owner);
+            assert_eq!(repo, expected_repo);
+        }
+
+        #[rstest]
+        #[case::multiple_slashes("a/b/c")]
+        #[case::deeply_nested("org/repo/sub/path")]
+        fn test_multiple_slashes_takes_first(#[case] input: &str) {
+            // split_once only splits on the first '/', so "a/b/c" -> ("a", "b/c")
+            let result = parse_repo(input);
+            assert!(result.is_ok());
         }
     }
 
-    #[rstest]
-    #[case("noslash")]
-    #[case("")]
-    fn test_parse_repo_invalid(#[case] input: &str) {
-        let result = parse_repo(input);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Invalid repository format"));
+    mod get_repo_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::simple("owner/repo")]
+        #[case::real_repo("fohte/armyknife")]
+        #[case::with_special_chars("my-org/my_repo.rs")]
+        fn test_with_arg_returns_as_is(#[case] repo: &str) {
+            let result = get_repo(&Some(repo.to_string())).unwrap();
+            assert_eq!(result, repo);
+        }
     }
 
-    #[rstest]
-    #[case(Some("owner/repo".to_string()), "owner/repo")]
-    #[case(Some("fohte/armyknife".to_string()), "fohte/armyknife")]
-    fn test_get_repo_with_arg(#[case] repo_arg: Option<String>, #[case] expected: &str) {
-        let result = get_repo(&repo_arg).unwrap();
-        assert_eq!(result, expected);
-    }
+    mod format_diff_tests {
+        use super::*;
 
-    #[test]
-    fn test_format_diff_no_changes() {
-        let text = "line1\nline2\n";
-        let diff = format_diff(text, text);
-        assert!(diff.contains(" line1"));
-        assert!(diff.contains(" line2"));
-        assert!(!diff.contains("-"));
-        assert!(!diff.contains("+"));
-    }
+        #[rstest]
+        #[case::single_line("line1\n", "line1\n", vec![" line1"])]
+        #[case::multiple_lines("line1\nline2\n", "line1\nline2\n", vec![" line1", " line2"])]
+        #[case::empty("", "", vec![])]
+        fn test_no_changes(
+            #[case] old: &str,
+            #[case] new: &str,
+            #[case] expected_lines: Vec<&str>,
+        ) {
+            let diff = format_diff(old, new);
+            for line in expected_lines {
+                assert!(
+                    diff.contains(line),
+                    "Expected '{}' in diff:\n{}",
+                    line,
+                    diff
+                );
+            }
+            // No changes should not have - or + markers (except in content)
+            let lines: Vec<&str> = diff.lines().collect();
+            for line in lines {
+                assert!(
+                    line.starts_with(' ') || line.is_empty(),
+                    "Expected no changes but found: {}",
+                    line
+                );
+            }
+        }
 
-    #[test]
-    fn test_format_diff_with_additions() {
-        let old = "line1\n";
-        let new = "line1\nline2\n";
-        let diff = format_diff(old, new);
-        assert!(diff.contains(" line1"));
-        assert!(diff.contains("+line2"));
-    }
+        #[rstest]
+        #[case::add_one_line("line1\n", "line1\nline2\n", vec![" line1", "+line2"])]
+        #[case::add_multiple("a\n", "a\nb\nc\n", vec![" a", "+b", "+c"])]
+        #[case::add_to_empty("", "new\n", vec!["+new"])]
+        fn test_additions(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+            let diff = format_diff(old, new);
+            for line in expected {
+                assert!(
+                    diff.contains(line),
+                    "Expected '{}' in diff:\n{}",
+                    line,
+                    diff
+                );
+            }
+        }
 
-    #[test]
-    fn test_format_diff_with_deletions() {
-        let old = "line1\nline2\n";
-        let new = "line1\n";
-        let diff = format_diff(old, new);
-        assert!(diff.contains(" line1"));
-        assert!(diff.contains("-line2"));
-    }
+        #[rstest]
+        #[case::delete_one_line("line1\nline2\n", "line1\n", vec![" line1", "-line2"])]
+        #[case::delete_multiple("a\nb\nc\n", "a\n", vec![" a", "-b", "-c"])]
+        #[case::delete_all("old\n", "", vec!["-old"])]
+        fn test_deletions(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+            let diff = format_diff(old, new);
+            for line in expected {
+                assert!(
+                    diff.contains(line),
+                    "Expected '{}' in diff:\n{}",
+                    line,
+                    diff
+                );
+            }
+        }
 
-    #[test]
-    fn test_format_diff_with_modifications() {
-        let old = "old line\n";
-        let new = "new line\n";
-        let diff = format_diff(old, new);
-        assert!(diff.contains("-old line"));
-        assert!(diff.contains("+new line"));
+        #[rstest]
+        #[case::simple_modification("old\n", "new\n", vec!["-old", "+new"])]
+        #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"])]
+        #[case::complex_change("foo\nbar\nbaz\n", "foo\nqux\nbaz\n", vec![" foo", "-bar", "+qux", " baz"])]
+        fn test_modifications(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+            let diff = format_diff(old, new);
+            for line in expected {
+                assert!(
+                    diff.contains(line),
+                    "Expected '{}' in diff:\n{}",
+                    line,
+                    diff
+                );
+            }
+        }
+
+        #[rstest]
+        #[case::mixed_operations(
+            "keep\ndelete\nmodify\n",
+            "keep\nmodified\nnew\n",
+            vec![" keep", "-delete", "-modify", "+modified", "+new"]
+        )]
+        fn test_mixed_changes(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+            let diff = format_diff(old, new);
+            for line in expected {
+                assert!(
+                    diff.contains(line),
+                    "Expected '{}' in diff:\n{}",
+                    line,
+                    diff
+                );
+            }
+        }
     }
 }
