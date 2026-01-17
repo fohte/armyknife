@@ -116,68 +116,66 @@ pub fn read_comments_from_dir(issue_dir: &Path) -> Result<Vec<LocalComment>> {
 ///
 /// Body content here...
 fn parse_comment_content(content: &str, path: &Path) -> Result<(CommentFileMetadata, String)> {
-    let mut metadata = CommentFileMetadata::default();
-    let mut body_lines = Vec::new();
-    let mut in_header = true;
+    let lines: Vec<&str> = content.lines().collect();
 
-    for line in content.lines() {
-        if in_header {
-            if let Some(value) = extract_metadata_value(line, "author") {
-                metadata.author = Some(value);
-                continue;
-            }
-            if let Some(value) = extract_metadata_value(line, "createdAt") {
-                metadata.created_at = Some(value);
-                continue;
-            }
-            if let Some(value) = extract_metadata_value(line, "id") {
-                metadata.id = Some(value);
-                continue;
-            }
-            if let Some(value) = extract_metadata_value(line, "databaseId") {
-                match value.parse::<i64>() {
-                    Ok(id) => metadata.database_id = Some(id),
-                    Err(_) => {
-                        return Err(StorageError::CommentMetadataParseError {
-                            path: path.to_path_buf(),
-                            message: format!("Invalid databaseId: {}", value),
-                        });
-                    }
-                }
-                continue;
-            }
-            // Empty line after headers signals start of body
-            if line.is_empty() {
-                in_header = false;
-                continue;
-            }
-            // Non-metadata line, switch to body
-            if !line.starts_with("<!--") {
-                in_header = false;
-                body_lines.push(line);
-            }
-        } else {
-            body_lines.push(line);
-        }
-    }
+    // Split into header lines (metadata comments) and body lines
+    let header_end = lines
+        .iter()
+        .position(|line| !line.starts_with("<!--") && !line.is_empty())
+        .unwrap_or(lines.len());
 
-    let body = body_lines.join("\n");
+    let metadata = parse_metadata_from_lines(&lines[..header_end], path)?;
+
+    // Body starts after first empty line following headers, or at first non-metadata line
+    let body_start = lines[header_end..]
+        .iter()
+        .position(|line| !line.is_empty())
+        .map(|pos| header_end + pos)
+        .unwrap_or(lines.len());
+
+    let body = lines[body_start..].join("\n");
+
     Ok((metadata, body))
 }
 
-/// Extract value from a metadata comment line.
+/// Parse metadata from header lines.
+fn parse_metadata_from_lines(lines: &[&str], path: &Path) -> Result<CommentFileMetadata> {
+    let mut metadata = CommentFileMetadata::default();
+
+    for line in lines {
+        if let Some((key, value)) = extract_metadata_key_value(line) {
+            match key {
+                "author" => metadata.author = Some(value),
+                "createdAt" => metadata.created_at = Some(value),
+                "id" => metadata.id = Some(value),
+                "databaseId" => {
+                    metadata.database_id = Some(value.parse().map_err(|_| {
+                        StorageError::CommentMetadataParseError {
+                            path: path.to_path_buf(),
+                            message: format!("Invalid databaseId: {}", value),
+                        }
+                    })?);
+                }
+                _ => {} // Ignore unknown keys
+            }
+        }
+    }
+
+    Ok(metadata)
+}
+
+/// Extract key-value pair from a metadata comment line.
 /// Format: <!-- key: value -->
-fn extract_metadata_value(line: &str, key: &str) -> Option<String> {
-    line.strip_prefix("<!-- ")
-        .and_then(|s| s.strip_suffix(" -->"))
-        .and_then(|s| s.strip_prefix(key))
-        .and_then(|s| s.strip_prefix(": "))
-        .map(str::to_string)
+fn extract_metadata_key_value(line: &str) -> Option<(&str, String)> {
+    let inner = line.strip_prefix("<!-- ")?.strip_suffix(" -->")?;
+    let (key, value) = inner.split_once(": ")?;
+    Some((key, value.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use tempfile::TempDir;
 
     fn setup_test_dir() -> TempDir {
@@ -261,23 +259,17 @@ This is the comment body."#;
         assert_eq!(comments[0].body, "New comment content");
     }
 
-    #[test]
-    fn test_extract_metadata_value() {
-        assert_eq!(
-            extract_metadata_value("<!-- author: testuser -->", "author"),
-            Some("testuser".to_string())
-        );
-        assert_eq!(
-            extract_metadata_value("<!-- databaseId: 12345 -->", "databaseId"),
-            Some("12345".to_string())
-        );
-        assert_eq!(
-            extract_metadata_value("not a metadata line", "author"),
-            None
-        );
-        assert_eq!(
-            extract_metadata_value("<!-- author: testuser -->", "other"),
-            None
-        );
+    #[rstest]
+    #[case("<!-- author: testuser -->", Some(("author", "testuser".to_string())))]
+    #[case("<!-- databaseId: 12345 -->", Some(("databaseId", "12345".to_string())))]
+    #[case("<!-- id: IC_abc123 -->", Some(("id", "IC_abc123".to_string())))]
+    #[case("not a metadata line", None)]
+    #[case("<!-- invalid -->", None)]
+    #[case("<!-- no-colon-separator -->", None)]
+    fn test_extract_metadata_key_value(
+        #[case] line: &str,
+        #[case] expected: Option<(&str, String)>,
+    ) {
+        assert_eq!(extract_metadata_key_value(line), expected);
     }
 }

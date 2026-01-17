@@ -104,10 +104,12 @@ mod tests {
     use super::*;
     use crate::gh::issue_agent::models::{Author, Label};
     use chrono::{TimeZone, Utc};
+    use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_issue() -> Issue {
+    #[fixture]
+    fn test_issue() -> Issue {
         Issue {
             number: 123,
             title: "Test Issue".to_string(),
@@ -126,7 +128,8 @@ mod tests {
         }
     }
 
-    fn create_test_comment() -> Comment {
+    #[fixture]
+    fn test_comment() -> Comment {
         Comment {
             id: "IC_abc123".to_string(),
             database_id: 12345,
@@ -138,25 +141,22 @@ mod tests {
         }
     }
 
-    fn setup_test_dir() -> TempDir {
+    #[fixture]
+    fn test_dir() -> TempDir {
         tempfile::tempdir().unwrap()
     }
 
-    #[test]
-    fn test_no_changes() {
-        let dir = setup_test_dir();
-        let issue = create_test_issue();
-        let comment = create_test_comment();
-
+    #[rstest]
+    fn test_no_changes(test_dir: TempDir, test_issue: Issue, test_comment: Comment) {
         // Write matching local files
-        fs::write(dir.path().join("issue.md"), "Original body\n").unwrap();
+        fs::write(test_dir.path().join("issue.md"), "Original body\n").unwrap();
         fs::write(
-            dir.path().join("metadata.json"),
+            test_dir.path().join("metadata.json"),
             r#"{"number":123,"title":"Test Issue","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}"#,
         )
         .unwrap();
 
-        let comments_dir = dir.path().join("comments");
+        let comments_dir = test_dir.path().join("comments");
         fs::create_dir(&comments_dir).unwrap();
         fs::write(
             comments_dir.join("001_comment_12345.md"),
@@ -164,45 +164,36 @@ mod tests {
         )
         .unwrap();
 
-        let changes = detect_local_changes_from_dir(dir.path(), &issue, &[comment]).unwrap();
+        let changes =
+            detect_local_changes_from_dir(test_dir.path(), &test_issue, &[test_comment]).unwrap();
         assert!(!changes.has_changes());
     }
 
-    #[test]
-    fn test_body_changed() {
-        let dir = setup_test_dir();
-        let issue = create_test_issue();
+    #[rstest]
+    fn test_body_changed(test_dir: TempDir, test_issue: Issue) {
+        fs::write(test_dir.path().join("issue.md"), "Modified body\n").unwrap();
 
-        fs::write(dir.path().join("issue.md"), "Modified body\n").unwrap();
-
-        let changes = detect_local_changes_from_dir(dir.path(), &issue, &[]).unwrap();
+        let changes = detect_local_changes_from_dir(test_dir.path(), &test_issue, &[]).unwrap();
         assert!(changes.has_changes());
         assert!(changes.body_changed);
     }
 
-    #[test]
-    fn test_title_changed() {
-        let dir = setup_test_dir();
-        let issue = create_test_issue();
-
+    #[rstest]
+    fn test_title_changed(test_dir: TempDir, test_issue: Issue) {
         fs::write(
-            dir.path().join("metadata.json"),
+            test_dir.path().join("metadata.json"),
             r#"{"number":123,"title":"Modified Title","state":"OPEN","labels":[],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}"#,
         )
         .unwrap();
 
-        let changes = detect_local_changes_from_dir(dir.path(), &issue, &[]).unwrap();
+        let changes = detect_local_changes_from_dir(test_dir.path(), &test_issue, &[]).unwrap();
         assert!(changes.has_changes());
         assert!(changes.title_changed);
     }
 
-    #[test]
-    fn test_comment_modified() {
-        let dir = setup_test_dir();
-        let issue = create_test_issue();
-        let comment = create_test_comment();
-
-        let comments_dir = dir.path().join("comments");
+    #[rstest]
+    fn test_comment_modified(test_dir: TempDir, test_issue: Issue, test_comment: Comment) {
+        let comments_dir = test_dir.path().join("comments");
         fs::create_dir(&comments_dir).unwrap();
         fs::write(
             comments_dir.join("001_comment_12345.md"),
@@ -210,17 +201,15 @@ mod tests {
         )
         .unwrap();
 
-        let changes = detect_local_changes_from_dir(dir.path(), &issue, &[comment]).unwrap();
+        let changes =
+            detect_local_changes_from_dir(test_dir.path(), &test_issue, &[test_comment]).unwrap();
         assert!(changes.has_changes());
         assert_eq!(changes.modified_comment_ids, vec!["IC_abc123"]);
     }
 
-    #[test]
-    fn test_new_comment() {
-        let dir = setup_test_dir();
-        let issue = create_test_issue();
-
-        let comments_dir = dir.path().join("comments");
+    #[rstest]
+    fn test_new_comment(test_dir: TempDir, test_issue: Issue) {
+        let comments_dir = test_dir.path().join("comments");
         fs::create_dir(&comments_dir).unwrap();
         fs::write(
             comments_dir.join("new_my_comment.md"),
@@ -228,7 +217,7 @@ mod tests {
         )
         .unwrap();
 
-        let changes = detect_local_changes_from_dir(dir.path(), &issue, &[]).unwrap();
+        let changes = detect_local_changes_from_dir(test_dir.path(), &test_issue, &[]).unwrap();
         assert!(changes.has_changes());
         assert_eq!(changes.new_comment_files, vec!["new_my_comment.md"]);
     }

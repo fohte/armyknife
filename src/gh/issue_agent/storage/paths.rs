@@ -32,38 +32,41 @@ fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i6
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_get_cache_dir_with_xdg() {
-        let dir = get_cache_dir_with_env(Some("/tmp/test-cache".to_string()), None);
-        assert_eq!(dir, PathBuf::from("/tmp/test-cache/gh-issue-agent"));
+    #[rstest]
+    #[case(Some("/tmp/test-cache".to_string()), None, "/tmp/test-cache/gh-issue-agent")]
+    #[case(
+        None,
+        Some(PathBuf::from("/home/user")),
+        "/home/user/.cache/gh-issue-agent"
+    )]
+    #[case(Some("/custom/cache".to_string()), Some(PathBuf::from("/home/user")), "/custom/cache/gh-issue-agent")]
+    #[case(None, None, ".cache/gh-issue-agent")]
+    fn test_get_cache_dir_with_env(
+        #[case] xdg_cache_home: Option<String>,
+        #[case] home_dir: Option<PathBuf>,
+        #[case] expected: &str,
+    ) {
+        let dir = get_cache_dir_with_env(xdg_cache_home, home_dir);
+        assert_eq!(dir, PathBuf::from(expected));
     }
 
-    #[test]
-    fn test_get_cache_dir_with_home() {
-        let dir = get_cache_dir_with_env(None, Some(PathBuf::from("/home/user")));
-        assert_eq!(dir, PathBuf::from("/home/user/.cache/gh-issue-agent"));
-    }
-
-    #[test]
-    fn test_get_cache_dir_xdg_takes_priority() {
-        let dir = get_cache_dir_with_env(
-            Some("/custom/cache".to_string()),
-            Some(PathBuf::from("/home/user")),
-        );
-        assert_eq!(dir, PathBuf::from("/custom/cache/gh-issue-agent"));
-    }
-
-    #[test]
-    fn test_get_cache_dir_fallback() {
-        let dir = get_cache_dir_with_env(None, None);
-        assert_eq!(dir, PathBuf::from(".cache/gh-issue-agent"));
-    }
-
-    #[test]
-    fn test_get_issue_dir() {
-        let cache_dir = PathBuf::from("/cache");
-        let dir = get_issue_dir_with_cache_dir(cache_dir, "owner/repo", 123);
-        assert_eq!(dir, PathBuf::from("/cache/owner/repo/123"));
+    #[rstest]
+    #[case("/cache", "owner/repo", 123, "/cache/owner/repo/123")]
+    #[case(
+        "/home/user/.cache/gh-issue-agent",
+        "fohte/armyknife",
+        42,
+        "/home/user/.cache/gh-issue-agent/fohte/armyknife/42"
+    )]
+    fn test_get_issue_dir_with_cache_dir(
+        #[case] cache_dir: &str,
+        #[case] repo: &str,
+        #[case] issue_number: i64,
+        #[case] expected: &str,
+    ) {
+        let dir = get_issue_dir_with_cache_dir(PathBuf::from(cache_dir), repo, issue_number);
+        assert_eq!(dir, PathBuf::from(expected));
     }
 }
