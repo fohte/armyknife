@@ -307,3 +307,100 @@ fn print_diff(old: &str, new: &str) {
         print!("{}{}", sign, change);
     }
 }
+
+/// Format diff as a string (for testing).
+#[cfg(test)]
+fn format_diff(old: &str, new: &str) -> String {
+    let diff = TextDiff::from_lines(old, new);
+    let mut result = String::new();
+
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        result.push_str(sign);
+        result.push_str(&change.to_string());
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("owner/repo", Ok(("owner", "repo")))]
+    #[case("fohte/armyknife", Ok(("fohte", "armyknife")))]
+    #[case("org-name/repo-name", Ok(("org-name", "repo-name")))]
+    fn test_parse_repo_valid(#[case] input: &str, #[case] expected: Result<(&str, &str), ()>) {
+        let result = parse_repo(input);
+        match expected {
+            Ok((owner, repo)) => {
+                let (actual_owner, actual_repo) = result.unwrap();
+                assert_eq!(actual_owner, owner);
+                assert_eq!(actual_repo, repo);
+            }
+            Err(_) => {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[rstest]
+    #[case("noslash")]
+    #[case("")]
+    fn test_parse_repo_invalid(#[case] input: &str) {
+        let result = parse_repo(input);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid repository format"));
+    }
+
+    #[rstest]
+    #[case(Some("owner/repo".to_string()), "owner/repo")]
+    #[case(Some("fohte/armyknife".to_string()), "fohte/armyknife")]
+    fn test_get_repo_with_arg(#[case] repo_arg: Option<String>, #[case] expected: &str) {
+        let result = get_repo(&repo_arg).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_format_diff_no_changes() {
+        let text = "line1\nline2\n";
+        let diff = format_diff(text, text);
+        assert!(diff.contains(" line1"));
+        assert!(diff.contains(" line2"));
+        assert!(!diff.contains("-"));
+        assert!(!diff.contains("+"));
+    }
+
+    #[test]
+    fn test_format_diff_with_additions() {
+        let old = "line1\n";
+        let new = "line1\nline2\n";
+        let diff = format_diff(old, new);
+        assert!(diff.contains(" line1"));
+        assert!(diff.contains("+line2"));
+    }
+
+    #[test]
+    fn test_format_diff_with_deletions() {
+        let old = "line1\nline2\n";
+        let new = "line1\n";
+        let diff = format_diff(old, new);
+        assert!(diff.contains(" line1"));
+        assert!(diff.contains("-line2"));
+    }
+
+    #[test]
+    fn test_format_diff_with_modifications() {
+        let old = "old line\n";
+        let new = "new line\n";
+        let diff = format_diff(old, new);
+        assert!(diff.contains("-old line"));
+        assert!(diff.contains("+new line"));
+    }
+}
