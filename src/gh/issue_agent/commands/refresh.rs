@@ -1,4 +1,9 @@
+use std::process::Command;
+
 use clap::Args;
+
+use crate::gh::issue_agent::storage::IssueStorage;
+use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct RefreshArgs {
@@ -6,6 +11,94 @@ pub struct RefreshArgs {
     pub issue: super::IssueArgs,
 }
 
-pub async fn run(_args: &RefreshArgs) -> Result<(), Box<dyn std::error::Error>> {
-    todo!("refresh command not implemented")
+pub async fn run(args: &RefreshArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = get_repo(&args.issue.repo)?;
+    let issue_number = args.issue.issue_number;
+
+    eprintln!("Refreshing issue #{issue_number} from {repo}...");
+
+    let (owner, repo_name) = parse_repo(&repo)?;
+    let client = OctocrabClient::get()?;
+
+    // Fetch issue and comments from GitHub
+    let issue = client.get_issue(&owner, &repo_name, issue_number).await?;
+    let comments = client
+        .get_comments(&owner, &repo_name, issue_number)
+        .await?;
+
+    let storage = IssueStorage::new(&repo, issue.number);
+
+    // Save to local storage (overwriting any local changes)
+    super::pull::do_fetch_issue(&storage, &issue, &comments)?;
+
+    // Print success message
+    print_success_message(issue_number, &issue.title, storage.dir());
+
+    Ok(())
+}
+
+/// Get repository from argument or current directory.
+fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(repo) = repo_arg {
+        return Ok(repo.clone());
+    }
+
+    // Use `gh repo view` to get current repository
+    let output = Command::new("gh")
+        .args([
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "--jq",
+            ".nameWithOwner",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run gh repo view: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("gh repo view failed: {stderr}").into());
+    }
+
+    let repo = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if repo.is_empty() {
+        return Err("Could not determine repository. Use -R to specify.".into());
+    }
+
+    Ok(repo)
+}
+
+/// Parse "owner/repo" into (owner, repo) tuple.
+fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let parts: Vec<&str> = repo.split('/').collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Print success message after fetching issue.
+fn print_success_message(issue_number: u64, title: &str, dir: &std::path::Path) {
+    eprintln!();
+    eprintln!(
+        "Done! Issue #{issue_number} has been saved to {}/",
+        dir.display()
+    );
+    eprintln!();
+    eprintln!("Title: {title}");
+    eprintln!();
+    eprintln!("Files:");
+    eprintln!(
+        "  {}/issue.md          - Issue body (editable)",
+        dir.display()
+    );
+    eprintln!(
+        "  {}/metadata.json     - Metadata (editable: title, labels, assignees)",
+        dir.display()
+    );
+    eprintln!(
+        "  {}/comments/         - Comments (only your own comments are editable)",
+        dir.display()
+    );
 }
