@@ -16,8 +16,10 @@ pub async fn run(args: &ViewArgs) -> Result<(), Box<dyn std::error::Error>> {
     let issue_number = args.issue.issue_number;
 
     let client = OctocrabClient::get()?;
-    let issue = client.get_issue(&owner, &repo, issue_number).await?;
-    let comments = client.get_comments(&owner, &repo, issue_number).await?;
+    let (issue, comments) = tokio::try_join!(
+        client.get_issue(&owner, &repo, issue_number),
+        client.get_comments(&owner, &repo, issue_number)
+    )?;
 
     print_issue(&issue, issue_number, comments.len());
     print_comments(&comments);
@@ -29,11 +31,12 @@ fn get_repo_owner_and_name(
     repo_arg: Option<&str>,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     if let Some(repo) = repo_arg {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() == 2 {
-            return Ok((parts[0].to_string(), parts[1].to_string()));
-        }
-        return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
+        return repo
+            .split_once('/')
+            .map(|(owner, repo_name)| (owner.to_string(), repo_name.to_string()))
+            .ok_or_else(|| {
+                format!("Invalid repository format: {repo}. Expected owner/repo").into()
+            });
     }
 
     // Get from current repo using git2
@@ -86,12 +89,8 @@ fn print_issue(issue: &Issue, issue_number: u64, comment_count: usize) {
 
     // Body
     println!();
-    if let Some(body) = &issue.body {
-        if !body.is_empty() {
-            println!("{}", indent_text(body, "  "));
-        } else {
-            println!("  No description provided.");
-        }
+    if let Some(body) = issue.body.as_deref().filter(|b| !b.is_empty()) {
+        println!("{}", indent_text(body, "  "));
     } else {
         println!("  No description provided.");
     }
