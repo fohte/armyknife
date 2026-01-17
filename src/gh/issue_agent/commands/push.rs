@@ -70,7 +70,7 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
     let mut has_changes = false;
 
     // Compare issue body
-    let local_body = storage.read_body().unwrap_or_default();
+    let local_body = storage.read_body()?;
     let remote_body = remote_issue.body.as_deref().unwrap_or("");
     if local_body != remote_body {
         println!();
@@ -144,7 +144,7 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Compare comments
-    let local_comments = storage.read_comments().unwrap_or_default();
+    let local_comments = storage.read_comments()?;
     let remote_comments_map: HashMap<&str, &Comment> =
         remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
 
