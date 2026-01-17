@@ -2,6 +2,7 @@ use std::fs;
 
 use super::error::Result;
 use super::issue_storage::IssueStorage;
+use super::read::LocalComment;
 use crate::gh::issue_agent::models::{Comment, IssueMetadata};
 
 impl IssueStorage {
@@ -32,32 +33,11 @@ impl IssueStorage {
             let filename = format!("{}_comment_{}.md", index, comment.database_id);
             let path = comments_dir.join(&filename);
 
-            let content = comment.to_file_content();
+            let content = LocalComment::format_from_comment(comment);
             fs::write(&path, content)?;
         }
 
         Ok(())
-    }
-}
-
-/// Extension trait for Comment to support file serialization.
-trait CommentExt {
-    fn to_file_content(&self) -> String;
-}
-
-impl CommentExt for Comment {
-    fn to_file_content(&self) -> String {
-        let author = self
-            .author
-            .as_ref()
-            .map(|a| a.login.as_str())
-            .unwrap_or("unknown");
-        let created_at = self.created_at.to_rfc3339();
-
-        format!(
-            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}",
-            author, created_at, self.id, self.database_id, self.body
-        )
     }
 }
 

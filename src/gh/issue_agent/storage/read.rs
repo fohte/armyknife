@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::error::{Result, StorageError};
+use crate::gh::issue_agent::models::Comment;
 
 /// Metadata parsed from comment file headers.
 /// Format: <!-- key: value -->
@@ -97,6 +98,21 @@ impl LocalComment {
     /// Returns true if this is a new comment (filename starts with "new_").
     pub fn is_new(&self) -> bool {
         self.filename.starts_with("new_")
+    }
+
+    /// Format a Comment as file content with metadata headers.
+    pub fn format_from_comment(comment: &Comment) -> String {
+        let author = comment
+            .author
+            .as_ref()
+            .map(|a| a.login.as_str())
+            .unwrap_or("unknown");
+        let created_at = comment.created_at.to_rfc3339();
+
+        format!(
+            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}",
+            author, created_at, comment.id, comment.database_id, comment.body
+        )
     }
 }
 
