@@ -415,62 +415,66 @@ mod tests {
     mod compute_label_changes_tests {
         use super::*;
 
-        #[test]
-        fn test_no_changes() {
-            let local: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let (to_remove, to_add) = compute_label_changes(&local, &remote);
-            assert!(to_remove.is_empty());
-            assert!(to_add.is_empty());
-        }
-
-        #[test]
-        fn test_add_labels() {
-            let local: HashSet<&str> = ["bug", "feature", "new-label"].into_iter().collect();
-            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let (to_remove, to_add) = compute_label_changes(&local, &remote);
-            assert!(to_remove.is_empty());
-            assert_eq!(to_add, vec!["new-label"]);
-        }
-
-        #[test]
-        fn test_remove_labels() {
-            let local: HashSet<&str> = ["bug"].into_iter().collect();
-            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let (to_remove, to_add) = compute_label_changes(&local, &remote);
-            assert_eq!(to_remove, vec!["feature"]);
-            assert!(to_add.is_empty());
-        }
-
-        #[test]
-        fn test_add_and_remove_labels() {
-            let local: HashSet<&str> = ["bug", "new-label"].into_iter().collect();
-            let remote: HashSet<&str> = ["bug", "old-label"].into_iter().collect();
+        #[rstest]
+        #[case::no_changes(
+            vec!["bug", "feature"],
+            vec!["bug", "feature"],
+            vec![],
+            vec![]
+        )]
+        #[case::add_one_label(
+            vec!["bug", "feature", "new-label"],
+            vec!["bug", "feature"],
+            vec![],
+            vec!["new-label"]
+        )]
+        #[case::remove_one_label(
+            vec!["bug"],
+            vec!["bug", "feature"],
+            vec!["feature"],
+            vec![]
+        )]
+        #[case::add_and_remove(
+            vec!["bug", "new-label"],
+            vec!["bug", "old-label"],
+            vec!["old-label"],
+            vec!["new-label"]
+        )]
+        #[case::empty_local(
+            vec![],
+            vec!["bug", "feature"],
+            vec!["bug", "feature"],
+            vec![]
+        )]
+        #[case::empty_remote(
+            vec!["bug", "feature"],
+            vec![],
+            vec![],
+            vec!["bug", "feature"]
+        )]
+        #[case::both_empty(
+            vec![],
+            vec![],
+            vec![],
+            vec![]
+        )]
+        fn test_label_changes(
+            #[case] local_labels: Vec<&str>,
+            #[case] remote_labels: Vec<&str>,
+            #[case] expected_remove: Vec<&str>,
+            #[case] expected_add: Vec<&str>,
+        ) {
+            let local: HashSet<&str> = local_labels.into_iter().collect();
+            let remote: HashSet<&str> = remote_labels.into_iter().collect();
             let (mut to_remove, mut to_add) = compute_label_changes(&local, &remote);
             to_remove.sort();
             to_add.sort();
-            assert_eq!(to_remove, vec!["old-label"]);
-            assert_eq!(to_add, vec!["new-label"]);
-        }
-
-        #[test]
-        fn test_empty_local() {
-            let local: HashSet<&str> = HashSet::new();
-            let remote: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let (mut to_remove, to_add) = compute_label_changes(&local, &remote);
-            to_remove.sort();
-            assert_eq!(to_remove, vec!["bug", "feature"]);
-            assert!(to_add.is_empty());
-        }
-
-        #[test]
-        fn test_empty_remote() {
-            let local: HashSet<&str> = ["bug", "feature"].into_iter().collect();
-            let remote: HashSet<&str> = HashSet::new();
-            let (to_remove, mut to_add) = compute_label_changes(&local, &remote);
-            to_add.sort();
-            assert!(to_remove.is_empty());
-            assert_eq!(to_add, vec!["bug", "feature"]);
+            let mut expected_remove = expected_remove;
+            let mut expected_add = expected_add;
+            expected_remove.sort();
+            expected_add.sort();
+            assert_eq!(to_remove, expected_remove);
+            assert_eq!(to_add, expected_add);
         }
     }
 
