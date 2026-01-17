@@ -64,15 +64,16 @@ impl IssueClient for OctocrabClient {
 
         // Convert octocrab::models::issues::Issue to our Issue model
         let state = match issue.state {
-            octocrab::models::IssueState::Open => "OPEN",
-            octocrab::models::IssueState::Closed => "CLOSED",
-            _ => "OPEN",
+            octocrab::models::IssueState::Open => "OPEN".to_string(),
+            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
+            // IssueState is #[non_exhaustive], so handle future variants
+            _ => format!("{:?}", issue.state).to_uppercase(),
         };
         Ok(crate::gh::issue_agent::models::Issue {
             number: issue.number as i64,
             title: issue.title,
             body: issue.body,
-            state: state.to_string(),
+            state,
             labels: issue
                 .labels
                 .into_iter()
