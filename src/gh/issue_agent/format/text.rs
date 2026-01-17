@@ -8,10 +8,15 @@
 /// The indented text with each line prefixed by the indent string.
 #[allow(dead_code)]
 pub fn indent_text(text: &str, indent: &str) -> String {
-    text.lines()
+    let mut result = text
+        .lines()
         .map(|line| format!("{indent}{line}"))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if !text.is_empty() && text.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
 
 #[cfg(test)]
@@ -51,5 +56,11 @@ mod tests {
         let input = "first\n\nthird";
         let expected = "  first\n  \n  third";
         assert_eq!(indent_text(input, "  "), expected);
+    }
+
+    #[test]
+    fn test_trailing_newline() {
+        assert_eq!(indent_text("hello\n", "  "), "  hello\n");
+        assert_eq!(indent_text("a\nb\n", "  "), "  a\n  b\n");
     }
 }

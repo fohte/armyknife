@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 /// Formats an ISO 8601 timestamp as a human-readable relative time string.
 ///
-/// Returns strings like "just now", "5 minutes ago", "3 hours ago", "2 days ago", "1 weeks ago".
+/// Returns strings like "just now", "5 minutes ago", "3 hours ago", "2 days ago", "1 week ago".
 ///
 /// # Arguments
 /// * `timestamp` - An ISO 8601 formatted timestamp string (e.g., "2024-01-15T10:30:00Z")
@@ -27,13 +27,21 @@ pub fn format_relative_time(timestamp: &str) -> String {
     if seconds < 60 {
         "just now".to_string()
     } else if seconds < 3600 {
-        format!("{} minutes ago", seconds / 60)
+        let minutes = seconds / 60;
+        format!(
+            "{} minute{} ago",
+            minutes,
+            if minutes == 1 { "" } else { "s" }
+        )
     } else if seconds < 86400 {
-        format!("{} hours ago", seconds / 3600)
+        let hours = seconds / 3600;
+        format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
     } else if seconds < 604800 {
-        format!("{} days ago", seconds / 86400)
+        let days = seconds / 86400;
+        format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
     } else {
-        format!("{} weeks ago", seconds / 604800)
+        let weeks = seconds / 604800;
+        format!("{} week{} ago", weeks, if weeks == 1 { "" } else { "s" })
     }
 }
 
@@ -54,6 +62,9 @@ mod tests {
 
     #[test]
     fn test_minutes_ago() {
+        let ts = timestamp_ago(Duration::minutes(1));
+        assert_eq!(format_relative_time(&ts), "1 minute ago");
+
         let ts = timestamp_ago(Duration::minutes(5));
         assert_eq!(format_relative_time(&ts), "5 minutes ago");
 
@@ -64,7 +75,7 @@ mod tests {
     #[test]
     fn test_hours_ago() {
         let ts = timestamp_ago(Duration::hours(1));
-        assert_eq!(format_relative_time(&ts), "1 hours ago");
+        assert_eq!(format_relative_time(&ts), "1 hour ago");
 
         let ts = timestamp_ago(Duration::hours(23));
         assert_eq!(format_relative_time(&ts), "23 hours ago");
@@ -73,7 +84,7 @@ mod tests {
     #[test]
     fn test_days_ago() {
         let ts = timestamp_ago(Duration::days(1));
-        assert_eq!(format_relative_time(&ts), "1 days ago");
+        assert_eq!(format_relative_time(&ts), "1 day ago");
 
         let ts = timestamp_ago(Duration::days(6));
         assert_eq!(format_relative_time(&ts), "6 days ago");
@@ -82,7 +93,7 @@ mod tests {
     #[test]
     fn test_weeks_ago() {
         let ts = timestamp_ago(Duration::weeks(1));
-        assert_eq!(format_relative_time(&ts), "1 weeks ago");
+        assert_eq!(format_relative_time(&ts), "1 week ago");
 
         let ts = timestamp_ago(Duration::weeks(4));
         assert_eq!(format_relative_time(&ts), "4 weeks ago");
