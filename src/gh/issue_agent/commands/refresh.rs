@@ -110,6 +110,9 @@ fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Err
 /// Parse "owner/repo" into (owner, repo) tuple.
 fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
     if let Some((owner, repo_name)) = repo.split_once('/') {
+        if owner.is_empty() || repo_name.is_empty() {
+            return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
+        }
         Ok((owner.to_string(), repo_name.to_string()))
     } else {
         Err(format!("Invalid repository format: {repo}. Expected owner/repo").into())
@@ -349,9 +352,18 @@ mod tests {
         #[rstest]
         #[case::no_slash("ownerrepo")]
         #[case::empty("")]
+        #[case::only_slash("/")]
+        #[case::empty_owner("/repo")]
+        #[case::empty_repo("owner/")]
         fn test_parse_repo_invalid(#[case] input: &str) {
             let result = parse_repo(input);
             assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
         }
     }
 

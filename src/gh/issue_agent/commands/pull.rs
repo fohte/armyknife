@@ -125,6 +125,9 @@ fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Err
 /// Parse "owner/repo" into (owner, repo) tuple.
 fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
     if let Some((owner, repo_name)) = repo.split_once('/') {
+        if owner.is_empty() || repo_name.is_empty() {
+            return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
+        }
         Ok((owner.to_string(), repo_name.to_string()))
     } else {
         Err(format!("Invalid repository format: {repo}. Expected owner/repo").into())
@@ -386,16 +389,18 @@ mod tests {
         #[rstest]
         #[case::no_slash("ownerrepo")]
         #[case::empty("")]
+        #[case::only_slash("/")]
+        #[case::empty_owner("/repo")]
+        #[case::empty_repo("owner/")]
         fn test_parse_repo_invalid(#[case] input: &str) {
             let result = parse_repo(input);
             assert!(result.is_err());
-        }
-
-        #[test]
-        fn test_parse_repo_only_slash() {
-            // "/" splits into ("", ""), which is technically valid but empty
-            let result = parse_repo("/").unwrap();
-            assert_eq!(result, ("".to_string(), "".to_string()));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
         }
 
         #[test]
@@ -415,14 +420,10 @@ mod tests {
             assert_eq!(result, "owner/repo");
         }
 
-        #[test]
-        fn test_get_repo_with_none_in_non_git_dir() {
-            // When repo arg is None and not in a git repo, should fail
-            let result = get_repo(&None);
-            // This may succeed or fail depending on environment
-            // Just ensure it doesn't panic
-            let _ = result;
-        }
+        // Note: Testing get_repo with None requires a controlled environment
+        // (either a git repo or not). Since this is environment-dependent,
+        // we only test the explicit arg case. The None case is covered by
+        // integration tests in the actual CLI.
     }
 
     mod do_fetch_issue_tests {
