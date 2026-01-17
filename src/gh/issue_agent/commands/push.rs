@@ -1,13 +1,9 @@
 use clap::Args;
 
-#[derive(Args, Clone, PartialEq, Eq)]
+#[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct PushArgs {
-    /// Issue number
-    pub issue_number: u64,
-
-    /// Target repository (owner/repo)
-    #[arg(short = 'R', long)]
-    pub repo: Option<String>,
+    #[command(flatten)]
+    pub issue: super::IssueArgs,
 
     /// Show what would be changed without applying
     #[arg(long)]

@@ -5,7 +5,7 @@ pub mod storage;
 
 use clap::Subcommand;
 
-#[derive(Subcommand, Clone, PartialEq, Eq)]
+#[derive(Subcommand, Clone, PartialEq, Eq, Debug)]
 pub enum IssueAgentCommands {
     /// View issue and comments (read-only)
     View(commands::ViewArgs),

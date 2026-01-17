@@ -1,13 +1,9 @@
 use clap::Args;
 
-#[derive(Args, Clone, PartialEq, Eq)]
+#[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct PullArgs {
-    /// Issue number
-    pub issue_number: u64,
-
-    /// Target repository (owner/repo)
-    #[arg(short = 'R', long)]
-    pub repo: Option<String>,
+    #[command(flatten)]
+    pub issue: super::IssueArgs,
 }
 
 pub async fn run(_args: &PullArgs) -> Result<(), Box<dyn std::error::Error>> {
