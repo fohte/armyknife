@@ -1,5 +1,7 @@
 //! Integration tests for push command.
 
+use super::detect::{check_can_edit_comment, check_remote_unchanged, detect_label_change};
+use super::diff::format_diff;
 use super::*;
 use crate::gh::issue_agent::commands::IssueArgs;
 use crate::gh::issue_agent::commands::test_helpers::{
@@ -58,6 +60,7 @@ mod check_can_edit_comment_tests {
 
 mod detect_label_change_tests {
     use super::*;
+    use crate::gh::issue_agent::models::{Issue, IssueMetadata};
     use crate::testing::factories;
 
     fn metadata_with_labels(labels: &[&str]) -> IssueMetadata {
