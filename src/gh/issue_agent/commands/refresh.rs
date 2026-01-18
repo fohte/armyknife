@@ -83,6 +83,7 @@ mod tests {
     use crate::gh::issue_agent::models::{Author, Comment, Issue};
     use crate::github::MockGitHubClient;
     use chrono::{TimeZone, Utc};
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
@@ -249,13 +250,13 @@ mod tests {
             let content = fs::read_to_string(comments_dir.join("001_comment_99999.md")).unwrap();
             assert_eq!(
                 content,
-                "\
-<!-- author: newuser -->
-<!-- createdAt: 2024-02-01T00:00:00+00:00 -->
-<!-- id: IC_new -->
-<!-- databaseId: 99999 -->
+                indoc! {"
+                    <!-- author: newuser -->
+                    <!-- createdAt: 2024-02-01T00:00:00+00:00 -->
+                    <!-- id: IC_new -->
+                    <!-- databaseId: 99999 -->
 
-New comment from refresh"
+                    New comment from refresh"}
             );
         }
     }

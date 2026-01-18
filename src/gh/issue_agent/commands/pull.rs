@@ -117,6 +117,7 @@ mod tests {
     use crate::gh::issue_agent::models::{Author, Comment, Issue};
     use crate::github::MockGitHubClient;
     use chrono::{TimeZone, Utc};
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
@@ -172,13 +173,13 @@ mod tests {
             let content = fs::read_to_string(&comment_file).unwrap();
             assert_eq!(
                 content,
-                "\
-<!-- author: commenter -->
-<!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-<!-- id: IC_abc123 -->
-<!-- databaseId: 12345 -->
+                indoc! {"
+                    <!-- author: commenter -->
+                    <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
 
-Test comment body"
+                    Test comment body"}
             );
         }
 

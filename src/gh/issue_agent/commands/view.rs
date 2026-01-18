@@ -181,6 +181,7 @@ where
 mod tests {
     use super::*;
     use crate::testing::factories;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
 
     /// Fixed time formatter for deterministic test output.
@@ -208,13 +209,13 @@ mod tests {
 
         assert_eq!(
             output,
-            "\
-Test Issue Title #123
+            indoc! {"
+                Test Issue Title #123
 
-Open • testuser opened 2 hours ago • 0 comments
+                Open • testuser opened 2 hours ago • 0 comments
 
-  This is the issue body.
-"
+                  This is the issue body.
+            "}
         );
     }
 
@@ -232,15 +233,15 @@ Open • testuser opened 2 hours ago • 0 comments
 
         assert_eq!(
             output,
-            "\
-Bug Report #42
+            indoc! {"
+                Bug Report #42
 
-Open • reporter opened 2 hours ago • 5 comments
-Labels: bug, urgent
-Assignees: dev1, dev2
+                Open • reporter opened 2 hours ago • 5 comments
+                Labels: bug, urgent
+                Assignees: dev1, dev2
 
-  Found a bug.
-"
+                  Found a bug.
+            "}
         );
     }
 
@@ -254,14 +255,12 @@ Assignees: dev1, dev2
         let output = format_issue_with(&issue, 1, count, fixed_time);
         assert_eq!(
             output,
-            format!(
-                "\
-Test Issue #1
+            formatdoc! {"
+                Test Issue #1
 
-{expected}
-  Test body
-"
-            )
+                {expected}
+                  Test body
+            "}
         );
     }
 
@@ -274,14 +273,12 @@ Test Issue #1
         let output = format_issue_with(&issue, 1, 0, fixed_time);
         assert_eq!(
             output,
-            format!(
-                "\
-Test Issue #1
+            formatdoc! {"
+                Test Issue #1
 
-Open • testuser opened 2 hours ago • 0 comments
+                Open • testuser opened 2 hours ago • 0 comments
 
-{expected_body}"
-            )
+                {expected_body}"}
         );
     }
 
@@ -293,15 +290,13 @@ Open • testuser opened 2 hours ago • 0 comments
         let output = format_issue_with(&issue, 1, 0, fixed_time);
         assert_eq!(
             output,
-            format!(
-                "\
-Test Issue #1
+            formatdoc! {"
+                Test Issue #1
 
-Open • {expected_author} opened 2 hours ago • 0 comments
+                Open • {expected_author} opened 2 hours ago • 0 comments
 
-  Test body
-"
-            )
+                  Test body
+            "}
         );
     }
 
@@ -313,15 +308,13 @@ Open • {expected_author} opened 2 hours ago • 0 comments
         let output = format_issue_with(&issue, 1, 0, fixed_time);
         assert_eq!(
             output,
-            format!(
-                "\
-Test Issue #1
+            formatdoc! {"
+                Test Issue #1
 
-{expected_state} • testuser opened 2 hours ago • 0 comments
+                {expected_state} • testuser opened 2 hours ago • 0 comments
 
-  Test body
-"
-            )
+                  Test body
+            "}
         );
     }
 
@@ -342,13 +335,14 @@ Test Issue #1
 
         assert_eq!(
             output,
-            "
-──────────────────────────────────────────────────────
+            indoc! {"
 
-commenter • 2 hours ago
+                ──────────────────────────────────────────────────────
 
-  This is a comment.
-"
+                commenter • 2 hours ago
+
+                  This is a comment.
+            "}
         );
     }
 
@@ -369,19 +363,20 @@ commenter • 2 hours ago
 
         assert_eq!(
             output,
-            "
-──────────────────────────────────────────────────────
+            indoc! {"
 
-user1 • 2 hours ago
+                ──────────────────────────────────────────────────────
 
-  First comment.
+                user1 • 2 hours ago
 
-──────────────────────────────────────────────────────
+                  First comment.
 
-user2 • 2 hours ago
+                ──────────────────────────────────────────────────────
 
-  Second comment.
-"
+                user2 • 2 hours ago
+
+                  Second comment.
+            "}
         );
     }
 
@@ -396,15 +391,14 @@ user2 • 2 hours ago
         let output = format_comments_with(&comments, fixed_time);
         assert_eq!(
             output,
-            format!(
-                "
-──────────────────────────────────────────────────────
+            formatdoc! {"
 
-{expected_author} • 2 hours ago
+                ──────────────────────────────────────────────────────
 
-  Comment body.
-"
-            )
+                {expected_author} • 2 hours ago
+
+                  Comment body.
+            "}
         );
     }
 
@@ -425,20 +419,20 @@ user2 • 2 hours ago
 
         assert_eq!(
             output,
-            "\
-Feature Request #99
+            indoc! {"
+                Feature Request #99
 
-Open • author opened 2 hours ago • 1 comment
-Labels: enhancement
+                Open • author opened 2 hours ago • 1 comment
+                Labels: enhancement
 
-  Add new feature.
+                  Add new feature.
 
-──────────────────────────────────────────────────────
+                ──────────────────────────────────────────────────────
 
-reviewer • 2 hours ago
+                reviewer • 2 hours ago
 
-  Looks good!
-"
+                  Looks good!
+            "}
         );
     }
 
@@ -447,6 +441,7 @@ reviewer • 2 hours ago
         use crate::gh::issue_agent::commands::IssueArgs;
         use crate::github::MockGitHubClient;
         use chrono::{TimeZone, Utc};
+        use indoc::indoc;
 
         fn mock_issue(number: i64, title: &str, body: &str) -> Issue {
             factories::issue_with(|i| {
@@ -493,26 +488,26 @@ reviewer • 2 hours ago
 
             assert_eq!(
                 output,
-                "\
-Test Issue #123
+                indoc! {"
+                    Test Issue #123
 
-Open • testuser opened 2 hours ago • 2 comments
-Labels: bug
+                    Open • testuser opened 2 hours ago • 2 comments
+                    Labels: bug
 
-  Test body content
+                      Test body content
 
-──────────────────────────────────────────────────────
+                    ──────────────────────────────────────────────────────
 
-commenter1 • 2 hours ago
+                    commenter1 • 2 hours ago
 
-  First comment
+                      First comment
 
-──────────────────────────────────────────────────────
+                    ──────────────────────────────────────────────────────
 
-commenter2 • 2 hours ago
+                    commenter2 • 2 hours ago
 
-  Second comment
-"
+                      Second comment
+                "}
             );
         }
 
@@ -536,14 +531,14 @@ commenter2 • 2 hours ago
 
             assert_eq!(
                 output,
-                "\
-No Comments Issue #42
+                indoc! {"
+                    No Comments Issue #42
 
-Open • testuser opened 2 hours ago • 0 comments
-Labels: bug
+                    Open • testuser opened 2 hours ago • 0 comments
+                    Labels: bug
 
-  Body without comments
-"
+                      Body without comments
+                "}
             );
         }
 
@@ -606,14 +601,14 @@ Labels: bug
 
             assert_eq!(
                 output,
-                "\
-Empty Body Issue #10
+                indoc! {"
+                    Empty Body Issue #10
 
-Open • testuser opened 2 hours ago • 0 comments
-Labels: bug
+                    Open • testuser opened 2 hours ago • 0 comments
+                    Labels: bug
 
-  No description provided.
-"
+                      No description provided.
+                "}
             );
         }
 
@@ -642,14 +637,14 @@ Labels: bug
 
             assert_eq!(
                 output,
-                "\
-Multi Label Issue #15
+                indoc! {"
+                    Multi Label Issue #15
 
-Open • testuser opened 2 hours ago • 0 comments
-Labels: bug, enhancement, help wanted
+                    Open • testuser opened 2 hours ago • 0 comments
+                    Labels: bug, enhancement, help wanted
 
-  Body
-"
+                      Body
+                "}
             );
         }
     }
