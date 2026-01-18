@@ -111,11 +111,20 @@ impl IssueStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gh::issue_agent::models::Author;
-    use chrono::{TimeZone, Utc};
+    use crate::testing::factories;
+    use rstest::rstest;
     use std::fs;
 
-    #[test]
+    fn make_comment(id: &str, database_id: i64, author: &str, body: &str) -> Comment {
+        factories::comment_with(|c| {
+            c.id = id.to_string();
+            c.database_id = database_id;
+            c.author = Some(factories::author(author));
+            c.body = body.to_string();
+        })
+    }
+
+    #[rstest]
     fn test_save_body() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
@@ -125,7 +134,7 @@ mod tests {
         assert_eq!(content, "Test body content\n");
     }
 
-    #[test]
+    #[rstest]
     fn test_save_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
@@ -149,27 +158,18 @@ mod tests {
         assert_eq!(loaded.title, "Test Issue");
     }
 
-    #[test]
+    #[rstest]
     fn test_save_comments() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
         let comments = vec![
-            Comment {
-                id: "IC_abc123".to_string(),
-                database_id: 12345,
-                author: Some(Author {
-                    login: "testuser".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                body: "First comment".to_string(),
-            },
-            Comment {
-                id: "IC_def456".to_string(),
-                database_id: 67890,
-                author: None,
-                created_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-                body: "Second comment".to_string(),
-            },
+            make_comment("IC_abc123", 12345, "testuser", "First comment"),
+            factories::comment_with(|c| {
+                c.id = "IC_def456".to_string();
+                c.database_id = 67890;
+                c.author = None;
+                c.body = "Second comment".to_string();
+            }),
         ];
 
         storage.save_comments(&comments).unwrap();
@@ -187,7 +187,7 @@ mod tests {
         assert!(second_comment.contains("Second comment"));
     }
 
-    #[test]
+    #[rstest]
     fn test_save_comments_removes_stale_files() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
@@ -196,39 +196,15 @@ mod tests {
 
         // Create initial comments: comment_11111 and comment_22222
         let initial_comments = vec![
-            Comment {
-                id: "IC_11111".to_string(),
-                database_id: 11111,
-                author: Some(Author {
-                    login: "user1".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                body: "First".to_string(),
-            },
-            Comment {
-                id: "IC_22222".to_string(),
-                database_id: 22222,
-                author: Some(Author {
-                    login: "user2".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-                body: "Second".to_string(),
-            },
+            make_comment("IC_11111", 11111, "user1", "First"),
+            make_comment("IC_22222", 22222, "user2", "Second"),
         ];
         storage.save_comments(&initial_comments).unwrap();
         assert!(comments_dir.join("001_comment_11111.md").exists());
         assert!(comments_dir.join("002_comment_22222.md").exists());
 
         // Now save only comment_22222 (simulating comment_11111 being deleted on GitHub)
-        let updated_comments = vec![Comment {
-            id: "IC_22222".to_string(),
-            database_id: 22222,
-            author: Some(Author {
-                login: "user2".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-            body: "Second".to_string(),
-        }];
+        let updated_comments = vec![make_comment("IC_22222", 22222, "user2", "Second")];
         storage.save_comments(&updated_comments).unwrap();
 
         // Stale file should be removed, remaining file should be re-indexed
@@ -246,7 +222,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn test_save_comments_preserves_new_files() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
@@ -257,15 +233,12 @@ mod tests {
         fs::write(comments_dir.join("new_my_comment.md"), "My new comment").unwrap();
 
         // Save comments from GitHub
-        let comments = vec![Comment {
-            id: "IC_12345".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: "testuser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-            body: "Remote comment".to_string(),
-        }];
+        let comments = vec![make_comment(
+            "IC_12345",
+            12345,
+            "testuser",
+            "Remote comment",
+        )];
         storage.save_comments(&comments).unwrap();
 
         // new_*.md file should be preserved
@@ -276,27 +249,16 @@ mod tests {
         assert!(comments_dir.join("001_comment_12345.md").exists());
     }
 
-    #[test]
-    fn test_parse_database_id_from_filename() {
+    #[rstest]
+    #[case::valid_001("001_comment_12345.md", Some(12345))]
+    #[case::valid_999("999_comment_99999999.md", Some(99999999))]
+    #[case::new_file("new_my_comment.md", None)]
+    #[case::invalid("invalid.md", None)]
+    #[case::not_a_number("001_comment_notanumber.md", None)]
+    fn test_parse_database_id_from_filename(#[case] filename: &str, #[case] expected: Option<i64>) {
         assert_eq!(
-            IssueStorage::parse_database_id_from_filename("001_comment_12345.md"),
-            Some(12345)
-        );
-        assert_eq!(
-            IssueStorage::parse_database_id_from_filename("999_comment_99999999.md"),
-            Some(99999999)
-        );
-        assert_eq!(
-            IssueStorage::parse_database_id_from_filename("new_my_comment.md"),
-            None
-        );
-        assert_eq!(
-            IssueStorage::parse_database_id_from_filename("invalid.md"),
-            None
-        );
-        assert_eq!(
-            IssueStorage::parse_database_id_from_filename("001_comment_notanumber.md"),
-            None
+            IssueStorage::parse_database_id_from_filename(filename),
+            expected
         );
     }
 }

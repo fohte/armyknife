@@ -390,7 +390,6 @@ mod tests {
     mod detect_comment_changes_tests {
         use super::*;
         use crate::gh::issue_agent::storage::LocalComment;
-        use chrono::{TimeZone, Utc};
 
         fn make_local_comment(
             id: &str,
@@ -398,77 +397,61 @@ mod tests {
             body: &str,
             author: &str,
         ) -> LocalComment {
-            LocalComment {
-                filename: format!("001_comment_{}.md", database_id),
-                body: body.to_string(),
-                metadata: crate::gh::issue_agent::storage::CommentFileMetadata {
-                    author: Some(author.to_string()),
-                    created_at: Some("2024-01-01T00:00:00+00:00".to_string()),
-                    id: Some(id.to_string()),
-                    database_id: Some(database_id),
-                },
-            }
+            factories::local_comment_with(|c| {
+                c.filename = format!("001_comment_{}.md", database_id);
+                c.body = body.to_string();
+                c.metadata.author = Some(author.to_string());
+                c.metadata.id = Some(id.to_string());
+                c.metadata.database_id = Some(database_id);
+            })
         }
 
         fn make_remote_comment(id: &str, database_id: i64, body: &str, author: &str) -> Comment {
-            Comment {
-                id: id.to_string(),
-                database_id,
-                author: Some(crate::gh::issue_agent::models::Author {
-                    login: author.to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                body: body.to_string(),
+            factories::comment_with(|c| {
+                c.id = id.to_string();
+                c.database_id = database_id;
+                c.body = body.to_string();
+                c.author = Some(factories::author(author));
+            })
+        }
+
+        #[rstest]
+        #[case::delete_allowed(vec![], true, 1)]
+        #[case::no_delete_when_local_exists(vec![make_local_comment("IC_123", 12345, "body", "alice")], false, 0)]
+        fn test_delete_detection(
+            #[case] local_comments: Vec<LocalComment>,
+            #[case] allow_delete: bool,
+            #[case] expected_changes: usize,
+        ) {
+            let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
+
+            let result = detect_comment_changes(
+                &local_comments,
+                &remote_comments,
+                "alice",
+                false,
+                allow_delete,
+            );
+
+            let changes = result.expect("Expected Ok result");
+            assert_eq!(changes.len(), expected_changes);
+            if expected_changes > 0 {
+                assert!(matches!(
+                    &changes[0],
+                    CommentChange::Deleted { database_id, .. } if *database_id == 12345
+                ));
             }
         }
 
-        #[test]
-        fn test_detects_deleted_comment_with_allow_delete() {
-            // Local has no comments, remote has one
+        #[rstest]
+        fn test_delete_without_allow_delete_fails() {
             let local_comments: Vec<LocalComment> = vec![];
-            let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
-
-            let result = detect_comment_changes(
-                &local_comments,
-                &remote_comments,
-                "alice",
-                false,
-                true, // allow_delete = true
-            );
-
-            assert!(result.is_ok());
-            let changes = result.unwrap();
-            assert_eq!(changes.len(), 1);
-            matches!(&changes[0], CommentChange::Deleted { database_id, .. } if *database_id == 12345);
-        }
-
-        #[test]
-        fn test_detects_deleted_comment_without_allow_delete_fails() {
-            let local_comments: Vec<LocalComment> = vec![];
-            let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
-
-            let result = detect_comment_changes(
-                &local_comments,
-                &remote_comments,
-                "alice",
-                false,
-                false, // allow_delete = false
-            );
-
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("--allow-delete"));
-        }
-
-        #[test]
-        fn test_no_delete_when_local_has_comment() {
-            let local_comments = vec![make_local_comment("IC_123", 12345, "body", "alice")];
             let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
 
             let result =
                 detect_comment_changes(&local_comments, &remote_comments, "alice", false, false);
 
-            assert!(result.is_ok());
-            assert!(result.unwrap().is_empty());
+            assert!(result.unwrap_err().to_string().contains("--allow-delete"));
         }
     }
 }

@@ -20,6 +20,7 @@
 use chrono::{Duration, Utc};
 
 use crate::gh::issue_agent::models::{Author, Comment, Issue, Label};
+use crate::gh::issue_agent::storage::{CommentFileMetadata, LocalComment};
 
 // =============================================================================
 // Issue factories
@@ -101,4 +102,29 @@ pub fn labels(names: &[&str]) -> Vec<Label> {
 /// Create multiple authors (assignees) from a slice of logins.
 pub fn assignees(logins: &[&str]) -> Vec<Author> {
     logins.iter().map(|l| author(l)).collect()
+}
+
+// =============================================================================
+// LocalComment factories
+// =============================================================================
+
+/// Create a LocalComment with default test values.
+pub fn local_comment() -> LocalComment {
+    LocalComment {
+        filename: "001_comment_123.md".to_string(),
+        body: "Test comment body".to_string(),
+        metadata: CommentFileMetadata {
+            author: Some("testuser".to_string()),
+            created_at: Some("2024-01-01T00:00:00+00:00".to_string()),
+            id: Some("IC_123".to_string()),
+            database_id: Some(123),
+        },
+    }
+}
+
+/// Create a LocalComment with customizations applied via closure.
+pub fn local_comment_with(f: impl FnOnce(&mut LocalComment)) -> LocalComment {
+    let mut c = local_comment();
+    f(&mut c);
+    c
 }
