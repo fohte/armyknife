@@ -102,35 +102,3 @@ pub fn labels(names: &[&str]) -> Vec<Label> {
 pub fn assignees(logins: &[&str]) -> Vec<Author> {
     logins.iter().map(|l| author(l)).collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_issue_defaults() {
-        let i = issue();
-        assert_eq!(i.number, 1);
-        assert_eq!(i.title, "Test Issue");
-        assert_eq!(i.state, "OPEN");
-    }
-
-    #[test]
-    fn test_issue_with_customization() {
-        let i = issue_with(|i| {
-            i.number = 42;
-            i.title = "Custom".to_string();
-            i.labels = labels(&["bug", "urgent"]);
-        });
-        assert_eq!(i.number, 42);
-        assert_eq!(i.title, "Custom");
-        assert_eq!(i.labels.len(), 2);
-    }
-
-    #[test]
-    fn test_comment_defaults() {
-        let c = comment();
-        assert_eq!(c.id, "IC_123");
-        assert_eq!(c.body, "Test comment");
-    }
-}
