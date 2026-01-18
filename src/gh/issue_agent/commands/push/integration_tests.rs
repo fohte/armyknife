@@ -18,6 +18,25 @@ fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
         dry_run,
         force,
         edit_others,
+        allow_delete: false,
+    }
+}
+
+fn make_args_with_delete(
+    dry_run: bool,
+    force: bool,
+    edit_others: bool,
+    allow_delete: bool,
+) -> PushArgs {
+    PushArgs {
+        issue: IssueArgs {
+            issue_number: 123,
+            repo: Some("owner/repo".to_string()),
+        },
+        dry_run,
+        force,
+        edit_others,
+        allow_delete,
     }
 }
 
@@ -131,6 +150,7 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
         dry_run: false,
         force: false,
         edit_others: false,
+        allow_delete: false,
     };
 
     let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;

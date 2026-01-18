@@ -41,6 +41,8 @@ pub struct MockGitHubClient {
     pub updated_comments: Arc<Mutex<Vec<UpdateCommentParams>>>,
     /// Track created comments for assertions
     pub created_comments: Arc<Mutex<Vec<CreateCommentParams>>>,
+    /// Track deleted comments for assertions
+    pub deleted_comments: Arc<Mutex<Vec<DeleteCommentParams>>>,
     /// Current user login for testing
     pub current_user: Option<String>,
 }
@@ -103,6 +105,12 @@ pub struct CreateCommentParams {
     pub body: String,
 }
 
+/// Parameters for tracking delete_comment calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeleteCommentParams {
+    pub comment: CommentRef,
+}
+
 impl MockGitHubClient {
     pub fn new() -> Self {
         Self {
@@ -120,6 +128,7 @@ impl MockGitHubClient {
             removed_labels: Arc::new(Mutex::new(Vec::new())),
             updated_comments: Arc::new(Mutex::new(Vec::new())),
             created_comments: Arc::new(Mutex::new(Vec::new())),
+            deleted_comments: Arc::new(Mutex::new(Vec::new())),
             current_user: None,
         }
     }
@@ -375,6 +384,20 @@ impl CommentClient for MockGitHubClient {
             created_at: chrono::Utc::now(),
             body: body.to_string(),
         })
+    }
+
+    async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
+        self.deleted_comments
+            .lock()
+            .unwrap()
+            .push(DeleteCommentParams {
+                comment: CommentRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    comment_id,
+                },
+            });
+        Ok(())
     }
 }
 

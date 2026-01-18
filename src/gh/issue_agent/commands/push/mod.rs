@@ -32,6 +32,10 @@ pub struct PushArgs {
     /// Allow editing other users' comments
     #[arg(long)]
     pub edit_others: bool,
+
+    /// Allow deleting comments from GitHub
+    #[arg(long)]
+    pub allow_delete: bool,
 }
 
 pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -122,6 +126,7 @@ where
         &remote_comments,
         current_user,
         args.edit_others,
+        args.allow_delete,
     )?;
 
     // Display and apply changes

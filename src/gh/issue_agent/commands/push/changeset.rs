@@ -34,6 +34,7 @@ pub(super) struct LabelChange {
     pub(super) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug)]
 pub(super) enum CommentChange<'a> {
     New {
         filename: &'a str,
@@ -47,9 +48,15 @@ pub(super) enum CommentChange<'a> {
         author: &'a str,
         current_user: &'a str,
     },
+    Deleted {
+        database_id: i64,
+        body: &'a str,
+        author: &'a str,
+    },
 }
 
 impl<'a> ChangeSet<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn detect(
         local_metadata: &'a IssueMetadata,
         local_body: &'a str,
@@ -58,12 +65,18 @@ impl<'a> ChangeSet<'a> {
         remote_comments: &'a [Comment],
         current_user: &'a str,
         edit_others: bool,
+        allow_delete: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let body = detect_body_change(local_body, remote_issue);
         let title = detect_title_change(local_metadata, remote_issue);
         let labels = detect_label_change(local_metadata, remote_issue);
-        let comments =
-            detect_comment_changes(local_comments, remote_comments, current_user, edit_others)?;
+        let comments = detect_comment_changes(
+            local_comments,
+            remote_comments,
+            current_user,
+            edit_others,
+            allow_delete,
+        )?;
 
         Ok(Self {
             body,
@@ -123,6 +136,21 @@ impl<'a> ChangeSet<'a> {
                         println!("=== Comment: {} ===", filename);
                     }
                     print_diff(remote_body, local_body);
+                }
+                CommentChange::Deleted {
+                    database_id,
+                    body,
+                    author,
+                } => {
+                    println!();
+                    println!(
+                        "=== Delete Comment: database_id={} (author: {}) ===",
+                        database_id, author
+                    );
+                    // Show the content that will be deleted (prefixed with -)
+                    for line in body.lines() {
+                        println!("- {}", line);
+                    }
                 }
             }
         }
@@ -191,6 +219,13 @@ impl<'a> ChangeSet<'a> {
                     println!("Updating comment...");
                     client
                         .update_comment(owner, repo, *database_id as u64, local_body)
+                        .await?;
+                }
+                CommentChange::Deleted { database_id, .. } => {
+                    println!();
+                    println!("Deleting comment...");
+                    client
+                        .delete_comment(owner, repo, *database_id as u64)
                         .await?;
                 }
             }
