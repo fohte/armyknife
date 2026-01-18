@@ -27,20 +27,10 @@ pub(super) async fn run_with_client_and_output<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo_str = get_repo_from_arg_or_git(&args.issue.repo)?;
-    let (owner, repo) = parse_repo(&repo_str)?;
-    let issue_number = args.issue.issue_number;
-
-    let (issue, comments) = tokio::try_join!(
-        client.get_issue(&owner, &repo, issue_number),
-        client.get_comments(&owner, &repo, issue_number)
-    )?;
-
-    Ok(format_issue_view(&issue, issue_number, &comments))
+    run_with_client_and_output_with(args, client, format_relative_time).await
 }
 
 /// Internal implementation that accepts a custom time formatter for testability.
-#[cfg(test)]
 async fn run_with_client_and_output_with<C, F>(
     args: &ViewArgs,
     client: &C,
@@ -68,14 +58,12 @@ where
 }
 
 /// Format the complete view output for an issue and its comments.
+#[allow(dead_code)]
 fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> String {
-    let mut output = format_issue(issue, issue_number, comments.len());
-    output.push_str(&format_comments(comments));
-    output
+    format_issue_view_with(issue, issue_number, comments, format_relative_time)
 }
 
 /// Testable version that accepts a custom time formatter.
-#[cfg(test)]
 fn format_issue_view_with<F>(
     issue: &Issue,
     issue_number: u64,
@@ -98,6 +86,7 @@ fn format_state(state: &str) -> &str {
     }
 }
 
+#[allow(dead_code)]
 fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> String {
     format_issue_with(issue, issue_number, comment_count, format_relative_time)
 }
@@ -157,6 +146,7 @@ where
     output
 }
 
+#[allow(dead_code)]
 fn format_comments(comments: &[Comment]) -> String {
     format_comments_with(comments, format_relative_time)
 }
