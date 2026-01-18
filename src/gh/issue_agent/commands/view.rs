@@ -177,8 +177,6 @@ mod tests {
         }
     }
 
-    // parse_repo and get_repo tests are in commands/common.rs
-
     #[rstest]
     #[case::open("OPEN", "Open")]
     #[case::closed("CLOSED", "Closed")]

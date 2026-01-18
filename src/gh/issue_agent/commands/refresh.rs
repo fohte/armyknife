@@ -87,8 +87,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // parse_repo and get_repo tests are in commands/common.rs
-
     mod run_with_client_and_storage_tests {
         use super::*;
 

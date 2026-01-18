@@ -121,8 +121,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // parse_repo and get_repo tests are in commands/common.rs
-
     mod save_issue_to_storage_tests {
         use super::*;
 
