@@ -133,7 +133,28 @@ mod run_with_client_and_storage_tests {
         }
     }
 
-    // Basic push operations: body, title, labels
+    /// Common setup: create issue, client, and storage with given parameters.
+    fn setup_test(
+        dir: &std::path::Path,
+        remote_title: &str,
+        remote_body: &str,
+        local_title: &str,
+        local_body: &str,
+        local_labels: &[&str],
+        timestamp: &str,
+    ) -> MockGitHubClient {
+        let issue = create_test_issue(123, remote_title, remote_body, timestamp);
+        let client = MockGitHubClient::new()
+            .with_issue("owner", "repo", issue)
+            .with_comments("owner", "repo", 123, vec![]);
+        setup_storage(
+            dir,
+            local_body,
+            &create_metadata_json(123, local_title, timestamp, local_labels),
+        );
+        client
+    }
+
     #[rstest]
     #[case::dry_run_no_api_call("Local", "Remote", true, false, 0)]
     #[case::updates_body("Local", "Remote", false, false, 1)]
@@ -172,18 +193,17 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_title(test_dir: TempDir) {
-        let issue = create_test_issue(123, "Old Title", "Body", TIMESTAMP);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![]);
-
-        setup_storage(
+        let client = setup_test(
             test_dir.path(),
+            "Old Title",
             "Body",
-            &create_metadata_json(123, "New Title", TIMESTAMP, &["bug"]),
+            "New Title",
+            "Body",
+            &["bug"],
+            TIMESTAMP,
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, false, false),
             &client,
@@ -201,18 +221,17 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_labels(test_dir: TempDir) {
-        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![]);
-
-        setup_storage(
+        let client = setup_test(
             test_dir.path(),
+            "Title",
             "Body",
-            &create_metadata_json(123, "Title", TIMESTAMP, &["enhancement"]),
+            "Title",
+            "Body",
+            &["enhancement"],
+            TIMESTAMP,
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, false, false),
             &client,
@@ -235,18 +254,18 @@ mod run_with_client_and_storage_tests {
     #[case::force_overrides(true, false)]
     #[tokio::test]
     async fn test_remote_changed(test_dir: TempDir, #[case] force: bool, #[case] expect_err: bool) {
+        // Remote has TIMESTAMP, local has OLD_TIMESTAMP (mismatch)
         let issue = create_test_issue(123, "Title", "Remote", TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
-
         setup_storage(
             test_dir.path(),
             "Local",
             &create_metadata_json(123, "Title", OLD_TIMESTAMP, &["bug"]),
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, force, false),
             &client,
@@ -270,13 +289,11 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_invalid_repo_format(test_dir: TempDir) {
-        let client = MockGitHubClient::new();
         setup_storage(
             test_dir.path(),
             "Body",
             &create_metadata_json(123, "T", TIMESTAMP, &[]),
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
         let args = PushArgs {
             issue: IssueArgs {
@@ -288,7 +305,9 @@ mod run_with_client_and_storage_tests {
             edit_others: false,
         };
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result =
+            run_with_client_and_storage(&args, &MockGitHubClient::new(), &storage, "testuser")
+                .await;
         assert!(
             result
                 .unwrap_err()
@@ -298,20 +317,26 @@ mod run_with_client_and_storage_tests {
     }
 
     // Comment operations
-    #[rstest]
-    #[tokio::test]
-    async fn test_updates_own_comment(test_dir: TempDir) {
+    fn setup_with_comment(dir: &std::path::Path, comment: Comment) -> MockGitHubClient {
         let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
-        let comment = make_comment("IC_abc", 12345, "testuser", "Original");
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![comment])
             .with_current_user("testuser");
-
         setup_storage(
-            test_dir.path(),
+            dir,
             "Body",
             &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
+        );
+        client
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_updates_own_comment(test_dir: TempDir) {
+        let client = setup_with_comment(
+            test_dir.path(),
+            make_comment("IC_abc", 12345, "testuser", "Original"),
         );
         setup_comment(
             test_dir.path(),
@@ -324,8 +349,8 @@ mod run_with_client_and_storage_tests {
                 "Updated",
             ),
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, false, false),
             &client,
@@ -335,28 +360,25 @@ mod run_with_client_and_storage_tests {
         .await;
 
         assert!(result.is_ok());
-        let updated = client.updated_comments.lock().unwrap();
-        assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0].body, "Updated");
+        assert_eq!(client.updated_comments.lock().unwrap()[0].body, "Updated");
     }
 
     #[rstest]
     #[tokio::test]
     async fn test_creates_new_comment(test_dir: TempDir) {
-        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![])
-            .with_current_user("testuser");
-
-        setup_storage(
+        let client = setup_test(
             test_dir.path(),
+            "Title",
             "Body",
-            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
-        );
+            "Title",
+            "Body",
+            &["bug"],
+            TIMESTAMP,
+        )
+        .with_current_user("testuser");
         setup_comment(test_dir.path(), "new_my_comment.md", "New comment");
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, false, false),
             &client,
@@ -383,17 +405,9 @@ mod run_with_client_and_storage_tests {
         #[case] edit_others: bool,
         #[case] expect_err: bool,
     ) {
-        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
-        let comment = make_comment("IC_abc", 12345, "otheruser", "Original");
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![comment])
-            .with_current_user("testuser");
-
-        setup_storage(
+        let client = setup_with_comment(
             test_dir.path(),
-            "Body",
-            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
+            make_comment("IC_abc", 12345, "otheruser", "Original"),
         );
         setup_comment(
             test_dir.path(),
@@ -406,8 +420,8 @@ mod run_with_client_and_storage_tests {
                 "Modified",
             ),
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, false, edit_others),
             &client,
@@ -417,8 +431,12 @@ mod run_with_client_and_storage_tests {
         .await;
 
         if expect_err {
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("Cannot edit other user's comment"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Cannot edit other user's comment")
+            );
         } else {
             assert!(result.is_ok());
             assert_eq!(client.updated_comments.lock().unwrap()[0].body, "Modified");
@@ -431,18 +449,16 @@ mod run_with_client_and_storage_tests {
         let new_timestamp = "2024-01-03T00:00:00+00:00";
         let mut issue = create_test_issue(123, "New Title", "Body", new_timestamp);
         issue.body = Some("Body".to_string());
-
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
-
         setup_storage(
             test_dir.path(),
             "Body",
             &create_metadata_json(123, "Old Title", OLD_TIMESTAMP, &["bug"]),
         );
-
         let storage = IssueStorage::from_dir(test_dir.path());
+
         let result = run_with_client_and_storage(
             &make_args(123, false, true, false),
             &client,
@@ -452,8 +468,11 @@ mod run_with_client_and_storage_tests {
         .await;
 
         assert!(result.is_ok());
-        let metadata = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
-        assert!(metadata.contains("2024-01-03"));
+        assert!(
+            fs::read_to_string(test_dir.path().join("metadata.json"))
+                .unwrap()
+                .contains("2024-01-03")
+        );
     }
 }
 
