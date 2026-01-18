@@ -129,17 +129,15 @@ where
         changeset
             .apply(client, &owner, &repo_name, issue_number, storage)
             .await?;
-    }
 
-    // Show result
-    print_result(args.dry_run, has_changes);
-
-    if !args.dry_run && has_changes {
         // Update local metadata to match remote after successful push
         let new_remote_issue = client.get_issue(&owner, &repo_name, issue_number).await?;
         let new_metadata = IssueMetadata::from_issue(&new_remote_issue);
         storage.save_metadata(&new_metadata)?;
     }
+
+    // Show result
+    print_result(args.dry_run, has_changes);
 
     Ok(())
 }
