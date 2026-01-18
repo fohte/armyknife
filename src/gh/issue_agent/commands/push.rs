@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use clap::Args;
 use similar::{ChangeTag, TextDiff};
 
+use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::gh::issue_agent::models::{Comment, IssueMetadata};
 use crate::gh::issue_agent::storage::IssueStorage;
-use crate::git::get_owner_repo;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -27,8 +27,11 @@ pub struct PushArgs {
 }
 
 pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let repo = get_repo(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
+
+    // Validate repo format before making any API calls
+    parse_repo(&repo)?;
 
     let storage = IssueStorage::new(&repo, issue_number as i64);
 
@@ -73,13 +76,15 @@ async fn run_with_client_and_user<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo = get_repo(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
     let (owner, repo_name) = parse_repo(&repo)?;
 
-    let remote_issue = client.get_issue(owner, repo_name, issue_number).await?;
-    let remote_comments = client.get_comments(owner, repo_name, issue_number).await?;
+    let remote_issue = client.get_issue(&owner, &repo_name, issue_number).await?;
+    let remote_comments = client
+        .get_comments(&owner, &repo_name, issue_number)
+        .await?;
 
     // 3. Check if remote has changed since pull
     let local_metadata = storage.read_metadata()?;
@@ -110,7 +115,7 @@ where
             println!();
             println!("Updating issue body...");
             client
-                .update_issue_body(owner, repo_name, issue_number, &local_body)
+                .update_issue_body(&owner, &repo_name, issue_number, &local_body)
                 .await?;
         }
         has_changes = true;
@@ -126,7 +131,7 @@ where
             println!();
             println!("Updating title...");
             client
-                .update_issue_title(owner, repo_name, issue_number, &local_metadata.title)
+                .update_issue_title(&owner, &repo_name, issue_number, &local_metadata.title)
                 .await?;
         }
         has_changes = true;
@@ -159,14 +164,14 @@ where
 
             for label in labels_to_remove {
                 client
-                    .remove_label(owner, repo_name, issue_number, label)
+                    .remove_label(&owner, &repo_name, issue_number, label)
                     .await?;
             }
 
             if !labels_to_add.is_empty() {
                 let labels: Vec<String> = labels_to_add.iter().map(|s| s.to_string()).collect();
                 client
-                    .add_labels(owner, repo_name, issue_number, &labels)
+                    .add_labels(&owner, &repo_name, issue_number, &labels)
                     .await?;
             }
         }
@@ -189,7 +194,7 @@ where
                 println!();
                 println!("Creating comment...");
                 client
-                    .create_comment(owner, repo_name, issue_number, &local_comment.body)
+                    .create_comment(&owner, &repo_name, issue_number, &local_comment.body)
                     .await?;
 
                 // Remove the new comment file after successful creation
@@ -246,7 +251,7 @@ where
                     .database_id
                     .ok_or("Comment missing databaseId")?;
                 client
-                    .update_comment(owner, repo_name, database_id as u64, &local_comment.body)
+                    .update_comment(&owner, &repo_name, database_id as u64, &local_comment.body)
                     .await?;
             }
             has_changes = true;
@@ -263,7 +268,7 @@ where
         }
     } else if has_changes {
         // Update local updatedAt to match remote after successful push
-        let new_remote_issue = client.get_issue(owner, repo_name, issue_number).await?;
+        let new_remote_issue = client.get_issue(&owner, &repo_name, issue_number).await?;
         let new_metadata = IssueMetadata::from_issue(&new_remote_issue);
         storage.save_metadata(&new_metadata)?;
         println!("Done! Changes have been pushed to GitHub.");
@@ -272,25 +277,6 @@ where
     }
 
     Ok(())
-}
-
-/// Get repository from argument or current directory.
-fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(repo) = repo_arg {
-        return Ok(repo.clone());
-    }
-
-    // Get from git remote origin
-    let (owner, repo) =
-        get_owner_repo().ok_or("Failed to determine current repository. Use -R to specify.")?;
-
-    Ok(format!("{}/{}", owner, repo))
-}
-
-/// Parse owner/repo string into (owner, repo) tuple.
-fn parse_repo(repo: &str) -> Result<(&str, &str), Box<dyn std::error::Error>> {
-    repo.split_once('/')
-        .ok_or_else(|| format!("Invalid repository format: {}. Expected owner/repo.", repo).into())
 }
 
 /// Get current GitHub user from the API.
@@ -508,127 +494,19 @@ mod tests {
         }
     }
 
-    mod parse_repo_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::simple("owner/repo", "owner", "repo")]
-        #[case::real_repo("fohte/armyknife", "fohte", "armyknife")]
-        #[case::with_dashes("org-name/repo-name", "org-name", "repo-name")]
-        #[case::with_underscores("my_org/my_repo", "my_org", "my_repo")]
-        #[case::with_dots("org.name/repo.name", "org.name", "repo.name")]
-        #[case::with_numbers("user123/project456", "user123", "project456")]
-        fn test_valid(
-            #[case] input: &str,
-            #[case] expected_owner: &str,
-            #[case] expected_repo: &str,
-        ) {
-            let (owner, repo) = parse_repo(input).unwrap();
-            assert_eq!(owner, expected_owner);
-            assert_eq!(repo, expected_repo);
-        }
-
-        #[rstest]
-        #[case::no_slash("noslash")]
-        #[case::empty("")]
-        #[case::only_owner("owner")]
-        fn test_invalid(#[case] input: &str) {
-            let result = parse_repo(input);
-            assert!(result.is_err());
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("Invalid repository format"));
-        }
-
-        // split_once accepts these as valid splits, resulting in empty strings
-        #[rstest]
-        #[case::only_slash("/", "", "")]
-        #[case::trailing_slash("owner/", "owner", "")]
-        #[case::leading_slash("/repo", "", "repo")]
-        fn test_edge_cases_with_slash(
-            #[case] input: &str,
-            #[case] expected_owner: &str,
-            #[case] expected_repo: &str,
-        ) {
-            let (owner, repo) = parse_repo(input).unwrap();
-            assert_eq!(owner, expected_owner);
-            assert_eq!(repo, expected_repo);
-        }
-
-        #[rstest]
-        #[case::multiple_slashes("a/b/c")]
-        #[case::deeply_nested("org/repo/sub/path")]
-        fn test_multiple_slashes_takes_first(#[case] input: &str) {
-            // split_once only splits on the first '/', so "a/b/c" -> ("a", "b/c")
-            let result = parse_repo(input);
-            assert!(result.is_ok());
-        }
-    }
-
-    mod get_repo_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::simple("owner/repo")]
-        #[case::real_repo("fohte/armyknife")]
-        #[case::with_special_chars("my-org/my_repo.rs")]
-        fn test_with_arg_returns_as_is(#[case] repo: &str) {
-            let result = get_repo(&Some(repo.to_string())).unwrap();
-            assert_eq!(result, repo);
-        }
-    }
+    // parse_repo and get_repo tests are in commands/common.rs
 
     mod run_with_client_and_storage_tests {
         use super::*;
         use crate::gh::issue_agent::commands::IssueArgs;
-        use crate::gh::issue_agent::models::{Author, Comment, Issue, Label};
+        use crate::gh::issue_agent::commands::test_helpers::{
+            create_comment_file, create_metadata_json, create_test_issue, test_dir,
+        };
+        use crate::gh::issue_agent::models::{Author, Comment};
         use crate::github::MockGitHubClient;
         use chrono::{TimeZone, Utc};
-        use rstest::fixture;
         use std::fs;
         use tempfile::TempDir;
-
-        fn create_test_issue(number: i64, title: &str, body: &str, updated_at: &str) -> Issue {
-            Issue {
-                number,
-                title: title.to_string(),
-                body: Some(body.to_string()),
-                state: "OPEN".to_string(),
-                labels: vec![Label {
-                    name: "bug".to_string(),
-                }],
-                assignees: vec![],
-                milestone: None,
-                author: Some(Author {
-                    login: "testuser".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                updated_at: chrono::DateTime::parse_from_rfc3339(updated_at)
-                    .unwrap()
-                    .with_timezone(&Utc),
-            }
-        }
-
-        fn create_metadata_json(
-            number: i64,
-            title: &str,
-            updated_at: &str,
-            labels: &[&str],
-        ) -> String {
-            let labels_json: Vec<String> = labels.iter().map(|l| format!("\"{}\"", l)).collect();
-            // Use camelCase as per IssueMetadata's serde rename_all attribute
-            format!(
-                r#"{{"number":{},"title":"{}","state":"OPEN","labels":[{}],"assignees":[],"milestone":null,"author":"testuser","createdAt":"2024-01-01T00:00:00+00:00","updatedAt":"{}"}}"#,
-                number,
-                title,
-                labels_json.join(","),
-                updated_at
-            )
-        }
-
-        #[fixture]
-        fn test_dir() -> TempDir {
-            tempfile::tempdir().unwrap()
-        }
 
         #[rstest]
         #[tokio::test]
@@ -963,7 +841,13 @@ mod tests {
             .unwrap();
             fs::write(
                 test_dir.path().join("comments/001_comment_12345.md"),
-                "<!-- author: testuser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nUpdated comment body",
+                create_comment_file(
+                    "testuser",
+                    "2024-01-01T12:00:00+00:00",
+                    "IC_abc123",
+                    12345,
+                    "Updated comment body",
+                ),
             )
             .unwrap();
 
@@ -1062,7 +946,13 @@ mod tests {
             .unwrap();
             fs::write(
                 test_dir.path().join("comments/001_comment_12345.md"),
-                "<!-- author: otheruser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nModified other's comment",
+                create_comment_file(
+                    "otheruser",
+                    "2024-01-01T12:00:00+00:00",
+                    "IC_abc123",
+                    12345,
+                    "Modified other's comment",
+                ),
             )
             .unwrap();
 
@@ -1113,7 +1003,13 @@ mod tests {
             .unwrap();
             fs::write(
                 test_dir.path().join("comments/001_comment_12345.md"),
-                "<!-- author: otheruser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nModified other's comment",
+                create_comment_file(
+                    "otheruser",
+                    "2024-01-01T12:00:00+00:00",
+                    "IC_abc123",
+                    12345,
+                    "Modified other's comment",
+                ),
             )
             .unwrap();
 

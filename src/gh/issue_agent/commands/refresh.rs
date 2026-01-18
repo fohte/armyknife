@@ -1,7 +1,7 @@
-use std::process::Command;
-
 use clap::Args;
 
+use super::common::{get_repo_from_arg_or_gh, parse_repo, print_fetch_success};
+use super::pull::save_issue_to_storage;
 use crate::gh::issue_agent::storage::IssueStorage;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
@@ -24,7 +24,7 @@ async fn run_with_client<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo = get_repo(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_gh(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
     eprintln!("Refreshing issue #{issue_number} from {repo}...");
@@ -40,10 +40,10 @@ where
     let storage = IssueStorage::new(&repo, issue.number);
 
     // Save to local storage (overwriting any local changes)
-    super::pull::do_fetch_issue(&storage, &issue, &comments)?;
+    save_issue_to_storage(&storage, &issue, &comments)?;
 
     // Print success message
-    print_success_message(issue_number, &issue.title, storage.dir());
+    print_fetch_success(issue_number, &issue.title, storage.dir());
 
     Ok(())
 }
@@ -58,7 +58,7 @@ async fn run_with_client_and_storage<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo = get_repo(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_gh(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
     let (owner, repo_name) = parse_repo(&repo)?;
@@ -70,78 +70,9 @@ where
         .await?;
 
     // Save to local storage (overwriting any local changes - no change check)
-    super::pull::do_fetch_issue(storage, &issue, &comments)?;
+    save_issue_to_storage(storage, &issue, &comments)?;
 
     Ok(())
-}
-
-/// Get repository from argument or current directory.
-fn get_repo(repo_arg: &Option<String>) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(repo) = repo_arg {
-        return Ok(repo.clone());
-    }
-
-    // Use `gh repo view` to get current repository
-    let output = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "nameWithOwner",
-            "--jq",
-            ".nameWithOwner",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run gh repo view: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh repo view failed: {stderr}").into());
-    }
-
-    let repo = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if repo.is_empty() {
-        return Err("Could not determine repository. Use -R to specify.".into());
-    }
-
-    Ok(repo)
-}
-
-/// Parse "owner/repo" into (owner, repo) tuple.
-fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
-    if let Some((owner, repo_name)) = repo.split_once('/') {
-        if owner.is_empty() || repo_name.is_empty() {
-            return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
-        }
-        Ok((owner.to_string(), repo_name.to_string()))
-    } else {
-        Err(format!("Invalid repository format: {repo}. Expected owner/repo").into())
-    }
-}
-
-/// Print success message after fetching issue.
-fn print_success_message(issue_number: u64, title: &str, dir: &std::path::Path) {
-    eprintln!();
-    eprintln!(
-        "Done! Issue #{issue_number} has been saved to {}/",
-        dir.display()
-    );
-    eprintln!();
-    eprintln!("Title: {title}");
-    eprintln!();
-    eprintln!("Files:");
-    eprintln!(
-        "  {}/issue.md          - Issue body (editable)",
-        dir.display()
-    );
-    eprintln!(
-        "  {}/metadata.json     - Metadata (editable: title, labels, assignees)",
-        dir.display()
-    );
-    eprintln!(
-        "  {}/comments/         - Comments (only your own comments are editable)",
-        dir.display()
-    );
 }
 
 #[cfg(test)]
@@ -195,44 +126,7 @@ mod tests {
         }
     }
 
-    mod parse_repo_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::valid("owner/repo", ("owner", "repo"))]
-        #[case::with_dashes("my-org/my-repo", ("my-org", "my-repo"))]
-        fn test_parse_repo_valid(#[case] input: &str, #[case] expected: (&str, &str)) {
-            let result = parse_repo(input).unwrap();
-            assert_eq!(result, (expected.0.to_string(), expected.1.to_string()));
-        }
-
-        #[rstest]
-        #[case::no_slash("ownerrepo")]
-        #[case::empty("")]
-        #[case::only_slash("/")]
-        #[case::empty_owner("/repo")]
-        #[case::empty_repo("owner/")]
-        fn test_parse_repo_invalid(#[case] input: &str) {
-            let result = parse_repo(input);
-            assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid repository format")
-            );
-        }
-    }
-
-    mod get_repo_tests {
-        use super::*;
-
-        #[test]
-        fn test_get_repo_with_explicit_arg() {
-            let result = get_repo(&Some("owner/repo".to_string())).unwrap();
-            assert_eq!(result, "owner/repo");
-        }
-    }
+    // parse_repo and get_repo tests are in commands/common.rs
 
     mod run_with_client_and_storage_tests {
         use super::*;
