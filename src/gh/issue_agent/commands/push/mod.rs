@@ -13,7 +13,7 @@ use crate::gh::issue_agent::models::IssueMetadata;
 use crate::gh::issue_agent::storage::IssueStorage;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
-use changeset::ChangeSet;
+use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::check_remote_unchanged;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -118,16 +118,21 @@ where
     }
 
     // Detect all changes
-    let changeset = ChangeSet::detect(
-        &local_metadata,
-        &local_body,
-        &local_comments,
-        &remote_issue,
-        &remote_comments,
+    let local = LocalState {
+        metadata: &local_metadata,
+        body: &local_body,
+        comments: &local_comments,
+    };
+    let remote = RemoteState {
+        issue: &remote_issue,
+        comments: &remote_comments,
+    };
+    let options = DetectOptions {
         current_user,
-        args.edit_others,
-        args.allow_delete,
-    )?;
+        edit_others: args.edit_others,
+        allow_delete: args.allow_delete,
+    };
+    let changeset = ChangeSet::detect(&local, &remote, &options)?;
 
     // Display and apply changes
     let has_changes = changeset.has_changes();
