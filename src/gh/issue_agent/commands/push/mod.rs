@@ -4,7 +4,7 @@ mod changeset;
 mod detect;
 mod diff;
 #[cfg(test)]
-mod tests;
+mod integration_tests;
 
 use clap::Args;
 
