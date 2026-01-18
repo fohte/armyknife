@@ -1,4 +1,5 @@
 pub mod check_pr_review;
+pub mod issue_agent;
 
 use clap::Subcommand;
 
@@ -6,6 +7,12 @@ use clap::Subcommand;
 pub enum GhCommands {
     /// Fetch PR review comments in a concise format
     CheckPrReview(check_pr_review::CheckPrReviewArgs),
+
+    /// Manage GitHub Issues as local files
+    IssueAgent {
+        #[command(subcommand)]
+        command: issue_agent::IssueAgentCommands,
+    },
 }
 
 impl GhCommands {
@@ -15,6 +22,7 @@ impl GhCommands {
                 check_pr_review::run(args).await?;
                 Ok(())
             }
+            Self::IssueAgent { command } => command.run().await,
         }
     }
 }
