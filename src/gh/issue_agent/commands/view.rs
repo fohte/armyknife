@@ -127,55 +127,8 @@ fn format_comments(comments: &[Comment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gh::issue_agent::models::{Author, Label};
-    use chrono::{Duration, Utc};
+    use crate::testing::factories;
     use rstest::rstest;
-
-    fn create_test_issue(
-        title: &str,
-        state: &str,
-        body: Option<&str>,
-        author: Option<&str>,
-        labels: Vec<&str>,
-        assignees: Vec<&str>,
-    ) -> Issue {
-        Issue {
-            number: 1,
-            title: title.to_string(),
-            body: body.map(|s| s.to_string()),
-            state: state.to_string(),
-            labels: labels
-                .into_iter()
-                .map(|name| Label {
-                    name: name.to_string(),
-                })
-                .collect(),
-            assignees: assignees
-                .into_iter()
-                .map(|login| Author {
-                    login: login.to_string(),
-                })
-                .collect(),
-            milestone: None,
-            author: author.map(|login| Author {
-                login: login.to_string(),
-            }),
-            created_at: Utc::now() - Duration::hours(2),
-            updated_at: Utc::now(),
-        }
-    }
-
-    fn create_test_comment(author: Option<&str>, body: &str) -> Comment {
-        Comment {
-            id: "IC_123".to_string(),
-            database_id: 123,
-            author: author.map(|login| Author {
-                login: login.to_string(),
-            }),
-            created_at: Utc::now() - Duration::hours(1),
-            body: body.to_string(),
-        }
-    }
 
     #[rstest]
     #[case::open("OPEN", "Open")]
@@ -188,14 +141,10 @@ mod tests {
 
     #[test]
     fn test_format_issue_basic() {
-        let issue = create_test_issue(
-            "Test Issue Title",
-            "OPEN",
-            Some("This is the issue body."),
-            Some("testuser"),
-            vec![],
-            vec![],
-        );
+        let issue = factories::issue_with(|i| {
+            i.title = "Test Issue Title".to_string();
+            i.body = Some("This is the issue body.".to_string());
+        });
 
         let output = format_issue(&issue, 123, 0);
 
@@ -208,14 +157,13 @@ mod tests {
 
     #[test]
     fn test_format_issue_with_labels_and_assignees() {
-        let issue = create_test_issue(
-            "Bug Report",
-            "OPEN",
-            Some("Found a bug."),
-            Some("reporter"),
-            vec!["bug", "urgent"],
-            vec!["dev1", "dev2"],
-        );
+        let issue = factories::issue_with(|i| {
+            i.title = "Bug Report".to_string();
+            i.body = Some("Found a bug.".to_string());
+            i.author = Some(factories::author("reporter"));
+            i.labels = factories::labels(&["bug", "urgent"]);
+            i.assignees = factories::assignees(&["dev1", "dev2"]);
+        });
 
         let output = format_issue(&issue, 42, 5);
 
@@ -231,7 +179,7 @@ mod tests {
     #[case::two(2, "2 comments")]
     #[case::many(10, "10 comments")]
     fn test_format_issue_comment_count(#[case] count: usize, #[case] expected: &str) {
-        let issue = create_test_issue("Title", "OPEN", Some("body"), Some("user"), vec![], vec![]);
+        let issue = factories::issue();
         let output = format_issue(&issue, 1, count);
         assert!(output.contains(expected));
     }
@@ -241,7 +189,7 @@ mod tests {
     #[case::empty(Some(""), "No description provided.")]
     #[case::with_body(Some("Issue body"), "  Issue body")]
     fn test_format_issue_body(#[case] body: Option<&str>, #[case] expected: &str) {
-        let issue = create_test_issue("Title", "OPEN", body, Some("user"), vec![], vec![]);
+        let issue = factories::issue_with(|i| i.body = body.map(|s| s.to_string()));
         let output = format_issue(&issue, 1, 0);
         assert!(output.contains(expected));
     }
@@ -250,7 +198,7 @@ mod tests {
     #[case::with_author(Some("testuser"), "testuser opened")]
     #[case::no_author(None, "unknown opened")]
     fn test_format_issue_author(#[case] author: Option<&str>, #[case] expected: &str) {
-        let issue = create_test_issue("Title", "OPEN", Some("body"), author, vec![], vec![]);
+        let issue = factories::issue_with(|i| i.author = author.map(factories::author));
         let output = format_issue(&issue, 1, 0);
         assert!(output.contains(expected));
     }
@@ -259,7 +207,7 @@ mod tests {
     #[case::open("OPEN", "Open")]
     #[case::closed("CLOSED", "Closed")]
     fn test_format_issue_state_display(#[case] state: &str, #[case] expected: &str) {
-        let issue = create_test_issue("Title", state, Some("body"), Some("user"), vec![], vec![]);
+        let issue = factories::issue_with(|i| i.state = state.to_string());
         let output = format_issue(&issue, 1, 0);
         assert!(output.contains(expected));
     }
@@ -272,7 +220,10 @@ mod tests {
 
     #[test]
     fn test_format_comments_single() {
-        let comments = vec![create_test_comment(Some("commenter"), "This is a comment.")];
+        let comments = vec![factories::comment_with(|c| {
+            c.author = Some(factories::author("commenter"));
+            c.body = "This is a comment.".to_string();
+        })];
 
         let output = format_comments(&comments);
 
@@ -284,8 +235,14 @@ mod tests {
     #[test]
     fn test_format_comments_multiple() {
         let comments = vec![
-            create_test_comment(Some("user1"), "First comment."),
-            create_test_comment(Some("user2"), "Second comment."),
+            factories::comment_with(|c| {
+                c.author = Some(factories::author("user1"));
+                c.body = "First comment.".to_string();
+            }),
+            factories::comment_with(|c| {
+                c.author = Some(factories::author("user2"));
+                c.body = "Second comment.".to_string();
+            }),
         ];
 
         let output = format_comments(&comments);
@@ -307,22 +264,26 @@ mod tests {
     #[case::with_author(Some("commenter"), "commenter •")]
     #[case::no_author(None, "unknown •")]
     fn test_format_comments_author(#[case] author: Option<&str>, #[case] expected: &str) {
-        let comments = vec![create_test_comment(author, "Comment body.")];
+        let comments = vec![factories::comment_with(|c| {
+            c.author = author.map(factories::author);
+            c.body = "Comment body.".to_string();
+        })];
         let output = format_comments(&comments);
         assert!(output.contains(expected));
     }
 
     #[test]
     fn test_format_issue_view_complete() {
-        let issue = create_test_issue(
-            "Feature Request",
-            "OPEN",
-            Some("Add new feature."),
-            Some("author"),
-            vec!["enhancement"],
-            vec![],
-        );
-        let comments = vec![create_test_comment(Some("reviewer"), "Looks good!")];
+        let issue = factories::issue_with(|i| {
+            i.title = "Feature Request".to_string();
+            i.body = Some("Add new feature.".to_string());
+            i.author = Some(factories::author("author"));
+            i.labels = factories::labels(&["enhancement"]);
+        });
+        let comments = vec![factories::comment_with(|c| {
+            c.author = Some(factories::author("reviewer"));
+            c.body = "Looks good!".to_string();
+        })];
 
         let output = format_issue_view(&issue, 99, &comments);
 
@@ -343,43 +304,33 @@ mod tests {
         use crate::github::MockGitHubClient;
         use chrono::{TimeZone, Utc};
 
-        fn create_mock_issue(number: i64, title: &str, body: &str) -> Issue {
-            Issue {
-                number,
-                title: title.to_string(),
-                body: Some(body.to_string()),
-                state: "OPEN".to_string(),
-                labels: vec![Label {
-                    name: "bug".to_string(),
-                }],
-                assignees: vec![],
-                milestone: None,
-                author: Some(Author {
-                    login: "testuser".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-            }
+        fn mock_issue(number: i64, title: &str, body: &str) -> Issue {
+            factories::issue_with(|i| {
+                i.number = number;
+                i.title = title.to_string();
+                i.body = Some(body.to_string());
+                i.labels = factories::labels(&["bug"]);
+                i.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+                i.updated_at = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+            })
         }
 
-        fn create_mock_comment(id: &str, database_id: i64, author: &str, body: &str) -> Comment {
-            Comment {
-                id: id.to_string(),
-                database_id,
-                author: Some(Author {
-                    login: author.to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-                body: body.to_string(),
-            }
+        fn mock_comment(id: &str, database_id: i64, author: &str, body: &str) -> Comment {
+            factories::comment_with(|c| {
+                c.id = id.to_string();
+                c.database_id = database_id;
+                c.author = Some(factories::author(author));
+                c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+                c.body = body.to_string();
+            })
         }
 
         #[tokio::test]
         async fn test_fetches_and_displays_issue_with_comments() {
-            let issue = create_mock_issue(123, "Test Issue", "Test body content");
+            let issue = mock_issue(123, "Test Issue", "Test body content");
             let comments = vec![
-                create_mock_comment("IC_1", 1001, "commenter1", "First comment"),
-                create_mock_comment("IC_2", 1002, "commenter2", "Second comment"),
+                mock_comment("IC_1", 1001, "commenter1", "First comment"),
+                mock_comment("IC_2", 1002, "commenter2", "Second comment"),
             ];
             let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", issue)
@@ -408,7 +359,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_without_comments() {
-            let issue = create_mock_issue(42, "No Comments Issue", "Body without comments");
+            let issue = mock_issue(42, "No Comments Issue", "Body without comments");
             let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", issue)
                 .with_comments("owner", "repo", 42, vec![]);
@@ -466,8 +417,12 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_without_body() {
-            let mut issue = create_mock_issue(10, "Empty Body Issue", "");
-            issue.body = None;
+            let issue = factories::issue_with(|i| {
+                i.number = 10;
+                i.title = "Empty Body Issue".to_string();
+                i.body = None;
+                i.labels = factories::labels(&["bug"]);
+            });
             let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", issue)
                 .with_comments("owner", "repo", 10, vec![]);
@@ -487,18 +442,12 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_with_multiple_labels() {
-            let mut issue = create_mock_issue(15, "Multi Label Issue", "Body");
-            issue.labels = vec![
-                Label {
-                    name: "bug".to_string(),
-                },
-                Label {
-                    name: "enhancement".to_string(),
-                },
-                Label {
-                    name: "help wanted".to_string(),
-                },
-            ];
+            let issue = factories::issue_with(|i| {
+                i.number = 15;
+                i.title = "Multi Label Issue".to_string();
+                i.body = Some("Body".to_string());
+                i.labels = factories::labels(&["bug", "enhancement", "help wanted"]);
+            });
             let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", issue)
                 .with_comments("owner", "repo", 15, vec![]);
