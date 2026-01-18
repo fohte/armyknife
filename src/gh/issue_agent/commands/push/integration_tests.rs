@@ -22,24 +22,6 @@ fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
     }
 }
 
-fn make_args_with_delete(
-    dry_run: bool,
-    force: bool,
-    edit_others: bool,
-    allow_delete: bool,
-) -> PushArgs {
-    PushArgs {
-        issue: IssueArgs {
-            issue_number: 123,
-            repo: Some("owner/repo".to_string()),
-        },
-        dry_run,
-        force,
-        edit_others,
-        allow_delete,
-    }
-}
-
 // Body update tests
 #[rstest]
 #[case::dry_run_no_api_call("Local", "Remote", true, 0)]
