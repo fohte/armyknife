@@ -13,6 +13,9 @@ pub enum GitError {
     #[error("Could not parse GitHub URL: {0}")]
     InvalidGitHubUrl(String),
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Git error: {0}")]
     Git2(#[from] git2::Error),
 

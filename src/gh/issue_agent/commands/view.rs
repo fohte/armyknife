@@ -1,8 +1,8 @@
 use clap::Args;
 
+use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::gh::issue_agent::models::{Comment, Issue};
-use crate::git;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -12,18 +12,31 @@ pub struct ViewArgs {
 }
 
 pub async fn run(args: &ViewArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (owner, repo) = get_repo_owner_and_name(args.issue.repo.as_deref())?;
+    let client = OctocrabClient::get()?;
+    let output = run_with_client_and_output(args, client).await?;
+    print!("{}", output);
+    Ok(())
+}
+
+/// Internal implementation that returns the formatted output for testability.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) async fn run_with_client_and_output<C>(
+    args: &ViewArgs,
+    client: &C,
+) -> Result<String, Box<dyn std::error::Error>>
+where
+    C: IssueClient + CommentClient,
+{
+    let repo_str = get_repo_from_arg_or_git(&args.issue.repo)?;
+    let (owner, repo) = parse_repo(&repo_str)?;
     let issue_number = args.issue.issue_number;
 
-    let client = OctocrabClient::get()?;
     let (issue, comments) = tokio::try_join!(
         client.get_issue(&owner, &repo, issue_number),
         client.get_comments(&owner, &repo, issue_number)
     )?;
 
-    print!("{}", format_issue_view(&issue, issue_number, &comments));
-
-    Ok(())
+    Ok(format_issue_view(&issue, issue_number, &comments))
 }
 
 /// Format the complete view output for an issue and its comments.
@@ -31,24 +44,6 @@ fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> 
     let mut output = format_issue(issue, issue_number, comments.len());
     output.push_str(&format_comments(comments));
     output
-}
-
-fn get_repo_owner_and_name(
-    repo_arg: Option<&str>,
-) -> Result<(String, String), Box<dyn std::error::Error>> {
-    if let Some(repo) = repo_arg {
-        return repo
-            .split_once('/')
-            .map(|(owner, repo_name)| (owner.to_string(), repo_name.to_string()))
-            .ok_or_else(|| {
-                format!("Invalid repository format: {repo}. Expected owner/repo").into()
-            });
-    }
-
-    // Get from current repo using git2
-    let repo = git::open_repo()?;
-    let (owner, name) = git::github_owner_and_repo(&repo)?;
-    Ok((owner, name))
 }
 
 fn format_state(state: &str) -> &str {
@@ -180,29 +175,6 @@ mod tests {
             created_at: Utc::now() - Duration::hours(1),
             body: body.to_string(),
         }
-    }
-
-    #[rstest]
-    #[case::valid("owner/repo", "owner", "repo")]
-    #[case::with_dashes("my-org/my-repo", "my-org", "my-repo")]
-    #[case::with_numbers("user123/project456", "user123", "project456")]
-    #[case::with_dots("owner/repo.name", "owner", "repo.name")]
-    fn test_get_repo_owner_and_name_with_arg(
-        #[case] input: &str,
-        #[case] expected_owner: &str,
-        #[case] expected_repo: &str,
-    ) {
-        let (owner, repo) = get_repo_owner_and_name(Some(input)).unwrap();
-        assert_eq!(owner, expected_owner);
-        assert_eq!(repo, expected_repo);
-    }
-
-    #[rstest]
-    #[case::no_slash("invalid")]
-    #[case::empty("")]
-    fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
-        let result = get_repo_owner_and_name(Some(input));
-        assert!(result.is_err());
     }
 
     #[rstest]
@@ -363,5 +335,184 @@ mod tests {
         assert!(output.contains("──────────────────────────────────────────────────────"));
         assert!(output.contains("reviewer"));
         assert!(output.contains("Looks good!"));
+    }
+
+    mod run_with_client_tests {
+        use super::*;
+        use crate::gh::issue_agent::commands::IssueArgs;
+        use crate::github::MockGitHubClient;
+        use chrono::{TimeZone, Utc};
+
+        fn create_mock_issue(number: i64, title: &str, body: &str) -> Issue {
+            Issue {
+                number,
+                title: title.to_string(),
+                body: Some(body.to_string()),
+                state: "OPEN".to_string(),
+                labels: vec![Label {
+                    name: "bug".to_string(),
+                }],
+                assignees: vec![],
+                milestone: None,
+                author: Some(Author {
+                    login: "testuser".to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+                updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+            }
+        }
+
+        fn create_mock_comment(id: &str, database_id: i64, author: &str, body: &str) -> Comment {
+            Comment {
+                id: id.to_string(),
+                database_id,
+                author: Some(Author {
+                    login: author.to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+                body: body.to_string(),
+            }
+        }
+
+        #[tokio::test]
+        async fn test_fetches_and_displays_issue_with_comments() {
+            let issue = create_mock_issue(123, "Test Issue", "Test body content");
+            let comments = vec![
+                create_mock_comment("IC_1", 1001, "commenter1", "First comment"),
+                create_mock_comment("IC_2", 1002, "commenter2", "Second comment"),
+            ];
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, comments);
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
+
+            // Verify issue content
+            assert!(output.contains("Test Issue #123"));
+            assert!(output.contains("Test body content"));
+            assert!(output.contains("Labels: bug"));
+
+            // Verify comments
+            assert!(output.contains("commenter1"));
+            assert!(output.contains("First comment"));
+            assert!(output.contains("commenter2"));
+            assert!(output.contains("Second comment"));
+        }
+
+        #[tokio::test]
+        async fn test_displays_issue_without_comments() {
+            let issue = create_mock_issue(42, "No Comments Issue", "Body without comments");
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 42, vec![]);
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 42,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
+
+            assert!(output.contains("No Comments Issue #42"));
+            assert!(output.contains("0 comments"));
+            // No comment separators
+            assert!(!output.contains("──────────────────────────────────────────────────────"));
+        }
+
+        #[tokio::test]
+        async fn test_fails_when_issue_not_found() {
+            let client = MockGitHubClient::new(); // No issues configured
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 999,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let result = run_with_client_and_output(&args, &client).await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_fails_with_invalid_repo_format() {
+            let client = MockGitHubClient::new();
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("invalid-repo-format".to_string()),
+                },
+            };
+
+            let result = run_with_client_and_output(&args, &client).await;
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
+        }
+
+        #[tokio::test]
+        async fn test_displays_issue_without_body() {
+            let mut issue = create_mock_issue(10, "Empty Body Issue", "");
+            issue.body = None;
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 10, vec![]);
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 10,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
+
+            assert!(output.contains("Empty Body Issue #10"));
+            assert!(output.contains("No description provided."));
+        }
+
+        #[tokio::test]
+        async fn test_displays_issue_with_multiple_labels() {
+            let mut issue = create_mock_issue(15, "Multi Label Issue", "Body");
+            issue.labels = vec![
+                Label {
+                    name: "bug".to_string(),
+                },
+                Label {
+                    name: "enhancement".to_string(),
+                },
+                Label {
+                    name: "help wanted".to_string(),
+                },
+            ];
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 15, vec![]);
+
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 15,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
+
+            assert!(output.contains("Labels: bug, enhancement, help wanted"));
+        }
     }
 }

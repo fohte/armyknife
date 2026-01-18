@@ -3,9 +3,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use super::comment::CommentClient;
 use super::error::{GitHubError, Result};
+use super::issue::IssueClient;
 use super::pr::{CreatePrParams, PrClient, PrInfo};
 use super::repo::RepoClient;
+use crate::gh::issue_agent::models::{Author, Comment, Issue};
 
 /// Mock implementation for testing.
 #[derive(Clone)]
@@ -22,6 +25,82 @@ pub struct MockGitHubClient {
     pub created_prs: Arc<Mutex<Vec<CreatePrParams>>>,
     /// Track browser opens for assertions
     pub opened_urls: Arc<Mutex<Vec<String>>>,
+    /// Map of "owner/repo/issue_number" -> Issue
+    pub issues: HashMap<String, Issue>,
+    /// Map of "owner/repo/issue_number" -> Vec<Comment>
+    pub comments: HashMap<String, Vec<Comment>>,
+    /// Track updated issue bodies for assertions
+    pub updated_issue_bodies: Arc<Mutex<Vec<UpdateIssueBodyParams>>>,
+    /// Track updated issue titles for assertions
+    pub updated_issue_titles: Arc<Mutex<Vec<UpdateIssueTitleParams>>>,
+    /// Track added labels for assertions
+    pub added_labels: Arc<Mutex<Vec<AddLabelsParams>>>,
+    /// Track removed labels for assertions
+    pub removed_labels: Arc<Mutex<Vec<RemoveLabelParams>>>,
+    /// Track updated comments for assertions
+    pub updated_comments: Arc<Mutex<Vec<UpdateCommentParams>>>,
+    /// Track created comments for assertions
+    pub created_comments: Arc<Mutex<Vec<CreateCommentParams>>>,
+    /// Current user login for testing
+    pub current_user: Option<String>,
+}
+
+/// Common fields for issue-related API calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueRef {
+    pub owner: String,
+    pub repo: String,
+    pub issue_number: u64,
+}
+
+/// Common fields for comment-related API calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentRef {
+    pub owner: String,
+    pub repo: String,
+    pub comment_id: u64,
+}
+
+/// Parameters for tracking update_issue_body calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateIssueBodyParams {
+    pub issue: IssueRef,
+    pub body: String,
+}
+
+/// Parameters for tracking update_issue_title calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateIssueTitleParams {
+    pub issue: IssueRef,
+    pub title: String,
+}
+
+/// Parameters for tracking add_labels calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddLabelsParams {
+    pub issue: IssueRef,
+    pub labels: Vec<String>,
+}
+
+/// Parameters for tracking remove_label calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveLabelParams {
+    pub issue: IssueRef,
+    pub label: String,
+}
+
+/// Parameters for tracking update_comment calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateCommentParams {
+    pub comment: CommentRef,
+    pub body: String,
+}
+
+/// Parameters for tracking create_comment calls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateCommentParams {
+    pub issue: IssueRef,
+    pub body: String,
 }
 
 impl MockGitHubClient {
@@ -33,6 +112,15 @@ impl MockGitHubClient {
             branch_prs: HashMap::new(),
             created_prs: Arc::new(Mutex::new(Vec::new())),
             opened_urls: Arc::new(Mutex::new(Vec::new())),
+            issues: HashMap::new(),
+            comments: HashMap::new(),
+            updated_issue_bodies: Arc::new(Mutex::new(Vec::new())),
+            updated_issue_titles: Arc::new(Mutex::new(Vec::new())),
+            added_labels: Arc::new(Mutex::new(Vec::new())),
+            removed_labels: Arc::new(Mutex::new(Vec::new())),
+            updated_comments: Arc::new(Mutex::new(Vec::new())),
+            created_comments: Arc::new(Mutex::new(Vec::new())),
+            current_user: None,
         }
     }
 
@@ -63,6 +151,35 @@ impl MockGitHubClient {
     ) -> Self {
         self.branch_prs
             .insert(format!("{owner}/{repo}/{branch}"), pr_info);
+        self
+    }
+
+    /// Add an issue to the mock client.
+    #[allow(dead_code)]
+    pub fn with_issue(mut self, owner: &str, repo: &str, issue: Issue) -> Self {
+        let key = format!("{owner}/{repo}/{}", issue.number);
+        self.issues.insert(key, issue);
+        self
+    }
+
+    /// Add comments to an issue in the mock client.
+    #[allow(dead_code)]
+    pub fn with_comments(
+        mut self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        comments: Vec<Comment>,
+    ) -> Self {
+        let key = format!("{owner}/{repo}/{issue_number}");
+        self.comments.insert(key, comments);
+        self
+    }
+
+    /// Set the current user for the mock client.
+    #[allow(dead_code)]
+    pub fn with_current_user(mut self, login: &str) -> Self {
+        self.current_user = Some(login.to_string());
         self
     }
 }
@@ -105,6 +222,159 @@ impl PrClient for MockGitHubClient {
 
     fn open_in_browser(&self, url: &str) {
         self.opened_urls.lock().unwrap().push(url.to_string());
+    }
+}
+
+#[async_trait::async_trait]
+impl IssueClient for MockGitHubClient {
+    async fn get_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Issue> {
+        let key = format!("{owner}/{repo}/{issue_number}");
+        self.issues
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| GitHubError::TokenError(format!("Issue {key} not found in mock")))
+    }
+
+    async fn update_issue_body(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        body: &str,
+    ) -> Result<()> {
+        self.updated_issue_bodies
+            .lock()
+            .unwrap()
+            .push(UpdateIssueBodyParams {
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
+                body: body.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn update_issue_title(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        title: &str,
+    ) -> Result<()> {
+        self.updated_issue_titles
+            .lock()
+            .unwrap()
+            .push(UpdateIssueTitleParams {
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
+                title: title.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn add_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        labels: &[String],
+    ) -> Result<()> {
+        self.added_labels.lock().unwrap().push(AddLabelsParams {
+            issue: IssueRef {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                issue_number,
+            },
+            labels: labels.to_vec(),
+        });
+        Ok(())
+    }
+
+    async fn remove_label(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        label: &str,
+    ) -> Result<()> {
+        self.removed_labels.lock().unwrap().push(RemoveLabelParams {
+            issue: IssueRef {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                issue_number,
+            },
+            label: label.to_string(),
+        });
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl CommentClient for MockGitHubClient {
+    async fn get_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+    ) -> Result<Vec<Comment>> {
+        let key = format!("{owner}/{repo}/{issue_number}");
+        Ok(self.comments.get(&key).cloned().unwrap_or_default())
+    }
+
+    async fn update_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<()> {
+        self.updated_comments
+            .lock()
+            .unwrap()
+            .push(UpdateCommentParams {
+                comment: CommentRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    comment_id,
+                },
+                body: body.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn create_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        body: &str,
+    ) -> Result<Comment> {
+        self.created_comments
+            .lock()
+            .unwrap()
+            .push(CreateCommentParams {
+                issue: IssueRef {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    issue_number,
+                },
+                body: body.to_string(),
+            });
+        // Return a mock comment
+        Ok(Comment {
+            id: "IC_mock_new".to_string(),
+            database_id: 99999,
+            author: self.current_user.as_ref().map(|login| Author {
+                login: login.clone(),
+            }),
+            created_at: chrono::Utc::now(),
+            body: body.to_string(),
+        })
     }
 }
 

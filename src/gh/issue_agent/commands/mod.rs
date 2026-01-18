@@ -1,6 +1,9 @@
+mod common;
 mod pull;
 mod push;
 mod refresh;
+#[cfg(test)]
+mod test_helpers;
 mod view;
 
 use clap::Args;
