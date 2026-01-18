@@ -3,11 +3,8 @@
 use super::*;
 use crate::gh::issue_agent::commands::IssueArgs;
 use crate::gh::issue_agent::commands::test_helpers::{
-    create_comment_file, create_metadata_json, create_test_issue, test_dir,
+    DEFAULT_TS, OLD_TS, TestSetup, create_comment_file, make_comment, setup_local_comment, test_dir,
 };
-use crate::gh::issue_agent::models::{Author, Comment};
-use crate::github::MockGitHubClient;
-use chrono::{TimeZone, Utc};
 use rstest::rstest;
 use std::collections::HashSet;
 use std::fs;
@@ -93,137 +90,15 @@ mod compute_label_changes_tests {
 mod run_with_client_and_storage_tests {
     use super::*;
 
-    const TS: &str = "2024-01-02T00:00:00+00:00";
-    const OLD_TS: &str = "2024-01-01T00:00:00+00:00";
-
-    /// Test fixture builder with sensible defaults.
-    struct TestSetup<'a> {
-        dir: &'a std::path::Path,
-        // Remote state
-        remote_title: &'a str,
-        remote_body: &'a str,
-        remote_ts: &'a str,
-        remote_comments: Vec<Comment>,
-        // Local state
-        local_title: &'a str,
-        local_body: &'a str,
-        local_labels: Vec<&'a str>,
-        local_ts: &'a str,
-        // Args
-        dry_run: bool,
-        force: bool,
-        edit_others: bool,
-        current_user: &'a str,
-    }
-
-    impl<'a> TestSetup<'a> {
-        fn new(dir: &'a std::path::Path) -> Self {
-            Self {
-                dir,
-                remote_title: "Title",
-                remote_body: "Body",
-                remote_ts: TS,
-                remote_comments: vec![],
-                local_title: "Title",
-                local_body: "Body",
-                local_labels: vec!["bug"],
-                local_ts: TS,
-                dry_run: false,
-                force: false,
-                edit_others: false,
-                current_user: "testuser",
-            }
-        }
-
-        fn remote_title(mut self, v: &'a str) -> Self {
-            self.remote_title = v;
-            self
-        }
-        fn remote_body(mut self, v: &'a str) -> Self {
-            self.remote_body = v;
-            self
-        }
-        fn remote_ts(mut self, v: &'a str) -> Self {
-            self.remote_ts = v;
-            self
-        }
-        fn remote_comments(mut self, v: Vec<Comment>) -> Self {
-            self.remote_comments = v;
-            self
-        }
-        fn local_title(mut self, v: &'a str) -> Self {
-            self.local_title = v;
-            self
-        }
-        fn local_body(mut self, v: &'a str) -> Self {
-            self.local_body = v;
-            self
-        }
-        fn local_labels(mut self, v: Vec<&'a str>) -> Self {
-            self.local_labels = v;
-            self
-        }
-        fn local_ts(mut self, v: &'a str) -> Self {
-            self.local_ts = v;
-            self
-        }
-        fn dry_run(mut self, v: bool) -> Self {
-            self.dry_run = v;
-            self
-        }
-        fn force(mut self, v: bool) -> Self {
-            self.force = v;
-            self
-        }
-        fn edit_others(mut self, v: bool) -> Self {
-            self.edit_others = v;
-            self
-        }
-
-        fn build(self) -> (MockGitHubClient, IssueStorage, PushArgs) {
-            let issue = create_test_issue(123, self.remote_title, self.remote_body, self.remote_ts);
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", issue)
-                .with_comments("owner", "repo", 123, self.remote_comments)
-                .with_current_user(self.current_user);
-
-            fs::create_dir_all(self.dir).unwrap();
-            fs::write(self.dir.join("issue.md"), format!("{}\n", self.local_body)).unwrap();
-            fs::write(
-                self.dir.join("metadata.json"),
-                create_metadata_json(123, self.local_title, self.local_ts, &self.local_labels),
-            )
-            .unwrap();
-
-            let storage = IssueStorage::from_dir(self.dir);
-            let args = PushArgs {
-                issue: IssueArgs {
-                    issue_number: 123,
-                    repo: Some("owner/repo".to_string()),
-                },
-                dry_run: self.dry_run,
-                force: self.force,
-                edit_others: self.edit_others,
-            };
-            (client, storage, args)
-        }
-    }
-
-    fn setup_local_comment(dir: &std::path::Path, filename: &str, content: &str) {
-        let comments_dir = dir.join("comments");
-        fs::create_dir_all(&comments_dir).unwrap();
-        fs::write(comments_dir.join(filename), content).unwrap();
-    }
-
-    fn make_comment(author: &str) -> Comment {
-        Comment {
-            id: "IC_abc".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: author.to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-            body: "Original".to_string(),
+    fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
+        PushArgs {
+            issue: IssueArgs {
+                issue_number: 123,
+                repo: Some("owner/repo".to_string()),
+            },
+            dry_run,
+            force,
+            edit_others,
         }
     }
 
@@ -240,13 +115,18 @@ mod run_with_client_and_storage_tests {
         #[case] dry_run: bool,
         #[case] expected: usize,
     ) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .local_body(local_body)
             .remote_body(remote_body)
-            .dry_run(dry_run)
             .build();
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(dry_run, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(client.updated_issue_bodies.lock().unwrap().len(), expected);
     }
@@ -254,12 +134,18 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_title(test_dir: TempDir) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .remote_title("Old Title")
             .local_title("New Title")
             .build();
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             client.updated_issue_titles.lock().unwrap()[0].title,
@@ -270,11 +156,17 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_labels(test_dir: TempDir) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .local_labels(vec!["enhancement"])
             .build();
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(client.removed_labels.lock().unwrap()[0].label, "bug");
         assert_eq!(
@@ -289,12 +181,15 @@ mod run_with_client_and_storage_tests {
     #[case::force_overrides(true, false)]
     #[tokio::test]
     async fn test_remote_changed(test_dir: TempDir, #[case] force: bool, #[case] expect_err: bool) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
-            .local_ts(OLD_TS) // Local has old timestamp, remote has new
-            .force(force)
-            .build();
+        let (client, storage) = TestSetup::new(test_dir.path()).local_ts(OLD_TS).build();
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, force, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         if expect_err {
             assert!(
                 result
@@ -310,7 +205,7 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_invalid_repo_format(test_dir: TempDir) {
-        let (client, storage, _) = TestSetup::new(test_dir.path()).build();
+        let (client, storage) = TestSetup::new(test_dir.path()).build();
         let args = PushArgs {
             issue: IssueArgs {
                 issue_number: 123,
@@ -334,7 +229,7 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_own_comment(test_dir: TempDir) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .remote_comments(vec![make_comment("testuser")])
             .build();
         setup_local_comment(
@@ -349,7 +244,13 @@ mod run_with_client_and_storage_tests {
             ),
         );
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(client.updated_comments.lock().unwrap()[0].body, "Updated");
     }
@@ -357,10 +258,16 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_creates_new_comment(test_dir: TempDir) {
-        let (client, storage, args) = TestSetup::new(test_dir.path()).build();
+        let (client, storage) = TestSetup::new(test_dir.path()).build();
         setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             client.created_comments.lock().unwrap()[0].body,
@@ -378,9 +285,8 @@ mod run_with_client_and_storage_tests {
         #[case] edit_others: bool,
         #[case] expect_err: bool,
     ) {
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .remote_comments(vec![make_comment("otheruser")])
-            .edit_others(edit_others)
             .build();
         setup_local_comment(
             test_dir.path(),
@@ -394,7 +300,13 @@ mod run_with_client_and_storage_tests {
             ),
         );
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, false, edit_others),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         if expect_err {
             assert!(
                 result
@@ -412,15 +324,20 @@ mod run_with_client_and_storage_tests {
     #[tokio::test]
     async fn test_updates_metadata_after_push(test_dir: TempDir) {
         let new_ts = "2024-01-03T00:00:00+00:00";
-        let (client, storage, args) = TestSetup::new(test_dir.path())
+        let (client, storage) = TestSetup::new(test_dir.path())
             .remote_ts(new_ts)
             .local_ts(OLD_TS)
             .local_title("Old Title")
             .remote_title("New Title")
-            .force(true)
             .build();
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+        let result = run_with_client_and_storage(
+            &make_args(false, true, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
         assert!(result.is_ok());
         assert!(
             fs::read_to_string(test_dir.path().join("metadata.json"))
