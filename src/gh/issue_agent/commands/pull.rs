@@ -113,52 +113,13 @@ pub(super) fn save_issue_to_storage(
 mod tests {
     use super::*;
     use crate::gh::issue_agent::commands::IssueArgs;
-    use crate::gh::issue_agent::models::{Author, Comment, Issue, Label};
+    use crate::gh::issue_agent::commands::test_helpers::{test_comment, test_dir, test_issue};
+    use crate::gh::issue_agent::models::{Author, Comment, Issue};
     use crate::github::MockGitHubClient;
     use chrono::{TimeZone, Utc};
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
-
-    #[fixture]
-    fn test_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    #[fixture]
-    fn test_issue() -> Issue {
-        Issue {
-            number: 123,
-            title: "Test Issue".to_string(),
-            body: Some("Test body content".to_string()),
-            state: "OPEN".to_string(),
-            labels: vec![Label {
-                name: "bug".to_string(),
-            }],
-            assignees: vec![Author {
-                login: "assignee1".to_string(),
-            }],
-            milestone: None,
-            author: Some(Author {
-                login: "testuser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-            updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-        }
-    }
-
-    #[fixture]
-    fn test_comment() -> Comment {
-        Comment {
-            id: "IC_abc123".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: "commenter".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-            body: "Test comment body".to_string(),
-        }
-    }
 
     // parse_repo and get_repo tests are in commands/common.rs
 
