@@ -2,7 +2,11 @@
 
 use std::path::Path;
 
-use crate::git::get_owner_repo;
+use crate::git;
+
+// Re-export git::parse_repo for convenience.
+// Note: This returns git::Result, callers using Box<dyn Error> can use `?` directly.
+pub use git::parse_repo;
 
 /// Get repository from argument or git remote origin.
 ///
@@ -16,22 +20,10 @@ pub fn get_repo_from_arg_or_git(
     }
 
     // Get from git remote origin
-    let (owner, repo) =
-        get_owner_repo().ok_or("Failed to determine current repository. Use -R to specify.")?;
+    let (owner, repo) = git::get_owner_repo()
+        .ok_or("Failed to determine current repository. Use -R to specify.")?;
 
     Ok(format!("{}/{}", owner, repo))
-}
-
-/// Parse "owner/repo" into (owner, repo) tuple.
-pub fn parse_repo(repo: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
-    if let Some((owner, repo_name)) = repo.split_once('/') {
-        if owner.is_empty() || repo_name.is_empty() {
-            return Err(format!("Invalid repository format: {repo}. Expected owner/repo").into());
-        }
-        Ok((owner.to_string(), repo_name.to_string()))
-    } else {
-        Err(format!("Invalid repository format: {repo}. Expected owner/repo").into())
-    }
 }
 
 /// Print success message after fetching issue.
@@ -64,43 +56,7 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
-    mod parse_repo_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::valid("owner/repo", ("owner", "repo"))]
-        #[case::with_dashes("my-org/my-repo", ("my-org", "my-repo"))]
-        #[case::with_numbers("org123/repo456", ("org123", "repo456"))]
-        #[case::with_dots("org.name/repo.name", ("org.name", "repo.name"))]
-        fn test_valid(#[case] input: &str, #[case] expected: (&str, &str)) {
-            let result = parse_repo(input).unwrap();
-            assert_eq!(result, (expected.0.to_string(), expected.1.to_string()));
-        }
-
-        #[rstest]
-        #[case::no_slash("ownerrepo")]
-        #[case::empty("")]
-        #[case::only_slash("/")]
-        #[case::empty_owner("/repo")]
-        #[case::empty_repo("owner/")]
-        fn test_invalid(#[case] input: &str) {
-            let result = parse_repo(input);
-            assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid repository format")
-            );
-        }
-
-        #[test]
-        fn test_multiple_slashes_takes_first() {
-            // split_once splits at first occurrence, so "a/b/c" -> ("a", "b/c")
-            let result = parse_repo("org/repo/extra").unwrap();
-            assert_eq!(result, ("org".to_string(), "repo/extra".to_string()));
-        }
-    }
+    // parse_repo tests are in src/git/repo.rs
 
     mod get_repo_tests {
         use super::*;

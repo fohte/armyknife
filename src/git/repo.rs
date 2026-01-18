@@ -4,6 +4,7 @@ use git2::{BranchType, Cred, FetchOptions, RemoteCallbacks, Repository};
 use std::path::Path;
 
 use super::error::{GitError, Result};
+use super::github::get_owner_repo;
 
 /// Open a git repository from the current directory or any parent.
 pub fn open_repo() -> Result<Repository> {
@@ -179,6 +180,36 @@ pub fn origin_url(repo: &Repository) -> Result<String> {
         .ok_or(GitError::NoOriginRemote)
 }
 
+/// Parse "owner/repo" string into (owner, repo) tuple.
+///
+/// Validates that the string contains exactly one slash with non-empty parts.
+/// Note: If there are multiple slashes (e.g., "org/repo/extra"), only the first
+/// slash is used for splitting, resulting in ("org", "repo/extra").
+pub fn parse_repo(repo: &str) -> Result<(String, String)> {
+    repo.split_once('/')
+        .filter(|(owner, name)| !owner.is_empty() && !name.is_empty())
+        .map(|(owner, name)| (owner.to_string(), name.to_string()))
+        .ok_or_else(|| {
+            GitError::InvalidInput(format!(
+                "Invalid repository format: {repo}. Expected owner/repo"
+            ))
+        })
+}
+
+/// Get repository owner and name from argument or git remote origin.
+///
+/// If a repo argument is provided (e.g., "owner/repo"), parses and returns it.
+/// Otherwise, attempts to determine the repository from git remote origin.
+pub fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
+    if let Some(repo) = repo_arg {
+        return parse_repo(repo);
+    }
+
+    // Get from git remote origin
+    get_owner_repo()
+        .ok_or_else(|| GitError::NotFound("Failed to determine current repository".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +282,62 @@ mod tests {
 
             // Repo config values should be preserved
             assert_eq!(config.get_string("test.value").unwrap(), "from-repo");
+        }
+    }
+
+    mod parse_repo_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid("owner/repo", ("owner", "repo"))]
+        #[case::with_dashes("my-org/my-repo", ("my-org", "my-repo"))]
+        #[case::with_numbers("org123/repo456", ("org123", "repo456"))]
+        #[case::with_dots("org.name/repo.name", ("org.name", "repo.name"))]
+        fn test_valid(#[case] input: &str, #[case] expected: (&str, &str)) {
+            let result = parse_repo(input).unwrap();
+            assert_eq!(result, (expected.0.to_string(), expected.1.to_string()));
+        }
+
+        #[rstest]
+        #[case::no_slash("ownerrepo")]
+        #[case::empty("")]
+        #[case::only_slash("/")]
+        #[case::empty_owner("/repo")]
+        #[case::empty_repo("owner/")]
+        fn test_invalid(#[case] input: &str) {
+            let result = parse_repo(input);
+            assert!(result.is_err());
+            assert!(matches!(result, Err(GitError::InvalidInput(_))));
+        }
+
+        #[test]
+        fn test_multiple_slashes_takes_first() {
+            // split_once splits at first occurrence, so "a/b/c" -> ("a", "b/c")
+            let result = parse_repo("org/repo/extra").unwrap();
+            assert_eq!(result, ("org".to_string(), "repo/extra".to_string()));
+        }
+    }
+
+    mod get_repo_owner_and_name_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::simple("owner/repo")]
+        #[case::real_repo("fohte/armyknife")]
+        #[case::with_special_chars("my-org/my_repo.rs")]
+        fn test_with_arg_returns_parsed(#[case] repo: &str) {
+            let (owner, name) = get_repo_owner_and_name(Some(repo)).unwrap();
+            let expected: Vec<&str> = repo.splitn(2, '/').collect();
+            assert_eq!(owner, expected[0]);
+            assert_eq!(name, expected[1]);
+        }
+
+        #[rstest]
+        #[case::no_slash("invalid")]
+        #[case::empty("")]
+        fn test_invalid_format(#[case] input: &str) {
+            let result = get_repo_owner_and_name(Some(input));
+            assert!(result.is_err());
         }
     }
 }

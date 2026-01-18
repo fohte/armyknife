@@ -11,9 +11,6 @@ pub use api::fetch_pr_data;
 
 #[derive(Error, Debug)]
 pub enum CheckPrReviewError {
-    #[error("Failed to get repository info: {0}")]
-    RepoInfoError(String),
-
     #[error("Git error: {0}")]
     GitError(#[from] git::GitError),
 
@@ -59,7 +56,7 @@ pub struct CheckPrReviewArgs {
 }
 
 pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
-    let (owner, repo) = get_repo_owner_and_name(args.repo.as_deref())?;
+    let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
     let pr_data = fetch_pr_data(&owner, &repo, args.pr_number, args.include_resolved).await?;
 
@@ -88,62 +85,4 @@ pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
     Ok(())
 }
 
-fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
-    if let Some(repo) = repo_arg {
-        return repo
-            .split_once('/')
-            .filter(|(owner, name)| !owner.is_empty() && !name.is_empty())
-            .map(|(owner, name)| (owner.to_string(), name.to_string()))
-            .ok_or_else(|| {
-                CheckPrReviewError::RepoInfoError(format!(
-                    "Invalid repository format: {repo}. Expected owner/repo"
-                ))
-            });
-    }
-
-    // Get from current repo using git remote origin
-    git::get_owner_repo().ok_or_else(|| {
-        CheckPrReviewError::RepoInfoError(
-            "Failed to determine current repository. Use -R to specify.".to_string(),
-        )
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::valid("owner/repo", "owner", "repo")]
-    #[case::with_dashes("my-org/my-repo", "my-org", "my-repo")]
-    #[case::with_numbers("user123/project456", "user123", "project456")]
-    fn test_get_repo_owner_and_name_with_arg(
-        #[case] input: &str,
-        #[case] expected_owner: &str,
-        #[case] expected_repo: &str,
-    ) {
-        let (owner, repo) = get_repo_owner_and_name(Some(input)).unwrap();
-        assert_eq!(owner, expected_owner);
-        assert_eq!(repo, expected_repo);
-    }
-
-    #[rstest]
-    #[case::no_slash("invalid")]
-    #[case::empty("")]
-    #[case::only_slash("/")]
-    #[case::empty_owner("/repo")]
-    #[case::empty_repo("owner/")]
-    fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
-        let result = get_repo_owner_and_name(Some(input));
-        assert!(result.is_err());
-        assert!(matches!(result, Err(CheckPrReviewError::RepoInfoError(_))));
-    }
-
-    #[test]
-    fn test_multiple_slashes_takes_first() {
-        // split_once splits at first occurrence, so "a/b/c" -> ("a", "b/c")
-        let result = get_repo_owner_and_name(Some("org/repo/extra")).unwrap();
-        assert_eq!(result, ("org".to_string(), "repo/extra".to_string()));
-    }
-}
+// parse_repo and get_repo_owner_and_name tests are in src/git/repo.rs
