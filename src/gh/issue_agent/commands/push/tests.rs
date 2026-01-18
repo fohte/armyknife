@@ -3,10 +3,9 @@
 use super::*;
 use crate::gh::issue_agent::commands::IssueArgs;
 use crate::gh::issue_agent::commands::test_helpers::{
-    DEFAULT_TS, OLD_TS, TestSetup, create_comment_file, make_comment, setup_local_comment, test_dir,
+    OLD_TS, TestSetup, create_comment_file, make_comment, setup_local_comment, test_dir,
 };
 use rstest::rstest;
-use std::collections::HashSet;
 use std::fs;
 use tempfile::TempDir;
 
@@ -51,37 +50,72 @@ mod check_can_edit_comment_tests {
         assert!(
             result
                 .unwrap_err()
+                .to_string()
                 .contains("Cannot edit other user's comment")
         );
     }
 }
 
-mod compute_label_changes_tests {
+mod detect_label_change_tests {
     use super::*;
+    use crate::testing::factories;
+
+    fn metadata_with_labels(labels: &[&str]) -> IssueMetadata {
+        IssueMetadata {
+            number: 1,
+            title: "Test".to_string(),
+            state: "OPEN".to_string(),
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+            assignees: vec![],
+            milestone: None,
+            author: "testuser".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+        }
+    }
+
+    fn issue_with_labels(labels: &[&str]) -> Issue {
+        factories::issue_with(|i| {
+            i.labels = factories::labels(labels);
+        })
+    }
 
     #[rstest]
-    #[case::no_changes(vec!["bug"], vec!["bug"], vec![], vec![])]
+    #[case::no_changes(vec!["bug"], vec!["bug"])]
+    #[case::both_empty(vec![], vec![])]
+    fn test_returns_none_when_no_changes(#[case] local: Vec<&str>, #[case] remote: Vec<&str>) {
+        let metadata = metadata_with_labels(&local);
+        let issue = issue_with_labels(&remote);
+        assert!(detect_label_change(&metadata, &issue).is_none());
+    }
+
+    #[rstest]
     #[case::add_one(vec!["bug", "new"], vec!["bug"], vec![], vec!["new"])]
     #[case::remove_one(vec!["bug"], vec!["bug", "old"], vec!["old"], vec![])]
     #[case::add_and_remove(vec!["new"], vec!["old"], vec!["old"], vec!["new"])]
     #[case::empty_local(vec![], vec!["a", "b"], vec!["a", "b"], vec![])]
     #[case::empty_remote(vec!["a", "b"], vec![], vec![], vec!["a", "b"])]
-    #[case::both_empty(vec![], vec![], vec![], vec![])]
-    fn test_label_changes(
+    fn test_detects_label_changes(
         #[case] local: Vec<&str>,
         #[case] remote: Vec<&str>,
         #[case] expected_remove: Vec<&str>,
         #[case] expected_add: Vec<&str>,
     ) {
-        let local: HashSet<&str> = local.into_iter().collect();
-        let remote: HashSet<&str> = remote.into_iter().collect();
-        let (mut to_remove, mut to_add) = compute_label_changes(&local, &remote);
+        let metadata = metadata_with_labels(&local);
+        let issue = issue_with_labels(&remote);
+
+        let change = detect_label_change(&metadata, &issue).expect("Expected label changes");
+
+        let mut to_remove = change.to_remove.clone();
         to_remove.sort();
+        let mut to_add = change.to_add.clone();
         to_add.sort();
-        let mut expected_remove = expected_remove;
-        let mut expected_add = expected_add;
+        let mut expected_remove: Vec<String> =
+            expected_remove.iter().map(|s| s.to_string()).collect();
+        let mut expected_add: Vec<String> = expected_add.iter().map(|s| s.to_string()).collect();
         expected_remove.sort();
         expected_add.sort();
+
         assert_eq!(to_remove, expected_remove);
         assert_eq!(to_add, expected_add);
     }
