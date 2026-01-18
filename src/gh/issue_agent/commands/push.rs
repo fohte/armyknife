@@ -580,7 +580,7 @@ mod tests {
     mod run_with_client_and_storage_tests {
         use super::*;
         use crate::gh::issue_agent::commands::IssueArgs;
-        use crate::gh::issue_agent::models::{Author, Issue, Label};
+        use crate::gh::issue_agent::models::{Author, Comment, Issue, Label};
         use crate::github::MockGitHubClient;
         use chrono::{TimeZone, Utc};
         use rstest::fixture;
@@ -932,6 +932,256 @@ mod tests {
                     .to_string()
                     .contains("Invalid repository format")
             );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_updates_own_comment(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+            let remote_comment = Comment {
+                id: "IC_abc123".to_string(),
+                database_id: 12345,
+                author: Some(Author {
+                    login: "testuser".to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+                body: "Original comment".to_string(),
+            };
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![remote_comment])
+                .with_current_user("testuser");
+
+            // Setup local storage with modified comment
+            fs::create_dir_all(test_dir.path().join("comments")).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+            fs::write(
+                test_dir.path().join("comments/001_comment_12345.md"),
+                "<!-- author: testuser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nUpdated comment body",
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            let updated = client.updated_comments.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+            assert_eq!(updated[0].body, "Updated comment body");
+            assert_eq!(updated[0].comment.comment_id, 12345);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_creates_new_comment(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![])
+                .with_current_user("testuser");
+
+            // Setup local storage with new comment file
+            fs::create_dir_all(test_dir.path().join("comments")).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+            fs::write(
+                test_dir.path().join("comments/new_my_comment.md"),
+                "This is a new comment",
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            let created = client.created_comments.lock().unwrap();
+            assert_eq!(created.len(), 1);
+            assert_eq!(created[0].body, "This is a new comment");
+
+            // New comment file should be deleted after successful creation
+            assert!(!test_dir.path().join("comments/new_my_comment.md").exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_fails_editing_others_comment_without_flag(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+            let remote_comment = Comment {
+                id: "IC_abc123".to_string(),
+                database_id: 12345,
+                author: Some(Author {
+                    login: "otheruser".to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+                body: "Original comment".to_string(),
+            };
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![remote_comment])
+                .with_current_user("testuser");
+
+            // Setup local storage with modified comment from another user
+            fs::create_dir_all(test_dir.path().join("comments")).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+            fs::write(
+                test_dir.path().join("comments/001_comment_12345.md"),
+                "<!-- author: otheruser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nModified other's comment",
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: false, // Flag not set
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Cannot edit other user's comment"));
+            assert!(err.contains("--edit-others"));
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_allows_editing_others_comment_with_flag(test_dir: TempDir) {
+            let updated_at = "2024-01-02T00:00:00+00:00";
+            let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+            let remote_comment = Comment {
+                id: "IC_abc123".to_string(),
+                database_id: 12345,
+                author: Some(Author {
+                    login: "otheruser".to_string(),
+                }),
+                created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+                body: "Original comment".to_string(),
+            };
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![remote_comment])
+                .with_current_user("testuser");
+
+            // Setup local storage with modified comment from another user
+            fs::create_dir_all(test_dir.path().join("comments")).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            )
+            .unwrap();
+            fs::write(
+                test_dir.path().join("comments/001_comment_12345.md"),
+                "<!-- author: otheruser -->\n<!-- createdAt: 2024-01-01T12:00:00+00:00 -->\n<!-- id: IC_abc123 -->\n<!-- databaseId: 12345 -->\n\nModified other's comment",
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: false,
+                edit_others: true, // Flag set
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            let updated = client.updated_comments.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+            assert_eq!(updated[0].body, "Modified other's comment");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_updates_metadata_after_push(test_dir: TempDir) {
+            let initial_updated_at = "2024-01-02T00:00:00+00:00";
+            let new_updated_at = "2024-01-03T00:00:00+00:00";
+            // Remote issue has old body initially, but after push the mock returns
+            // the same issue (we can't change mock state mid-test), so we use
+            // a different title to trigger a change
+            let mut issue = create_test_issue(123, "New Title", "Body", new_updated_at);
+            issue.body = Some("Body".to_string());
+
+            let client = MockGitHubClient::new()
+                .with_issue("owner", "repo", issue)
+                .with_comments("owner", "repo", 123, vec![]);
+
+            // Setup local storage with different title to trigger a change
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Body\n").unwrap();
+            fs::write(
+                test_dir.path().join("metadata.json"),
+                create_metadata_json(123, "Old Title", initial_updated_at, &["bug"]),
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PushArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                dry_run: false,
+                force: true, // Force to bypass timestamp check
+                edit_others: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+            assert!(result.is_ok());
+
+            // Verify title was updated
+            let updated = client.updated_issue_titles.lock().unwrap();
+            assert_eq!(updated.len(), 1);
+
+            // Verify metadata was updated with new timestamp from re-fetched issue
+            let metadata_content =
+                fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
+            assert!(metadata_content.contains("2024-01-03"));
         }
     }
 

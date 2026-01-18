@@ -184,154 +184,11 @@ mod tests {
     use super::*;
     use crate::gh::issue_agent::commands::IssueArgs;
     use crate::gh::issue_agent::models::{Author, Comment, Issue, Label};
+    use crate::github::MockGitHubClient;
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
-    use std::collections::HashMap;
     use std::fs;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    type GitHubResult<T> = std::result::Result<T, crate::github::GitHubError>;
-
-    // Mock client for testing
-    struct MockClient {
-        issues: Mutex<HashMap<String, Issue>>,
-        comments: Mutex<HashMap<String, Vec<Comment>>>,
-    }
-
-    impl MockClient {
-        fn new() -> Self {
-            Self {
-                issues: Mutex::new(HashMap::new()),
-                comments: Mutex::new(HashMap::new()),
-            }
-        }
-
-        fn with_issue(self, owner: &str, repo: &str, issue: Issue) -> Self {
-            let key = format!("{owner}/{repo}/{}", issue.number);
-            self.issues.lock().unwrap().insert(key, issue);
-            self
-        }
-
-        fn with_comments(
-            self,
-            owner: &str,
-            repo: &str,
-            issue_number: i64,
-            comments: Vec<Comment>,
-        ) -> Self {
-            let key = format!("{owner}/{repo}/{issue_number}");
-            self.comments.lock().unwrap().insert(key, comments);
-            self
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl IssueClient for MockClient {
-        async fn get_issue(
-            &self,
-            owner: &str,
-            repo: &str,
-            issue_number: u64,
-        ) -> GitHubResult<Issue> {
-            let key = format!("{owner}/{repo}/{issue_number}");
-            self.issues
-                .lock()
-                .unwrap()
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| {
-                    crate::github::GitHubError::TokenError(format!("Issue {key} not found"))
-                })
-        }
-
-        async fn update_issue_body(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _issue_number: u64,
-            _body: &str,
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
-
-        async fn update_issue_title(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _issue_number: u64,
-            _title: &str,
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
-
-        async fn add_labels(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _issue_number: u64,
-            _labels: &[String],
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
-
-        async fn remove_label(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _issue_number: u64,
-            _label: &str,
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl CommentClient for MockClient {
-        async fn get_comments(
-            &self,
-            owner: &str,
-            repo: &str,
-            issue_number: u64,
-        ) -> GitHubResult<Vec<Comment>> {
-            let key = format!("{owner}/{repo}/{issue_number}");
-            Ok(self
-                .comments
-                .lock()
-                .unwrap()
-                .get(&key)
-                .cloned()
-                .unwrap_or_default())
-        }
-
-        async fn update_comment(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _comment_id: u64,
-            _body: &str,
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
-
-        async fn create_comment(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _issue_number: u64,
-            body: &str,
-        ) -> GitHubResult<Comment> {
-            Ok(Comment {
-                id: "IC_new".to_string(),
-                database_id: 99999,
-                author: Some(Author {
-                    login: "testuser".to_string(),
-                }),
-                created_at: Utc::now(),
-                body: body.to_string(),
-            })
-        }
-    }
 
     #[fixture]
     fn test_dir() -> TempDir {
@@ -521,7 +378,7 @@ mod tests {
             test_issue: Issue,
             test_comment: Comment,
         ) {
-            let client = MockClient::new()
+            let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", test_issue.clone())
                 .with_comments("owner", "repo", 123, vec![test_comment]);
 
@@ -546,7 +403,7 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_fails_when_local_changes_exist(test_dir: TempDir, test_issue: Issue) {
-            let client = MockClient::new()
+            let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", test_issue.clone())
                 .with_comments("owner", "repo", 123, vec![]);
 
@@ -575,7 +432,7 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_succeeds_when_no_local_changes(test_dir: TempDir, test_issue: Issue) {
-            let client = MockClient::new()
+            let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", test_issue.clone())
                 .with_comments("owner", "repo", 123, vec![]);
 
@@ -599,7 +456,7 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir, test_issue: Issue) {
-            let client = MockClient::new()
+            let client = MockGitHubClient::new()
                 .with_issue("owner", "repo", test_issue.clone())
                 .with_comments("owner", "repo", 123, vec![]);
 
@@ -620,7 +477,7 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_fails_when_issue_not_found(test_dir: TempDir) {
-            let client = MockClient::new(); // No issues configured
+            let client = MockGitHubClient::new(); // No issues configured
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {
@@ -637,7 +494,7 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_fails_with_invalid_repo_format(test_dir: TempDir, test_issue: Issue) {
-            let client = MockClient::new().with_issue("owner", "repo", test_issue);
+            let client = MockGitHubClient::new().with_issue("owner", "repo", test_issue);
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {

@@ -19,8 +19,8 @@ pub async fn run(args: &ViewArgs) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Internal implementation that returns the formatted output for testability.
-#[cfg_attr(test, allow(dead_code))]
-async fn run_with_client_and_output<C>(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) async fn run_with_client_and_output<C>(
     args: &ViewArgs,
     client: &C,
 ) -> Result<String, Box<dyn std::error::Error>>
@@ -36,18 +36,6 @@ where
     )?;
 
     Ok(format_issue_view(&issue, issue_number, &comments))
-}
-
-/// Test-visible version of run_with_client_and_output.
-#[cfg(test)]
-pub(super) async fn run_with_client_and_output_for_test<C>(
-    args: &ViewArgs,
-    client: &C,
-) -> Result<String, Box<dyn std::error::Error>>
-where
-    C: IssueClient + CommentClient,
-{
-    run_with_client_and_output(args, client).await
 }
 
 /// Format the complete view output for an issue and its comments.
@@ -444,9 +432,7 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output_for_test(&args, &client)
-                .await
-                .unwrap();
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
 
             // Verify issue content
             assert!(output.contains("Test Issue #123"));
@@ -474,9 +460,7 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output_for_test(&args, &client)
-                .await
-                .unwrap();
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
 
             assert!(output.contains("No Comments Issue #42"));
             assert!(output.contains("0 comments"));
@@ -495,7 +479,7 @@ mod tests {
                 },
             };
 
-            let result = run_with_client_and_output_for_test(&args, &client).await;
+            let result = run_with_client_and_output(&args, &client).await;
             assert!(result.is_err());
         }
 
@@ -510,7 +494,7 @@ mod tests {
                 },
             };
 
-            let result = run_with_client_and_output_for_test(&args, &client).await;
+            let result = run_with_client_and_output(&args, &client).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -535,9 +519,7 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output_for_test(&args, &client)
-                .await
-                .unwrap();
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
 
             assert!(output.contains("Empty Body Issue #10"));
             assert!(output.contains("No description provided."));
@@ -568,9 +550,7 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output_for_test(&args, &client)
-                .await
-                .unwrap();
+            let output = run_with_client_and_output(&args, &client).await.unwrap();
 
             assert!(output.contains("Labels: bug, enhancement, help wanted"));
         }
