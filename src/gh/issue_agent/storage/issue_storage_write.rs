@@ -111,7 +111,7 @@ impl IssueStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::factories;
+    use crate::gh::issue_agent::testing::factories;
     use rstest::rstest;
     use std::fs;
 

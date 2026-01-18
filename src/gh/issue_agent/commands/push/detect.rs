@@ -229,7 +229,7 @@ pub(super) fn check_remote_unchanged(
 mod tests {
     use super::*;
     use crate::gh::issue_agent::models::IssueMetadata;
-    use crate::testing::factories;
+    use crate::gh::issue_agent::testing::factories;
     use rstest::rstest;
 
     mod check_remote_unchanged_tests {
