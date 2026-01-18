@@ -84,5 +84,3 @@ pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
 
     Ok(())
 }
-
-// parse_repo and get_repo_owner_and_name tests are in src/git/repo.rs

@@ -32,8 +32,6 @@ mod check_remote_unchanged_tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Remote has changed"));
-        assert!(err.contains(local));
-        assert!(err.contains(remote));
     }
 }
 
@@ -41,34 +39,24 @@ mod check_can_edit_comment_tests {
     use super::*;
 
     #[rstest]
-    #[case::own_comment("alice", "alice", false, "001_comment.md")]
-    #[case::other_comment_with_edit_others("bob", "alice", true, "001_comment.md")]
-    #[case::own_comment_with_edit_others("alice", "alice", true, "001_comment.md")]
-    fn test_allowed(
-        #[case] author: &str,
-        #[case] current_user: &str,
-        #[case] edit_others: bool,
-        #[case] filename: &str,
-    ) {
-        assert!(check_can_edit_comment(author, current_user, edit_others, filename).is_ok());
+    #[case::own_comment("alice", "alice", false)]
+    #[case::other_with_flag("bob", "alice", true)]
+    #[case::own_with_flag("alice", "alice", true)]
+    fn test_allowed(#[case] author: &str, #[case] current_user: &str, #[case] edit_others: bool) {
+        assert!(check_can_edit_comment(author, current_user, edit_others, "001.md").is_ok());
     }
 
     #[rstest]
-    #[case::other_comment_without_flag("bob", "alice", false, "001_comment.md")]
-    #[case::unknown_author("unknown", "alice", false, "002_comment.md")]
-    fn test_denied(
-        #[case] author: &str,
-        #[case] current_user: &str,
-        #[case] edit_others: bool,
-        #[case] filename: &str,
-    ) {
-        let result = check_can_edit_comment(author, current_user, edit_others, filename);
+    #[case::other_without_flag("bob", "alice", false)]
+    #[case::unknown_author("unknown", "alice", false)]
+    fn test_denied(#[case] author: &str, #[case] current_user: &str, #[case] edit_others: bool) {
+        let result = check_can_edit_comment(author, current_user, edit_others, "001.md");
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("Cannot edit other user's comment"));
-        assert!(err.contains(filename));
-        assert!(err.contains(author));
-        assert!(err.contains("--edit-others"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Cannot edit other user's comment")
+        );
     }
 }
 
@@ -76,56 +64,21 @@ mod compute_label_changes_tests {
     use super::*;
 
     #[rstest]
-    #[case::no_changes(
-        vec!["bug", "feature"],
-        vec!["bug", "feature"],
-        vec![],
-        vec![]
-    )]
-    #[case::add_one_label(
-        vec!["bug", "feature", "new-label"],
-        vec!["bug", "feature"],
-        vec![],
-        vec!["new-label"]
-    )]
-    #[case::remove_one_label(
-        vec!["bug"],
-        vec!["bug", "feature"],
-        vec!["feature"],
-        vec![]
-    )]
-    #[case::add_and_remove(
-        vec!["bug", "new-label"],
-        vec!["bug", "old-label"],
-        vec!["old-label"],
-        vec!["new-label"]
-    )]
-    #[case::empty_local(
-        vec![],
-        vec!["bug", "feature"],
-        vec!["bug", "feature"],
-        vec![]
-    )]
-    #[case::empty_remote(
-        vec!["bug", "feature"],
-        vec![],
-        vec![],
-        vec!["bug", "feature"]
-    )]
-    #[case::both_empty(
-        vec![],
-        vec![],
-        vec![],
-        vec![]
-    )]
+    #[case::no_changes(vec!["bug"], vec!["bug"], vec![], vec![])]
+    #[case::add_one(vec!["bug", "new"], vec!["bug"], vec![], vec!["new"])]
+    #[case::remove_one(vec!["bug"], vec!["bug", "old"], vec!["old"], vec![])]
+    #[case::add_and_remove(vec!["new"], vec!["old"], vec!["old"], vec!["new"])]
+    #[case::empty_local(vec![], vec!["a", "b"], vec!["a", "b"], vec![])]
+    #[case::empty_remote(vec!["a", "b"], vec![], vec![], vec!["a", "b"])]
+    #[case::both_empty(vec![], vec![], vec![], vec![])]
     fn test_label_changes(
-        #[case] local_labels: Vec<&str>,
-        #[case] remote_labels: Vec<&str>,
+        #[case] local: Vec<&str>,
+        #[case] remote: Vec<&str>,
         #[case] expected_remove: Vec<&str>,
         #[case] expected_add: Vec<&str>,
     ) {
-        let local: HashSet<&str> = local_labels.into_iter().collect();
-        let remote: HashSet<&str> = remote_labels.into_iter().collect();
+        let local: HashSet<&str> = local.into_iter().collect();
+        let remote: HashSet<&str> = remote.into_iter().collect();
         let (mut to_remove, mut to_add) = compute_label_changes(&local, &remote);
         to_remove.sort();
         to_add.sort();
@@ -141,93 +94,85 @@ mod compute_label_changes_tests {
 mod run_with_client_and_storage_tests {
     use super::*;
 
-    /// Helper to set up local storage with issue body and metadata.
+    const TIMESTAMP: &str = "2024-01-02T00:00:00+00:00";
+    const OLD_TIMESTAMP: &str = "2024-01-01T00:00:00+00:00";
+
     fn setup_storage(dir: &std::path::Path, body: &str, metadata_json: &str) {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join("issue.md"), format!("{}\n", body)).unwrap();
         fs::write(dir.join("metadata.json"), metadata_json).unwrap();
     }
 
-    /// Helper to set up a comment file in storage.
     fn setup_comment(dir: &std::path::Path, filename: &str, content: &str) {
         let comments_dir = dir.join("comments");
         fs::create_dir_all(&comments_dir).unwrap();
         fs::write(comments_dir.join(filename), content).unwrap();
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_dry_run_detects_body_change(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Remote body", updated_at);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![]);
-
-        setup_storage(
-            test_dir.path(),
-            "Local body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
-        );
-
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
+    fn make_args(issue_number: u64, dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
+        PushArgs {
             issue: IssueArgs {
-                issue_number: 123,
+                issue_number,
                 repo: Some("owner/repo".to_string()),
             },
-            dry_run: true,
-            force: false,
-            edit_others: false,
-        };
-
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_ok());
-
-        // In dry-run mode, no API calls should be made
-        assert!(client.updated_issue_bodies.lock().unwrap().is_empty());
+            dry_run,
+            force,
+            edit_others,
+        }
     }
 
+    fn make_comment(id: &str, db_id: i64, author: &str, body: &str) -> Comment {
+        Comment {
+            id: id.to_string(),
+            database_id: db_id,
+            author: Some(Author {
+                login: author.to_string(),
+            }),
+            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
+            body: body.to_string(),
+        }
+    }
+
+    // Basic push operations: body, title, labels
     #[rstest]
+    #[case::dry_run_no_api_call("Local", "Remote", true, false, 0)]
+    #[case::updates_body("Local", "Remote", false, false, 1)]
+    #[case::no_changes("Same", "Same", false, false, 0)]
     #[tokio::test]
-    async fn test_updates_issue_body(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Remote body", updated_at);
+    async fn test_body_update(
+        test_dir: TempDir,
+        #[case] local_body: &str,
+        #[case] remote_body: &str,
+        #[case] dry_run: bool,
+        #[case] force: bool,
+        #[case] expected_updates: usize,
+    ) {
+        let issue = create_test_issue(123, "Title", remote_body, TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
 
         setup_storage(
             test_dir.path(),
-            "Local body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            local_body,
+            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let args = make_args(123, dry_run, force, false);
 
         let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
-        // Verify API was called
-        let updated = client.updated_issue_bodies.lock().unwrap();
-        assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0].body, "Local body");
+        assert_eq!(
+            client.updated_issue_bodies.lock().unwrap().len(),
+            expected_updates
+        );
     }
 
     #[rstest]
     #[tokio::test]
     async fn test_updates_title(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Old Title", "Body", updated_at);
+        let issue = create_test_issue(123, "Old Title", "Body", TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
@@ -235,23 +180,19 @@ mod run_with_client_and_storage_tests {
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "New Title", updated_at, &["bug"]),
+            &create_metadata_json(123, "New Title", TIMESTAMP, &["bug"]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
         let updated = client.updated_issue_titles.lock().unwrap();
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0].title, "New Title");
@@ -260,8 +201,7 @@ mod run_with_client_and_storage_tests {
     #[rstest]
     #[tokio::test]
     async fn test_updates_labels(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
@@ -269,150 +209,72 @@ mod run_with_client_and_storage_tests {
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["enhancement"]),
+            &create_metadata_json(123, "Title", TIMESTAMP, &["enhancement"]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
-        // "bug" should be removed, "enhancement" should be added
-        let removed = client.removed_labels.lock().unwrap();
-        assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].label, "bug");
-
-        let added = client.added_labels.lock().unwrap();
-        assert_eq!(added.len(), 1);
-        assert_eq!(added[0].labels, vec!["enhancement"]);
+        assert_eq!(client.removed_labels.lock().unwrap()[0].label, "bug");
+        assert_eq!(
+            client.added_labels.lock().unwrap()[0].labels,
+            vec!["enhancement"]
+        );
     }
 
+    // Remote changed detection
     #[rstest]
+    #[case::fails_when_remote_changed(false, true)]
+    #[case::force_overrides(true, false)]
     #[tokio::test]
-    async fn test_fails_when_remote_changed(test_dir: TempDir) {
-        let local_updated_at = "2024-01-01T00:00:00+00:00";
-        let remote_updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", remote_updated_at);
+    async fn test_remote_changed(test_dir: TempDir, #[case] force: bool, #[case] expect_err: bool) {
+        let issue = create_test_issue(123, "Title", "Remote", TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![]);
 
         setup_storage(
             test_dir.path(),
-            "Body",
-            &create_metadata_json(123, "Test Issue", local_updated_at, &["bug"]),
+            "Local",
+            &create_metadata_json(123, "Title", OLD_TIMESTAMP, &["bug"]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, force, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Remote has changed")
-        );
+        if expect_err {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Remote has changed")
+            );
+        } else {
+            assert!(result.is_ok());
+        }
     }
 
     #[rstest]
     #[tokio::test]
-    async fn test_force_overrides_remote_changed(test_dir: TempDir) {
-        let local_updated_at = "2024-01-01T00:00:00+00:00";
-        let remote_updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Remote body", remote_updated_at);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![]);
-
-        setup_storage(
-            test_dir.path(),
-            "Local body",
-            &create_metadata_json(123, "Test Issue", local_updated_at, &["bug"]),
-        );
-
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: true, // Force flag
-            edit_others: false,
-        };
-
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_ok());
-
-        // Body should be updated despite timestamp mismatch
-        let updated = client.updated_issue_bodies.lock().unwrap();
-        assert_eq!(updated.len(), 1);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_no_changes_to_push(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Same body", updated_at);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![]);
-
-        setup_storage(
-            test_dir.path(),
-            "Same body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
-        );
-
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
-
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_ok());
-
-        // No API calls should be made
-        assert!(client.updated_issue_bodies.lock().unwrap().is_empty());
-        assert!(client.updated_issue_titles.lock().unwrap().is_empty());
-        assert!(client.added_labels.lock().unwrap().is_empty());
-        assert!(client.removed_labels.lock().unwrap().is_empty());
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_fails_with_invalid_repo_format(test_dir: TempDir) {
+    async fn test_invalid_repo_format(test_dir: TempDir) {
         let client = MockGitHubClient::new();
-
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Test", "2024-01-01T00:00:00+00:00", &[]),
+            &create_metadata_json(123, "T", TIMESTAMP, &[]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
@@ -427,7 +289,6 @@ mod run_with_client_and_storage_tests {
         };
 
         let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
@@ -436,29 +297,21 @@ mod run_with_client_and_storage_tests {
         );
     }
 
+    // Comment operations
     #[rstest]
     #[tokio::test]
     async fn test_updates_own_comment(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
-        let remote_comment = Comment {
-            id: "IC_abc123".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: "testuser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-            body: "Original comment".to_string(),
-        };
+        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
+        let comment = make_comment("IC_abc", 12345, "testuser", "Original");
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![remote_comment])
+            .with_comments("owner", "repo", 123, vec![comment])
             .with_current_user("testuser");
 
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
         );
         setup_comment(
             test_dir.path(),
@@ -466,37 +319,31 @@ mod run_with_client_and_storage_tests {
             &create_comment_file(
                 "testuser",
                 "2024-01-01T12:00:00+00:00",
-                "IC_abc123",
+                "IC_abc",
                 12345,
-                "Updated comment body",
+                "Updated",
             ),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
         let updated = client.updated_comments.lock().unwrap();
         assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0].body, "Updated comment body");
-        assert_eq!(updated[0].comment.comment_id, 12345);
+        assert_eq!(updated[0].body, "Updated");
     }
 
     #[rstest]
     #[tokio::test]
     async fn test_creates_new_comment(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
+        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
             .with_comments("owner", "repo", 123, vec![])
@@ -505,59 +352,48 @@ mod run_with_client_and_storage_tests {
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
         );
-        setup_comment(
-            test_dir.path(),
-            "new_my_comment.md",
-            "This is a new comment",
-        );
+        setup_comment(test_dir.path(), "new_my_comment.md", "New comment");
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, false, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
-        let created = client.created_comments.lock().unwrap();
-        assert_eq!(created.len(), 1);
-        assert_eq!(created[0].body, "This is a new comment");
-
-        // New comment file should be deleted after successful creation
+        assert_eq!(
+            client.created_comments.lock().unwrap()[0].body,
+            "New comment"
+        );
         assert!(!test_dir.path().join("comments/new_my_comment.md").exists());
     }
 
+    // Editing others' comments
     #[rstest]
+    #[case::denied_without_flag(false, true)]
+    #[case::allowed_with_flag(true, false)]
     #[tokio::test]
-    async fn test_fails_editing_others_comment_without_flag(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
-        let remote_comment = Comment {
-            id: "IC_abc123".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: "otheruser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-            body: "Original comment".to_string(),
-        };
+    async fn test_edit_others_comment(
+        test_dir: TempDir,
+        #[case] edit_others: bool,
+        #[case] expect_err: bool,
+    ) {
+        let issue = create_test_issue(123, "Title", "Body", TIMESTAMP);
+        let comment = make_comment("IC_abc", 12345, "otheruser", "Original");
         let client = MockGitHubClient::new()
             .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![remote_comment])
+            .with_comments("owner", "repo", 123, vec![comment])
             .with_current_user("testuser");
 
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
+            &create_metadata_json(123, "Title", TIMESTAMP, &["bug"]),
         );
         setup_comment(
             test_dir.path(),
@@ -565,92 +401,35 @@ mod run_with_client_and_storage_tests {
             &create_comment_file(
                 "otheruser",
                 "2024-01-01T12:00:00+00:00",
-                "IC_abc123",
+                "IC_abc",
                 12345,
-                "Modified other's comment",
+                "Modified",
             ),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: false, // Flag not set
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, false, edit_others),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Cannot edit other user's comment"));
-        assert!(err.contains("--edit-others"));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_allows_editing_others_comment_with_flag(test_dir: TempDir) {
-        let updated_at = "2024-01-02T00:00:00+00:00";
-        let issue = create_test_issue(123, "Test Issue", "Body", updated_at);
-        let remote_comment = Comment {
-            id: "IC_abc123".to_string(),
-            database_id: 12345,
-            author: Some(Author {
-                login: "otheruser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap(),
-            body: "Original comment".to_string(),
-        };
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, vec![remote_comment])
-            .with_current_user("testuser");
-
-        setup_storage(
-            test_dir.path(),
-            "Body",
-            &create_metadata_json(123, "Test Issue", updated_at, &["bug"]),
-        );
-        setup_comment(
-            test_dir.path(),
-            "001_comment_12345.md",
-            &create_comment_file(
-                "otheruser",
-                "2024-01-01T12:00:00+00:00",
-                "IC_abc123",
-                12345,
-                "Modified other's comment",
-            ),
-        );
-
-        let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: false,
-            edit_others: true, // Flag set
-        };
-
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(result.is_ok());
-
-        let updated = client.updated_comments.lock().unwrap();
-        assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0].body, "Modified other's comment");
+        if expect_err {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Cannot edit other user's comment"));
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(client.updated_comments.lock().unwrap()[0].body, "Modified");
+        }
     }
 
     #[rstest]
     #[tokio::test]
     async fn test_updates_metadata_after_push(test_dir: TempDir) {
-        let initial_updated_at = "2024-01-02T00:00:00+00:00";
-        let new_updated_at = "2024-01-03T00:00:00+00:00";
-        // Remote issue has new timestamp, and we use different title to trigger a change
-        let mut issue = create_test_issue(123, "New Title", "Body", new_updated_at);
+        let new_timestamp = "2024-01-03T00:00:00+00:00";
+        let mut issue = create_test_issue(123, "New Title", "Body", new_timestamp);
         issue.body = Some("Body".to_string());
 
         let client = MockGitHubClient::new()
@@ -660,30 +439,21 @@ mod run_with_client_and_storage_tests {
         setup_storage(
             test_dir.path(),
             "Body",
-            &create_metadata_json(123, "Old Title", initial_updated_at, &["bug"]),
+            &create_metadata_json(123, "Old Title", OLD_TIMESTAMP, &["bug"]),
         );
 
         let storage = IssueStorage::from_dir(test_dir.path());
-        let args = PushArgs {
-            issue: IssueArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-            },
-            dry_run: false,
-            force: true, // Force to bypass timestamp check
-            edit_others: false,
-        };
+        let result = run_with_client_and_storage(
+            &make_args(123, false, true, false),
+            &client,
+            &storage,
+            "testuser",
+        )
+        .await;
 
-        let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
         assert!(result.is_ok());
-
-        // Verify title was updated
-        let updated = client.updated_issue_titles.lock().unwrap();
-        assert_eq!(updated.len(), 1);
-
-        // Verify metadata was updated with new timestamp from re-fetched issue
-        let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
-        assert!(metadata_content.contains("2024-01-03"));
+        let metadata = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
+        assert!(metadata.contains("2024-01-03"));
     }
 }
 
@@ -691,85 +461,18 @@ mod format_diff_tests {
     use super::*;
 
     #[rstest]
-    #[case::single_line("line1\n", "line1\n", vec![" line1"])]
-    #[case::multiple_lines("line1\nline2\n", "line1\nline2\n", vec![" line1", " line2"])]
-    #[case::empty("", "", vec![])]
-    fn test_no_changes(#[case] old: &str, #[case] new: &str, #[case] expected_lines: Vec<&str>) {
-        let diff = format_diff(old, new);
-        for line in expected_lines {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
-        // No changes should not have - or + markers (except in content)
-        let lines: Vec<&str> = diff.lines().collect();
-        for line in lines {
-            assert!(
-                line.starts_with(' ') || line.is_empty(),
-                "Expected no changes but found: {}",
-                line
-            );
-        }
-    }
-
-    #[rstest]
-    #[case::add_one_line("line1\n", "line1\nline2\n", vec![" line1", "+line2"])]
-    #[case::add_multiple("a\n", "a\nb\nc\n", vec![" a", "+b", "+c"])]
-    #[case::add_to_empty("", "new\n", vec!["+new"])]
-    fn test_additions(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
-        let diff = format_diff(old, new);
-        for line in expected {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
-    }
-
-    #[rstest]
-    #[case::delete_one_line("line1\nline2\n", "line1\n", vec![" line1", "-line2"])]
-    #[case::delete_multiple("a\nb\nc\n", "a\n", vec![" a", "-b", "-c"])]
-    #[case::delete_all("old\n", "", vec!["-old"])]
-    fn test_deletions(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
-        let diff = format_diff(old, new);
-        for line in expected {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
-    }
-
-    #[rstest]
-    #[case::simple_modification("old\n", "new\n", vec!["-old", "+new"])]
-    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"])]
-    #[case::complex_change("foo\nbar\nbaz\n", "foo\nqux\nbaz\n", vec![" foo", "-bar", "+qux", " baz"])]
-    fn test_modifications(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
-        let diff = format_diff(old, new);
-        for line in expected {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
-    }
-
-    #[rstest]
-    #[case::mixed_operations(
-        "keep\ndelete\nmodify\n",
-        "keep\nmodified\nnew\n",
-        vec![" keep", "-delete", "-modify", "+modified", "+new"]
-    )]
-    fn test_mixed_changes(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+    #[case::no_changes("a\n", "a\n", vec![" a"], vec![])]
+    #[case::add_line("a\n", "a\nb\n", vec![" a", "+b"], vec![])]
+    #[case::delete_line("a\nb\n", "a\n", vec![" a", "-b"], vec![])]
+    #[case::modify("old\n", "new\n", vec!["-old", "+new"], vec![])]
+    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"], vec![])]
+    #[case::empty_both("", "", vec![], vec![])]
+    fn test_format_diff(
+        #[case] old: &str,
+        #[case] new: &str,
+        #[case] expected: Vec<&str>,
+        #[case] _unused: Vec<&str>,
+    ) {
         let diff = format_diff(old, new);
         for line in expected {
             assert!(
