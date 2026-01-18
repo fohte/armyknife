@@ -167,3 +167,131 @@ pub(super) fn check_remote_unchanged(
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gh::issue_agent::models::IssueMetadata;
+    use crate::testing::factories;
+    use rstest::rstest;
+
+    mod check_remote_unchanged_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::same_timestamp("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", false)]
+        #[case::force_with_different("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", true)]
+        #[case::force_with_same("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", true)]
+        fn test_ok(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
+            assert!(check_remote_unchanged(local, remote, force).is_ok());
+        }
+
+        #[rstest]
+        #[case::different_timestamp("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", false)]
+        #[case::local_newer("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z", false)]
+        fn test_err(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
+            let result = check_remote_unchanged(local, remote, force);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Remote has changed"));
+        }
+    }
+
+    mod check_can_edit_comment_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::own_comment("alice", "alice", false)]
+        #[case::other_with_flag("bob", "alice", true)]
+        #[case::own_with_flag("alice", "alice", true)]
+        fn test_allowed(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] edit_others: bool,
+        ) {
+            assert!(check_can_edit_comment(author, current_user, edit_others, "001.md").is_ok());
+        }
+
+        #[rstest]
+        #[case::other_without_flag("bob", "alice", false)]
+        #[case::unknown_author("unknown", "alice", false)]
+        fn test_denied(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] edit_others: bool,
+        ) {
+            let result = check_can_edit_comment(author, current_user, edit_others, "001.md");
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Cannot edit other user's comment")
+            );
+        }
+    }
+
+    mod detect_label_change_tests {
+        use super::*;
+
+        fn metadata_with_labels(labels: &[&str]) -> IssueMetadata {
+            IssueMetadata {
+                number: 1,
+                title: "Test".to_string(),
+                state: "OPEN".to_string(),
+                labels: labels.iter().map(|s| s.to_string()).collect(),
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            }
+        }
+
+        fn issue_with_labels(labels: &[&str]) -> Issue {
+            factories::issue_with(|i| {
+                i.labels = factories::labels(labels);
+            })
+        }
+
+        #[rstest]
+        #[case::no_changes(vec!["bug"], vec!["bug"])]
+        #[case::both_empty(vec![], vec![])]
+        fn test_returns_none_when_no_changes(#[case] local: Vec<&str>, #[case] remote: Vec<&str>) {
+            let metadata = metadata_with_labels(&local);
+            let issue = issue_with_labels(&remote);
+            assert!(detect_label_change(&metadata, &issue).is_none());
+        }
+
+        #[rstest]
+        #[case::add_one(vec!["bug", "new"], vec!["bug"], vec![], vec!["new"])]
+        #[case::remove_one(vec!["bug"], vec!["bug", "old"], vec!["old"], vec![])]
+        #[case::add_and_remove(vec!["new"], vec!["old"], vec!["old"], vec!["new"])]
+        #[case::empty_local(vec![], vec!["a", "b"], vec!["a", "b"], vec![])]
+        #[case::empty_remote(vec!["a", "b"], vec![], vec![], vec!["a", "b"])]
+        fn test_detects_label_changes(
+            #[case] local: Vec<&str>,
+            #[case] remote: Vec<&str>,
+            #[case] expected_remove: Vec<&str>,
+            #[case] expected_add: Vec<&str>,
+        ) {
+            let metadata = metadata_with_labels(&local);
+            let issue = issue_with_labels(&remote);
+
+            let change = detect_label_change(&metadata, &issue).expect("Expected label changes");
+
+            let mut to_remove = change.to_remove.clone();
+            to_remove.sort();
+            let mut to_add = change.to_add.clone();
+            to_add.sort();
+            let mut expected_remove: Vec<String> =
+                expected_remove.iter().map(|s| s.to_string()).collect();
+            let mut expected_add: Vec<String> =
+                expected_add.iter().map(|s| s.to_string()).collect();
+            expected_remove.sort();
+            expected_add.sort();
+
+            assert_eq!(to_remove, expected_remove);
+            assert_eq!(to_add, expected_add);
+        }
+    }
+}

@@ -19,7 +19,7 @@ pub(super) fn print_diff(old: &str, new: &str) {
 
 /// Format diff as a string (for testing).
 #[cfg(test)]
-pub(super) fn format_diff(old: &str, new: &str) -> String {
+fn format_diff(old: &str, new: &str) -> String {
     let diff = TextDiff::from_lines(old, new);
     let mut result = String::new();
 
@@ -33,4 +33,29 @@ pub(super) fn format_diff(old: &str, new: &str) -> String {
         result.push_str(&change.to_string());
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::no_changes("a\n", "a\n", vec![" a"])]
+    #[case::add_line("a\n", "a\nb\n", vec![" a", "+b"])]
+    #[case::delete_line("a\nb\n", "a\n", vec![" a", "-b"])]
+    #[case::modify("old\n", "new\n", vec!["-old", "+new"])]
+    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"])]
+    #[case::empty_both("", "", vec![])]
+    fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+        let diff = format_diff(old, new);
+        for line in expected {
+            assert!(
+                diff.contains(line),
+                "Expected '{}' in diff:\n{}",
+                line,
+                diff
+            );
+        }
+    }
 }
