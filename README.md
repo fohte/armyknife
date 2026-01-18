@@ -75,33 +75,13 @@ a gh issue-agent <command> <issue-number> [options]
 | `refresh` | Discard local changes and fetch latest from GitHub  |
 | `push`    | Push local changes to GitHub                        |
 
-**Options:**
-
-| Option           | Commands | Description                                 |
-| ---------------- | -------- | ------------------------------------------- |
-| `-R <repo>`      | all      | Target repository (default: current repo)   |
-| `--dry-run`      | push     | Show what would be changed without applying |
-| `--force`        | push     | Allow overwriting remote changes            |
-| `--edit-others`  | push     | Allow editing other users' comments         |
-| `--allow-delete` | push     | Allow deleting comments removed locally     |
-
-**Directory Structure:**
-
-```
-~/.cache/gh-issue-agent/<owner>/<repo>/<issue-number>/
-├── issue.md          # Issue body
-├── metadata.json     # Title, labels, assignees, etc.
-└── comments/
-    ├── 001_comment_<id>.md   # Existing comments
-    └── new_<name>.md         # New comments (created locally)
-```
-
-**Workflow:**
-
-1. `pull` to fetch an issue locally
-2. Edit `issue.md`, `metadata.json`, or files in `comments/`
-3. Create new comments as `comments/new_<name>.md`
-4. `push` to apply changes to GitHub
+| Option           | Description                                 |
+| ---------------- | ------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)   |
+| `--dry-run`      | Show what would be changed without applying |
+| `--force`        | Allow overwriting remote changes            |
+| `--edit-others`  | Allow editing other users' comments         |
+| `--allow-delete` | Allow deleting comments removed locally     |
 
 #### `a gh check-pr-review`
 
