@@ -60,6 +60,49 @@ Manage PR body drafts with human-in-the-loop review.
 
 GitHub-related utilities.
 
+#### `a gh issue-agent`
+
+Manage GitHub Issues as local files for AI agents.
+
+```sh
+a gh issue-agent <command> <issue-number> [options]
+```
+
+| Command   | Description                                         |
+| --------- | --------------------------------------------------- |
+| `view`    | View issue and comments (read-only, no local cache) |
+| `pull`    | Fetch issue and save locally                        |
+| `refresh` | Discard local changes and fetch latest from GitHub  |
+| `push`    | Push local changes to GitHub                        |
+
+**Options:**
+
+| Option           | Commands | Description                                 |
+| ---------------- | -------- | ------------------------------------------- |
+| `-R <repo>`      | all      | Target repository (default: current repo)   |
+| `--dry-run`      | push     | Show what would be changed without applying |
+| `--force`        | push     | Allow overwriting remote changes            |
+| `--edit-others`  | push     | Allow editing other users' comments         |
+| `--allow-delete` | push     | Allow deleting comments removed locally     |
+
+**Directory Structure:**
+
+```
+~/.cache/gh-issue-agent/<owner>/<repo>/<issue-number>/
+├── issue.md          # Issue body
+├── metadata.json     # Title, labels, assignees, etc.
+└── comments/
+    ├── 001_comment_<id>.md   # Existing comments
+    └── new_<name>.md         # New comments (created locally)
+```
+
+**Workflow:**
+
+1. `pull` to fetch an issue locally
+2. Edit `issue.md`, `metadata.json`, or files in `comments/`
+3. Create new comments as `comments/new_<name>.md`
+4. `push` to apply changes to GitHub
+
 #### `a gh check-pr-review`
 
 Fetch PR review comments in a concise format for AI agents.
