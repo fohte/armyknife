@@ -1,6 +1,6 @@
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_gh, parse_repo, print_fetch_success};
+use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success};
 use crate::gh::issue_agent::models::IssueMetadata;
 use crate::gh::issue_agent::storage::IssueStorage;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
@@ -24,7 +24,7 @@ pub(super) async fn run_with_client<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo = get_repo_from_arg_or_gh(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
     eprintln!("Fetching issue #{issue_number} from {repo}...");
@@ -65,7 +65,7 @@ pub(super) async fn run_with_client_and_storage<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let repo = get_repo_from_arg_or_gh(&args.issue.repo)?;
+    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
     let (owner, repo_name) = parse_repo(&repo)?;

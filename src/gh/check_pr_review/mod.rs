@@ -2,9 +2,10 @@ mod api;
 mod format;
 mod models;
 
-use crate::git;
 use clap::Args;
 use thiserror::Error;
+
+use crate::git;
 
 pub use api::fetch_pr_data;
 
@@ -89,19 +90,23 @@ pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
 
 fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String)> {
     if let Some(repo) = repo_arg {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() == 2 {
-            return Ok((parts[0].to_string(), parts[1].to_string()));
-        }
-        return Err(CheckPrReviewError::RepoInfoError(format!(
-            "Invalid repository format: {repo}. Expected owner/repo"
-        )));
+        return repo
+            .split_once('/')
+            .filter(|(owner, name)| !owner.is_empty() && !name.is_empty())
+            .map(|(owner, name)| (owner.to_string(), name.to_string()))
+            .ok_or_else(|| {
+                CheckPrReviewError::RepoInfoError(format!(
+                    "Invalid repository format: {repo}. Expected owner/repo"
+                ))
+            });
     }
 
-    // Get from current repo using git2
-    let repo = git::open_repo()?;
-    let (owner, name) = git::github_owner_and_repo(&repo)?;
-    Ok((owner, name))
+    // Get from current repo using git remote origin
+    git::get_owner_repo().ok_or_else(|| {
+        CheckPrReviewError::RepoInfoError(
+            "Failed to determine current repository. Use -R to specify.".to_string(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -125,11 +130,20 @@ mod tests {
 
     #[rstest]
     #[case::no_slash("invalid")]
-    #[case::too_many_slashes("a/b/c")]
     #[case::empty("")]
+    #[case::only_slash("/")]
+    #[case::empty_owner("/repo")]
+    #[case::empty_repo("owner/")]
     fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
         let result = get_repo_owner_and_name(Some(input));
         assert!(result.is_err());
         assert!(matches!(result, Err(CheckPrReviewError::RepoInfoError(_))));
+    }
+
+    #[test]
+    fn test_multiple_slashes_takes_first() {
+        // split_once splits at first occurrence, so "a/b/c" -> ("a", "b/c")
+        let result = get_repo_owner_and_name(Some("org/repo/extra")).unwrap();
+        assert_eq!(result, ("org".to_string(), "repo/extra".to_string()));
     }
 }

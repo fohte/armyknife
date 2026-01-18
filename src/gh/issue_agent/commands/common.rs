@@ -1,16 +1,13 @@
 //! Common utilities shared across issue-agent commands.
 
 use std::path::Path;
-use std::process::Command;
 
 use crate::git::get_owner_repo;
 
-/// Get repository from argument or current directory.
+/// Get repository from argument or git remote origin.
 ///
 /// If a repo argument is provided, returns it directly.
-/// Otherwise, attempts to determine the repository from:
-/// 1. Git remote origin (for push command)
-/// 2. `gh repo view` command (for pull/refresh commands)
+/// Otherwise, attempts to determine the repository from git remote origin.
 pub fn get_repo_from_arg_or_git(
     repo_arg: &Option<String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -23,43 +20,6 @@ pub fn get_repo_from_arg_or_git(
         get_owner_repo().ok_or("Failed to determine current repository. Use -R to specify.")?;
 
     Ok(format!("{}/{}", owner, repo))
-}
-
-/// Get repository from argument or `gh repo view` command.
-///
-/// Similar to `get_repo_from_arg_or_git`, but uses `gh repo view` as fallback
-/// instead of git remote parsing.
-pub fn get_repo_from_arg_or_gh(
-    repo_arg: &Option<String>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(repo) = repo_arg {
-        return Ok(repo.clone());
-    }
-
-    // Use `gh repo view` to get current repository
-    let output = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            "--json",
-            "nameWithOwner",
-            "--jq",
-            ".nameWithOwner",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run gh repo view: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh repo view failed: {stderr}").into());
-    }
-
-    let repo = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if repo.is_empty() {
-        return Err("Could not determine repository. Use -R to specify.".into());
-    }
-
-    Ok(repo)
 }
 
 /// Parse "owner/repo" into (owner, repo) tuple.

@@ -1,8 +1,8 @@
 use clap::Args;
 
+use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::gh::issue_agent::models::{Comment, Issue};
-use crate::git;
 use crate::github::{CommentClient, IssueClient, OctocrabClient};
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -27,7 +27,8 @@ pub(super) async fn run_with_client_and_output<C>(
 where
     C: IssueClient + CommentClient,
 {
-    let (owner, repo) = get_repo_owner_and_name(args.issue.repo.as_deref())?;
+    let repo_str = get_repo_from_arg_or_git(&args.issue.repo)?;
+    let (owner, repo) = parse_repo(&repo_str)?;
     let issue_number = args.issue.issue_number;
 
     let (issue, comments) = tokio::try_join!(
@@ -43,24 +44,6 @@ fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> 
     let mut output = format_issue(issue, issue_number, comments.len());
     output.push_str(&format_comments(comments));
     output
-}
-
-fn get_repo_owner_and_name(
-    repo_arg: Option<&str>,
-) -> Result<(String, String), Box<dyn std::error::Error>> {
-    if let Some(repo) = repo_arg {
-        return repo
-            .split_once('/')
-            .map(|(owner, repo_name)| (owner.to_string(), repo_name.to_string()))
-            .ok_or_else(|| {
-                format!("Invalid repository format: {repo}. Expected owner/repo").into()
-            });
-    }
-
-    // Get from current repo using git2
-    let repo = git::open_repo()?;
-    let (owner, name) = git::github_owner_and_repo(&repo)?;
-    Ok((owner, name))
 }
 
 fn format_state(state: &str) -> &str {
@@ -194,28 +177,7 @@ mod tests {
         }
     }
 
-    #[rstest]
-    #[case::valid("owner/repo", "owner", "repo")]
-    #[case::with_dashes("my-org/my-repo", "my-org", "my-repo")]
-    #[case::with_numbers("user123/project456", "user123", "project456")]
-    #[case::with_dots("owner/repo.name", "owner", "repo.name")]
-    fn test_get_repo_owner_and_name_with_arg(
-        #[case] input: &str,
-        #[case] expected_owner: &str,
-        #[case] expected_repo: &str,
-    ) {
-        let (owner, repo) = get_repo_owner_and_name(Some(input)).unwrap();
-        assert_eq!(owner, expected_owner);
-        assert_eq!(repo, expected_repo);
-    }
-
-    #[rstest]
-    #[case::no_slash("invalid")]
-    #[case::empty("")]
-    fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
-        let result = get_repo_owner_and_name(Some(input));
-        assert!(result.is_err());
-    }
+    // parse_repo and get_repo tests are in commands/common.rs
 
     #[rstest]
     #[case::open("OPEN", "Open")]
