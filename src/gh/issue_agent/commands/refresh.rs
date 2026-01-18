@@ -83,6 +83,7 @@ mod tests {
     use crate::gh::issue_agent::models::{Author, Comment, Issue};
     use crate::github::MockGitHubClient;
     use chrono::{TimeZone, Utc};
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
@@ -204,11 +205,9 @@ mod tests {
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid repository format")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Invalid input: Invalid repository format: invalid-repo-format. Expected owner/repo"
             );
         }
 
@@ -246,10 +245,19 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Verify new comment file exists
+            // Verify new comment file exists with expected content
             assert!(comments_dir.join("001_comment_99999.md").exists());
             let content = fs::read_to_string(comments_dir.join("001_comment_99999.md")).unwrap();
-            assert!(content.contains("New comment from refresh"));
+            assert_eq!(
+                content,
+                indoc! {"
+                    <!-- author: newuser -->
+                    <!-- createdAt: 2024-02-01T00:00:00+00:00 -->
+                    <!-- id: IC_new -->
+                    <!-- databaseId: 99999 -->
+
+                    New comment from refresh"}
+            );
         }
     }
 }

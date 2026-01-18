@@ -110,11 +110,9 @@ async fn test_remote_changed(test_dir: TempDir, #[case] force: bool, #[case] exp
     )
     .await;
     if expect_err {
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Remote has changed")
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
         );
     } else {
         assert!(result.is_ok());
@@ -136,11 +134,9 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
     };
 
     let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid repository format")
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Invalid input: Invalid repository format: invalid-format. Expected owner/repo"
     );
 }
 
@@ -227,11 +223,9 @@ async fn test_edit_others_comment(
     )
     .await;
     if expect_err {
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Cannot edit other user's comment")
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cannot edit other user's comment: 001_comment_12345.md (author: otheruser). Use --edit-others to allow."
         );
     } else {
         assert!(result.is_ok());
@@ -258,9 +252,8 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     )
     .await;
     assert!(result.is_ok());
-    assert!(
-        fs::read_to_string(test_dir.path().join("metadata.json"))
-            .unwrap()
-            .contains("2024-01-03")
-    );
+
+    let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
+    assert_eq!(metadata["updatedAt"], "2024-01-03T00:00:00+00:00");
 }

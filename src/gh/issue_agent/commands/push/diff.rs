@@ -41,21 +41,14 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::no_changes("a\n", "a\n", vec![" a"])]
-    #[case::add_line("a\n", "a\nb\n", vec![" a", "+b"])]
-    #[case::delete_line("a\nb\n", "a\n", vec![" a", "-b"])]
-    #[case::modify("old\n", "new\n", vec!["-old", "+new"])]
-    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"])]
-    #[case::empty_both("", "", vec![])]
-    fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+    #[case::no_changes("a\n", "a\n", " a\n")]
+    #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
+    #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
+    #[case::modify("old\n", "new\n", "-old\n+new\n")]
+    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
+    #[case::empty_both("", "", "")]
+    fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
         let diff = format_diff(old, new);
-        for line in expected {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
+        assert_eq!(diff, expected);
     }
 }

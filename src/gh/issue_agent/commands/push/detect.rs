@@ -192,7 +192,13 @@ mod tests {
         fn test_err(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
             let result = check_remote_unchanged(local, remote, force);
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Remote has changed"));
+            assert_eq!(
+                result.unwrap_err(),
+                format!(
+                    "Remote has changed since pull. Local: {}, Remote: {}",
+                    local, remote
+                )
+            );
         }
     }
 
@@ -221,11 +227,12 @@ mod tests {
         ) {
             let result = check_can_edit_comment(author, current_user, edit_others, "001.md");
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Cannot edit other user's comment")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "Cannot edit other user's comment: 001.md (author: {}). Use --edit-others to allow.",
+                    author
+                )
             );
         }
     }
