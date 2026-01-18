@@ -180,7 +180,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::factories;
+    use crate::gh::issue_agent::testing::factories;
     use indoc::{formatdoc, indoc};
     use rstest::rstest;
 

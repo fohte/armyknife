@@ -36,6 +36,9 @@ pub trait CommentClient: Send + Sync {
         issue_number: u64,
         body: &str,
     ) -> Result<crate::gh::issue_agent::models::Comment>;
+
+    /// Delete a comment from an issue.
+    async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()>;
 }
 
 /// GraphQL response for fetching comments.
@@ -173,5 +176,14 @@ impl CommentClient for OctocrabClient {
             created_at: comment.created_at,
             body: comment.body.unwrap_or_default(),
         })
+    }
+
+    async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
+        // Use REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
+        let route = format!("/repos/{owner}/{repo}/issues/comments/{comment_id}");
+        self.client
+            .delete::<(), String, ()>(route, Option::<&()>::None)
+            .await?;
+        Ok(())
     }
 }

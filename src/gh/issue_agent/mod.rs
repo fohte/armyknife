@@ -2,6 +2,8 @@ pub mod commands;
 pub mod format;
 pub mod models;
 pub mod storage;
+#[cfg(test)]
+pub mod testing;
 
 use clap::Subcommand;
 

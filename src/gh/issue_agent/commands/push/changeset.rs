@@ -9,6 +9,26 @@ use super::detect::{
 };
 use super::diff::print_diff;
 
+/// Local state for change detection.
+pub(super) struct LocalState<'a> {
+    pub(super) metadata: &'a IssueMetadata,
+    pub(super) body: &'a str,
+    pub(super) comments: &'a [LocalComment],
+}
+
+/// Remote state for change detection.
+pub(super) struct RemoteState<'a> {
+    pub(super) issue: &'a Issue,
+    pub(super) comments: &'a [Comment],
+}
+
+/// Options for change detection.
+pub(super) struct DetectOptions<'a> {
+    pub(super) current_user: &'a str,
+    pub(super) edit_others: bool,
+    pub(super) allow_delete: bool,
+}
+
 /// Represents all changes detected between local and remote state.
 pub(super) struct ChangeSet<'a> {
     pub(super) body: Option<BodyChange<'a>>,
@@ -34,6 +54,7 @@ pub(super) struct LabelChange {
     pub(super) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug)]
 pub(super) enum CommentChange<'a> {
     New {
         filename: &'a str,
@@ -47,23 +68,29 @@ pub(super) enum CommentChange<'a> {
         author: &'a str,
         current_user: &'a str,
     },
+    Deleted {
+        database_id: i64,
+        body: &'a str,
+        author: &'a str,
+    },
 }
 
 impl<'a> ChangeSet<'a> {
     pub(super) fn detect(
-        local_metadata: &'a IssueMetadata,
-        local_body: &'a str,
-        local_comments: &'a [LocalComment],
-        remote_issue: &'a Issue,
-        remote_comments: &'a [Comment],
-        current_user: &'a str,
-        edit_others: bool,
+        local: &LocalState<'a>,
+        remote: &RemoteState<'a>,
+        options: &DetectOptions<'a>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let body = detect_body_change(local_body, remote_issue);
-        let title = detect_title_change(local_metadata, remote_issue);
-        let labels = detect_label_change(local_metadata, remote_issue);
-        let comments =
-            detect_comment_changes(local_comments, remote_comments, current_user, edit_others)?;
+        let body = detect_body_change(local.body, remote.issue);
+        let title = detect_title_change(local.metadata, remote.issue);
+        let labels = detect_label_change(local.metadata, remote.issue);
+        let comments = detect_comment_changes(
+            local.comments,
+            remote.comments,
+            options.current_user,
+            options.edit_others,
+            options.allow_delete,
+        )?;
 
         Ok(Self {
             body,
@@ -123,6 +150,21 @@ impl<'a> ChangeSet<'a> {
                         println!("=== Comment: {} ===", filename);
                     }
                     print_diff(remote_body, local_body);
+                }
+                CommentChange::Deleted {
+                    database_id,
+                    body,
+                    author,
+                } => {
+                    println!();
+                    println!(
+                        "=== Delete Comment: database_id={} (author: {}) ===",
+                        database_id, author
+                    );
+                    // Show the content that will be deleted (prefixed with -)
+                    for line in body.lines() {
+                        println!("- {}", line);
+                    }
                 }
             }
         }
@@ -191,6 +233,13 @@ impl<'a> ChangeSet<'a> {
                     println!("Updating comment...");
                     client
                         .update_comment(owner, repo, *database_id as u64, local_body)
+                        .await?;
+                }
+                CommentChange::Deleted { database_id, .. } => {
+                    println!();
+                    println!("Deleting comment...");
+                    client
+                        .delete_comment(owner, repo, *database_id as u64)
                         .await?;
                 }
             }

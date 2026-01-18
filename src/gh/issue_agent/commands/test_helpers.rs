@@ -2,8 +2,8 @@
 
 use crate::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::gh::issue_agent::storage::IssueStorage;
+use crate::gh::issue_agent::testing::factories;
 use crate::github::MockGitHubClient;
-use crate::testing::factories;
 use chrono::{TimeZone, Utc};
 use rstest::fixture;
 use std::fs;

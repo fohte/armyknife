@@ -79,9 +79,16 @@ pub(super) fn detect_comment_changes<'a>(
     remote_comments: &'a [Comment],
     current_user: &'a str,
     edit_others: bool,
+    allow_delete: bool,
 ) -> Result<Vec<CommentChange<'a>>, Box<dyn std::error::Error>> {
     let remote_comments_map: HashMap<&str, &Comment> =
         remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    // Build a set of local comment IDs (excluding new comments)
+    let local_comment_ids: HashSet<&str> = local_comments
+        .iter()
+        .filter_map(|c| c.metadata.id.as_deref())
+        .collect();
 
     let mut changes = Vec::new();
 
@@ -129,7 +136,57 @@ pub(super) fn detect_comment_changes<'a>(
         });
     }
 
+    // Detect deleted comments (remote comments that don't exist locally)
+    for remote_comment in remote_comments {
+        if !local_comment_ids.contains(remote_comment.id.as_str()) {
+            let author = remote_comment
+                .author
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or("unknown");
+
+            // Check if deleting other user's comment requires --allow-delete
+            check_can_delete_comment(
+                author,
+                current_user,
+                allow_delete,
+                remote_comment.database_id,
+            )?;
+
+            changes.push(CommentChange::Deleted {
+                database_id: remote_comment.database_id,
+                body: &remote_comment.body,
+                author,
+            });
+        }
+    }
+
     Ok(changes)
+}
+
+/// Check if the user can delete a comment.
+/// Returns Ok(()) if allowed, Err with message if not.
+pub(super) fn check_can_delete_comment(
+    comment_author: &str,
+    current_user: &str,
+    allow_delete: bool,
+    database_id: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if allow_delete {
+        Ok(())
+    } else if comment_author == current_user {
+        Err(format!(
+            "Cannot delete comment (database_id: {}). Use --allow-delete to allow.",
+            database_id
+        )
+        .into())
+    } else {
+        Err(format!(
+            "Cannot delete other user's comment (database_id: {}, author: {}). Use --allow-delete to allow.",
+            database_id, comment_author
+        )
+        .into())
+    }
 }
 
 /// Check if the user can edit a comment.
@@ -172,7 +229,7 @@ pub(super) fn check_remote_unchanged(
 mod tests {
     use super::*;
     use crate::gh::issue_agent::models::IssueMetadata;
-    use crate::testing::factories;
+    use crate::gh::issue_agent::testing::factories;
     use rstest::rstest;
 
     mod check_remote_unchanged_tests {
@@ -299,6 +356,102 @@ mod tests {
 
             assert_eq!(to_remove, expected_remove);
             assert_eq!(to_add, expected_add);
+        }
+    }
+
+    mod check_can_delete_comment_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::allow_delete_own("alice", "alice", true)]
+        #[case::allow_delete_other("bob", "alice", true)]
+        fn test_allowed_with_flag(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] allow_delete: bool,
+        ) {
+            assert!(check_can_delete_comment(author, current_user, allow_delete, 12345).is_ok());
+        }
+
+        #[rstest]
+        #[case::deny_own_without_flag("alice", "alice", false)]
+        #[case::deny_other_without_flag("bob", "alice", false)]
+        fn test_denied_without_flag(
+            #[case] author: &str,
+            #[case] current_user: &str,
+            #[case] allow_delete: bool,
+        ) {
+            let result = check_can_delete_comment(author, current_user, allow_delete, 12345);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("--allow-delete"));
+        }
+    }
+
+    mod detect_comment_changes_tests {
+        use super::*;
+        use crate::gh::issue_agent::storage::LocalComment;
+
+        fn make_local_comment(
+            id: &str,
+            database_id: i64,
+            body: &str,
+            author: &str,
+        ) -> LocalComment {
+            factories::local_comment_with(|c| {
+                c.filename = format!("001_comment_{}.md", database_id);
+                c.body = body.to_string();
+                c.metadata.author = Some(author.to_string());
+                c.metadata.id = Some(id.to_string());
+                c.metadata.database_id = Some(database_id);
+            })
+        }
+
+        fn make_remote_comment(id: &str, database_id: i64, body: &str, author: &str) -> Comment {
+            factories::comment_with(|c| {
+                c.id = id.to_string();
+                c.database_id = database_id;
+                c.body = body.to_string();
+                c.author = Some(factories::author(author));
+            })
+        }
+
+        #[rstest]
+        #[case::delete_allowed(vec![], true, 1)]
+        #[case::no_delete_when_local_exists(vec![make_local_comment("IC_123", 12345, "body", "alice")], false, 0)]
+        fn test_delete_detection(
+            #[case] local_comments: Vec<LocalComment>,
+            #[case] allow_delete: bool,
+            #[case] expected_changes: usize,
+        ) {
+            let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
+
+            let result = detect_comment_changes(
+                &local_comments,
+                &remote_comments,
+                "alice",
+                false,
+                allow_delete,
+            );
+
+            let changes = result.expect("Expected Ok result");
+            assert_eq!(changes.len(), expected_changes);
+            if expected_changes > 0 {
+                assert!(matches!(
+                    &changes[0],
+                    CommentChange::Deleted { database_id, .. } if *database_id == 12345
+                ));
+            }
+        }
+
+        #[rstest]
+        fn test_delete_without_allow_delete_fails() {
+            let local_comments: Vec<LocalComment> = vec![];
+            let remote_comments = vec![make_remote_comment("IC_123", 12345, "body", "alice")];
+
+            let result =
+                detect_comment_changes(&local_comments, &remote_comments, "alice", false, false);
+
+            assert!(result.unwrap_err().to_string().contains("--allow-delete"));
         }
     }
 }

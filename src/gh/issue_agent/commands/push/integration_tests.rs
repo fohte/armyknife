@@ -10,6 +10,10 @@ use std::fs;
 use tempfile::TempDir;
 
 fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
+    make_args_full(dry_run, force, edit_others, false)
+}
+
+fn make_args_full(dry_run: bool, force: bool, edit_others: bool, allow_delete: bool) -> PushArgs {
     PushArgs {
         issue: IssueArgs {
             issue_number: 123,
@@ -18,6 +22,7 @@ fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
         dry_run,
         force,
         edit_others,
+        allow_delete,
     }
 }
 
@@ -131,6 +136,7 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
         dry_run: false,
         force: false,
         edit_others: false,
+        allow_delete: false,
     };
 
     let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
@@ -256,4 +262,68 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
     let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
     assert_eq!(metadata["updatedAt"], "2024-01-03T00:00:00+00:00");
+}
+
+// Comment deletion tests
+#[rstest]
+#[case::denied_without_flag(false, true)]
+#[case::allowed_with_flag(true, false)]
+#[tokio::test]
+async fn test_delete_comment(
+    test_dir: TempDir,
+    #[case] allow_delete: bool,
+    #[case] expect_err: bool,
+) {
+    // Remote has a comment, but local doesn't have the corresponding file
+    // This simulates the user deleting a comment file locally
+    let (client, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_comment("testuser")])
+        .build();
+    // Don't create local comment file - simulating deletion
+
+    let result = run_with_client_and_storage(
+        &make_args_full(false, false, false, allow_delete),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+
+    if expect_err {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cannot delete comment (database_id: 12345). Use --allow-delete to allow."
+        );
+    } else {
+        assert!(result.is_ok());
+        assert_eq!(client.deleted_comments.lock().unwrap().len(), 1);
+        assert_eq!(
+            client.deleted_comments.lock().unwrap()[0]
+                .comment
+                .comment_id,
+            12345
+        );
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
+    // Remote has another user's comment, local doesn't have the file
+    let (client, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_comment("otheruser")])
+        .build();
+
+    let result = run_with_client_and_storage(
+        &make_args_full(false, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Cannot delete other user's comment (database_id: 12345, author: otheruser). Use --allow-delete to allow."
+    );
 }
