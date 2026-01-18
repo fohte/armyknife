@@ -170,8 +170,16 @@ mod tests {
             assert!(comment_file.exists());
 
             let content = fs::read_to_string(&comment_file).unwrap();
-            assert!(content.contains("Test comment body"));
-            assert!(content.contains("<!-- author: commenter -->"));
+            assert_eq!(
+                content,
+                "\
+<!-- author: commenter -->
+<!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+<!-- id: IC_abc123 -->
+<!-- databaseId: 12345 -->
+
+Test comment body"
+            );
         }
 
         #[rstest]
@@ -259,11 +267,9 @@ mod tests {
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Local changes would be overwritten")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Local changes would be overwritten. Use 'refresh' to discard local changes."
             );
         }
 
@@ -344,11 +350,9 @@ mod tests {
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid repository format")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Invalid input: Invalid repository format: invalid-repo-format. Expected owner/repo"
             );
         }
     }

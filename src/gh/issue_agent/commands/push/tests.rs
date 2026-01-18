@@ -26,7 +26,13 @@ mod check_remote_unchanged_tests {
     fn test_err(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
         let result = check_remote_unchanged(local, remote, force);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Remote has changed"));
+        assert_eq!(
+            result.unwrap_err(),
+            format!(
+                "Remote has changed since pull. Local: {}, Remote: {}",
+                local, remote
+            )
+        );
     }
 }
 
@@ -47,11 +53,12 @@ mod check_can_edit_comment_tests {
     fn test_denied(#[case] author: &str, #[case] current_user: &str, #[case] edit_others: bool) {
         let result = check_can_edit_comment(author, current_user, edit_others, "001.md");
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Cannot edit other user's comment")
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!(
+                "Cannot edit other user's comment: 001.md (author: {}). Use --edit-others to allow.",
+                author
+            )
         );
     }
 }
@@ -225,11 +232,9 @@ mod run_with_client_and_storage_tests {
         )
         .await;
         if expect_err {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Remote has changed")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
             );
         } else {
             assert!(result.is_ok());
@@ -251,11 +256,9 @@ mod run_with_client_and_storage_tests {
         };
 
         let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid repository format")
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid input: Invalid repository format: invalid-format. Expected owner/repo"
         );
     }
 
@@ -342,11 +345,9 @@ mod run_with_client_and_storage_tests {
         )
         .await;
         if expect_err {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Cannot edit other user's comment")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Cannot edit other user's comment: 001_comment_12345.md (author: otheruser). Use --edit-others to allow."
             );
         } else {
             assert!(result.is_ok());
@@ -373,11 +374,10 @@ mod run_with_client_and_storage_tests {
         )
         .await;
         assert!(result.is_ok());
-        assert!(
-            fs::read_to_string(test_dir.path().join("metadata.json"))
-                .unwrap()
-                .contains("2024-01-03")
-        );
+
+        let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
+        assert_eq!(metadata["updatedAt"], "2024-01-03T00:00:00+00:00");
     }
 }
 
@@ -385,21 +385,14 @@ mod format_diff_tests {
     use super::*;
 
     #[rstest]
-    #[case::no_changes("a\n", "a\n", vec![" a"])]
-    #[case::add_line("a\n", "a\nb\n", vec![" a", "+b"])]
-    #[case::delete_line("a\nb\n", "a\n", vec![" a", "-b"])]
-    #[case::modify("old\n", "new\n", vec!["-old", "+new"])]
-    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", vec![" a", "-old", "+new", " c"])]
-    #[case::empty_both("", "", vec![])]
-    fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: Vec<&str>) {
+    #[case::no_changes("a\n", "a\n", " a\n")]
+    #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
+    #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
+    #[case::modify("old\n", "new\n", "-old\n+new\n")]
+    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
+    #[case::empty_both("", "", "")]
+    fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
         let diff = format_diff(old, new);
-        for line in expected {
-            assert!(
-                diff.contains(line),
-                "Expected '{}' in diff:\n{}",
-                line,
-                diff
-            );
-        }
+        assert_eq!(diff, expected);
     }
 }

@@ -39,10 +39,54 @@ where
     Ok(format_issue_view(&issue, issue_number, &comments))
 }
 
+/// Internal implementation that accepts a custom time formatter for testability.
+#[cfg(test)]
+async fn run_with_client_and_output_with<C, F>(
+    args: &ViewArgs,
+    client: &C,
+    time_formatter: F,
+) -> Result<String, Box<dyn std::error::Error>>
+where
+    C: IssueClient + CommentClient,
+    F: Fn(&str) -> String,
+{
+    let repo_str = get_repo_from_arg_or_git(&args.issue.repo)?;
+    let (owner, repo) = parse_repo(&repo_str)?;
+    let issue_number = args.issue.issue_number;
+
+    let (issue, comments) = tokio::try_join!(
+        client.get_issue(&owner, &repo, issue_number),
+        client.get_comments(&owner, &repo, issue_number)
+    )?;
+
+    Ok(format_issue_view_with(
+        &issue,
+        issue_number,
+        &comments,
+        time_formatter,
+    ))
+}
+
 /// Format the complete view output for an issue and its comments.
 fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> String {
     let mut output = format_issue(issue, issue_number, comments.len());
     output.push_str(&format_comments(comments));
+    output
+}
+
+/// Testable version that accepts a custom time formatter.
+#[cfg(test)]
+fn format_issue_view_with<F>(
+    issue: &Issue,
+    issue_number: u64,
+    comments: &[Comment],
+    time_formatter: F,
+) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let mut output = format_issue_with(issue, issue_number, comments.len(), &time_formatter);
+    output.push_str(&format_comments_with(comments, &time_formatter));
     output
 }
 
@@ -55,6 +99,18 @@ fn format_state(state: &str) -> &str {
 }
 
 fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> String {
+    format_issue_with(issue, issue_number, comment_count, format_relative_time)
+}
+
+fn format_issue_with<F>(
+    issue: &Issue,
+    issue_number: u64,
+    comment_count: usize,
+    time_formatter: F,
+) -> String
+where
+    F: Fn(&str) -> String,
+{
     let mut output = String::new();
 
     // Title line
@@ -67,7 +123,7 @@ fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> Strin
         .as_ref()
         .map(|a| a.login.as_str())
         .unwrap_or("unknown");
-    let relative_time = format_relative_time(&issue.created_at.to_rfc3339());
+    let relative_time = time_formatter(&issue.created_at.to_rfc3339());
     let state_display = format_state(&issue.state);
     output.push_str(&format!(
         "{} • {} opened {} • {} comment{}\n",
@@ -102,6 +158,13 @@ fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> Strin
 }
 
 fn format_comments(comments: &[Comment]) -> String {
+    format_comments_with(comments, format_relative_time)
+}
+
+fn format_comments_with<F>(comments: &[Comment], time_formatter: F) -> String
+where
+    F: Fn(&str) -> String,
+{
     let mut output = String::new();
 
     for comment in comments {
@@ -114,7 +177,7 @@ fn format_comments(comments: &[Comment]) -> String {
             .as_ref()
             .map(|a| a.login.as_str())
             .unwrap_or("unknown");
-        let relative_time = format_relative_time(&comment.created_at.to_rfc3339());
+        let relative_time = time_formatter(&comment.created_at.to_rfc3339());
         output.push_str(&format!("{} • {}\n", author, relative_time));
 
         output.push('\n');
@@ -129,6 +192,11 @@ mod tests {
     use super::*;
     use crate::testing::factories;
     use rstest::rstest;
+
+    /// Fixed time formatter for deterministic test output.
+    fn fixed_time(_: &str) -> String {
+        "2 hours ago".to_string()
+    }
 
     #[rstest]
     #[case::open("OPEN", "Open")]
@@ -146,13 +214,18 @@ mod tests {
             i.body = Some("This is the issue body.".to_string());
         });
 
-        let output = format_issue(&issue, 123, 0);
+        let output = format_issue_with(&issue, 123, 0, fixed_time);
 
-        assert!(output.contains("Test Issue Title #123"));
-        assert!(output.contains("Open"));
-        assert!(output.contains("testuser"));
-        assert!(output.contains("0 comments"));
-        assert!(output.contains("  This is the issue body."));
+        assert_eq!(
+            output,
+            "\
+Test Issue Title #123
+
+Open • testuser opened 2 hours ago • 0 comments
+
+  This is the issue body.
+"
+        );
     }
 
     #[test]
@@ -165,57 +238,107 @@ mod tests {
             i.assignees = factories::assignees(&["dev1", "dev2"]);
         });
 
-        let output = format_issue(&issue, 42, 5);
+        let output = format_issue_with(&issue, 42, 5, fixed_time);
 
-        assert!(output.contains("Bug Report #42"));
-        assert!(output.contains("Labels: bug, urgent"));
-        assert!(output.contains("Assignees: dev1, dev2"));
-        assert!(output.contains("5 comments"));
+        assert_eq!(
+            output,
+            "\
+Bug Report #42
+
+Open • reporter opened 2 hours ago • 5 comments
+Labels: bug, urgent
+Assignees: dev1, dev2
+
+  Found a bug.
+"
+        );
     }
 
     #[rstest]
-    #[case::zero(0, "0 comments")]
-    #[case::one(1, "1 comment\n")]
-    #[case::two(2, "2 comments")]
-    #[case::many(10, "10 comments")]
+    #[case::zero(0, "Open • testuser opened 2 hours ago • 0 comments\n")]
+    #[case::one(1, "Open • testuser opened 2 hours ago • 1 comment\n")]
+    #[case::two(2, "Open • testuser opened 2 hours ago • 2 comments\n")]
+    #[case::many(10, "Open • testuser opened 2 hours ago • 10 comments\n")]
     fn test_format_issue_comment_count(#[case] count: usize, #[case] expected: &str) {
         let issue = factories::issue();
-        let output = format_issue(&issue, 1, count);
-        assert!(output.contains(expected));
+        let output = format_issue_with(&issue, 1, count, fixed_time);
+        assert_eq!(
+            output,
+            format!(
+                "\
+Test Issue #1
+
+{expected}
+  Test body
+"
+            )
+        );
     }
 
     #[rstest]
-    #[case::none(None, "No description provided.")]
-    #[case::empty(Some(""), "No description provided.")]
-    #[case::with_body(Some("Issue body"), "  Issue body")]
-    fn test_format_issue_body(#[case] body: Option<&str>, #[case] expected: &str) {
+    #[case::none(None, "  No description provided.\n")]
+    #[case::empty(Some(""), "  No description provided.\n")]
+    #[case::with_body(Some("Issue body"), "  Issue body\n")]
+    fn test_format_issue_body(#[case] body: Option<&str>, #[case] expected_body: &str) {
         let issue = factories::issue_with(|i| i.body = body.map(|s| s.to_string()));
-        let output = format_issue(&issue, 1, 0);
-        assert!(output.contains(expected));
+        let output = format_issue_with(&issue, 1, 0, fixed_time);
+        assert_eq!(
+            output,
+            format!(
+                "\
+Test Issue #1
+
+Open • testuser opened 2 hours ago • 0 comments
+
+{expected_body}"
+            )
+        );
     }
 
     #[rstest]
-    #[case::with_author(Some("testuser"), "testuser opened")]
-    #[case::no_author(None, "unknown opened")]
-    fn test_format_issue_author(#[case] author: Option<&str>, #[case] expected: &str) {
+    #[case::with_author(Some("testuser"), "testuser")]
+    #[case::no_author(None, "unknown")]
+    fn test_format_issue_author(#[case] author: Option<&str>, #[case] expected_author: &str) {
         let issue = factories::issue_with(|i| i.author = author.map(factories::author));
-        let output = format_issue(&issue, 1, 0);
-        assert!(output.contains(expected));
+        let output = format_issue_with(&issue, 1, 0, fixed_time);
+        assert_eq!(
+            output,
+            format!(
+                "\
+Test Issue #1
+
+Open • {expected_author} opened 2 hours ago • 0 comments
+
+  Test body
+"
+            )
+        );
     }
 
     #[rstest]
     #[case::open("OPEN", "Open")]
     #[case::closed("CLOSED", "Closed")]
-    fn test_format_issue_state_display(#[case] state: &str, #[case] expected: &str) {
+    fn test_format_issue_state_display(#[case] state: &str, #[case] expected_state: &str) {
         let issue = factories::issue_with(|i| i.state = state.to_string());
-        let output = format_issue(&issue, 1, 0);
-        assert!(output.contains(expected));
+        let output = format_issue_with(&issue, 1, 0, fixed_time);
+        assert_eq!(
+            output,
+            format!(
+                "\
+Test Issue #1
+
+{expected_state} • testuser opened 2 hours ago • 0 comments
+
+  Test body
+"
+            )
+        );
     }
 
     #[test]
     fn test_format_comments_empty() {
-        let output = format_comments(&[]);
-        assert!(output.is_empty());
+        let output = format_comments_with(&[], fixed_time);
+        assert_eq!(output, "");
     }
 
     #[test]
@@ -225,11 +348,18 @@ mod tests {
             c.body = "This is a comment.".to_string();
         })];
 
-        let output = format_comments(&comments);
+        let output = format_comments_with(&comments, fixed_time);
 
-        assert!(output.contains("──────────────────────────────────────────────────────"));
-        assert!(output.contains("commenter"));
-        assert!(output.contains("  This is a comment."));
+        assert_eq!(
+            output,
+            "
+──────────────────────────────────────────────────────
+
+commenter • 2 hours ago
+
+  This is a comment.
+"
+        );
     }
 
     #[test]
@@ -245,31 +375,47 @@ mod tests {
             }),
         ];
 
-        let output = format_comments(&comments);
+        let output = format_comments_with(&comments, fixed_time);
 
-        assert!(output.contains("user1"));
-        assert!(output.contains("First comment."));
-        assert!(output.contains("user2"));
-        assert!(output.contains("Second comment."));
-        // Should have 2 separators
         assert_eq!(
-            output
-                .matches("──────────────────────────────────────────────────────")
-                .count(),
-            2
+            output,
+            "
+──────────────────────────────────────────────────────
+
+user1 • 2 hours ago
+
+  First comment.
+
+──────────────────────────────────────────────────────
+
+user2 • 2 hours ago
+
+  Second comment.
+"
         );
     }
 
     #[rstest]
-    #[case::with_author(Some("commenter"), "commenter •")]
-    #[case::no_author(None, "unknown •")]
-    fn test_format_comments_author(#[case] author: Option<&str>, #[case] expected: &str) {
+    #[case::with_author(Some("commenter"), "commenter")]
+    #[case::no_author(None, "unknown")]
+    fn test_format_comments_author(#[case] author: Option<&str>, #[case] expected_author: &str) {
         let comments = vec![factories::comment_with(|c| {
             c.author = author.map(factories::author);
             c.body = "Comment body.".to_string();
         })];
-        let output = format_comments(&comments);
-        assert!(output.contains(expected));
+        let output = format_comments_with(&comments, fixed_time);
+        assert_eq!(
+            output,
+            format!(
+                "
+──────────────────────────────────────────────────────
+
+{expected_author} • 2 hours ago
+
+  Comment body.
+"
+            )
+        );
     }
 
     #[test]
@@ -285,17 +431,25 @@ mod tests {
             c.body = "Looks good!".to_string();
         })];
 
-        let output = format_issue_view(&issue, 99, &comments);
+        let output = format_issue_view_with(&issue, 99, &comments, fixed_time);
 
-        // Issue part
-        assert!(output.contains("Feature Request #99"));
-        assert!(output.contains("Labels: enhancement"));
-        assert!(output.contains("Add new feature."));
+        assert_eq!(
+            output,
+            "\
+Feature Request #99
 
-        // Comment part
-        assert!(output.contains("──────────────────────────────────────────────────────"));
-        assert!(output.contains("reviewer"));
-        assert!(output.contains("Looks good!"));
+Open • author opened 2 hours ago • 1 comment
+Labels: enhancement
+
+  Add new feature.
+
+──────────────────────────────────────────────────────
+
+reviewer • 2 hours ago
+
+  Looks good!
+"
+        );
     }
 
     mod run_with_client_tests {
@@ -343,18 +497,33 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output(&args, &client).await.unwrap();
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
 
-            // Verify issue content
-            assert!(output.contains("Test Issue #123"));
-            assert!(output.contains("Test body content"));
-            assert!(output.contains("Labels: bug"));
+            assert_eq!(
+                output,
+                "\
+Test Issue #123
 
-            // Verify comments
-            assert!(output.contains("commenter1"));
-            assert!(output.contains("First comment"));
-            assert!(output.contains("commenter2"));
-            assert!(output.contains("Second comment"));
+Open • testuser opened 2 hours ago • 2 comments
+Labels: bug
+
+  Test body content
+
+──────────────────────────────────────────────────────
+
+commenter1 • 2 hours ago
+
+  First comment
+
+──────────────────────────────────────────────────────
+
+commenter2 • 2 hours ago
+
+  Second comment
+"
+            );
         }
 
         #[tokio::test]
@@ -371,12 +540,21 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output(&args, &client).await.unwrap();
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
 
-            assert!(output.contains("No Comments Issue #42"));
-            assert!(output.contains("0 comments"));
-            // No comment separators
-            assert!(!output.contains("──────────────────────────────────────────────────────"));
+            assert_eq!(
+                output,
+                "\
+No Comments Issue #42
+
+Open • testuser opened 2 hours ago • 0 comments
+Labels: bug
+
+  Body without comments
+"
+            );
         }
 
         #[tokio::test]
@@ -407,11 +585,9 @@ mod tests {
 
             let result = run_with_client_and_output(&args, &client).await;
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid repository format")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Invalid input: Invalid repository format: invalid-repo-format. Expected owner/repo"
             );
         }
 
@@ -434,10 +610,21 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output(&args, &client).await.unwrap();
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
 
-            assert!(output.contains("Empty Body Issue #10"));
-            assert!(output.contains("No description provided."));
+            assert_eq!(
+                output,
+                "\
+Empty Body Issue #10
+
+Open • testuser opened 2 hours ago • 0 comments
+Labels: bug
+
+  No description provided.
+"
+            );
         }
 
         #[tokio::test]
@@ -459,9 +646,21 @@ mod tests {
                 },
             };
 
-            let output = run_with_client_and_output(&args, &client).await.unwrap();
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
 
-            assert!(output.contains("Labels: bug, enhancement, help wanted"));
+            assert_eq!(
+                output,
+                "\
+Multi Label Issue #15
+
+Open • testuser opened 2 hours ago • 0 comments
+Labels: bug, enhancement, help wanted
+
+  Body
+"
+            );
         }
     }
 }
