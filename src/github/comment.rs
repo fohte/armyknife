@@ -41,17 +41,24 @@ pub trait CommentClient: Send + Sync {
     async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()>;
 }
 
-/// GraphQL response for fetching comments.
+/// GraphQL response wrapper containing the data field.
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct GraphQLCommentsResponse {
-    repository: Option<RepositoryData>,
+    data: GraphQLCommentsData,
+}
+
+/// GraphQL data field for fetching comments.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct GraphQLCommentsData {
+    repository: RepositoryData,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RepositoryData {
-    issue: Option<IssueData>,
+    issue: IssueData,
 }
 
 #[allow(dead_code)]
@@ -118,13 +125,12 @@ impl CommentClient for OctocrabClient {
 
         let response: GraphQLCommentsResponse = self.graphql(GET_COMMENTS_QUERY, variables).await?;
 
-        let comments = response
+        Ok(response
+            .data
             .repository
-            .and_then(|r| r.issue)
-            .map(|i| i.comments.nodes)
-            .unwrap_or_default();
-
-        Ok(comments
+            .issue
+            .comments
+            .nodes
             .into_iter()
             .map(|c| crate::gh::issue_agent::models::Comment {
                 id: c.id,
