@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.25](https://github.com/fohte/armyknife/compare/v0.1.24...v0.1.25) (2026-01-19)
+
+
+### Features
+
+* **gh:** add `a gh issue-agent` command ([#80](https://github.com/fohte/armyknife/issues/80)) ([a80b9ee](https://github.com/fohte/armyknife/commit/a80b9ee9c99102c8817bb54a0feab2d4306c4ae5))
+
 ## [0.1.24](https://github.com/fohte/armyknife/compare/v0.1.23...v0.1.24) (2026-01-15)
 
 
