@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.26](https://github.com/fohte/armyknife/compare/v0.1.25...v0.1.26) (2026-01-20)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** retrieve issue comments correctly from GitHub API ([#103](https://github.com/fohte/armyknife/issues/103)) ([3acf53b](https://github.com/fohte/armyknife/commit/3acf53b02747095b09cfdfe329aeef2cf481b005))
+
 ## [0.1.25](https://github.com/fohte/armyknife/compare/v0.1.24...v0.1.25) (2026-01-19)
 
 
