@@ -54,6 +54,10 @@ impl OctocrabClient {
     }
 
     /// Execute a GraphQL query and deserialize the response.
+    ///
+    /// The type parameter `T` should be the full response structure.
+    /// For most queries, use `GraphQLResponse<YourDataType>` to automatically
+    /// handle the `data` wrapper field.
     pub async fn graphql<T: serde::de::DeserializeOwned>(
         &self,
         query: &str,
