@@ -12,6 +12,8 @@ pub mod mock;
 mod pr;
 mod repo;
 
+#[allow(unused_imports)]
+pub use client::GraphQLResponse;
 pub use client::OctocrabClient;
 #[allow(unused_imports)]
 pub use comment::CommentClient;

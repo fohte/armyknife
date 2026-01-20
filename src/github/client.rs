@@ -3,7 +3,20 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+use serde::Deserialize;
+
 use super::error::{GitHubError, Result};
+
+/// Generic wrapper for GitHub GraphQL API responses.
+///
+/// All GitHub GraphQL responses wrap the actual data in a `data` field.
+/// Using this wrapper ensures correct deserialization and makes errors
+/// explicit if the response structure is incorrect.
+#[derive(Debug, Deserialize)]
+pub struct GraphQLResponse<T> {
+    /// The actual response data from the GraphQL query.
+    pub data: T,
+}
 
 /// Production implementation using octocrab.
 pub struct OctocrabClient {

@@ -3,7 +3,7 @@
 use indoc::indoc;
 use serde::Deserialize;
 
-use super::client::OctocrabClient;
+use super::client::{GraphQLResponse, OctocrabClient};
 use super::error::Result;
 
 /// Trait for comment operations.
@@ -41,17 +41,10 @@ pub trait CommentClient: Send + Sync {
     async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()>;
 }
 
-/// GraphQL response wrapper containing the data field.
+/// GraphQL data for fetching comments.
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-struct GraphQLCommentsResponse {
-    data: GraphQLCommentsData,
-}
-
-/// GraphQL data field for fetching comments.
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct GraphQLCommentsData {
+struct GetCommentsData {
     repository: RepositoryData,
 }
 
@@ -123,7 +116,8 @@ impl CommentClient for OctocrabClient {
             "number": issue_number as i64,
         });
 
-        let response: GraphQLCommentsResponse = self.graphql(GET_COMMENTS_QUERY, variables).await?;
+        let response: GraphQLResponse<GetCommentsData> =
+            self.graphql(GET_COMMENTS_QUERY, variables).await?;
 
         Ok(response
             .data
