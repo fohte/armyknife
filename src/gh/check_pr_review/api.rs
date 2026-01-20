@@ -53,17 +53,6 @@ const GRAPHQL_QUERY: &str = indoc! {"
 "};
 
 #[derive(Debug, Deserialize)]
-struct GraphQLResponse {
-    data: Option<GraphQLData>,
-    errors: Option<Vec<GraphQLError>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLError {
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct GraphQLData {
     repository: Option<Repository>,
 }
@@ -185,14 +174,5 @@ async fn execute_graphql(
         "reviewCursor": pagination.review_cursor,
     });
 
-    let response: GraphQLResponse = client.graphql(GRAPHQL_QUERY, variables).await?;
-
-    if let Some(errors) = response.errors {
-        let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        return Err(CheckPrReviewError::GraphQLError(messages.join(", ")));
-    }
-
-    response
-        .data
-        .ok_or_else(|| CheckPrReviewError::GraphQLError("No data in response".to_string()))
+    Ok(client.graphql(GRAPHQL_QUERY, variables).await?)
 }

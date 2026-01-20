@@ -3,7 +3,24 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+use serde::Deserialize;
+
 use super::error::{GitHubError, Result};
+
+/// Internal wrapper for GitHub GraphQL API responses.
+///
+/// Used internally by `graphql` method to handle the `data` wrapper and errors.
+#[derive(Debug, Deserialize)]
+struct GraphQLResponse<T> {
+    data: Option<T>,
+    errors: Option<Vec<GraphQLError>>,
+}
+
+/// GraphQL error returned by GitHub API.
+#[derive(Debug, Deserialize)]
+struct GraphQLError {
+    message: String,
+}
 
 /// Production implementation using octocrab.
 pub struct OctocrabClient {
@@ -41,6 +58,10 @@ impl OctocrabClient {
     }
 
     /// Execute a GraphQL query and deserialize the response.
+    ///
+    /// Automatically handles the `data` wrapper and `errors` field from GitHub
+    /// GraphQL responses. Returns the unwrapped data on success, or an error
+    /// if the response contains GraphQL errors.
     pub async fn graphql<T: serde::de::DeserializeOwned>(
         &self,
         query: &str,
@@ -50,8 +71,16 @@ impl OctocrabClient {
             "query": query,
             "variables": variables,
         });
-        let response: T = self.client.graphql(&body).await?;
-        Ok(response)
+        let response: GraphQLResponse<T> = self.client.graphql(&body).await?;
+
+        if let Some(errors) = response.errors {
+            let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            return Err(GitHubError::GraphQLError(messages.join(", ")));
+        }
+
+        response
+            .data
+            .ok_or_else(|| GitHubError::GraphQLError("No data in response".to_string()))
     }
 }
 
