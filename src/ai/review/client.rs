@@ -86,11 +86,6 @@ const PR_INFO_QUERY: &str = indoc! {"
 "};
 
 #[derive(Debug, Deserialize)]
-struct PrInfoResponse {
-    data: Option<PrInfoData>,
-}
-
-#[derive(Debug, Deserialize)]
 struct PrInfoData {
     repository: Option<PrInfoRepository>,
 }
@@ -155,11 +150,10 @@ impl OctocrabReviewClient {
             "pr": pr_number,
         });
 
-        let response: PrInfoResponse = client.graphql(PR_INFO_QUERY, variables).await?;
+        let response: PrInfoData = client.graphql(PR_INFO_QUERY, variables).await?;
 
         response
-            .data
-            .and_then(|d| d.repository)
+            .repository
             .and_then(|r| r.pull_request)
             .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()))
     }

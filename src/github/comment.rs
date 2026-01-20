@@ -3,7 +3,7 @@
 use indoc::indoc;
 use serde::Deserialize;
 
-use super::client::{GraphQLResponse, OctocrabClient};
+use super::client::OctocrabClient;
 use super::error::Result;
 
 /// Trait for comment operations.
@@ -116,11 +116,9 @@ impl CommentClient for OctocrabClient {
             "number": issue_number as i64,
         });
 
-        let response: GraphQLResponse<GetCommentsData> =
-            self.graphql(GET_COMMENTS_QUERY, variables).await?;
+        let response: GetCommentsData = self.graphql(GET_COMMENTS_QUERY, variables).await?;
 
         Ok(response
-            .data
             .repository
             .issue
             .comments

@@ -14,6 +14,9 @@ pub enum GitHubError {
 
     #[error("PR created but no URL in response")]
     MissingPrUrl,
+
+    #[error("GraphQL error: {0}")]
+    GraphQLError(String),
 }
 
 /// Format octocrab::Error to extract detailed error information from GitHub API responses.

@@ -7,15 +7,19 @@ use serde::Deserialize;
 
 use super::error::{GitHubError, Result};
 
-/// Generic wrapper for GitHub GraphQL API responses.
+/// Internal wrapper for GitHub GraphQL API responses.
 ///
-/// All GitHub GraphQL responses wrap the actual data in a `data` field.
-/// Using this wrapper ensures correct deserialization and makes errors
-/// explicit if the response structure is incorrect.
+/// Used internally by `graphql` method to handle the `data` wrapper and errors.
 #[derive(Debug, Deserialize)]
-pub struct GraphQLResponse<T> {
-    /// The actual response data from the GraphQL query.
-    pub data: T,
+struct GraphQLResponse<T> {
+    data: Option<T>,
+    errors: Option<Vec<GraphQLError>>,
+}
+
+/// GraphQL error returned by GitHub API.
+#[derive(Debug, Deserialize)]
+struct GraphQLError {
+    message: String,
 }
 
 /// Production implementation using octocrab.
@@ -55,9 +59,9 @@ impl OctocrabClient {
 
     /// Execute a GraphQL query and deserialize the response.
     ///
-    /// The type parameter `T` should be the full response structure.
-    /// For most queries, use `GraphQLResponse<YourDataType>` to automatically
-    /// handle the `data` wrapper field.
+    /// Automatically handles the `data` wrapper and `errors` field from GitHub
+    /// GraphQL responses. Returns the unwrapped data on success, or an error
+    /// if the response contains GraphQL errors.
     pub async fn graphql<T: serde::de::DeserializeOwned>(
         &self,
         query: &str,
@@ -67,8 +71,16 @@ impl OctocrabClient {
             "query": query,
             "variables": variables,
         });
-        let response: T = self.client.graphql(&body).await?;
-        Ok(response)
+        let response: GraphQLResponse<T> = self.client.graphql(&body).await?;
+
+        if let Some(errors) = response.errors {
+            let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            return Err(GitHubError::GraphQLError(messages.join(", ")));
+        }
+
+        response
+            .data
+            .ok_or_else(|| GitHubError::GraphQLError("No data in response".to_string()))
     }
 }
 
