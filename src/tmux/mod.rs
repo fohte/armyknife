@@ -236,7 +236,7 @@ pub fn create_split_window(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(TmuxError::CommandFailed(format!(
-            "tmux new-window failed: {}",
+            "tmux create-split-window failed: {}",
             stderr.trim()
         )));
     }
