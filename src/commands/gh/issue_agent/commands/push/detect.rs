@@ -80,7 +80,7 @@ pub(super) fn detect_comment_changes<'a>(
     current_user: &'a str,
     edit_others: bool,
     allow_delete: bool,
-) -> Result<Vec<CommentChange<'a>>, Box<dyn std::error::Error>> {
+) -> anyhow::Result<Vec<CommentChange<'a>>> {
     let remote_comments_map: HashMap<&str, &Comment> =
         remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
 
@@ -124,7 +124,7 @@ pub(super) fn detect_comment_changes<'a>(
         let database_id = local_comment
             .metadata
             .database_id
-            .ok_or("Comment missing databaseId")?;
+            .ok_or_else(|| anyhow::anyhow!("Comment missing databaseId"))?;
 
         changes.push(CommentChange::Updated {
             filename: &local_comment.filename,
@@ -171,21 +171,20 @@ pub(super) fn check_can_delete_comment(
     current_user: &str,
     allow_delete: bool,
     database_id: i64,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     if allow_delete {
         Ok(())
     } else if comment_author == current_user {
-        Err(format!(
+        anyhow::bail!(
             "Cannot delete comment (database_id: {}). Use --allow-delete to allow.",
             database_id
         )
-        .into())
     } else {
-        Err(format!(
+        anyhow::bail!(
             "Cannot delete other user's comment (database_id: {}, author: {}). Use --allow-delete to allow.",
-            database_id, comment_author
+            database_id,
+            comment_author
         )
-        .into())
     }
 }
 
@@ -196,15 +195,15 @@ pub(super) fn check_can_edit_comment(
     current_user: &str,
     edit_others: bool,
     filename: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     if comment_author == current_user || edit_others {
         Ok(())
     } else {
-        Err(format!(
+        anyhow::bail!(
             "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
-            filename, comment_author
+            filename,
+            comment_author
         )
-        .into())
     }
 }
 

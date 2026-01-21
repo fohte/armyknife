@@ -1,5 +1,7 @@
 use std::process::Command;
 
+use anyhow::Context;
+
 use super::{Backend, check_command_status, extract_first_line};
 use crate::commands::name_branch::error::Result;
 
@@ -13,11 +15,7 @@ impl Backend for OpenCode {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
-            .map_err(|e| {
-                crate::commands::name_branch::error::Error::GenerationFailed(format!(
-                    "Failed to run opencode: {e}"
-                ))
-            })?;
+            .context("Failed to run opencode")?;
 
         check_command_status(&output, "opencode")?;
         extract_first_line(&output.stdout, "opencode")

@@ -38,7 +38,7 @@ pub struct PushArgs {
     pub allow_delete: bool,
 }
 
-pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -49,11 +49,11 @@ pub async fn run(args: &PushArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Check if local cache exists
     if !storage.dir().exists() {
-        return Err(format!(
+        anyhow::bail!(
             "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
-            issue_number, issue_number
-        )
-        .into());
+            issue_number,
+            issue_number
+        );
     }
 
     println!("Fetching latest from GitHub...");
@@ -72,7 +72,7 @@ pub(super) async fn run_with_client_and_storage<C>(
     client: &C,
     storage: &IssueStorage,
     current_user: &str,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {
@@ -84,7 +84,7 @@ async fn run_with_client_and_user<C>(
     client: &C,
     storage: &IssueStorage,
     current_user: &str,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {
@@ -111,9 +111,8 @@ where
         eprintln!();
         eprintln!("{}", msg);
         eprintln!();
-        return Err(
+        anyhow::bail!(
             "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
-                .into(),
         );
     }
 
@@ -171,7 +170,7 @@ fn print_result(dry_run: bool, has_changes: bool) {
 }
 
 /// Get current GitHub user from the API.
-async fn get_current_user(client: &OctocrabClient) -> Result<String, Box<dyn std::error::Error>> {
+async fn get_current_user(client: &OctocrabClient) -> anyhow::Result<String> {
     let user = client.client.current().user().await?;
     Ok(user.login)
 }

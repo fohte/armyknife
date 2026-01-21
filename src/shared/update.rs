@@ -111,7 +111,7 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-pub fn do_update() -> Result<(), Box<dyn std::error::Error>> {
+pub fn do_update() -> anyhow::Result<()> {
     let mut builder = base_update_builder();
     let status = builder.show_download_progress(true).build()?.update()?;
 

@@ -12,16 +12,15 @@ pub use git::parse_repo;
 ///
 /// If a repo argument is provided, returns it directly.
 /// Otherwise, attempts to determine the repository from git remote origin.
-pub fn get_repo_from_arg_or_git(
-    repo_arg: &Option<String>,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<String> {
     if let Some(repo) = repo_arg {
         return Ok(repo.clone());
     }
 
     // Get from git remote origin
-    let (owner, repo) = git::get_owner_repo()
-        .ok_or("Failed to determine current repository. Use -R to specify.")?;
+    let (owner, repo) = git::get_owner_repo().ok_or_else(|| {
+        anyhow::anyhow!("Failed to determine current repository. Use -R to specify.")
+    })?;
 
     Ok(format!("{}/{}", owner, repo))
 }

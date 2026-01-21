@@ -174,5 +174,5 @@ async fn execute_graphql(
         "reviewCursor": pagination.review_cursor,
     });
 
-    Ok(client.graphql(GRAPHQL_QUERY, variables).await?)
+    client.graphql(GRAPHQL_QUERY, variables).await
 }

@@ -76,7 +76,7 @@ impl PrClient for OctocrabClient {
 
         pr.html_url
             .map(|u| u.to_string())
-            .ok_or_else(|| GitHubError::MissingPrUrl)
+            .ok_or_else(|| GitHubError::MissingPrUrl.into())
     }
 
     async fn get_pr_for_branch(

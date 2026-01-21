@@ -19,7 +19,7 @@ pub enum ReviewCommands {
 }
 
 impl ReviewCommands {
-    pub async fn run(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::Request(args) => {
                 request::run(args).await?;

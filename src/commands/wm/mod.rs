@@ -27,7 +27,7 @@ pub enum WmCommands {
 }
 
 impl WmCommands {
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::List(args) => list::run(args),
             Self::New(args) => new::run(args),

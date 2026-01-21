@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use git2::Repository;
 use std::io::{self, Write};
@@ -22,16 +23,11 @@ struct CleanWorktreeInfo {
     reason: String,
 }
 
-pub async fn run(args: &CleanArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_inner(args).await?;
-    Ok(())
-}
-
-async fn run_inner(args: &CleanArgs) -> Result<()> {
+pub async fn run(args: &CleanArgs) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
-    fetch_with_prune(&main_repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    fetch_with_prune(&main_repo).context("Failed to fetch from remote")?;
 
     let (to_delete, to_skip) = collect_worktrees(&main_repo).await?;
 

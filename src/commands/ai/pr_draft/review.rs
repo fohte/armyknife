@@ -3,7 +3,7 @@ use indoc::formatdoc;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::common::{DraftFile, Frontmatter, PrDraftError, RepoInfo};
+use super::common::{DraftFile, Frontmatter, RepoInfo};
 use crate::shared::human_in_the_loop::{
     Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
 };
@@ -78,12 +78,12 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
     }
 }
 
-pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let (draft_path, owner, repo, branch) = match &args.filepath {
         Some(path) => {
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 let display = path.display();
-                PrDraftError::CommandFailed(format!("Invalid draft path: {display}"))
+                anyhow::anyhow!("Invalid draft path: {display}")
             })?;
             (path.clone(), owner, repo, branch)
         }
@@ -101,7 +101,7 @@ pub fn run(args: &ReviewArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn run_complete(args: &ReviewCompleteArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     complete_review::<Frontmatter, _>(
         &args.filepath,
         args.tmux_target.as_deref(),

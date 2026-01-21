@@ -11,16 +11,13 @@ pub struct RefreshArgs {
     pub issue: super::IssueArgs,
 }
 
-pub async fn run(args: &RefreshArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &RefreshArgs) -> anyhow::Result<()> {
     let client = OctocrabClient::get()?;
     run_with_client(args, client).await
 }
 
 /// Internal implementation that accepts a client for testability.
-async fn run_with_client<C>(
-    args: &RefreshArgs,
-    client: &C,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn run_with_client<C>(args: &RefreshArgs, client: &C) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {
@@ -54,7 +51,7 @@ async fn run_with_client_and_storage<C>(
     args: &RefreshArgs,
     client: &C,
     storage: &IssueStorage,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {

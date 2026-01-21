@@ -6,7 +6,9 @@ pub use opencode::OpenCode;
 
 use std::process::Output;
 
-use super::error::{Error, Result};
+use anyhow::bail;
+
+use super::error::Result;
 
 /// Backend trait for generating text from a prompt.
 ///
@@ -57,10 +59,11 @@ fn is_executable(path: &std::path::Path) -> bool {
 pub(super) fn check_command_status(output: &Output, command_name: &str) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::GenerationFailed(format!(
+        bail!(
             "{command_name} exited with status {}: {}",
-            output.status, stderr
-        )));
+            output.status,
+            stderr
+        );
     }
     Ok(())
 }
@@ -75,9 +78,7 @@ pub(super) fn extract_first_line(stdout: &[u8], command_name: &str) -> Result<St
         .to_string();
 
     if result.is_empty() {
-        return Err(Error::GenerationFailed(format!(
-            "{command_name} returned empty output"
-        )));
+        bail!("{command_name} returned empty output");
     }
 
     Ok(result)

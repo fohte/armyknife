@@ -9,7 +9,7 @@ use super::worktree::{get_main_worktree_info, get_main_worktree_path, list_linke
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}
 
-pub fn run(_args: &ListArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub fn run(_args: &ListArgs) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let entries = list_worktrees(&repo)?;
     print!("{}", format_worktree_list(&entries));

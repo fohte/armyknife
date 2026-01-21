@@ -18,7 +18,8 @@ pub fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String
         }
         return Err(ReviewError::RepoInfoError(format!(
             "Invalid repository format: {repo}. Expected owner/repo"
-        )));
+        ))
+        .into());
     }
 
     let repo = git::open_repo()?;
@@ -53,7 +54,7 @@ pub async fn get_pr_number(owner: &str, repo: &str, pr_arg: Option<u64>) -> Resu
                 })?;
             Ok(pr_number)
         }
-        _ => Err(ReviewError::NoPrFound),
+        _ => Err(ReviewError::NoPrFound.into()),
     }
 }
 
@@ -81,7 +82,7 @@ pub async fn wait_for_review(
         // Check timeout
         let elapsed = started_at.elapsed();
         if elapsed >= timeout_duration {
-            return Err(ReviewError::Timeout(config.timeout));
+            return Err(ReviewError::Timeout(config.timeout).into());
         }
 
         // Check for new review
@@ -98,7 +99,7 @@ pub async fn wait_for_review(
             .check_reviewer_unable_comment(owner, repo, pr_number, start_time, config.reviewer)
             .await?
         {
-            return Err(ReviewError::ReviewerUnable(unable_msg));
+            return Err(ReviewError::ReviewerUnable(unable_msg).into());
         }
 
         // Print progress
@@ -140,6 +141,10 @@ mod tests {
     fn test_get_repo_owner_and_name_invalid(#[case] input: &str) {
         let result = get_repo_owner_and_name(Some(input));
         assert!(result.is_err());
-        assert!(matches!(result, Err(ReviewError::RepoInfoError(_))));
+        let err = result.unwrap_err();
+        assert!(
+            err.downcast_ref::<ReviewError>()
+                .is_some_and(|e| matches!(e, ReviewError::RepoInfoError(_)))
+        );
     }
 }

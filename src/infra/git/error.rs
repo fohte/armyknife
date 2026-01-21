@@ -19,11 +19,8 @@ pub enum GitError {
     #[error("Git error: {0}")]
     Git2(#[from] git2::Error),
 
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
-
     #[error("Not found: {0}")]
     NotFound(String),
 }
 
-pub type Result<T> = std::result::Result<T, GitError>;
+pub type Result<T> = anyhow::Result<T>;

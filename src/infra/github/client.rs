@@ -3,6 +3,7 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+use anyhow::Context;
 use serde::Deserialize;
 
 use super::error::{GitHubError, Result};
@@ -41,9 +42,7 @@ impl OctocrabClient {
         let client = octocrab::Octocrab::builder()
             .personal_token(token)
             .build()
-            .map_err(|e| {
-                GitHubError::TokenError(format!("Failed to build octocrab client: {e}"))
-            })?;
+            .context("Failed to build octocrab client")?;
         Ok(Self { client })
     }
 
@@ -54,7 +53,7 @@ impl OctocrabClient {
         OCTOCRAB_CLIENT
             .get_or_init(|| Self::new().map_err(|e| e.to_string()))
             .as_ref()
-            .map_err(|e| GitHubError::TokenError(e.clone()))
+            .map_err(|e| GitHubError::TokenError(e.clone()).into())
     }
 
     /// Execute a GraphQL query and deserialize the response.
@@ -75,12 +74,12 @@ impl OctocrabClient {
 
         if let Some(errors) = response.errors {
             let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-            return Err(GitHubError::GraphQLError(messages.join(", ")));
+            return Err(GitHubError::GraphQLError(messages.join(", ")).into());
         }
 
         response
             .data
-            .ok_or_else(|| GitHubError::GraphQLError("No data in response".to_string()))
+            .ok_or_else(|| GitHubError::GraphQLError("No data in response".to_string()).into())
     }
 }
 
@@ -90,20 +89,18 @@ fn get_gh_token() -> Result<String> {
     let output = Command::new("gh")
         .args(["auth", "token"])
         .output()
-        .map_err(|e| GitHubError::TokenError(format!("Failed to run gh auth token: {e}")))?;
+        .context("Failed to run gh auth token")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitHubError::TokenError(format!(
-            "gh auth token failed: {stderr}"
-        )));
+        return Err(GitHubError::TokenError(format!("gh auth token failed: {stderr}")).into());
     }
 
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if token.is_empty() {
-        return Err(GitHubError::TokenError(
-            "gh auth token returned empty token".to_string(),
-        ));
+        return Err(
+            GitHubError::TokenError("gh auth token returned empty token".to_string()).into(),
+        );
     }
 
     Ok(token)

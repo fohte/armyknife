@@ -18,15 +18,12 @@ pub struct NewArgs {
     pub force: bool,
 }
 
-pub async fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &NewArgs) -> anyhow::Result<()> {
     let client = OctocrabClient::get()?;
     run_impl(args, client).await
 }
 
-async fn run_impl(
-    args: &NewArgs,
-    gh_client: &impl RepoClient,
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result<()> {
     let repo_info = RepoInfo::from_git_only()?;
     let draft_path = DraftFile::path_for(&repo_info);
 

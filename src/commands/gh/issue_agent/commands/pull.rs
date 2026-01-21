@@ -11,16 +11,13 @@ pub struct PullArgs {
     pub issue: super::IssueArgs,
 }
 
-pub async fn run(args: &PullArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &PullArgs) -> anyhow::Result<()> {
     let client = OctocrabClient::get()?;
     run_with_client(args, client).await
 }
 
 /// Internal implementation that accepts a client for testability.
-pub(super) async fn run_with_client<C>(
-    args: &PullArgs,
-    client: &C,
-) -> Result<(), Box<dyn std::error::Error>>
+pub(super) async fn run_with_client<C>(args: &PullArgs, client: &C) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {
@@ -41,8 +38,8 @@ where
 
     // Check for local changes before overwriting
     if storage.dir().exists() && storage.has_changes(&issue, &comments)? {
-        return Err(
-            "Local changes would be overwritten. Use 'refresh' to discard local changes.".into(),
+        anyhow::bail!(
+            "Local changes would be overwritten. Use 'refresh' to discard local changes."
         );
     }
 
@@ -61,7 +58,7 @@ pub(super) async fn run_with_client_and_storage<C>(
     args: &PullArgs,
     client: &C,
     storage: &IssueStorage,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> anyhow::Result<()>
 where
     C: IssueClient + CommentClient,
 {
@@ -78,8 +75,8 @@ where
 
     // Check for local changes before overwriting
     if storage.dir().exists() && storage.has_changes(&issue, &comments)? {
-        return Err(
-            "Local changes would be overwritten. Use 'refresh' to discard local changes.".into(),
+        anyhow::bail!(
+            "Local changes would be overwritten. Use 'refresh' to discard local changes."
         );
     }
 
@@ -94,7 +91,7 @@ pub(super) fn save_issue_to_storage(
     storage: &IssueStorage,
     issue: &crate::commands::gh::issue_agent::models::Issue,
     comments: &[crate::commands::gh::issue_agent::models::Comment],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     // Save issue body
     let body = issue.body.as_deref().unwrap_or("");
     storage.save_body(body)?;

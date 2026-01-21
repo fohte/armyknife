@@ -26,7 +26,7 @@ struct PrTarget {
     is_private: bool,
 }
 
-pub async fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = OctocrabClient::get()?;
     run_impl(args, client).await
 }
@@ -34,7 +34,7 @@ pub async fn run(args: &SubmitArgs) -> std::result::Result<(), Box<dyn std::erro
 async fn run_impl(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
         Some(path) => {
@@ -69,9 +69,7 @@ async fn run_impl(
 
     // Check for lock (editor still open)
     if DraftFile::lock_path(&draft_path).exists() {
-        return Err(Box::new(PrDraftError::CommandFailed(
-            "Please close the editor before submitting the PR.".to_string(),
-        )));
+        anyhow::bail!("Please close the editor before submitting the PR.");
     }
 
     let draft = DraftFile::from_path(draft_path.clone())?;
@@ -81,16 +79,16 @@ async fn run_impl(
 
     // Validate title
     if draft.frontmatter.title.trim().is_empty() {
-        return Err(Box::new(PrDraftError::EmptyTitle));
+        return Err(PrDraftError::EmptyTitle.into());
     }
 
     // For public repos, check for Japanese characters
     if !is_private {
         if contains_japanese(&draft.frontmatter.title) {
-            return Err(Box::new(PrDraftError::JapaneseInTitle));
+            return Err(PrDraftError::JapaneseInTitle.into());
         }
         if contains_japanese(&draft.body) {
-            return Err(Box::new(PrDraftError::JapaneseInBody));
+            return Err(PrDraftError::JapaneseInBody.into());
         }
     }
 

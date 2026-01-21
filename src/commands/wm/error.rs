@@ -14,9 +14,6 @@ pub enum WmError {
     #[error("Cancelled: no prompt provided")]
     Cancelled,
 
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -30,4 +27,4 @@ pub enum WmError {
     NameBranch(#[from] name_branch::Error),
 }
 
-pub type Result<T> = std::result::Result<T, WmError>;
+pub type Result<T> = anyhow::Result<T>;
