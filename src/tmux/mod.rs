@@ -47,8 +47,8 @@ pub fn get_session_name(repo_root: &str) -> String {
 pub fn session_exists(session: &str) -> bool {
     Command::new("tmux")
         .args(["has-session", "-t", session])
-        .status()
-        .map(|s| s.success())
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
@@ -58,13 +58,17 @@ pub fn ensure_session(session: &str, cwd: &str) -> Result<()> {
         return Ok(());
     }
 
-    let status = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["new-session", "-ds", session, "-c", cwd])
-        .status()
+        .output()
         .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
 
-    if !status.success() {
-        return Err(TmuxError::CommandFailed("tmux new-session failed".into()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(TmuxError::CommandFailed(format!(
+            "tmux new-session failed: {}",
+            stderr.trim()
+        )));
     }
 
     Ok(())
@@ -100,10 +104,18 @@ pub fn switch_to_session(target_session: &str) -> Result<()> {
         return Ok(());
     }
 
-    Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["switch-client", "-t", target_session])
-        .status()
+        .output()
         .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(TmuxError::CommandFailed(format!(
+            "tmux switch-client failed: {}",
+            stderr.trim()
+        )));
+    }
 
     Ok(())
 }
@@ -168,13 +180,17 @@ pub fn kill_window(window_id: &str) {
 /// Create a new window in a session.
 #[allow(dead_code)]
 pub fn new_window(session: &str, cwd: &str, window_name: &str) -> Result<()> {
-    let status = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["new-window", "-t", session, "-c", cwd, "-n", window_name])
-        .status()
+        .output()
         .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
 
-    if !status.success() {
-        return Err(TmuxError::CommandFailed("tmux new-window failed".into()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(TmuxError::CommandFailed(format!(
+            "tmux new-window failed: {}",
+            stderr.trim()
+        )));
     }
 
     Ok(())
@@ -212,13 +228,17 @@ pub fn create_split_window(
         args.extend_from_slice(cmd);
     }
 
-    let status = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(&args)
-        .status()
+        .output()
         .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
 
-    if !status.success() {
-        return Err(TmuxError::CommandFailed("tmux new-window failed".into()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(TmuxError::CommandFailed(format!(
+            "tmux new-window failed: {}",
+            stderr.trim()
+        )));
     }
 
     Ok(())
