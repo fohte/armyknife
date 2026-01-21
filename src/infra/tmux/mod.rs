@@ -1,7 +1,7 @@
 //! Tmux session and window management.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 
 use thiserror::Error;
 
@@ -33,44 +33,23 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 // Internal helpers for command execution
 // ============================================================================
 
-/// Execute a tmux command and return the raw Output.
-fn exec_tmux(args: &[&str]) -> std::io::Result<Output> {
-    Command::new("tmux").args(args).output()
-}
+/// Run a tmux command, returning Ok(stdout) on success.
+fn run_tmux(args: &[&str]) -> Result<String> {
+    let output = Command::new("tmux")
+        .args(args)
+        .output()
+        .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
 
-/// Run a tmux command, returning Ok(()) on success.
-fn run_tmux(args: &[&str]) -> Result<()> {
-    let output =
-        exec_tmux(args).map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
-
-    if !output.status.success() {
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TmuxError::command_failed(
+        Err(TmuxError::command_failed(
             args,
             "command exited with non-zero status",
             Some(stderr),
-        ));
+        ))
     }
-
-    Ok(())
-}
-
-/// Run a tmux command and return stdout as a String.
-#[allow(dead_code)]
-fn run_tmux_output(args: &[&str]) -> Result<String> {
-    let output =
-        exec_tmux(args).map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TmuxError::command_failed(
-            args,
-            "command exited with non-zero status",
-            Some(stderr),
-        ));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Query a tmux value using display-message with a format string.
@@ -80,13 +59,7 @@ fn query_tmux_value(format_string: &str) -> Option<String> {
         return None;
     }
 
-    let output = exec_tmux(&["display-message", "-p", format_string]).ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    run_tmux(&["display-message", "-p", format_string]).ok()
 }
 
 // ============================================================================
@@ -125,9 +98,7 @@ pub fn get_session_name(repo_root: &str) -> String {
 
 /// Check if a session exists.
 pub fn session_exists(session: &str) -> bool {
-    exec_tmux(&["has-session", "-t", session])
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    run_tmux(&["has-session", "-t", session]).is_ok()
 }
 
 /// Ensure a tmux session exists, creating it if necessary.
@@ -136,7 +107,7 @@ pub fn ensure_session(session: &str, cwd: &str) -> Result<()> {
         return Ok(());
     }
 
-    run_tmux(&["new-session", "-ds", session, "-c", cwd])
+    run_tmux(&["new-session", "-ds", session, "-c", cwd]).map(|_| ())
 }
 
 /// Get the current tmux session name.
@@ -156,7 +127,7 @@ pub fn switch_to_session(target_session: &str) -> Result<()> {
         return Ok(());
     }
 
-    run_tmux(&["switch-client", "-t", target_session])
+    run_tmux(&["switch-client", "-t", target_session]).map(|_| ())
 }
 
 /// Get the current pane's working directory.
@@ -184,13 +155,13 @@ pub fn get_window_id_if_in_path(path: &str) -> Option<String> {
 
 /// Kill a tmux window by its ID.
 pub fn kill_window(window_id: &str) {
-    let _ = exec_tmux(&["kill-window", "-t", window_id]);
+    let _ = run_tmux(&["kill-window", "-t", window_id]);
 }
 
 /// Create a new window in a session.
 #[allow(dead_code)]
 pub fn new_window(session: &str, cwd: &str, window_name: &str) -> Result<()> {
-    run_tmux(&["new-window", "-t", session, "-c", cwd, "-n", window_name])
+    run_tmux(&["new-window", "-t", session, "-c", cwd, "-n", window_name]).map(|_| ())
 }
 
 /// Create a new window with a horizontal split and run commands in each pane.
@@ -225,5 +196,5 @@ pub fn create_split_window(
         args.extend_from_slice(cmd);
     }
 
-    run_tmux(&args)
+    run_tmux(&args).map(|_| ())
 }
