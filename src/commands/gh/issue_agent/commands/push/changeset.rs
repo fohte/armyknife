@@ -80,7 +80,7 @@ impl<'a> ChangeSet<'a> {
         local: &LocalState<'a>,
         remote: &RemoteState<'a>,
         options: &DetectOptions<'a>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> anyhow::Result<Self> {
         let body = detect_body_change(local.body, remote.issue);
         let title = detect_title_change(local.metadata, remote.issue);
         let labels = detect_label_change(local.metadata, remote.issue);
@@ -177,7 +177,7 @@ impl<'a> ChangeSet<'a> {
         repo: &str,
         issue_number: u64,
         storage: &IssueStorage,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> anyhow::Result<()>
     where
         C: IssueClient + CommentClient,
     {

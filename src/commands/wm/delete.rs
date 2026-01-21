@@ -1,3 +1,4 @@
+use anyhow::{Context, bail};
 use clap::Args;
 use git2::Repository;
 use std::io::{self, Write};
@@ -20,12 +21,7 @@ pub struct DeleteArgs {
     pub force: bool,
 }
 
-pub async fn run(args: &DeleteArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_inner(args).await?;
-    Ok(())
-}
-
-async fn run_inner(args: &DeleteArgs) -> Result<()> {
+pub async fn run(args: &DeleteArgs) -> Result<()> {
     let worktree_path = resolve_worktree_path(args.worktree.as_deref())?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
@@ -53,16 +49,14 @@ async fn run_inner(args: &DeleteArgs) -> Result<()> {
             io::stdin().read_line(&mut input).ok();
             if !input.trim().eq_ignore_ascii_case("y") {
                 println!("Cancelled.");
-                return Err(WmError::Cancelled);
+                return Err(WmError::Cancelled.into());
             }
         }
     }
 
     // Remove the worktree
     if !delete_worktree(&main_repo, &worktree_name)? {
-        return Err(WmError::CommandFailed(format!(
-            "Failed to remove worktree: {worktree_path}"
-        )));
+        bail!("Failed to remove worktree: {worktree_path}");
     }
     println!("Worktree removed: {worktree_path}");
 
@@ -96,16 +90,17 @@ fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
 
         if std::path::Path::new(&candidate_path).exists() {
             let path = std::fs::canonicalize(&candidate_path)
-                .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+                .context("Failed to canonicalize worktree path")?;
             return Ok(path.to_string_lossy().to_string());
         }
 
-        Err(WmError::WorktreeNotFound(arg.to_string()))
+        Err(WmError::WorktreeNotFound(arg.to_string()).into())
     } else {
         // Use current directory
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .map_err(|e| WmError::CommandFailed(e.to_string()))
+        Ok(std::env::current_dir()
+            .context("Failed to get current directory")?
+            .to_string_lossy()
+            .to_string())
     }
 }
 

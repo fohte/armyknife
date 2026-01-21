@@ -22,7 +22,7 @@ pub enum PrDraftCommands {
 }
 
 impl PrDraftCommands {
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::New(args) => new::run(args).await,
             Self::Review(args) => review::run(args),

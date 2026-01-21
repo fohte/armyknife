@@ -41,14 +41,14 @@ pub fn format_review_details(
     options: &FormatOptions,
 ) -> Result<String> {
     if review_num == 0 {
-        return Err(CheckPrReviewError::ReviewNotFound(review_num));
+        return Err(CheckPrReviewError::ReviewNotFound(review_num).into());
     }
 
     let sorted_reviews = pr_data.sorted_reviews();
 
     let review = sorted_reviews
         .get(review_num - 1)
-        .ok_or(CheckPrReviewError::ReviewNotFound(review_num))?;
+        .ok_or_else(|| CheckPrReviewError::ReviewNotFound(review_num))?;
 
     Ok(format_review_with_threads(review, pr_data, options))
 }

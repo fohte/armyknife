@@ -1,8 +1,10 @@
 use std::io::Write;
 use std::process::Command;
 
+use anyhow::Context;
+
 use super::{Backend, check_command_status, extract_first_line};
-use crate::commands::name_branch::error::{Error, Result};
+use crate::commands::name_branch::error::Result;
 
 /// Claude Code backend using `claude --model haiku --print`
 pub struct ClaudeCode;
@@ -15,19 +17,20 @@ impl Backend for ClaudeCode {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| Error::GenerationFailed(format!("Failed to spawn claude: {e}")))?;
+            .context("Failed to spawn claude")?;
 
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            Error::GenerationFailed("Failed to get stdin handle for claude process".to_string())
-        })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("Failed to get stdin handle for claude process")?;
         stdin
             .write_all(prompt.as_bytes())
-            .map_err(|e| Error::GenerationFailed(format!("Failed to write to stdin: {e}")))?;
+            .context("Failed to write to stdin")?;
         drop(stdin);
 
         let output = child
             .wait_with_output()
-            .map_err(|e| Error::GenerationFailed(format!("Failed to wait for claude: {e}")))?;
+            .context("Failed to wait for claude")?;
 
         check_command_status(&output, "claude")?;
         extract_first_line(&output.stdout, "claude")

@@ -1,5 +1,6 @@
 //! Repository operations.
 
+use anyhow::Context;
 use git2::{BranchType, Cred, FetchOptions, RemoteCallbacks, Repository};
 use std::path::Path;
 
@@ -8,7 +9,7 @@ use super::github::get_owner_repo;
 
 /// Open a git repository from the current directory or any parent.
 pub fn open_repo() -> Result<Repository> {
-    Repository::open_from_env().map_err(|_| GitError::NotInRepo)
+    Repository::open_from_env().map_err(|_| GitError::NotInRepo.into())
 }
 
 /// Open a git repository from a specific path.
@@ -19,7 +20,7 @@ pub fn open_repo_at(path: &Path) -> Result<Repository> {
         RepositoryOpenFlags::empty(),
         std::iter::empty::<&Path>(),
     )
-    .map_err(|_| GitError::NotInRepo)
+    .map_err(|_| GitError::NotInRepo.into())
 }
 
 /// Get the main worktree root (the first entry in `git worktree list`).
@@ -27,7 +28,7 @@ pub fn open_repo_at(path: &Path) -> Result<Repository> {
 /// For bare repositories, this is the bare repo directory.
 /// For regular repositories, this is the main working tree root.
 pub fn get_repo_root() -> Result<String> {
-    let cwd = std::env::current_dir().map_err(|e| GitError::CommandFailed(e.to_string()))?;
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
     get_repo_root_in(&cwd)
 }
 
@@ -124,16 +125,14 @@ pub fn get_main_branch_for_repo(repo: &Repository) -> Result<String> {
     }
 
     // Neither exists - caller should fall back to GitHub API
-    Err(GitError::NotFound(
-        "Neither origin/main nor origin/master found".to_string(),
-    ))
+    Err(GitError::NotFound("Neither origin/main nor origin/master found".to_string()).into())
 }
 
 /// Fetch from origin with prune to remove stale remote-tracking references
 pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
     let mut remote = repo
         .find_remote("origin")
-        .map_err(|e| GitError::CommandFailed(format!("Failed to find origin remote: {e}")))?;
+        .context("Failed to find origin remote")?;
 
     let config = build_config_with_system_paths(repo)?;
 
@@ -164,7 +163,7 @@ pub fn fetch_with_prune(repo: &Repository) -> Result<()> {
 
     remote
         .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
-        .map_err(|e| GitError::CommandFailed(format!("git fetch failed: {e}")))?;
+        .context("git fetch failed")?;
 
     Ok(())
 }
@@ -177,7 +176,7 @@ pub fn origin_url(repo: &Repository) -> Result<String> {
     remote
         .url()
         .map(str::to_string)
-        .ok_or(GitError::NoOriginRemote)
+        .ok_or_else(|| GitError::NoOriginRemote.into())
 }
 
 /// Parse "owner/repo" string into (owner, repo) tuple.
@@ -193,6 +192,7 @@ pub fn parse_repo(repo: &str) -> Result<(String, String)> {
             GitError::InvalidInput(format!(
                 "Invalid repository format: {repo}. Expected owner/repo"
             ))
+            .into()
         })
 }
 
@@ -206,8 +206,9 @@ pub fn get_repo_owner_and_name(repo_arg: Option<&str>) -> Result<(String, String
     }
 
     // Get from git remote origin
-    get_owner_repo()
-        .ok_or_else(|| GitError::NotFound("Failed to determine current repository".to_string()))
+    get_owner_repo().ok_or_else(|| {
+        GitError::NotFound("Failed to determine current repository".to_string()).into()
+    })
 }
 
 #[cfg(test)]
@@ -307,7 +308,11 @@ mod tests {
         fn test_invalid(#[case] input: &str) {
             let result = parse_repo(input);
             assert!(result.is_err());
-            assert!(matches!(result, Err(GitError::InvalidInput(_))));
+            let err = result.unwrap_err();
+            assert!(
+                err.downcast_ref::<GitError>()
+                    .is_some_and(|e| matches!(e, GitError::InvalidInput(_)))
+            );
         }
 
         #[test]

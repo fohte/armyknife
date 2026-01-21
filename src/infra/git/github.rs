@@ -18,7 +18,7 @@ pub fn parse_github_url(url: &str) -> Result<(String, String)> {
         let repo = captures.get(2).unwrap().as_str().to_string();
         Ok((owner, repo))
     } else {
-        Err(GitError::InvalidGitHubUrl(url.to_string()))
+        Err(GitError::InvalidGitHubUrl(url.to_string()).into())
     }
 }
 

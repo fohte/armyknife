@@ -20,7 +20,7 @@ pub struct NameBranchArgs {
 }
 
 impl NameBranchArgs {
-    pub fn run(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    pub fn run(&self) -> Result<()> {
         let backend = detect_backend();
 
         let spinner = if std::io::stderr().is_terminal() {
@@ -104,9 +104,7 @@ fn sanitize_branch_name(name: &str) -> String {
 
 fn validate_branch_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(Error::InvalidBranchName(
-            "generated name is empty".to_string(),
-        ));
+        return Err(Error::InvalidBranchName("generated name is empty".to_string()).into());
     }
 
     if !name
@@ -117,7 +115,8 @@ fn validate_branch_name(name: &str) -> Result<()> {
     {
         return Err(Error::InvalidBranchName(format!(
             "'{name}' must start with an alphanumeric character"
-        )));
+        ))
+        .into());
     }
 
     Ok(())

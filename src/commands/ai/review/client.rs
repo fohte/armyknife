@@ -1,13 +1,15 @@
 //! Review client trait and implementations.
 
-use super::error::{Result, ReviewError};
-use super::reviewer::Reviewer;
-use crate::commands::gh::check_pr_review::fetch_pr_data;
-use crate::infra::github::OctocrabClient;
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use indoc::indoc;
 use serde::Deserialize;
 use serde_json::json;
+
+use super::error::{Result, ReviewError};
+use super::reviewer::Reviewer;
+use crate::commands::gh::check_pr_review::fetch_pr_data;
+use crate::infra::github::OctocrabClient;
 
 /// Trait for review-related GitHub API operations.
 #[async_trait::async_trait]
@@ -155,7 +157,7 @@ impl OctocrabReviewClient {
         response
             .repository
             .and_then(|r| r.pull_request)
-            .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()))
+            .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()).into())
     }
 }
 
@@ -170,7 +172,7 @@ impl ReviewClient for OctocrabReviewClient {
     ) -> Result<Option<DateTime<Utc>>> {
         let pr_data = fetch_pr_data(owner, repo, pr_number, true)
             .await
-            .map_err(|e| ReviewError::RepoInfoError(e.to_string()))?;
+            .context("Failed to fetch PR data")?;
 
         let bot_login = reviewer.bot_login();
 
@@ -185,7 +187,7 @@ impl ReviewClient for OctocrabReviewClient {
                     .map(|created_at| {
                         Some(acc.map_or(created_at, |prev: DateTime<Utc>| prev.max(created_at)))
                     })
-                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()))
+                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()).into())
             })
     }
 
@@ -256,6 +258,7 @@ impl ReviewClient for OctocrabReviewClient {
                     .parse::<DateTime<Utc>>()
                     .map_err(|_| {
                         ReviewError::TimestampParseError(commit_node.commit.committed_date.clone())
+                            .into()
                     })
             })
             .transpose()
@@ -276,7 +279,7 @@ impl ReviewClient for OctocrabReviewClient {
             .issues(owner, repo)
             .create_comment(pr_number, review_command)
             .await
-            .map_err(|e| ReviewError::CommentError(format!("Failed to post comment: {e}")))?;
+            .context("Failed to post comment")?;
 
         Ok(())
     }

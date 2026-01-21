@@ -56,7 +56,7 @@ pub enum PrDraftError {
     CommandFailed(String),
 }
 
-pub type Result<T> = std::result::Result<T, PrDraftError>;
+pub type Result<T> = anyhow::Result<T>;
 
 #[derive(Debug, Clone)]
 pub struct RepoInfo {
@@ -203,7 +203,7 @@ impl DraftFile {
 
     pub fn from_path(path: PathBuf) -> Result<Self> {
         if !path.exists() {
-            return Err(PrDraftError::FileNotFound(path));
+            return Err(PrDraftError::FileNotFound(path).into());
         }
 
         let content = fs::read_to_string(&path)?;
@@ -243,14 +243,14 @@ impl DraftFile {
         let approve_path = Self::approve_path(&self.path);
 
         if !approve_path.exists() {
-            return Err(PrDraftError::NotApproved);
+            return Err(PrDraftError::NotApproved.into());
         }
 
         let saved_hash = fs::read_to_string(&approve_path)?.trim().to_string();
         let current_hash = self.compute_hash()?;
 
         if saved_hash != current_hash {
-            return Err(PrDraftError::ModifiedAfterApproval);
+            return Err(PrDraftError::ModifiedAfterApproval.into());
         }
 
         Ok(())

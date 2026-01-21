@@ -13,9 +13,6 @@ pub enum ReviewError {
     #[error("GitHub API error: {0}")]
     GitHubError(#[from] crate::infra::github::GitHubError),
 
-    #[error("Failed to post comment: {0}")]
-    CommentError(String),
-
     #[error("Timeout waiting for review after {0} seconds")]
     Timeout(u64),
 
@@ -32,4 +29,4 @@ pub enum ReviewError {
     ReviewNotStarted,
 }
 
-pub type Result<T> = std::result::Result<T, ReviewError>;
+pub type Result<T> = anyhow::Result<T>;

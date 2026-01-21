@@ -3,6 +3,7 @@ mod commands;
 mod infra;
 mod shared;
 
+use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::aot::generate;
 use cli::{Cli, Commands};
@@ -11,12 +12,12 @@ use shared::update;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("Error: {e}");
+        eprintln!("Error: {e:?}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
     if !matches!(command, Commands::Update | Commands::Completions { .. }) {

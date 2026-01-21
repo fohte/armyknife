@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use git2::{BranchType, Repository, WorktreePruneOptions};
 
 use super::error::{Result, WmError};
@@ -12,11 +13,11 @@ pub fn get_main_repo(repo: &Repository) -> Result<Repository> {
     if repo.is_worktree() {
         let commondir = repo.commondir();
         Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
-            .map_err(|_| WmError::NotInGitRepo)
+            .map_err(|_| WmError::NotInGitRepo.into())
     } else {
         // Clone isn't available, so re-open from workdir
         let workdir = repo.workdir().ok_or(WmError::NotInGitRepo)?;
-        Repository::open(workdir).map_err(|_| WmError::NotInGitRepo)
+        Repository::open(workdir).map_err(|_| WmError::NotInGitRepo.into())
     }
 }
 
@@ -65,9 +66,7 @@ pub fn delete_branch_if_exists(repo: &Repository, branch: &str) -> bool {
 
 /// Find the worktree name from its path.
 pub fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<String> {
-    let worktrees = repo
-        .worktrees()
-        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
+    let worktrees = repo.worktrees().context("Failed to list worktrees")?;
 
     for name in worktrees.iter().flatten() {
         if let Ok(wt) = repo.find_worktree(name) {
@@ -80,7 +79,7 @@ pub fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<Stri
         }
     }
 
-    Err(WmError::WorktreeNotFound(worktree_path.to_string()))
+    Err(WmError::WorktreeNotFound(worktree_path.to_string()).into())
 }
 
 /// Basic information about a linked worktree.
@@ -98,9 +97,7 @@ pub struct LinkedWorktree {
 
 /// List all linked worktrees (excludes main worktree).
 pub fn list_linked_worktrees(repo: &Repository) -> Result<Vec<LinkedWorktree>> {
-    let worktrees = repo
-        .worktrees()
-        .map_err(|e| WmError::CommandFailed(e.message().to_string()))?;
+    let worktrees = repo.worktrees().context("Failed to list worktrees")?;
 
     let mut result = Vec::new();
 
@@ -148,11 +145,11 @@ pub fn get_main_worktree_path(repo: &Repository) -> Result<PathBuf> {
         repo.commondir()
             .parent()
             .map(|p| p.to_path_buf())
-            .ok_or(WmError::NotInGitRepo)
+            .ok_or_else(|| WmError::NotInGitRepo.into())
     } else {
         repo.workdir()
             .map(|p| p.to_path_buf())
-            .ok_or(WmError::NotInGitRepo)
+            .ok_or_else(|| WmError::NotInGitRepo.into())
     }
 }
 

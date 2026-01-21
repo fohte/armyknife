@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::timeout(MockReviewClient::new(), 1, "Timeout")]
+    #[case::timeout(MockReviewClient::new(), 1, "Timeout waiting for review")]
     #[case::unable_to_review(
         MockReviewClient::new().with_comment(
             "gemini-code-assist",
@@ -170,7 +170,7 @@ mod tests {
             Utc::now() + ChronoDuration::milliseconds(100),
         ),
         5,
-        "ReviewerUnable"
+        "Reviewer is unable to review this PR"
     )]
     #[tokio::test]
     async fn request_fails(
@@ -182,10 +182,10 @@ mod tests {
         let result = run_request(&args, &client, "owner", "repo", 1).await;
 
         let err = result.unwrap_err();
-        let err_name = format!("{err:?}");
+        let err_msg = err.to_string();
         assert!(
-            err_name.starts_with(expected_error),
-            "Expected {expected_error}, got {err_name}"
+            err_msg.contains(expected_error),
+            "Expected error containing '{expected_error}', got '{err_msg}'"
         );
     }
 

@@ -16,7 +16,7 @@ pub enum GhCommands {
 }
 
 impl GhCommands {
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::CheckPrReview(args) => {
                 check_pr_review::run(args).await?;

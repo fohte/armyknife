@@ -11,7 +11,7 @@ pub struct ViewArgs {
     pub issue: super::IssueArgs,
 }
 
-pub async fn run(args: &ViewArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &ViewArgs) -> anyhow::Result<()> {
     let client = OctocrabClient::get()?;
     let output = run_with_client_and_output(args, client).await?;
     print!("{}", output);
@@ -23,7 +23,7 @@ pub async fn run(args: &ViewArgs) -> Result<(), Box<dyn std::error::Error>> {
 pub(super) async fn run_with_client_and_output<C>(
     args: &ViewArgs,
     client: &C,
-) -> Result<String, Box<dyn std::error::Error>>
+) -> anyhow::Result<String>
 where
     C: IssueClient + CommentClient,
 {
@@ -35,7 +35,7 @@ async fn run_with_client_and_output_with<C, F>(
     args: &ViewArgs,
     client: &C,
     time_formatter: F,
-) -> Result<String, Box<dyn std::error::Error>>
+) -> anyhow::Result<String>
 where
     C: IssueClient + CommentClient,
     F: Fn(&str) -> String,

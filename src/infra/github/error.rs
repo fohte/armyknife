@@ -40,7 +40,7 @@ fn format_octocrab_error(err: &octocrab::Error) -> String {
     }
 }
 
-pub type Result<T> = std::result::Result<T, GitHubError>;
+pub type Result<T> = anyhow::Result<T>;
 
 /// Format error details from GitHub API errors array.
 /// Returns a formatted string like "[field1 is code1, field2 is code2]" or empty string.

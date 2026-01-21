@@ -1,3 +1,4 @@
+use anyhow::{Context, bail};
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::{Path, PathBuf};
@@ -21,17 +22,13 @@ fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
 
 /// Save prompt to cache directory for recovery.
 fn save_prompt_cache(repo_root: &str, prompt: &str) -> Result<PathBuf> {
-    let path = get_prompt_cache_path(repo_root)
-        .ok_or_else(|| WmError::CommandFailed("Failed to determine cache directory".into()))?;
+    let path = get_prompt_cache_path(repo_root).context("Failed to determine cache directory")?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            WmError::CommandFailed(format!("Failed to create cache directory: {e}"))
-        })?;
+        std::fs::create_dir_all(parent).context("Failed to create cache directory")?;
     }
 
-    std::fs::write(&path, prompt)
-        .map_err(|e| WmError::CommandFailed(format!("Failed to save prompt: {e}")))?;
+    std::fs::write(&path, prompt).context("Failed to save prompt")?;
 
     Ok(path)
 }
@@ -53,7 +50,7 @@ fn open_editor_for_prompt() -> Result<Option<String>> {
         .prefix("wm-prompt-")
         .suffix(".md")
         .tempfile()
-        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+        .context("Failed to create temp file")?;
 
     let temp_path = temp_file.path().to_path_buf();
 
@@ -61,17 +58,14 @@ fn open_editor_for_prompt() -> Result<Option<String>> {
     let status = Command::new(&editor)
         .arg(&temp_path)
         .status()
-        .map_err(|e| WmError::CommandFailed(format!("Failed to launch editor '{editor}': {e}")))?;
+        .with_context(|| format!("Failed to launch editor '{editor}'"))?;
 
     if !status.success() {
-        return Err(WmError::CommandFailed(format!(
-            "Editor exited with status: {status}"
-        )));
+        bail!("Editor exited with status: {status}");
     }
 
     // Read the content
-    let content = std::fs::read_to_string(&temp_path)
-        .map_err(|e| WmError::CommandFailed(format!("Failed to read temp file: {e}")))?;
+    let content = std::fs::read_to_string(&temp_path).context("Failed to read temp file")?;
 
     let prompt = content.trim().to_string();
 
@@ -99,77 +93,76 @@ fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMod
     let worktree_name = worktree_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| WmError::CommandFailed("Invalid worktree path".into()))?;
+        .context("Invalid worktree path")?;
 
     match mode {
         WorktreeAddMode::LocalBranch { branch } => {
             // Checkout existing local branch
             let local_branch = repo
                 .find_branch(branch, BranchType::Local)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to find branch: {e}")))?;
+                .context("Failed to find branch")?;
             let reference = local_branch.into_reference();
 
             let mut opts = WorktreeAddOptions::new();
             opts.reference(Some(&reference));
 
             repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .map_err(|e| WmError::CommandFailed(format!("Failed to add worktree: {e}")))?;
+                .context("Failed to add worktree")?;
         }
         WorktreeAddMode::TrackRemote { branch } => {
             // Create a tracking branch from remote
             let remote_name = format!("origin/{branch}");
-            let remote_branch =
-                repo.find_branch(&remote_name, BranchType::Remote)
-                    .map_err(|e| {
-                        WmError::CommandFailed(format!("Failed to find remote branch: {e}"))
-                    })?;
+            let remote_branch = repo
+                .find_branch(&remote_name, BranchType::Remote)
+                .context("Failed to find remote branch")?;
 
-            let commit = remote_branch.get().peel_to_commit().map_err(|e| {
-                WmError::CommandFailed(format!("Failed to get commit from remote branch: {e}"))
-            })?;
+            let commit = remote_branch
+                .get()
+                .peel_to_commit()
+                .context("Failed to get commit from remote branch")?;
 
             // Create local branch tracking remote
             let mut local_branch = repo
                 .branch(branch, &commit, false)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to create branch: {e}")))?;
+                .context("Failed to create branch")?;
 
             local_branch
                 .set_upstream(Some(&remote_name))
-                .map_err(|e| WmError::CommandFailed(format!("Failed to set upstream: {e}")))?;
+                .context("Failed to set upstream")?;
 
             let reference = local_branch.into_reference();
             let mut opts = WorktreeAddOptions::new();
             opts.reference(Some(&reference));
 
             repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .map_err(|e| WmError::CommandFailed(format!("Failed to add worktree: {e}")))?;
+                .context("Failed to add worktree")?;
         }
         WorktreeAddMode::NewBranch { branch, base } => {
             // Create new branch from base
             let base_commit = repo
                 .revparse_single(base)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to resolve base: {e}")))?
+                .context("Failed to resolve base")?
                 .peel_to_commit()
-                .map_err(|e| WmError::CommandFailed(format!("Failed to get commit: {e}")))?;
+                .context("Failed to get commit")?;
 
             let new_branch = repo
                 .branch(branch, &base_commit, false)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to create branch: {e}")))?;
+                .context("Failed to create branch")?;
 
             let reference = new_branch.into_reference();
             let mut opts = WorktreeAddOptions::new();
             opts.reference(Some(&reference));
 
             repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .map_err(|e| WmError::CommandFailed(format!("Failed to add worktree: {e}")))?;
+                .context("Failed to add worktree")?;
         }
         WorktreeAddMode::ForceNewBranch { branch, base } => {
             // Force create/reset branch from base
             let base_commit = repo
                 .revparse_single(base)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to resolve base: {e}")))?
+                .context("Failed to resolve base")?
                 .peel_to_commit()
-                .map_err(|e| WmError::CommandFailed(format!("Failed to get commit: {e}")))?;
+                .context("Failed to get commit")?;
 
             // Delete existing branch if it exists
             if let Ok(mut existing) = repo.find_branch(branch, BranchType::Local) {
@@ -178,14 +171,14 @@ fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMod
 
             let new_branch = repo
                 .branch(branch, &base_commit, true)
-                .map_err(|e| WmError::CommandFailed(format!("Failed to create branch: {e}")))?;
+                .context("Failed to create branch")?;
 
             let reference = new_branch.into_reference();
             let mut opts = WorktreeAddOptions::new();
             opts.reference(Some(&reference));
 
             repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .map_err(|e| WmError::CommandFailed(format!("Failed to add worktree: {e}")))?;
+                .context("Failed to add worktree")?;
         }
     }
 
@@ -226,6 +219,7 @@ pub struct NewArgs {
 }
 
 /// Resolved branch name and prompt information
+#[derive(Debug)]
 struct ResolvedArgs {
     branch_name: String,
     prompt: Option<String>,
@@ -273,9 +267,8 @@ where
     }
 }
 
-pub fn run(args: &NewArgs) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    run_inner(args)?;
-    Ok(())
+pub fn run(args: &NewArgs) -> Result<()> {
+    run_inner(args)
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
@@ -317,12 +310,10 @@ fn run_worktree_creation(
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
     // Ensure .worktrees directory exists
-    std::fs::create_dir_all(&worktrees_dir).map_err(|e| {
-        WmError::CommandFailed(format!("Failed to create .worktrees directory: {e}"))
-    })?;
+    std::fs::create_dir_all(&worktrees_dir).context("Failed to create .worktrees directory")?;
 
     // Fetch with prune
-    fetch_with_prune(&repo).map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    fetch_with_prune(&repo).context("Failed to fetch from remote")?;
 
     // Remove BRANCH_PREFIX to avoid double prefix
     let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
@@ -400,19 +391,17 @@ fn build_claude_command(prompt: Option<&str>) -> Result<String> {
         .prefix("claude-prompt-")
         .suffix(".txt")
         .tempfile()
-        .map_err(|e| WmError::CommandFailed(format!("Failed to create temp file: {e}")))?;
+        .context("Failed to create temp file")?;
 
-    std::fs::write(prompt_file.path(), prompt)
-        .map_err(|e| WmError::CommandFailed(format!("Failed to write prompt: {e}")))?;
+    std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt")?;
 
     let prompt_path = prompt_file
         .into_temp_path()
         .keep()
-        .map_err(|e| WmError::CommandFailed(format!("Failed to persist temp file: {e}")))?;
+        .context("Failed to persist temp file")?;
 
     let path_str = prompt_path.display().to_string();
-    let escaped_path = shlex::try_quote(&path_str)
-        .map_err(|_| WmError::CommandFailed("Failed to escape path".into()))?;
+    let escaped_path = shlex::try_quote(&path_str).context("Failed to escape path")?;
 
     // Command reads prompt, passes to claude, then deletes temp file
     Ok(format!(
@@ -430,8 +419,7 @@ fn setup_tmux_window(
     let claude_cmd = build_claude_command(prompt)?;
     let target_session = tmux::get_session_name(repo_root);
 
-    tmux::ensure_session(&target_session, repo_root)
-        .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    tmux::ensure_session(&target_session, repo_root).context("Failed to ensure tmux session")?;
 
     tmux::create_split_window(
         &target_session,
@@ -440,9 +428,9 @@ fn setup_tmux_window(
         "nvim",
         &claude_cmd,
     )
-    .map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    .context("Failed to create tmux split window")?;
 
-    tmux::switch_to_session(&target_session).map_err(|e| WmError::CommandFailed(e.to_string()))?;
+    tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
 
     Ok(())
 }
@@ -616,10 +604,10 @@ mod tests {
         Some("prompt from editor"),
         Ok(("editor-branch", Some("prompt from editor")))
     )]
-    #[case::editor_returns_empty(None, Err(WmError::Cancelled))]
+    #[case::editor_returns_empty(None, Err(true))]
     fn resolve_args_with_editor(
         #[case] editor_input: Option<&str>,
-        #[case] expected: std::result::Result<(&str, Option<&str>), WmError>,
+        #[case] expected: std::result::Result<(&str, Option<&str>), bool>,
     ) {
         let args = NewArgs {
             name: None,
@@ -640,7 +628,11 @@ mod tests {
                 assert_eq!(resolved.prompt.as_deref(), prompt);
             }
             Err(_) => {
-                assert!(matches!(result, Err(WmError::Cancelled)));
+                let err = result.unwrap_err();
+                assert!(
+                    err.downcast_ref::<WmError>()
+                        .is_some_and(|e| matches!(e, WmError::Cancelled))
+                );
             }
         }
     }

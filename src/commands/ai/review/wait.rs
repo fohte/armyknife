@@ -78,7 +78,7 @@ pub(crate) async fn run_wait(
         .check_reviewer_unable_comment(owner, repo, pr_number, past_time, args.reviewer)
         .await?
     {
-        return Err(ReviewError::ReviewerUnable(unable_msg));
+        return Err(ReviewError::ReviewerUnable(unable_msg).into());
     }
 
     // Check if review has started by looking for any comment from the reviewer
@@ -86,7 +86,7 @@ pub(crate) async fn run_wait(
         .has_reviewer_activity(owner, repo, pr_number, args.reviewer)
         .await?
     {
-        return Err(ReviewError::ReviewNotStarted);
+        return Err(ReviewError::ReviewNotStarted.into());
     }
 
     println!("Waiting for {:?} review to complete...", args.reviewer);
@@ -192,11 +192,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::not_started("not_started", "ReviewNotStarted")]
-    #[case::not_started_other_bot("not_started_other_bot", "ReviewNotStarted")]
-    #[case::unable_existing("unable_existing", "ReviewerUnable")]
-    #[case::unable_during_wait("unable_during_wait", "ReviewerUnable")]
-    #[case::timeout("timeout", "Timeout")]
+    #[case::not_started("not_started", "Review has not started yet")]
+    #[case::not_started_other_bot("not_started_other_bot", "Review has not started yet")]
+    #[case::unable_existing("unable_existing", "Reviewer is unable to review this PR")]
+    #[case::unable_during_wait("unable_during_wait", "Reviewer is unable to review this PR")]
+    #[case::timeout("timeout", "Timeout waiting for review")]
     #[tokio::test]
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
         let (client, timeout) = build_error_client(scenario);
@@ -205,10 +205,10 @@ mod tests {
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
         let err = result.unwrap_err();
-        let err_name = format!("{err:?}");
+        let err_msg = err.to_string();
         assert!(
-            err_name.starts_with(expected_error),
-            "Expected {expected_error}, got {err_name}"
+            err_msg.contains(expected_error),
+            "Expected error containing '{expected_error}', got '{err_msg}'"
         );
     }
 

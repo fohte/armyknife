@@ -15,7 +15,7 @@ pub enum AiCommands {
 }
 
 impl AiCommands {
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::PrDraft(cmd) => cmd.run().await,
             Self::Review(cmd) => cmd.run().await,

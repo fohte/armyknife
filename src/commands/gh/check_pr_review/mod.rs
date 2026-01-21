@@ -27,7 +27,7 @@ pub enum CheckPrReviewError {
     ReviewNotFound(usize),
 }
 
-pub type Result<T> = std::result::Result<T, CheckPrReviewError>;
+pub type Result<T> = anyhow::Result<T>;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CheckPrReviewArgs {

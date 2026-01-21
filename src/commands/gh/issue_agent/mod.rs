@@ -23,7 +23,7 @@ pub enum IssueAgentCommands {
 }
 
 impl IssueAgentCommands {
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::View(args) => commands::run_view(args).await,
             Self::Pull(args) => commands::run_pull(args).await,

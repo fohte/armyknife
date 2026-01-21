@@ -216,7 +216,7 @@ impl PrClient for MockGitHubClient {
         self.created_prs.lock().unwrap().push(params);
         self.pr_create_result
             .clone()
-            .ok_or_else(|| GitHubError::TokenError("Mock PR creation failed".to_string()))
+            .ok_or_else(|| GitHubError::TokenError("Mock PR creation failed".to_string()).into())
     }
 
     async fn get_pr_for_branch(
@@ -241,7 +241,7 @@ impl IssueClient for MockGitHubClient {
         self.issues
             .get(&key)
             .cloned()
-            .ok_or_else(|| GitHubError::TokenError(format!("Issue {key} not found in mock")))
+            .ok_or_else(|| GitHubError::TokenError(format!("Issue {key} not found in mock")).into())
     }
 
     async fn update_issue_body(
