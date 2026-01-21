@@ -9,7 +9,7 @@ use super::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
 };
-use crate::shared::tmux;
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {
@@ -68,8 +68,9 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     }
 
     // Close the original tmux window (identified by window ID)
+    // Ignore errors since this is a best-effort cleanup
     if let Some(window_id) = target_window_id {
-        tmux::kill_window(&window_id);
+        let _ = tmux::kill_window(&window_id);
     }
 
     Ok(())

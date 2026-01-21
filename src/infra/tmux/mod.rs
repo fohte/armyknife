@@ -3,15 +3,96 @@
 use std::path::Path;
 use std::process::Command;
 
+use std::fmt;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TmuxError {
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
+    #[error("{}", .0)]
+    CommandFailed(CommandFailedError),
+}
+
+#[derive(Debug)]
+pub struct CommandFailedError {
+    pub command: String,
+    pub args: Vec<String>,
+    pub message: String,
+    pub stderr: Option<String>,
+}
+
+impl fmt::Display for CommandFailedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} failed: {}",
+            self.command,
+            self.args.join(" "),
+            self.message
+        )?;
+        if let Some(stderr) = &self.stderr
+            && !stderr.is_empty()
+        {
+            write!(f, "\n-- stderr --\n{stderr}")?;
+        }
+        Ok(())
+    }
+}
+
+impl TmuxError {
+    fn command_failed(args: &[&str], message: impl Into<String>, stderr: Option<String>) -> Self {
+        Self::CommandFailed(CommandFailedError {
+            command: "tmux".to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            message: message.into(),
+            stderr,
+        })
+    }
 }
 
 pub type Result<T> = std::result::Result<T, TmuxError>;
+
+// ============================================================================
+// Internal helpers for command execution
+// ============================================================================
+
+/// Run a tmux command and return stdout on success.
+fn run_tmux_output(args: &[&str]) -> Result<String> {
+    let output = Command::new("tmux")
+        .args(args)
+        .output()
+        .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(TmuxError::command_failed(
+            args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ))
+    }
+}
+
+/// Run a tmux command, returning Ok(()) on success.
+fn run_tmux(args: &[&str]) -> Result<()> {
+    run_tmux_output(args).map(|_| ())
+}
+
+/// Query a tmux value using display-message with a format string.
+/// Returns None if not in tmux or if the command fails.
+fn query_tmux_value(format_string: &str) -> Option<String> {
+    if !in_tmux() {
+        return None;
+    }
+
+    run_tmux_output(&["display-message", "-p", format_string]).ok()
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
 
 /// Check if running inside a tmux session.
 pub fn in_tmux() -> bool {
@@ -45,11 +126,7 @@ pub fn get_session_name(repo_root: &str) -> String {
 
 /// Check if a session exists.
 pub fn session_exists(session: &str) -> bool {
-    Command::new("tmux")
-        .args(["has-session", "-t", session])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    run_tmux(&["has-session", "-t", session]).is_ok()
 }
 
 /// Ensure a tmux session exists, creating it if necessary.
@@ -58,38 +135,12 @@ pub fn ensure_session(session: &str, cwd: &str) -> Result<()> {
         return Ok(());
     }
 
-    let output = Command::new("tmux")
-        .args(["new-session", "-ds", session, "-c", cwd])
-        .output()
-        .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(TmuxError::CommandFailed(format!(
-            "tmux new-session failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    Ok(())
+    run_tmux(&["new-session", "-ds", session, "-c", cwd])
 }
 
 /// Get the current tmux session name.
 pub fn current_session() -> Option<String> {
-    if !in_tmux() {
-        return None;
-    }
-
-    let output = Command::new("tmux")
-        .args(["display-message", "-p", "#{session_name}"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    query_tmux_value("#{session_name}")
 }
 
 /// Switch to a different tmux session (only if inside tmux).
@@ -104,56 +155,17 @@ pub fn switch_to_session(target_session: &str) -> Result<()> {
         return Ok(());
     }
 
-    let output = Command::new("tmux")
-        .args(["switch-client", "-t", target_session])
-        .output()
-        .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(TmuxError::CommandFailed(format!(
-            "tmux switch-client failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    Ok(())
+    run_tmux(&["switch-client", "-t", target_session])
 }
 
 /// Get the current pane's working directory.
 pub fn current_pane_path() -> Option<String> {
-    if !in_tmux() {
-        return None;
-    }
-
-    let output = Command::new("tmux")
-        .args(["display-message", "-p", "#{pane_current_path}"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    query_tmux_value("#{pane_current_path}")
 }
 
 /// Get the current window ID.
 pub fn current_window_id() -> Option<String> {
-    if !in_tmux() {
-        return None;
-    }
-
-    let output = Command::new("tmux")
-        .args(["display-message", "-p", "#{window_id}"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    query_tmux_value("#{window_id}")
 }
 
 /// Get the current window ID if the pane is inside the given path.
@@ -170,30 +182,14 @@ pub fn get_window_id_if_in_path(path: &str) -> Option<String> {
 }
 
 /// Kill a tmux window by its ID.
-pub fn kill_window(window_id: &str) {
-    Command::new("tmux")
-        .args(["kill-window", "-t", window_id])
-        .status()
-        .ok();
+pub fn kill_window(window_id: &str) -> Result<()> {
+    run_tmux(&["kill-window", "-t", window_id])
 }
 
 /// Create a new window in a session.
 #[allow(dead_code)]
 pub fn new_window(session: &str, cwd: &str, window_name: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["new-window", "-t", session, "-c", cwd, "-n", window_name])
-        .output()
-        .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(TmuxError::CommandFailed(format!(
-            "tmux new-window failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    Ok(())
+    run_tmux(&["new-window", "-t", session, "-c", cwd, "-n", window_name])
 }
 
 /// Create a new window with a horizontal split and run commands in each pane.
@@ -220,7 +216,7 @@ pub fn create_split_window(
     ];
 
     // Interleave commands with ";" separator for tmux chaining
-    let mut args = Vec::new();
+    let mut args: Vec<&str> = Vec::new();
     for (i, cmd) in commands.iter().enumerate() {
         if i > 0 {
             args.push(";");
@@ -228,18 +224,5 @@ pub fn create_split_window(
         args.extend_from_slice(cmd);
     }
 
-    let output = Command::new("tmux")
-        .args(&args)
-        .output()
-        .map_err(|e| TmuxError::CommandFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(TmuxError::CommandFailed(format!(
-            "tmux create-split-window failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    Ok(())
+    run_tmux(&args)
 }
