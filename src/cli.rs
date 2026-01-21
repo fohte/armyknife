@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
-use crate::ai::AiCommands;
-use crate::gh::GhCommands;
-use crate::name_branch::NameBranchArgs;
-use crate::wm::WmCommands;
+use crate::commands::ai::AiCommands;
+use crate::commands::gh::GhCommands;
+use crate::commands::name_branch::NameBranchArgs;
+use crate::commands::wm::WmCommands;
 
 #[derive(Parser)]
 #[command(

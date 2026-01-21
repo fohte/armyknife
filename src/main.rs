@@ -1,20 +1,12 @@
-mod ai;
-mod cache;
 mod cli;
-mod gh;
-mod git;
-mod github;
-mod human_in_the_loop;
-mod name_branch;
-#[cfg(test)]
-mod testing;
-mod tmux;
-mod update;
-mod wm;
+mod commands;
+mod infra;
+mod shared;
 
 use clap::{CommandFactory, Parser};
 use clap_complete::aot::generate;
 use cli::{Cli, Commands};
+use shared::update;
 
 #[tokio::main]
 async fn main() {
