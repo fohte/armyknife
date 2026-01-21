@@ -3,27 +3,50 @@
 use std::path::Path;
 use std::process::Command;
 
+use std::fmt;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TmuxError {
-    #[error("tmux command '{command}' failed: {message}")]
-    CommandFailed {
-        command: String,
-        args: Vec<String>,
-        message: String,
-        stderr: Option<String>,
-    },
+    #[error("{}", .0)]
+    CommandFailed(CommandFailedError),
+}
+
+#[derive(Debug)]
+pub struct CommandFailedError {
+    pub command: String,
+    pub args: Vec<String>,
+    pub message: String,
+    pub stderr: Option<String>,
+}
+
+impl fmt::Display for CommandFailedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} failed: {}",
+            self.command,
+            self.args.join(" "),
+            self.message
+        )?;
+        if let Some(stderr) = &self.stderr
+            && !stderr.is_empty()
+        {
+            write!(f, "\n-- stderr --\n{stderr}")?;
+        }
+        Ok(())
+    }
 }
 
 impl TmuxError {
     fn command_failed(args: &[&str], message: impl Into<String>, stderr: Option<String>) -> Self {
-        Self::CommandFailed {
+        Self::CommandFailed(CommandFailedError {
             command: "tmux".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             message: message.into(),
             stderr,
-        }
+        })
     }
 }
 
@@ -159,8 +182,8 @@ pub fn get_window_id_if_in_path(path: &str) -> Option<String> {
 }
 
 /// Kill a tmux window by its ID.
-pub fn kill_window(window_id: &str) {
-    let _ = run_tmux(&["kill-window", "-t", window_id]);
+pub fn kill_window(window_id: &str) -> Result<()> {
+    run_tmux(&["kill-window", "-t", window_id])
 }
 
 /// Create a new window in a session.

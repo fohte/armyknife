@@ -68,8 +68,9 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     }
 
     // Close the original tmux window (identified by window ID)
+    // Ignore errors since this is a best-effort cleanup
     if let Some(window_id) = target_window_id {
-        tmux::kill_window(&window_id);
+        let _ = tmux::kill_window(&window_id);
     }
 
     Ok(())
