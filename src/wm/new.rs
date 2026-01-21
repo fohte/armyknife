@@ -381,6 +381,11 @@ fn run_worktree_creation(
         prompt,
     )?;
 
+    println!(
+        "Created worktree '{}' and opened tmux window",
+        worktree_name
+    );
+
     Ok(())
 }
 
