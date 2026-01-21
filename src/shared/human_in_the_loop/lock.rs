@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::error::Result;
+use crate::infra::tmux;
 
 /// RAII guard for lock file cleanup in the review launcher.
 ///
@@ -78,9 +78,7 @@ impl Drop for CleanupGuard {
 
         // Restore tmux session
         if let Some(ref target) = self.tmux_target {
-            let _ = Command::new("tmux")
-                .args(["switch-client", "-t", target])
-                .status();
+            let _ = tmux::switch_to_session(target);
         }
     }
 }

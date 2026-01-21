@@ -9,7 +9,7 @@ use super::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
 };
-use crate::shared::tmux;
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {

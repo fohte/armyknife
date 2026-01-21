@@ -11,8 +11,8 @@ use super::git::{
 };
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::infra::git::fetch_with_prune;
+use crate::infra::tmux;
 use crate::shared::cache;
-use crate::shared::tmux;
 
 /// Get the cache path for prompt recovery.
 fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
