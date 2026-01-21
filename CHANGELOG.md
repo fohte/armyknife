@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.27](https://github.com/fohte/armyknife/compare/v0.1.26...v0.1.27) (2026-01-21)
+
+
+### Bug Fixes
+
+* **wm:** improve `wm new` output for clarity ([#105](https://github.com/fohte/armyknife/issues/105)) ([dbda156](https://github.com/fohte/armyknife/commit/dbda1561948b055196a931c0a22dcccce137c0d6))
+
 ## [0.1.26](https://github.com/fohte/armyknife/compare/v0.1.25...v0.1.26) (2026-01-20)
 
 
