@@ -202,7 +202,7 @@ mod tests {
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
-            base: None,
+            base: Some("main".to_string()),
             draft: false,
         };
 
@@ -229,7 +229,7 @@ mod tests {
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
-            base: None,
+            base: Some("main".to_string()),
             draft: false,
         };
 
