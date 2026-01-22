@@ -113,7 +113,11 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 pub fn do_update() -> anyhow::Result<()> {
     let mut builder = base_update_builder();
-    let status = builder.show_download_progress(true).build()?.update()?;
+    let status = builder
+        .show_download_progress(true)
+        .no_confirm(true)
+        .build()?
+        .update()?;
 
     if status.updated() {
         println!("Updated to version {}!", status.version());
