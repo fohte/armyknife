@@ -44,14 +44,39 @@ async fn find_base_branch_with_local(
     repo_name: &str,
     local_branch: Option<String>,
 ) -> String {
+    use crate::infra::github::{OctocrabClient, RepoClient};
+
     // Try to use local git info first
     if let Some(branch) = local_branch {
         return branch;
     }
 
     // Fallback to GitHub API
-    use crate::infra::github::{OctocrabClient, RepoClient};
     if let Ok(client) = OctocrabClient::get()
+        && let Ok(default_branch) = client.get_default_branch(owner, repo_name).await
+    {
+        return default_branch;
+    }
+
+    // Ultimate fallback
+    "main".to_string()
+}
+
+/// Internal implementation that accepts optional client for testability.
+#[cfg(test)]
+async fn find_base_branch_with_client<C: crate::infra::github::RepoClient>(
+    owner: &str,
+    repo_name: &str,
+    local_branch: Option<String>,
+    client: Option<&C>,
+) -> String {
+    // Try to use local git info first
+    if let Some(branch) = local_branch {
+        return branch;
+    }
+
+    // Fallback to GitHub API
+    if let Some(client) = client
         && let Ok(default_branch) = client.get_default_branch(owner, repo_name).await
     {
         return default_branch;
@@ -152,6 +177,47 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::github::RepoClient;
+
+    /// Mock RepoClient for testing find_base_branch_with_client
+    struct MockRepoClient {
+        default_branch: Option<String>,
+    }
+
+    impl MockRepoClient {
+        fn with_default_branch(branch: &str) -> Self {
+            Self {
+                default_branch: Some(branch.to_string()),
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                default_branch: None,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RepoClient for MockRepoClient {
+        async fn is_repo_private(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> crate::infra::github::error::Result<bool> {
+            Ok(false)
+        }
+
+        async fn get_default_branch(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> crate::infra::github::error::Result<String> {
+            self.default_branch.clone().ok_or_else(|| {
+                crate::infra::github::GitHubError::TokenError("mock error".to_string()).into()
+            })
+        }
+    }
 
     #[test]
     fn test_merge_status_is_merged() {
@@ -180,24 +246,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_base_branch_with_local_uses_local_branch() {
-        let result = find_base_branch_with_local("owner", "repo", Some("master".to_string())).await;
+    async fn test_find_base_branch_uses_local_branch_when_provided() {
+        let client = MockRepoClient::with_default_branch("develop");
+        let result = find_base_branch_with_client(
+            "owner",
+            "repo",
+            Some("master".to_string()),
+            Some(&client),
+        )
+        .await;
+        // Local branch takes priority over GitHub API
         assert_eq!(result, "master");
+    }
 
-        let result = find_base_branch_with_local("owner", "repo", Some("main".to_string())).await;
-        assert_eq!(result, "main");
-
-        let result =
-            find_base_branch_with_local("owner", "repo", Some("develop".to_string())).await;
+    #[tokio::test]
+    async fn test_find_base_branch_uses_github_api_when_no_local_branch() {
+        let client = MockRepoClient::with_default_branch("develop");
+        let result = find_base_branch_with_client("owner", "repo", None, Some(&client)).await;
+        // Falls back to GitHub API
         assert_eq!(result, "develop");
     }
 
     #[tokio::test]
-    #[ignore = "Requires wiremock setup - OctocrabClient::get() panics in test mode to prevent accidental real API calls"]
-    async fn test_find_base_branch_with_local_fallback_to_main() {
-        // When local branch is None and no GitHub API available, falls back to "main"
-        // This test needs to be rewritten to use wiremock for proper API mocking
-        let result = find_base_branch_with_local("owner", "repo", None).await;
+    async fn test_find_base_branch_fallback_to_main_when_no_client() {
+        let result =
+            find_base_branch_with_client::<MockRepoClient>("owner", "repo", None, None).await;
+        // Falls back to "main" when no client available
+        assert_eq!(result, "main");
+    }
+
+    #[tokio::test]
+    async fn test_find_base_branch_fallback_to_main_when_api_fails() {
+        let client = MockRepoClient::failing();
+        let result = find_base_branch_with_client("owner", "repo", None, Some(&client)).await;
+        // Falls back to "main" when API call fails
         assert_eq!(result, "main");
     }
 }

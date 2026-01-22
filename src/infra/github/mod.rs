@@ -4,7 +4,7 @@
 //! with authentication via `gh auth token`.
 
 mod client;
-mod error;
+pub(crate) mod error;
 #[cfg(test)]
 mod mock;
 mod pr;
