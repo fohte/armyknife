@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 
@@ -33,10 +33,11 @@ pub fn run_neovim(file_path: &Path, window_title: Option<&str>) -> std::io::Resu
     cmd.arg(file_path).status()
 }
 
+/// Launch WezTerm with the specified command and arguments.
 #[cfg(target_os = "macos")]
 pub fn launch_wezterm(
     options: &LaunchOptions,
-    exe_path: &Path,
+    command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
     let cols_config = format!("initial_cols={}", options.window_cols);
@@ -59,7 +60,7 @@ pub fn launch_wezterm(
         &options.window_title,
         "--",
     ]);
-    cmd.arg(exe_path);
+    cmd.arg(command);
     cmd.args(args);
     cmd.status()
 }
@@ -67,7 +68,7 @@ pub fn launch_wezterm(
 #[cfg(not(target_os = "macos"))]
 pub fn launch_wezterm(
     options: &LaunchOptions,
-    exe_path: &Path,
+    command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
     let cols_config = format!("initial_cols={}", options.window_cols);
@@ -86,7 +87,7 @@ pub fn launch_wezterm(
         &options.window_title,
         "--",
     ]);
-    cmd.arg(exe_path);
+    cmd.arg(command);
     cmd.args(args);
     cmd.status()
 }
