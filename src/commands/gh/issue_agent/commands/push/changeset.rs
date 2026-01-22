@@ -2,7 +2,7 @@
 
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
-use crate::infra::github::{CommentClient, IssueClient};
+use crate::infra::github::OctocrabClient;
 
 use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_title_change,
@@ -170,17 +170,14 @@ impl<'a> ChangeSet<'a> {
         }
     }
 
-    pub(super) async fn apply<C>(
+    pub(super) async fn apply(
         &self,
-        client: &C,
+        client: &OctocrabClient,
         owner: &str,
         repo: &str,
         issue_number: u64,
         storage: &IssueStorage,
-    ) -> anyhow::Result<()>
-    where
-        C: IssueClient + CommentClient,
-    {
+    ) -> anyhow::Result<()> {
         if let Some(change) = &self.body {
             println!();
             println!("Updating issue body...");

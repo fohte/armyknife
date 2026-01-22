@@ -3,7 +3,7 @@ use clap::Args;
 use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success};
 use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::infra::github::{CommentClient, IssueClient, OctocrabClient};
+use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct PullArgs {
@@ -17,10 +17,10 @@ pub async fn run(args: &PullArgs) -> anyhow::Result<()> {
 }
 
 /// Internal implementation that accepts a client for testability.
-pub(super) async fn run_with_client<C>(args: &PullArgs, client: &C) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+pub(super) async fn run_with_client(
+    args: &PullArgs,
+    client: &OctocrabClient,
+) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -54,14 +54,11 @@ where
 
 /// Internal implementation with custom storage for testability.
 #[cfg(test)]
-pub(super) async fn run_with_client_and_storage<C>(
+pub(super) async fn run_with_client_and_storage(
     args: &PullArgs,
-    client: &C,
+    client: &OctocrabClient,
     storage: &IssueStorage,
-) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -110,11 +107,9 @@ pub(super) fn save_issue_to_storage(
 mod tests {
     use super::*;
     use crate::commands::gh::issue_agent::commands::IssueArgs;
-    use crate::commands::gh::issue_agent::commands::test_helpers::{
-        test_comment, test_dir, test_issue,
-    };
+    use crate::commands::gh::issue_agent::commands::test_helpers::{GitHubMockServer, test_dir};
     use crate::commands::gh::issue_agent::models::{Author, Comment, Issue};
-    use crate::infra::github::MockGitHubClient;
+    use crate::commands::gh::issue_agent::testing::factories;
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
     use rstest::rstest;
@@ -124,29 +119,52 @@ mod tests {
     mod save_issue_to_storage_tests {
         use super::*;
 
+        fn test_issue() -> Issue {
+            factories::issue_with(|i| {
+                i.number = 123;
+                i.title = "Test Issue".to_string();
+                i.body = Some("Test body content".to_string());
+                i.labels = factories::labels(&["bug"]);
+                i.assignees = factories::assignees(&["assignee1"]);
+                i.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+                i.updated_at = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+            })
+        }
+
+        fn test_comment() -> Comment {
+            factories::comment_with(|c| {
+                c.id = "IC_abc123".to_string();
+                c.database_id = 12345;
+                c.author = Some(factories::author("commenter"));
+                c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+                c.body = "Test comment body".to_string();
+            })
+        }
+
         #[rstest]
-        fn test_saves_issue_body(test_dir: TempDir, test_issue: Issue) {
+        fn test_saves_issue_body(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
-            save_issue_to_storage(&storage, &test_issue, &[]).unwrap();
+            save_issue_to_storage(&storage, &test_issue(), &[]).unwrap();
 
             let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
             assert_eq!(body, "Test body content\n");
         }
 
         #[rstest]
-        fn test_saves_empty_body_when_none(test_dir: TempDir, mut test_issue: Issue) {
-            test_issue.body = None;
+        fn test_saves_empty_body_when_none(test_dir: TempDir) {
+            let mut issue = test_issue();
+            issue.body = None;
             let storage = IssueStorage::from_dir(test_dir.path());
-            save_issue_to_storage(&storage, &test_issue, &[]).unwrap();
+            save_issue_to_storage(&storage, &issue, &[]).unwrap();
 
             let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
             assert_eq!(body, "\n");
         }
 
         #[rstest]
-        fn test_saves_metadata(test_dir: TempDir, test_issue: Issue) {
+        fn test_saves_metadata(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
-            save_issue_to_storage(&storage, &test_issue, &[]).unwrap();
+            save_issue_to_storage(&storage, &test_issue(), &[]).unwrap();
 
             let metadata_path = test_dir.path().join("metadata.json");
             assert!(metadata_path.exists());
@@ -159,9 +177,9 @@ mod tests {
         }
 
         #[rstest]
-        fn test_saves_comments(test_dir: TempDir, test_issue: Issue, test_comment: Comment) {
+        fn test_saves_comments(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
-            save_issue_to_storage(&storage, &test_issue, &[test_comment]).unwrap();
+            save_issue_to_storage(&storage, &test_issue(), &[test_comment()]).unwrap();
 
             let comments_dir = test_dir.path().join("comments");
             assert!(comments_dir.exists());
@@ -183,7 +201,7 @@ mod tests {
         }
 
         #[rstest]
-        fn test_saves_multiple_comments(test_dir: TempDir, test_issue: Issue) {
+        fn test_saves_multiple_comments(test_dir: TempDir) {
             let comments = vec![
                 Comment {
                     id: "IC_1".to_string(),
@@ -206,7 +224,7 @@ mod tests {
             ];
 
             let storage = IssueStorage::from_dir(test_dir.path());
-            save_issue_to_storage(&storage, &test_issue, &comments).unwrap();
+            save_issue_to_storage(&storage, &test_issue(), &comments).unwrap();
 
             let comments_dir = test_dir.path().join("comments");
             assert!(comments_dir.join("001_comment_1001.md").exists());
@@ -219,15 +237,12 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_fetches_and_saves_issue(
-            test_dir: TempDir,
-            test_issue: Issue,
-            test_comment: Comment,
-        ) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![test_comment]);
+        async fn test_fetches_and_saves_issue(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
 
+            let client = mock.client();
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {
                 issue: IssueArgs {
@@ -248,10 +263,12 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_fails_when_local_changes_exist(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![]);
+        async fn test_fails_when_local_changes_exist(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
 
             // Create storage dir with modified content
             fs::create_dir_all(test_dir.path()).unwrap();
@@ -275,14 +292,16 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_succeeds_when_no_local_changes(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![]);
+        async fn test_succeeds_when_no_local_changes(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
 
             // Create storage dir with matching content (no changes)
             fs::create_dir_all(test_dir.path()).unwrap();
-            fs::write(test_dir.path().join("issue.md"), "Test body content\n").unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Test body\n").unwrap();
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {
@@ -299,10 +318,12 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![]);
+        async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
 
             // Use a non-existent subdirectory
             let storage = IssueStorage::from_dir(test_dir.path().join("new_dir"));
@@ -321,7 +342,10 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_fails_when_issue_not_found(test_dir: TempDir) {
-            let client = MockGitHubClient::new(); // No issues configured
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_not_found("owner", "repo", 999).await;
+
+            let client = mock.client();
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {
@@ -337,8 +361,9 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_fails_with_invalid_repo_format(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new().with_issue("owner", "repo", test_issue);
+        async fn test_fails_with_invalid_repo_format(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = PullArgs {

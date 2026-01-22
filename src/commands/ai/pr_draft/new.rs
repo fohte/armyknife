@@ -104,13 +104,13 @@ fn format_diff(old: &str, new: &str, use_color: bool) -> String {
 mod tests {
     use super::*;
     use crate::infra::git::test_utils::TempRepo;
-    use crate::infra::github::MockGitHubClient;
+    use crate::infra::github::GitHubMockServer;
     use rstest::rstest;
     use std::fs;
     use std::path::Path;
 
     struct TestEnv {
-        gh_client: MockGitHubClient,
+        mock: GitHubMockServer,
         temp_repo: TempRepo,
         draft_dir: std::path::PathBuf,
     }
@@ -121,8 +121,9 @@ mod tests {
         }
     }
 
-    fn setup_test_env(owner: &str, repo: &str, is_private: bool) -> TestEnv {
-        let gh_client = MockGitHubClient::new().with_private(owner, repo, is_private);
+    async fn setup_test_env(owner: &str, repo: &str, is_private: bool) -> TestEnv {
+        let mock = GitHubMockServer::start().await;
+        mock.mock_get_repo(owner, repo, is_private).await;
         let temp_repo = TempRepo::new(owner, repo, "feature-test");
 
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
@@ -130,7 +131,7 @@ mod tests {
             let _ = fs::remove_dir_all(&draft_dir);
         }
         TestEnv {
-            gh_client,
+            mock,
             temp_repo,
             draft_dir,
         }
@@ -200,15 +201,16 @@ mod tests {
     ) {
         // Use unique repo name to avoid conflicts in parallel tests
         let repo = format!("repo_frontmatter_{}", is_private);
-        let env = setup_test_env("owner", &repo, is_private);
+        let env = setup_test_env("owner", &repo, is_private).await;
 
+        let client = env.mock.client();
         run_with_mock(
             &NewArgs {
                 title: Some("Test Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            &env.gh_client,
+            &client,
         )
         .await
         .expect("run should succeed");
@@ -226,15 +228,16 @@ mod tests {
 
     #[tokio::test]
     async fn new_fails_when_file_exists_without_force() {
-        let env = setup_test_env("owner", "repo_exists_no_force", true);
+        let env = setup_test_env("owner", "repo_exists_no_force", true).await;
 
+        let client = env.mock.client();
         run_with_mock(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            &env.gh_client,
+            &client,
         )
         .await
         .expect("first run should succeed");
@@ -252,7 +255,7 @@ mod tests {
                 force: false,
             },
             &env.temp_repo.path(),
-            &env.gh_client,
+            &client,
         )
         .await;
         assert!(result.is_err(), "second run without --force should fail");
@@ -301,15 +304,16 @@ mod tests {
 
     #[tokio::test]
     async fn new_overwrites_when_file_exists_with_force() {
-        let env = setup_test_env("owner", "repo_overwrite", true);
+        let env = setup_test_env("owner", "repo_overwrite", true).await;
 
+        let client = env.mock.client();
         run_with_mock(
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
             },
             &env.temp_repo.path(),
-            &env.gh_client,
+            &client,
         )
         .await
         .expect("first run should succeed");
@@ -320,7 +324,7 @@ mod tests {
                 force: true,
             },
             &env.temp_repo.path(),
-            &env.gh_client,
+            &client,
         )
         .await
         .expect("second run with --force should succeed");

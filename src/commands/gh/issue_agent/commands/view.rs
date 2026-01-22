@@ -3,7 +3,7 @@ use clap::Args;
 use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::commands::gh::issue_agent::models::{Comment, Issue};
-use crate::infra::github::{CommentClient, IssueClient, OctocrabClient};
+use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct ViewArgs {
@@ -20,24 +20,20 @@ pub async fn run(args: &ViewArgs) -> anyhow::Result<()> {
 
 /// Internal implementation that returns the formatted output for testability.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) async fn run_with_client_and_output<C>(
+pub(super) async fn run_with_client_and_output(
     args: &ViewArgs,
-    client: &C,
-) -> anyhow::Result<String>
-where
-    C: IssueClient + CommentClient,
-{
+    client: &OctocrabClient,
+) -> anyhow::Result<String> {
     run_with_client_and_output_with(args, client, format_relative_time).await
 }
 
 /// Internal implementation that accepts a custom time formatter for testability.
-async fn run_with_client_and_output_with<C, F>(
+async fn run_with_client_and_output_with<F>(
     args: &ViewArgs,
-    client: &C,
+    client: &OctocrabClient,
     time_formatter: F,
 ) -> anyhow::Result<String>
 where
-    C: IssueClient + CommentClient,
     F: Fn(&str) -> String,
 {
     let repo_str = get_repo_from_arg_or_git(&args.issue.repo)?;
@@ -439,42 +435,43 @@ mod tests {
     mod run_with_client_tests {
         use super::*;
         use crate::commands::gh::issue_agent::commands::IssueArgs;
-        use crate::infra::github::MockGitHubClient;
-        use chrono::{TimeZone, Utc};
+        use crate::commands::gh::issue_agent::commands::test_helpers::GitHubMockServer;
         use indoc::indoc;
-
-        fn mock_issue(number: i64, title: &str, body: &str) -> Issue {
-            factories::issue_with(|i| {
-                i.number = number;
-                i.title = title.to_string();
-                i.body = Some(body.to_string());
-                i.labels = factories::labels(&["bug"]);
-                i.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-                i.updated_at = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
-            })
-        }
-
-        fn mock_comment(id: &str, database_id: i64, author: &str, body: &str) -> Comment {
-            factories::comment_with(|c| {
-                c.id = id.to_string();
-                c.database_id = database_id;
-                c.author = Some(factories::author(author));
-                c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-                c.body = body.to_string();
-            })
-        }
 
         #[tokio::test]
         async fn test_fetches_and_displays_issue_with_comments() {
-            let issue = mock_issue(123, "Test Issue", "Test body content");
-            let comments = vec![
-                mock_comment("IC_1", 1001, "commenter1", "First comment"),
-                mock_comment("IC_2", 1002, "commenter2", "Second comment"),
-            ];
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", issue)
-                .with_comments("owner", "repo", 123, comments);
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_with(
+                "owner",
+                "repo",
+                123,
+                "Test Issue",
+                "Test body content",
+                "2024-01-02T00:00:00Z",
+            )
+            .await;
+            mock.mock_get_comments_graphql_with(
+                "owner",
+                "repo",
+                123,
+                &[
+                    crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment {
+                        id: "IC_1",
+                        database_id: 1001,
+                        author: "commenter1",
+                        body: "First comment",
+                    },
+                    crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment {
+                        id: "IC_2",
+                        database_id: 1002,
+                        author: "commenter2",
+                        body: "Second comment",
+                    },
+                ],
+            )
+            .await;
 
+            let client = mock.client();
             let args = ViewArgs {
                 issue: IssueArgs {
                     issue_number: 123,
@@ -513,11 +510,19 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_without_comments() {
-            let issue = mock_issue(42, "No Comments Issue", "Body without comments");
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", issue)
-                .with_comments("owner", "repo", 42, vec![]);
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_with(
+                "owner",
+                "repo",
+                42,
+                "No Comments Issue",
+                "Body without comments",
+                "2024-01-02T00:00:00Z",
+            )
+            .await;
+            mock.mock_get_comments_graphql("owner", "repo", 42).await;
 
+            let client = mock.client();
             let args = ViewArgs {
                 issue: IssueArgs {
                     issue_number: 42,
@@ -544,8 +549,10 @@ mod tests {
 
         #[tokio::test]
         async fn test_fails_when_issue_not_found() {
-            let client = MockGitHubClient::new(); // No issues configured
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_not_found("owner", "repo", 999).await;
 
+            let client = mock.client();
             let args = ViewArgs {
                 issue: IssueArgs {
                     issue_number: 999,
@@ -559,7 +566,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_fails_with_invalid_repo_format() {
-            let client = MockGitHubClient::new();
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
 
             let args = ViewArgs {
                 issue: IssueArgs {
@@ -578,16 +586,19 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_without_body() {
-            let issue = factories::issue_with(|i| {
-                i.number = 10;
-                i.title = "Empty Body Issue".to_string();
-                i.body = None;
-                i.labels = factories::labels(&["bug"]);
-            });
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", issue)
-                .with_comments("owner", "repo", 10, vec![]);
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_with(
+                "owner",
+                "repo",
+                10,
+                "Empty Body Issue",
+                "",
+                "2024-01-02T00:00:00Z",
+            )
+            .await;
+            mock.mock_get_comments_graphql("owner", "repo", 10).await;
 
+            let client = mock.client();
             let args = ViewArgs {
                 issue: IssueArgs {
                     issue_number: 10,
@@ -614,16 +625,20 @@ mod tests {
 
         #[tokio::test]
         async fn test_displays_issue_with_multiple_labels() {
-            let issue = factories::issue_with(|i| {
-                i.number = 15;
-                i.title = "Multi Label Issue".to_string();
-                i.body = Some("Body".to_string());
-                i.labels = factories::labels(&["bug", "enhancement", "help wanted"]);
-            });
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", issue)
-                .with_comments("owner", "repo", 15, vec![]);
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_with_labels(
+                "owner",
+                "repo",
+                15,
+                "Multi Label Issue",
+                "Body",
+                "2024-01-02T00:00:00Z",
+                &["bug", "enhancement", "help wanted"],
+            )
+            .await;
+            mock.mock_get_comments_graphql("owner", "repo", 15).await;
 
+            let client = mock.client();
             let args = ViewArgs {
                 issue: IssueArgs {
                     issue_number: 15,

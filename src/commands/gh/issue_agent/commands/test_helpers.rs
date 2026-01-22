@@ -1,10 +1,9 @@
 //! Test helpers shared across issue-agent command tests.
 
-use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
+use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::commands::gh::issue_agent::testing::factories;
-use crate::infra::github::MockGitHubClient;
-use chrono::{TimeZone, Utc};
+// Re-export for tests that import from test_helpers
+pub use crate::infra::github::{GitHubMockServer, RemoteComment};
 use rstest::fixture;
 use std::fs;
 use std::path::Path;
@@ -14,48 +13,6 @@ use tempfile::TempDir;
 #[fixture]
 pub fn test_dir() -> TempDir {
     tempfile::tempdir().unwrap()
-}
-
-/// Create a standard test issue with common defaults.
-/// Uses fixed timestamps for deterministic tests.
-#[fixture]
-pub fn test_issue() -> Issue {
-    factories::issue_with(|i| {
-        i.number = 123;
-        i.title = "Test Issue".to_string();
-        i.body = Some("Test body content".to_string());
-        i.labels = factories::labels(&["bug"]);
-        i.assignees = factories::assignees(&["assignee1"]);
-        i.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        i.updated_at = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
-    })
-}
-
-/// Create a standard test comment.
-/// Uses fixed timestamps for deterministic tests.
-#[fixture]
-pub fn test_comment() -> Comment {
-    factories::comment_with(|c| {
-        c.id = "IC_abc123".to_string();
-        c.database_id = 12345;
-        c.author = Some(factories::author("commenter"));
-        c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        c.body = "Test comment body".to_string();
-    })
-}
-
-/// Create a test issue with configurable fields.
-pub fn create_test_issue(number: i64, title: &str, body: &str, updated_at: &str) -> Issue {
-    factories::issue_with(|i| {
-        i.number = number;
-        i.title = title.to_string();
-        i.body = Some(body.to_string());
-        i.labels = factories::labels(&["bug"]);
-        i.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        i.updated_at = chrono::DateTime::parse_from_rfc3339(updated_at)
-            .unwrap()
-            .with_timezone(&Utc);
-    })
 }
 
 /// Create metadata JSON using IssueMetadata serialization.
@@ -88,17 +45,6 @@ pub fn create_comment_file(
     )
 }
 
-/// Create a comment with the given author (other fields use defaults).
-pub fn make_comment(author: &str) -> Comment {
-    factories::comment_with(|c| {
-        c.id = "IC_abc".to_string();
-        c.database_id = 12345;
-        c.author = Some(factories::author(author));
-        c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        c.body = "Original".to_string();
-    })
-}
-
 /// Write a local comment file to the storage directory.
 pub fn setup_local_comment(dir: &Path, filename: &str, content: &str) {
     let comments_dir = dir.join("comments");
@@ -108,6 +54,7 @@ pub fn setup_local_comment(dir: &Path, filename: &str, content: &str) {
 
 // Default timestamps for tests
 pub const DEFAULT_TS: &str = "2024-01-02T00:00:00+00:00";
+#[allow(dead_code)]
 pub const OLD_TS: &str = "2024-01-01T00:00:00+00:00";
 
 /// Macro to generate builder setter methods.
@@ -124,24 +71,26 @@ macro_rules! builder_setters {
 
 /// Test fixture builder with sensible defaults.
 ///
-/// Use this to set up MockGitHubClient and local storage for integration tests.
+/// Use this to set up GitHubMockServer and local storage for integration tests.
 /// Only specify the fields you want to change from defaults.
 ///
 /// # Example
 /// ```ignore
-/// let (client, storage) = TestSetup::new(test_dir.path())
+/// let (mock, storage) = TestSetup::new(test_dir.path())
 ///     .remote_title("Old Title")
 ///     .local_title("New Title")
-///     .build();
+///     .build()
+///     .await;
+/// let client = mock.client();
 /// ```
-#[allow(dead_code)] // All setters are generated but not all may be used yet
+#[allow(dead_code)]
 pub struct TestSetup<'a> {
     dir: &'a Path,
     // Remote state (what GitHub API returns)
     pub remote_title: &'a str,
     pub remote_body: &'a str,
     pub remote_ts: &'a str,
-    pub remote_comments: Vec<Comment>,
+    pub remote_comments: Vec<RemoteComment<'a>>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
     pub local_body: &'a str,
@@ -171,7 +120,7 @@ impl<'a> TestSetup<'a> {
         remote_title: &'a str,
         remote_body: &'a str,
         remote_ts: &'a str,
-        remote_comments: Vec<Comment>,
+        remote_comments: Vec<RemoteComment<'a>>,
         local_title: &'a str,
         local_body: &'a str,
         local_labels: Vec<&'a str>,
@@ -179,14 +128,29 @@ impl<'a> TestSetup<'a> {
         current_user: &'a str,
     }
 
-    /// Build the MockGitHubClient and IssueStorage.
-    pub fn build(self) -> (MockGitHubClient, IssueStorage) {
-        let issue = create_test_issue(123, self.remote_title, self.remote_body, self.remote_ts);
-        let client = MockGitHubClient::new()
-            .with_issue("owner", "repo", issue)
-            .with_comments("owner", "repo", 123, self.remote_comments)
-            .with_current_user(self.current_user);
+    /// Build the GitHubMockServer and IssueStorage.
+    pub async fn build(self) -> (GitHubMockServer, IssueStorage) {
+        let mock = GitHubMockServer::start().await;
 
+        // Set up remote issue mock
+        mock.mock_get_issue_with(
+            "owner",
+            "repo",
+            123,
+            self.remote_title,
+            self.remote_body,
+            self.remote_ts,
+        )
+        .await;
+
+        // Set up remote comments mock
+        mock.mock_get_comments_graphql_with("owner", "repo", 123, &self.remote_comments)
+            .await;
+
+        // Set up current user mock
+        mock.mock_get_current_user(self.current_user).await;
+
+        // Set up local storage
         fs::create_dir_all(self.dir).unwrap();
         fs::write(self.dir.join("issue.md"), format!("{}\n", self.local_body)).unwrap();
         fs::write(
@@ -196,6 +160,6 @@ impl<'a> TestSetup<'a> {
         .unwrap();
 
         let storage = IssueStorage::from_dir(self.dir);
-        (client, storage)
+        (mock, storage)
     }
 }

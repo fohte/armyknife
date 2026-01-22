@@ -1,525 +1,571 @@
-//! Mock implementations for testing.
+//! wiremock-based GitHub mock server for testing.
+//!
+//! Provides `GitHubMockServer` for HTTP-level mocking of GitHub API calls.
+//! This is used across all tests that need to interact with GitHub APIs.
 
-use std::collections::HashMap;
+use serde_json::json;
 use std::sync::{Arc, Mutex};
+use wiremock::matchers::{method, path, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::comment::CommentClient;
-use super::error::{GitHubError, Result};
-use super::issue::IssueClient;
-use super::pr::{CreatePrParams, PrClient, PrInfo};
-use super::repo::RepoClient;
-use crate::commands::gh::issue_agent::models::{Author, Comment, Issue};
+use super::client::OctocrabClient;
+use super::pr::CreatePrParams;
 
-/// Mock implementation for testing.
+/// Create a mock user JSON object for octocrab Author model.
+fn mock_user(login: &str) -> serde_json::Value {
+    json!({
+        "login": login,
+        "id": 1,
+        "node_id": "U_test",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1",
+        "gravatar_id": "",
+        "url": format!("https://api.github.com/users/{}", login),
+        "html_url": format!("https://github.com/{}", login),
+        "followers_url": format!("https://api.github.com/users/{}/followers", login),
+        "following_url": format!("https://api.github.com/users/{}/following{{/other_user}}", login),
+        "gists_url": format!("https://api.github.com/users/{}/gists{{/gist_id}}", login),
+        "starred_url": format!("https://api.github.com/users/{}/starred{{/owner}}{{/repo}}", login),
+        "subscriptions_url": format!("https://api.github.com/users/{}/subscriptions", login),
+        "organizations_url": format!("https://api.github.com/users/{}/orgs", login),
+        "repos_url": format!("https://api.github.com/users/{}/repos", login),
+        "events_url": format!("https://api.github.com/users/{}/events{{/privacy}}", login),
+        "received_events_url": format!("https://api.github.com/users/{}/received_events", login),
+        "type": "User",
+        "site_admin": false
+    })
+}
+
+/// Create a mock label JSON object for octocrab Label model.
+fn mock_label(name: &str) -> serde_json::Value {
+    json!({
+        "id": 1,
+        "node_id": "LA_test",
+        "url": format!("https://api.github.com/repos/owner/repo/labels/{}", name),
+        "name": name,
+        "color": "d73a4a",
+        "default": false
+    })
+}
+
+/// Create a mock comment JSON object for octocrab Comment model.
+fn mock_comment(
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    comment_id: u64,
+    node_id: &str,
+    author: &str,
+    body: &str,
+) -> serde_json::Value {
+    json!({
+        "id": comment_id,
+        "node_id": node_id,
+        "url": format!("https://api.github.com/repos/{}/{}/issues/comments/{}", owner, repo, comment_id),
+        "html_url": format!("https://github.com/{}/{}/issues/{}#issuecomment-{}", owner, repo, issue_number, comment_id),
+        "body": body,
+        "author_association": "OWNER",
+        "user": mock_user(author),
+        "created_at": "2024-01-02T00:00:00Z"
+    })
+}
+
+/// Create a mock issue JSON object for octocrab Issue model.
+fn mock_issue(
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    title: &str,
+    body: &str,
+    updated_at: &str,
+) -> serde_json::Value {
+    mock_issue_with_labels(owner, repo, issue_number, title, body, updated_at, &["bug"])
+}
+
+fn mock_issue_with_labels(
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    title: &str,
+    body: &str,
+    updated_at: &str,
+    labels: &[&str],
+) -> serde_json::Value {
+    let mock_labels: Vec<_> = labels.iter().map(|l| mock_label(l)).collect();
+    json!({
+        "id": 1,
+        "node_id": "I_test",
+        "url": format!("https://api.github.com/repos/{}/{}/issues/{}", owner, repo, issue_number),
+        "repository_url": format!("https://api.github.com/repos/{}/{}", owner, repo),
+        "labels_url": format!("https://api.github.com/repos/{}/{}/issues/{}/labels{{/name}}", owner, repo, issue_number),
+        "comments_url": format!("https://api.github.com/repos/{}/{}/issues/{}/comments", owner, repo, issue_number),
+        "events_url": format!("https://api.github.com/repos/{}/{}/issues/{}/events", owner, repo, issue_number),
+        "html_url": format!("https://github.com/{}/{}/issues/{}", owner, repo, issue_number),
+        "number": issue_number,
+        "state": "open",
+        "title": title,
+        "body": body,
+        "user": mock_user("testuser"),
+        "labels": mock_labels,
+        "assignees": [],
+        "author_association": "OWNER",
+        "milestone": null,
+        "locked": false,
+        "comments": 0,
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": updated_at
+    })
+}
+
+/// Create a mock repository JSON object for octocrab Repository model.
+fn mock_repository(
+    owner: &str,
+    repo: &str,
+    is_private: bool,
+    default_branch: &str,
+) -> serde_json::Value {
+    json!({
+        "id": 1,
+        "node_id": "R_test",
+        "name": repo,
+        "full_name": format!("{}/{}", owner, repo),
+        "private": is_private,
+        "owner": mock_user(owner),
+        "html_url": format!("https://github.com/{}/{}", owner, repo),
+        "description": "Test repository",
+        "fork": false,
+        "url": format!("https://api.github.com/repos/{}/{}", owner, repo),
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+        "pushed_at": "2024-01-01T00:00:00Z",
+        "default_branch": default_branch
+    })
+}
+
+/// Create a mock pull request JSON object for octocrab PullRequest model.
+fn mock_pull_request(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    title: &str,
+    body: &str,
+    head: &str,
+) -> serde_json::Value {
+    json!({
+        "id": 1,
+        "node_id": "PR_test",
+        "number": pr_number,
+        "state": "open",
+        "locked": false,
+        "title": title,
+        "body": body,
+        "user": mock_user("testuser"),
+        "url": format!("https://api.github.com/repos/{}/{}/pulls/{}", owner, repo, pr_number),
+        "html_url": format!("https://github.com/{}/{}/pull/{}", owner, repo, pr_number),
+        "diff_url": format!("https://github.com/{}/{}/pull/{}.diff", owner, repo, pr_number),
+        "patch_url": format!("https://github.com/{}/{}/pull/{}.patch", owner, repo, pr_number),
+        "issue_url": format!("https://api.github.com/repos/{}/{}/issues/{}", owner, repo, pr_number),
+        "commits_url": format!("https://api.github.com/repos/{}/{}/pulls/{}/commits", owner, repo, pr_number),
+        "review_comments_url": format!("https://api.github.com/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number),
+        "review_comment_url": format!("https://api.github.com/repos/{}/{}/pulls/comments{{/number}}", owner, repo),
+        "comments_url": format!("https://api.github.com/repos/{}/{}/issues/{}/comments", owner, repo, pr_number),
+        "statuses_url": format!("https://api.github.com/repos/{}/{}/statuses/abc123", owner, repo),
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+        "head": {
+            "label": format!("{}:{}", owner, head),
+            "ref": head,
+            "sha": "abc123"
+        },
+        "base": {
+            "label": format!("{}:main", owner),
+            "ref": "main",
+            "sha": "def456"
+        }
+    })
+}
+
+/// Remote comment definition for test setup.
 #[derive(Clone)]
-pub struct MockGitHubClient {
-    /// Map of "owner/repo" -> is_private
-    pub private_repos: HashMap<String, bool>,
-    /// Map of "owner/repo" -> default_branch
-    pub default_branches: HashMap<String, String>,
-    /// Result URL for PR creation (None = error)
-    pub pr_create_result: Option<String>,
-    /// Map of "owner/repo/branch" -> PrInfo
-    pub branch_prs: HashMap<String, PrInfo>,
-    /// Track created PRs for assertions
+pub struct RemoteComment<'a> {
+    pub id: &'a str,
+    pub database_id: i64,
+    pub author: &'a str,
+    pub body: &'a str,
+}
+
+/// wiremock-based GitHub mock server for testing.
+///
+/// This provides HTTP-level mocking for GitHub API endpoints, allowing tests
+/// to verify actual HTTP requests rather than mocking at the trait level.
+pub struct GitHubMockServer {
+    server: MockServer,
+    /// Track created PRs for assertions in tests.
+    #[allow(dead_code)]
     pub created_prs: Arc<Mutex<Vec<CreatePrParams>>>,
-    /// Track browser opens for assertions
+    /// Track browser opens for assertions.
+    #[allow(dead_code)]
     pub opened_urls: Arc<Mutex<Vec<String>>>,
-    /// Map of "owner/repo/issue_number" -> Issue
-    pub issues: HashMap<String, Issue>,
-    /// Map of "owner/repo/issue_number" -> Vec<Comment>
-    pub comments: HashMap<String, Vec<Comment>>,
-    /// Track updated issue bodies for assertions
-    pub updated_issue_bodies: Arc<Mutex<Vec<UpdateIssueBodyParams>>>,
-    /// Track updated issue titles for assertions
-    pub updated_issue_titles: Arc<Mutex<Vec<UpdateIssueTitleParams>>>,
-    /// Track added labels for assertions
-    pub added_labels: Arc<Mutex<Vec<AddLabelsParams>>>,
-    /// Track removed labels for assertions
-    pub removed_labels: Arc<Mutex<Vec<RemoveLabelParams>>>,
-    /// Track updated comments for assertions
-    pub updated_comments: Arc<Mutex<Vec<UpdateCommentParams>>>,
-    /// Track created comments for assertions
-    pub created_comments: Arc<Mutex<Vec<CreateCommentParams>>>,
-    /// Track deleted comments for assertions
-    pub deleted_comments: Arc<Mutex<Vec<DeleteCommentParams>>>,
-    /// Current user login for testing
-    pub current_user: Option<String>,
 }
 
-/// Common fields for issue-related API calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IssueRef {
-    pub owner: String,
-    pub repo: String,
-    pub issue_number: u64,
-}
-
-/// Common fields for comment-related API calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CommentRef {
-    pub owner: String,
-    pub repo: String,
-    pub comment_id: u64,
-}
-
-/// Parameters for tracking update_issue_body calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdateIssueBodyParams {
-    pub issue: IssueRef,
-    pub body: String,
-}
-
-/// Parameters for tracking update_issue_title calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdateIssueTitleParams {
-    pub issue: IssueRef,
-    pub title: String,
-}
-
-/// Parameters for tracking add_labels calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AddLabelsParams {
-    pub issue: IssueRef,
-    pub labels: Vec<String>,
-}
-
-/// Parameters for tracking remove_label calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RemoveLabelParams {
-    pub issue: IssueRef,
-    pub label: String,
-}
-
-/// Parameters for tracking update_comment calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdateCommentParams {
-    pub comment: CommentRef,
-    pub body: String,
-}
-
-/// Parameters for tracking create_comment calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CreateCommentParams {
-    pub issue: IssueRef,
-    pub body: String,
-}
-
-/// Parameters for tracking delete_comment calls.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeleteCommentParams {
-    pub comment: CommentRef,
-}
-
-impl MockGitHubClient {
-    pub fn new() -> Self {
+impl GitHubMockServer {
+    /// Start a new mock server.
+    pub async fn start() -> Self {
         Self {
-            private_repos: HashMap::new(),
-            default_branches: HashMap::new(),
-            pr_create_result: Some("https://github.com/owner/repo/pull/1".to_string()),
-            branch_prs: HashMap::new(),
+            server: MockServer::start().await,
             created_prs: Arc::new(Mutex::new(Vec::new())),
             opened_urls: Arc::new(Mutex::new(Vec::new())),
-            issues: HashMap::new(),
-            comments: HashMap::new(),
-            updated_issue_bodies: Arc::new(Mutex::new(Vec::new())),
-            updated_issue_titles: Arc::new(Mutex::new(Vec::new())),
-            added_labels: Arc::new(Mutex::new(Vec::new())),
-            removed_labels: Arc::new(Mutex::new(Vec::new())),
-            updated_comments: Arc::new(Mutex::new(Vec::new())),
-            created_comments: Arc::new(Mutex::new(Vec::new())),
-            deleted_comments: Arc::new(Mutex::new(Vec::new())),
-            current_user: None,
         }
     }
 
-    pub fn with_private(mut self, owner: &str, repo: &str, is_private: bool) -> Self {
-        self.private_repos
-            .insert(format!("{owner}/{repo}"), is_private);
-        self
+    /// Get an OctocrabClient configured to use this mock server.
+    pub fn client(&self) -> OctocrabClient {
+        OctocrabClient::with_base_url(&self.server.uri(), "test-token").unwrap()
     }
 
-    pub fn with_default_branch(mut self, owner: &str, repo: &str, branch: &str) -> Self {
-        self.default_branches
-            .insert(format!("{owner}/{repo}"), branch.to_string());
-        self
+    // ============ Issue Operations ============
+
+    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number}
+    pub async fn mock_get_issue(&self, owner: &str, repo: &str, issue_number: u64) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
+                owner,
+                repo,
+                issue_number,
+                "Test Issue",
+                "Test body",
+                "2024-01-02T00:00:00Z",
+            )))
+            .mount(&self.server)
+            .await;
     }
 
-    #[allow(dead_code)]
-    pub fn with_pr_result(mut self, result: Option<String>) -> Self {
-        self.pr_create_result = result;
-        self
-    }
-
-    pub fn with_branch_pr(
-        mut self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
-        pr_info: PrInfo,
-    ) -> Self {
-        self.branch_prs
-            .insert(format!("{owner}/{repo}/{branch}"), pr_info);
-        self
-    }
-
-    /// Add an issue to the mock client.
-    #[allow(dead_code)]
-    pub fn with_issue(mut self, owner: &str, repo: &str, issue: Issue) -> Self {
-        let key = format!("{owner}/{repo}/{}", issue.number);
-        self.issues.insert(key, issue);
-        self
-    }
-
-    /// Add comments to an issue in the mock client.
-    #[allow(dead_code)]
-    pub fn with_comments(
-        mut self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        comments: Vec<Comment>,
-    ) -> Self {
-        let key = format!("{owner}/{repo}/{issue_number}");
-        self.comments.insert(key, comments);
-        self
-    }
-
-    /// Set the current user for the mock client.
-    #[allow(dead_code)]
-    pub fn with_current_user(mut self, login: &str) -> Self {
-        self.current_user = Some(login.to_string());
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl RepoClient for MockGitHubClient {
-    async fn is_repo_private(&self, owner: &str, repo: &str) -> Result<bool> {
-        let key = format!("{owner}/{repo}");
-        Ok(self.private_repos.get(&key).copied().unwrap_or(true))
-    }
-
-    async fn get_default_branch(&self, owner: &str, repo: &str) -> Result<String> {
-        let key = format!("{owner}/{repo}");
-        Ok(self
-            .default_branches
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| "main".to_string()))
-    }
-}
-
-#[async_trait::async_trait]
-impl PrClient for MockGitHubClient {
-    async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
-        self.created_prs.lock().unwrap().push(params);
-        self.pr_create_result
-            .clone()
-            .ok_or_else(|| GitHubError::TokenError("Mock PR creation failed".to_string()).into())
-    }
-
-    async fn get_pr_for_branch(
-        &self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
-    ) -> Result<Option<PrInfo>> {
-        let key = format!("{owner}/{repo}/{branch}");
-        Ok(self.branch_prs.get(&key).cloned())
-    }
-
-    fn open_in_browser(&self, url: &str) {
-        self.opened_urls.lock().unwrap().push(url.to_string());
-    }
-}
-
-#[async_trait::async_trait]
-impl IssueClient for MockGitHubClient {
-    async fn get_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Issue> {
-        let key = format!("{owner}/{repo}/{issue_number}");
-        self.issues
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| GitHubError::TokenError(format!("Issue {key} not found in mock")).into())
-    }
-
-    async fn update_issue_body(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        body: &str,
-    ) -> Result<()> {
-        self.updated_issue_bodies
-            .lock()
-            .unwrap()
-            .push(UpdateIssueBodyParams {
-                issue: IssueRef {
-                    owner: owner.to_string(),
-                    repo: repo.to_string(),
-                    issue_number,
-                },
-                body: body.to_string(),
-            });
-        Ok(())
-    }
-
-    async fn update_issue_title(
+    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} with custom data
+    pub async fn mock_get_issue_with(
         &self,
         owner: &str,
         repo: &str,
         issue_number: u64,
         title: &str,
-    ) -> Result<()> {
-        self.updated_issue_titles
-            .lock()
-            .unwrap()
-            .push(UpdateIssueTitleParams {
-                issue: IssueRef {
-                    owner: owner.to_string(),
-                    repo: repo.to_string(),
-                    issue_number,
-                },
-                title: title.to_string(),
-            });
-        Ok(())
-    }
-
-    async fn add_labels(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        labels: &[String],
-    ) -> Result<()> {
-        self.added_labels.lock().unwrap().push(AddLabelsParams {
-            issue: IssueRef {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                issue_number,
-            },
-            labels: labels.to_vec(),
-        });
-        Ok(())
-    }
-
-    async fn remove_label(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        label: &str,
-    ) -> Result<()> {
-        self.removed_labels.lock().unwrap().push(RemoveLabelParams {
-            issue: IssueRef {
-                owner: owner.to_string(),
-                repo: repo.to_string(),
-                issue_number,
-            },
-            label: label.to_string(),
-        });
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl CommentClient for MockGitHubClient {
-    async fn get_comments(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-    ) -> Result<Vec<Comment>> {
-        let key = format!("{owner}/{repo}/{issue_number}");
-        Ok(self.comments.get(&key).cloned().unwrap_or_default())
-    }
-
-    async fn update_comment(
-        &self,
-        owner: &str,
-        repo: &str,
-        comment_id: u64,
         body: &str,
-    ) -> Result<()> {
-        self.updated_comments
-            .lock()
-            .unwrap()
-            .push(UpdateCommentParams {
-                comment: CommentRef {
-                    owner: owner.to_string(),
-                    repo: repo.to_string(),
-                    comment_id,
-                },
-                body: body.to_string(),
-            });
-        Ok(())
+        updated_at: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
+                owner,
+                repo,
+                issue_number,
+                title,
+                body,
+                updated_at,
+            )))
+            .mount(&self.server)
+            .await;
     }
 
-    async fn create_comment(
+    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} with custom labels
+    pub async fn mock_get_issue_with_labels(
         &self,
         owner: &str,
         repo: &str,
         issue_number: u64,
+        title: &str,
         body: &str,
-    ) -> Result<Comment> {
-        self.created_comments
-            .lock()
-            .unwrap()
-            .push(CreateCommentParams {
-                issue: IssueRef {
-                    owner: owner.to_string(),
-                    repo: repo.to_string(),
+        updated_at: &str,
+        labels: &[&str],
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mock_issue_with_labels(
+                    owner,
+                    repo,
                     issue_number,
-                },
-                body: body.to_string(),
-            });
-        // Return a mock comment
-        Ok(Comment {
-            id: "IC_mock_new".to_string(),
-            database_id: 99999,
-            author: self.current_user.as_ref().map(|login| Author {
-                login: login.clone(),
-            }),
-            created_at: chrono::Utc::now(),
-            body: body.to_string(),
-        })
+                    title,
+                    body,
+                    updated_at,
+                    labels,
+                )),
+            )
+            .mount(&self.server)
+            .await;
     }
 
-    async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
-        self.deleted_comments
-            .lock()
-            .unwrap()
-            .push(DeleteCommentParams {
-                comment: CommentRef {
-                    owner: owner.to_string(),
-                    repo: repo.to_string(),
-                    comment_id,
-                },
-            });
-        Ok(())
+    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} returning 404
+    pub async fn mock_get_issue_not_found(&self, owner: &str, repo: &str, issue_number: u64) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock PATCH /repos/{owner}/{repo}/issues/{issue_number} for body update
+    pub async fn mock_update_issue(&self, owner: &str, repo: &str, issue_number: u64) {
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
+                owner,
+                repo,
+                issue_number,
+                "Test Issue",
+                "Updated body",
+                "2024-01-03T00:00:00Z",
+            )))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/issues/{issue_number}/labels
+    pub async fn mock_add_labels(&self, owner: &str, repo: &str, issue_number: u64) {
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/issues/{issue_number}/labels"
+            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_label("enhancement")])),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{label}
+    pub async fn mock_remove_label(&self, owner: &str, repo: &str, issue_number: u64, label: &str) {
+        Mock::given(method("DELETE"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/issues/{issue_number}/labels/{label}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&self.server)
+            .await;
+    }
+
+    // ============ Comment Operations ============
+
+    /// Mock GraphQL endpoint for get_comments
+    pub async fn mock_get_comments_graphql(&self, _owner: &str, _repo: &str, _issue_number: u64) {
+        self.mock_get_comments_graphql_with(_owner, _repo, _issue_number, &[])
+            .await;
+    }
+
+    /// Mock GraphQL endpoint for get_comments with custom comments
+    pub async fn mock_get_comments_graphql_with(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _issue_number: u64,
+        comments: &[RemoteComment<'_>],
+    ) {
+        let nodes: Vec<serde_json::Value> = comments
+            .iter()
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "databaseId": c.database_id,
+                    "author": {"login": c.author},
+                    "createdAt": "2024-01-01T12:00:00Z",
+                    "body": c.body
+                })
+            })
+            .collect();
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "comments": {
+                                "nodes": nodes
+                            }
+                        }
+                    }
+                }
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/issues/{issue_number}/comments
+    pub async fn mock_create_comment(&self, owner: &str, repo: &str, issue_number: u64) {
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/issues/{issue_number}/comments"
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_json(mock_comment(
+                owner,
+                repo,
+                issue_number,
+                99999,
+                "IC_new_comment",
+                "testuser",
+                "New comment",
+            )))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+    pub async fn mock_update_comment(&self, owner: &str, repo: &str, _comment_id: u64) {
+        Mock::given(method("PATCH"))
+            .and(path_regex(format!(
+                r"/repos/{owner}/{repo}/issues/comments/\d+"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_comment(
+                owner,
+                repo,
+                1,
+                12345,
+                "IC_updated",
+                "testuser",
+                "Updated comment",
+            )))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
+    pub async fn mock_delete_comment(&self, owner: &str, repo: &str, _comment_id: u64) {
+        Mock::given(method("DELETE"))
+            .and(path_regex(format!(
+                r"/repos/{owner}/{repo}/issues/comments/\d+"
+            )))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&self.server)
+            .await;
+    }
+
+    // ============ User Operations ============
+
+    /// Mock GET /user for current user
+    pub async fn mock_get_current_user(&self, login: &str) {
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_user(login)))
+            .mount(&self.server)
+            .await;
+    }
+
+    // ============ Repository Operations ============
+
+    /// Mock GET /repos/{owner}/{repo} for repository info
+    pub async fn mock_get_repo(&self, owner: &str, repo: &str, is_private: bool) {
+        self.mock_get_repo_with_branch(owner, repo, is_private, "main")
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo} with custom default branch
+    pub async fn mock_get_repo_with_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        is_private: bool,
+        default_branch: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_repository(
+                owner,
+                repo,
+                is_private,
+                default_branch,
+            )))
+            .mount(&self.server)
+            .await;
+    }
+
+    // ============ Pull Request Operations ============
+
+    /// Mock POST /repos/{owner}/{repo}/pulls for PR creation.
+    pub async fn mock_create_pull_request(&self, owner: &str, repo: &str) {
+        self.mock_create_pull_request_with(owner, repo, 1, "Test PR", "Test body", "feature")
+            .await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/pulls with custom data.
+    pub async fn mock_create_pull_request_with(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        Mock::given(method("POST"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs (used by get_pr_for_branch).
+    #[allow(dead_code)]
+    pub async fn mock_list_pulls_empty(&self, owner: &str, repo: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls with a PR for a specific branch.
+    #[allow(dead_code)]
+    pub async fn mock_list_pulls_with_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        head_branch: &str,
+        pr_number: u64,
+        _state: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
+                    owner,
+                    repo,
+                    pr_number,
+                    "Test PR",
+                    "Test body",
+                    head_branch
+                )])),
+            )
+            .mount(&self.server)
+            .await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::github::pr::PrState;
+    use crate::infra::github::RepoClient;
 
     #[tokio::test]
-    async fn mock_client_returns_configured_private_status() {
-        let client = MockGitHubClient::new()
-            .with_private("owner", "public-repo", false)
-            .with_private("owner", "private-repo", true);
+    async fn mock_server_returns_repository_info() {
+        let mock = GitHubMockServer::start().await;
+        mock.mock_get_repo("owner", "repo", false).await;
 
-        assert!(
-            !client
-                .is_repo_private("owner", "public-repo")
-                .await
-                .unwrap()
-        );
-        assert!(
-            client
-                .is_repo_private("owner", "private-repo")
-                .await
-                .unwrap()
-        );
-        // Default to private for unknown repos
-        assert!(client.is_repo_private("owner", "unknown").await.unwrap());
+        let client = mock.client();
+        let is_private = client.is_repo_private("owner", "repo").await.unwrap();
+        assert!(!is_private);
     }
 
     #[tokio::test]
-    async fn mock_client_tracks_created_prs() {
-        let client = MockGitHubClient::new();
+    async fn mock_server_returns_configured_default_branch() {
+        let mock = GitHubMockServer::start().await;
+        mock.mock_get_repo_with_branch("owner", "repo", false, "develop")
+            .await;
 
-        let params = CreatePrParams {
-            owner: "owner".to_string(),
-            repo: "repo".to_string(),
-            title: "Test PR".to_string(),
-            body: "Test body".to_string(),
-            head: "feature".to_string(),
-            base: Some("main".to_string()),
-            draft: false,
-        };
-
-        let url = client.create_pull_request(params).await.unwrap();
-        assert_eq!(url, "https://github.com/owner/repo/pull/1");
-
-        let created = client.created_prs.lock().unwrap();
-        assert_eq!(created.len(), 1);
-        assert_eq!(created[0].title, "Test PR");
-    }
-
-    #[test]
-    fn mock_client_tracks_browser_opens() {
-        let client = MockGitHubClient::new();
-        client.open_in_browser("https://example.com");
-
-        let opened = client.opened_urls.lock().unwrap();
-        assert_eq!(opened.len(), 1);
-        assert_eq!(opened[0], "https://example.com");
-    }
-
-    #[tokio::test]
-    async fn mock_client_returns_branch_pr_info() {
-        let client = MockGitHubClient::new().with_branch_pr(
-            "owner",
-            "repo",
-            "feature",
-            PrInfo {
-                state: PrState::Open,
-                url: "https://github.com/owner/repo/pull/1".to_string(),
-            },
-        );
-
-        let pr_info = client
-            .get_pr_for_branch("owner", "repo", "feature")
-            .await
-            .unwrap();
-        assert!(pr_info.is_some());
-        let pr_info = pr_info.unwrap();
-        assert_eq!(pr_info.state, PrState::Open);
-
-        // Unknown branch returns None
-        let no_pr = client
-            .get_pr_for_branch("owner", "repo", "unknown")
-            .await
-            .unwrap();
-        assert!(no_pr.is_none());
-    }
-
-    #[tokio::test]
-    async fn mock_client_returns_configured_default_branch() {
-        let client = MockGitHubClient::new()
-            .with_default_branch("owner", "main-repo", "main")
-            .with_default_branch("owner", "master-repo", "master")
-            .with_default_branch("owner", "custom-repo", "develop");
-
-        assert_eq!(
-            client
-                .get_default_branch("owner", "main-repo")
-                .await
-                .unwrap(),
-            "main"
-        );
-        assert_eq!(
-            client
-                .get_default_branch("owner", "master-repo")
-                .await
-                .unwrap(),
-            "master"
-        );
-        assert_eq!(
-            client
-                .get_default_branch("owner", "custom-repo")
-                .await
-                .unwrap(),
-            "develop"
-        );
-        // Default to "main" for unknown repos
-        assert_eq!(
-            client.get_default_branch("owner", "unknown").await.unwrap(),
-            "main"
-        );
+        let client = mock.client();
+        let branch = client.get_default_branch("owner", "repo").await.unwrap();
+        assert_eq!(branch, "develop");
     }
 }

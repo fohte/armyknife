@@ -3,7 +3,7 @@ use clap::Args;
 use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success};
 use super::pull::save_issue_to_storage;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::infra::github::{CommentClient, IssueClient, OctocrabClient};
+use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct RefreshArgs {
@@ -17,10 +17,7 @@ pub async fn run(args: &RefreshArgs) -> anyhow::Result<()> {
 }
 
 /// Internal implementation that accepts a client for testability.
-async fn run_with_client<C>(args: &RefreshArgs, client: &C) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+async fn run_with_client(args: &RefreshArgs, client: &OctocrabClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -47,14 +44,11 @@ where
 
 /// Internal implementation with custom storage for testability.
 #[cfg(test)]
-async fn run_with_client_and_storage<C>(
+async fn run_with_client_and_storage(
     args: &RefreshArgs,
-    client: &C,
+    client: &OctocrabClient,
     storage: &IssueStorage,
-) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -77,11 +71,8 @@ mod tests {
     use super::*;
     use crate::commands::gh::issue_agent::commands::IssueArgs;
     use crate::commands::gh::issue_agent::commands::test_helpers::{
-        test_comment, test_dir, test_issue,
+        GitHubMockServer, RemoteComment, test_dir,
     };
-    use crate::commands::gh::issue_agent::models::{Author, Comment, Issue};
-    use crate::infra::github::MockGitHubClient;
-    use chrono::{TimeZone, Utc};
     use indoc::indoc;
     use rstest::rstest;
     use std::fs;
@@ -92,15 +83,23 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_fetches_and_saves_issue(
-            test_dir: TempDir,
-            test_issue: Issue,
-            test_comment: Comment,
-        ) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![test_comment]);
+        async fn test_fetches_and_saves_issue(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql_with(
+                "owner",
+                "repo",
+                123,
+                &[RemoteComment {
+                    id: "IC_abc123",
+                    database_id: 12345,
+                    author: "commenter",
+                    body: "Test comment body",
+                }],
+            )
+            .await;
 
+            let client = mock.client();
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = RefreshArgs {
                 issue: IssueArgs {
@@ -121,10 +120,12 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_overwrites_local_changes(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![]);
+        async fn test_overwrites_local_changes(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
 
             // Create storage dir with different content (simulating local changes)
             fs::create_dir_all(test_dir.path()).unwrap();
@@ -148,15 +149,17 @@ mod tests {
 
             // Verify content was overwritten
             let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert_eq!(body, "Test body content\n");
+            assert_eq!(body, "Test body\n");
         }
 
         #[rstest]
         #[tokio::test]
-        async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![]);
+        async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
 
             // Use a non-existent subdirectory
             let storage = IssueStorage::from_dir(test_dir.path().join("new_dir"));
@@ -175,7 +178,10 @@ mod tests {
         #[rstest]
         #[tokio::test]
         async fn test_fails_when_issue_not_found(test_dir: TempDir) {
-            let client = MockGitHubClient::new(); // No issues configured
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_not_found("owner", "repo", 999).await;
+
+            let client = mock.client();
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = RefreshArgs {
@@ -191,8 +197,9 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_fails_with_invalid_repo_format(test_dir: TempDir, test_issue: Issue) {
-            let client = MockGitHubClient::new().with_issue("owner", "repo", test_issue);
+        async fn test_fails_with_invalid_repo_format(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
 
             let storage = IssueStorage::from_dir(test_dir.path());
             let args = RefreshArgs {
@@ -212,20 +219,23 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
-        async fn test_overwrites_comments(test_dir: TempDir, test_issue: Issue) {
-            let new_comment = Comment {
-                id: "IC_new".to_string(),
-                database_id: 99999,
-                author: Some(Author {
-                    login: "newuser".to_string(),
-                }),
-                created_at: Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap(),
-                body: "New comment from refresh".to_string(),
-            };
+        async fn test_overwrites_comments(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql_with(
+                "owner",
+                "repo",
+                123,
+                &[RemoteComment {
+                    id: "IC_new",
+                    database_id: 99999,
+                    author: "newuser",
+                    body: "New comment from refresh",
+                }],
+            )
+            .await;
 
-            let client = MockGitHubClient::new()
-                .with_issue("owner", "repo", test_issue.clone())
-                .with_comments("owner", "repo", 123, vec![new_comment]);
+            let client = mock.client();
 
             // Create storage dir with old comments
             let comments_dir = test_dir.path().join("comments");
@@ -251,7 +261,7 @@ mod tests {
                 content,
                 indoc! {"
                     <!-- author: newuser -->
-                    <!-- createdAt: 2024-02-01T00:00:00+00:00 -->
+                    <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
                     <!-- id: IC_new -->
                     <!-- databaseId: 99999 -->
 
