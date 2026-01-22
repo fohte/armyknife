@@ -56,7 +56,7 @@ impl PrClient for OctocrabClient {
         // If base is not specified, find the base branch from local git info or GitHub API
         let base = match &params.base {
             Some(b) => b.clone(),
-            None => crate::infra::git::find_base_branch(&params.owner, &params.repo).await,
+            None => crate::infra::git::find_base_branch(&params.owner, &params.repo, self).await,
         };
 
         let pr = if params.draft {
