@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.28](https://github.com/fohte/armyknife/compare/v0.1.27...v0.1.28) (2026-01-22)
+
+
+### Features
+
+* **ai:** add `a ai draft` command ([#111](https://github.com/fohte/armyknife/issues/111)) ([a8d07e9](https://github.com/fohte/armyknife/commit/a8d07e9301b4b5343c3ac39150891d8a9035ebbf))
+
 ## [0.1.27](https://github.com/fohte/armyknife/compare/v0.1.26...v0.1.27) (2026-01-21)
 
 
