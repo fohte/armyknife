@@ -11,7 +11,7 @@ use clap::Args;
 use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::infra::github::{CommentClient, IssueClient, OctocrabClient};
+use crate::infra::github::OctocrabClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::check_remote_unchanged;
@@ -60,34 +60,28 @@ pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
 
     // 2. Fetch latest from GitHub
     let client = OctocrabClient::get()?;
-    let current_user = get_current_user(client).await?;
+    let current_user = client.get_current_user().await?;
 
     run_with_client_and_user(args, client, &storage, &current_user).await
 }
 
 /// Internal implementation that accepts a client and user for testability.
 #[cfg(test)]
-pub(super) async fn run_with_client_and_storage<C>(
+pub(super) async fn run_with_client_and_storage(
     args: &PushArgs,
-    client: &C,
+    client: &OctocrabClient,
     storage: &IssueStorage,
     current_user: &str,
-) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+) -> anyhow::Result<()> {
     run_with_client_and_user(args, client, storage, current_user).await
 }
 
-async fn run_with_client_and_user<C>(
+async fn run_with_client_and_user(
     args: &PushArgs,
-    client: &C,
+    client: &OctocrabClient,
     storage: &IssueStorage,
     current_user: &str,
-) -> anyhow::Result<()>
-where
-    C: IssueClient + CommentClient,
-{
+) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
     let (owner, repo_name) = parse_repo(&repo)?;
@@ -167,10 +161,4 @@ fn print_result(dry_run: bool, has_changes: bool) {
     } else {
         println!("No changes to push.");
     }
-}
-
-/// Get current GitHub user from the API.
-async fn get_current_user(client: &OctocrabClient) -> anyhow::Result<String> {
-    let user = client.client.current().user().await?;
-    Ok(user.login)
 }
