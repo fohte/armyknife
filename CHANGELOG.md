@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.29](https://github.com/fohte/armyknife/compare/v0.1.28...v0.1.29) (2026-01-22)
+
+
+### Bug Fixes
+
+* **update:** skip confirmation prompt ([#113](https://github.com/fohte/armyknife/issues/113)) ([4845753](https://github.com/fohte/armyknife/commit/4845753c9473ddab242fd312028540f5871e4c48))
+
 ## [0.1.28](https://github.com/fohte/armyknife/compare/v0.1.27...v0.1.28) (2026-01-22)
 
 
