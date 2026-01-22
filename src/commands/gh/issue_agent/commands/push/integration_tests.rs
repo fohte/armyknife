@@ -372,7 +372,8 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
     let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
     // After push, metadata should be updated from the mock response
-    assert!(metadata["updatedAt"].as_str().is_some());
+    // The TestSetup uses "2024-01-02T00:00:00+00:00" format for remote_ts
+    assert_eq!(metadata["updatedAt"], "2024-01-02T00:00:00+00:00");
 }
 
 // Comment deletion tests

@@ -126,6 +126,19 @@ fn mock_issue(
     body: &str,
     updated_at: &str,
 ) -> serde_json::Value {
+    mock_issue_with_labels(owner, repo, issue_number, title, body, updated_at, &["bug"])
+}
+
+fn mock_issue_with_labels(
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    title: &str,
+    body: &str,
+    updated_at: &str,
+    labels: &[&str],
+) -> serde_json::Value {
+    let mock_labels: Vec<_> = labels.iter().map(|l| mock_label(l)).collect();
     json!({
         "id": 1,
         "node_id": "I_test",
@@ -140,7 +153,7 @@ fn mock_issue(
         "title": title,
         "body": body,
         "user": mock_user("testuser"),
-        "labels": [mock_label("bug")],
+        "labels": mock_labels,
         "assignees": [],
         "author_association": "OWNER",
         "milestone": null,
@@ -341,6 +354,34 @@ impl GitHubMockServer {
             .await;
     }
 
+    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} with custom labels
+    pub async fn mock_get_issue_with_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        title: &str,
+        body: &str,
+        updated_at: &str,
+        labels: &[&str],
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mock_issue_with_labels(
+                    owner,
+                    repo,
+                    issue_number,
+                    title,
+                    body,
+                    updated_at,
+                    labels,
+                )),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
     /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} returning 404
     pub async fn mock_get_issue_not_found(&self, owner: &str, repo: &str, issue_number: u64) {
         Mock::given(method("GET"))
@@ -485,7 +526,7 @@ impl GitHubMockServer {
             .and(path_regex(format!(
                 r"/repos/{owner}/{repo}/issues/comments/\d+"
             )))
-            .respond_with(ResponseTemplate::new(204).set_body_json(json!({})))
+            .respond_with(ResponseTemplate::new(204))
             .mount(&self.server)
             .await;
     }

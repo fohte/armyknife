@@ -622,5 +622,45 @@ mod tests {
                 "}
             );
         }
+
+        #[tokio::test]
+        async fn test_displays_issue_with_multiple_labels() {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue_with_labels(
+                "owner",
+                "repo",
+                15,
+                "Multi Label Issue",
+                "Body",
+                "2024-01-02T00:00:00Z",
+                &["bug", "enhancement", "help wanted"],
+            )
+            .await;
+            mock.mock_get_comments_graphql("owner", "repo", 15).await;
+
+            let client = mock.client();
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 15,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                output,
+                indoc! {"
+                    Multi Label Issue #15
+
+                    Open • testuser opened 2 hours ago • 0 comments
+                    Labels: bug, enhancement, help wanted
+
+                      Body
+                "}
+            );
+        }
     }
 }
