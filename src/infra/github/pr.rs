@@ -116,6 +116,10 @@ impl PrClient for OctocrabClient {
     }
 
     fn open_in_browser(&self, url: &str) {
+        // Skip in test mode to prevent browser opening during tests
+        if cfg!(test) {
+            return;
+        }
         let _ = open::that(url);
     }
 }

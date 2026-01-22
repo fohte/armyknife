@@ -3,8 +3,9 @@
 use super::*;
 use crate::commands::gh::issue_agent::commands::IssueArgs;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
-    RemoteComment, TestSetup, create_comment_file, setup_local_comment, test_dir,
+    TestSetup, create_comment_file, setup_local_comment, test_dir,
 };
+use crate::infra::github::RemoteComment;
 use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;

@@ -6,15 +6,13 @@
 mod client;
 pub(crate) mod error;
 #[cfg(test)]
-mod mock;
+pub(crate) mod mock;
 mod pr;
 mod repo;
 
 pub use client::OctocrabClient;
 pub use error::GitHubError;
 #[cfg(test)]
-pub use mock::MockGitHubClient;
-#[cfg(test)]
-pub use pr::PrInfo;
+pub use mock::{GitHubMockServer, RemoteComment};
 pub use pr::{CreatePrParams, PrClient, PrState};
 pub use repo::RepoClient;

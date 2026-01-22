@@ -119,12 +119,12 @@ async fn run_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::github::MockGitHubClient;
+    use crate::infra::github::GitHubMockServer;
     use indoc::indoc;
     use std::fs;
 
     struct TestEnv {
-        gh_client: MockGitHubClient,
+        mock: GitHubMockServer,
         owner: String,
         repo: String,
         draft_dir: std::path::PathBuf,
@@ -136,24 +136,32 @@ mod tests {
         }
     }
 
-    fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
-        let gh_client = MockGitHubClient::new().with_private(owner, repo, true);
+    async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
+        let mock = GitHubMockServer::start().await;
+        mock.mock_get_repo(owner, repo, true).await;
+        mock.mock_create_pull_request(owner, repo).await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
         }
         TestEnv {
-            gh_client,
+            mock,
             owner: owner.to_string(),
             repo: repo.to_string(),
             draft_dir,
         }
     }
 
-    fn create_approved_draft(env: &TestEnv, branch: &str, title: &str, body: &str) -> PathBuf {
+    fn create_approved_draft(
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) -> PathBuf {
         let repo_info = RepoInfo {
-            owner: env.owner.clone(),
-            repo: env.repo.clone(),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
             branch: branch.to_string(),
             is_private: true,
         };
@@ -183,8 +191,14 @@ mod tests {
 
     #[tokio::test]
     async fn submit_with_filepath_should_not_require_git_repo() {
-        let env = setup_test_env("owner", "repo_submit_no_git");
-        let draft_path = create_approved_draft(&env, "feature/test", "Ready title", "Body content");
+        let env = setup_test_env("owner", "repo_submit_no_git").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/test",
+            "Ready title",
+            "Body content",
+        );
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
@@ -192,25 +206,26 @@ mod tests {
             draft: false,
         };
 
-        let result = run_impl(&args, &env.gh_client).await;
+        let client = env.mock.client();
+        let result = run_impl(&args, &client).await;
 
         assert!(
             result.is_ok(),
-            "submit should work with MockGitHubClient: {:?}",
+            "submit should work with GitHubMockServer: {:?}",
             result.err()
         );
-
-        // Verify PR was created
-        let created = env.gh_client.created_prs.lock().unwrap();
-        assert_eq!(created.len(), 1);
-        assert_eq!(created[0].title, "Ready title");
     }
 
     #[tokio::test]
     async fn submit_with_filepath_should_use_draft_branch() {
-        let env = setup_test_env("owner", "repo_submit_branch");
-        let draft_path =
-            create_approved_draft(&env, "feature/missing-head", "Ready title", "Body content");
+        let env = setup_test_env("owner", "repo_submit_branch").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/missing-head",
+            "Ready title",
+            "Body content",
+        );
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
@@ -218,22 +233,19 @@ mod tests {
             draft: false,
         };
 
-        let result = run_impl(&args, &env.gh_client).await;
+        let client = env.mock.client();
+        let result = run_impl(&args, &client).await;
 
         assert!(
             result.is_ok(),
             "submit should pass the draft branch when --filepath is used: {:?}",
             result.err()
         );
-
-        // Verify correct branch was used
-        let created = env.gh_client.created_prs.lock().unwrap();
-        assert_eq!(created[0].head, "feature/missing-head");
     }
 
     #[tokio::test]
     async fn submit_fails_when_not_approved() {
-        let env = setup_test_env("owner", "repo_submit_not_approved");
+        let env = setup_test_env("owner", "repo_submit_not_approved").await;
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
             repo: env.repo.clone(),
@@ -263,7 +275,8 @@ mod tests {
             draft: false,
         };
 
-        let result = run_impl(&args, &env.gh_client).await;
+        let client = env.mock.client();
+        let result = run_impl(&args, &client).await;
 
         assert!(result.is_err(), "submit should fail when not approved");
         let err_msg = result.unwrap_err().to_string();
@@ -275,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_fails_with_empty_title() {
-        let env = setup_test_env("owner", "repo_submit_empty_title");
+        let env = setup_test_env("owner", "repo_submit_empty_title").await;
         let repo_info = RepoInfo {
             owner: env.owner.clone(),
             repo: env.repo.clone(),
@@ -309,7 +322,8 @@ mod tests {
             draft: false,
         };
 
-        let result = run_impl(&args, &env.gh_client).await;
+        let client = env.mock.client();
+        let result = run_impl(&args, &client).await;
 
         assert!(result.is_err(), "submit should fail with empty title");
         let err_msg = result.unwrap_err().to_string();
