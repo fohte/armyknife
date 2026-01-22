@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use clap::Args;
 
 use crate::shared::human_in_the_loop::{LaunchOptions, launch_wezterm};
@@ -13,14 +13,16 @@ pub struct DraftArgs {
 }
 
 pub fn run(args: &DraftArgs) -> anyhow::Result<()> {
+    ensure!(
+        args.path.exists(),
+        "File not found: {}",
+        args.path.display()
+    );
+
     let path = args
         .path
         .canonicalize()
         .with_context(|| format!("Failed to resolve path: {}", args.path.display()))?;
-
-    if !path.exists() {
-        bail!("File not found: {}", path.display());
-    }
 
     let file_name = path
         .file_name()
