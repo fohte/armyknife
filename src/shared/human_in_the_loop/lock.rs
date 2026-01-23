@@ -32,7 +32,9 @@ impl LockGuard {
 
     /// Get the lock file path for a document.
     pub fn lock_path(document_path: &Path) -> PathBuf {
-        document_path.with_extension("md.lock")
+        let mut lock_path = document_path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        PathBuf::from(lock_path)
     }
 
     /// Prevent this guard from removing the lock file on drop.
