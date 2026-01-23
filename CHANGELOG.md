@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.31](https://github.com/fohte/armyknife/compare/v0.1.30...v0.1.31) (2026-01-23)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** prevent false positive change detection for comments with whitespace differences ([#124](https://github.com/fohte/armyknife/issues/124)) ([23860eb](https://github.com/fohte/armyknife/commit/23860eb87b8d7303830ba5bda75952c5766add35))
+
 ## [0.1.30](https://github.com/fohte/armyknife/compare/v0.1.29...v0.1.30) (2026-01-22)
 
 
