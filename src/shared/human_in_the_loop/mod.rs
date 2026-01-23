@@ -11,12 +11,14 @@ mod document;
 mod editor;
 mod error;
 mod lock;
+mod simple_edit;
 mod tmux;
 
 pub use document::{Document, DocumentSchema};
 pub use editor::{LaunchOptions, launch_wezterm, run_neovim};
 pub use error::{HumanInTheLoopError, Result};
 pub use lock::{CleanupGuard, LockGuard};
+pub use simple_edit::{SimpleEditCompleteArgs, complete_simple_edit, start_simple_edit};
 pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
