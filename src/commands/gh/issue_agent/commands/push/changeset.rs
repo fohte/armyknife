@@ -4,10 +4,10 @@ use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
 use crate::infra::github::OctocrabClient;
 
+use super::super::common::print_diff;
 use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_title_change,
 };
-use super::diff::print_diff;
 
 /// Local state for change detection.
 pub(super) struct LocalState<'a> {

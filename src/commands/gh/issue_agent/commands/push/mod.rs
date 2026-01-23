@@ -2,7 +2,6 @@
 
 mod changeset;
 mod detect;
-mod diff;
 #[cfg(test)]
 mod integration_tests;
 

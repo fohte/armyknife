@@ -29,17 +29,37 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
 
 /// Print unified diff between old and new text.
 pub fn print_diff(old: &str, new: &str) {
-    let diff = TextDiff::from_lines(old, new);
-
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        // change already includes newline, so use print! instead of println!
-        print!("{}{}", sign, change);
+    for (sign, text) in diff_lines(old, new) {
+        // text already includes newline, so use print! instead of println!
+        print!("{}{}", sign, text);
     }
+}
+
+/// Format diff as a string (for testing).
+#[cfg(test)]
+pub fn format_diff(old: &str, new: &str) -> String {
+    let mut result = String::new();
+    for (sign, text) in diff_lines(old, new) {
+        result.push_str(sign);
+        result.push_str(&text);
+    }
+    result
+}
+
+/// Generate diff lines with their signs.
+fn diff_lines(old: &str, new: &str) -> impl Iterator<Item = (&'static str, String)> {
+    let diff = TextDiff::from_lines(old, new);
+    diff.iter_all_changes()
+        .map(|change| {
+            let sign = match change.tag() {
+                ChangeTag::Delete => "-",
+                ChangeTag::Insert => "+",
+                ChangeTag::Equal => " ",
+            };
+            (sign, change.to_string())
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 /// Print success message after fetching issue.
@@ -84,6 +104,22 @@ mod tests {
         fn test_with_arg_returns_as_is(#[case] repo: &str) {
             let result = get_repo_from_arg_or_git(&Some(repo.to_string())).unwrap();
             assert_eq!(result, repo);
+        }
+    }
+
+    mod diff_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::no_changes("a\n", "a\n", " a\n")]
+        #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
+        #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
+        #[case::modify("old\n", "new\n", "-old\n+new\n")]
+        #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
+        #[case::empty_both("", "", "")]
+        fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
+            let diff = format_diff(old, new);
+            assert_eq!(diff, expected);
         }
     }
 }
