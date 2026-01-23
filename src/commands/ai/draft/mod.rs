@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use clap::Args;
+use serde::{Deserialize, Serialize};
 
 use crate::shared::human_in_the_loop::{
-    SimpleEditCompleteArgs, complete_simple_edit, start_simple_edit,
+    DocumentSchema, ReviewHandler, complete_review, start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -25,9 +27,50 @@ pub struct DraftArgs {
     pub complete: bool,
 }
 
+/// Empty schema for simple file editing (no frontmatter parsing needed).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EmptySchema;
+
+impl DocumentSchema for EmptySchema {
+    fn is_approved(&self) -> bool {
+        false
+    }
+}
+
+/// Handler for simple file editing sessions.
+pub struct DraftHandler;
+
+impl ReviewHandler<EmptySchema> for DraftHandler {
+    fn build_complete_args(
+        &self,
+        document_path: &Path,
+        tmux_target: Option<&str>,
+        window_title: &str,
+    ) -> Vec<OsString> {
+        let mut args: Vec<OsString> = vec![
+            "ai".into(),
+            "draft".into(),
+            "--complete".into(),
+            document_path.as_os_str().to_os_string(),
+        ];
+
+        if let Some(target) = tmux_target {
+            args.push("--tmux-target".into());
+            args.push(target.into());
+        }
+
+        args.push("--title".into());
+        args.push(window_title.into());
+
+        args
+    }
+
+    // Uses default on_review_complete (does nothing)
+}
+
 pub fn run(args: &DraftArgs) -> anyhow::Result<()> {
     if args.complete {
-        run_edit_complete(args)
+        run_complete(args)
     } else {
         run_edit(args)
     }
@@ -53,20 +96,20 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
         format!("Draft: {}", file_name)
     });
 
-    start_simple_edit(&path, &window_title, &["ai", "draft", "--complete"])?;
+    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler)?;
 
     println!("Opened draft in editor: {}", path.display());
 
     Ok(())
 }
 
-fn run_edit_complete(args: &DraftArgs) -> anyhow::Result<()> {
-    let complete_args = SimpleEditCompleteArgs {
-        tmux_target: args.tmux_target.clone(),
-        window_title: args.title.clone(),
-    };
-
-    complete_simple_edit(&args.path, &complete_args)?;
+fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
+    complete_review::<EmptySchema, _>(
+        &args.path,
+        args.tmux_target.as_deref(),
+        args.title.as_deref(),
+        &DraftHandler,
+    )?;
 
     Ok(())
 }
