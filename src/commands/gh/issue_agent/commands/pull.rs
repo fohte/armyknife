@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::io::{self, Write};
 
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo, print_diff, print_fetch_success};
+use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success, write_diff};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
 use crate::infra::github::OctocrabClient;
@@ -81,34 +82,51 @@ async fn run_with_client_and_storage(
     Ok(issue.title.clone())
 }
 
-/// Display local changes that differ from remote.
+/// Display local changes that differ from remote to stdout.
 fn display_local_changes(
     storage: &IssueStorage,
     remote_issue: &Issue,
     remote_comments: &[Comment],
     changes: &LocalChanges,
 ) -> anyhow::Result<()> {
-    println!();
-    println!("=== Local changes detected ===");
+    write_local_changes(
+        &mut io::stdout(),
+        storage,
+        remote_issue,
+        remote_comments,
+        changes,
+    )
+}
+
+/// Write local changes that differ from remote to a writer.
+fn write_local_changes<W: Write>(
+    writer: &mut W,
+    storage: &IssueStorage,
+    remote_issue: &Issue,
+    remote_comments: &[Comment],
+    changes: &LocalChanges,
+) -> anyhow::Result<()> {
+    writeln!(writer)?;
+    writeln!(writer, "=== Local changes detected ===")?;
 
     // Show body diff (local -> remote, so local changes are shown as deleted)
     if changes.body_changed
         && let Ok(local_body) = storage.read_body()
     {
         let remote_body = remote_issue.body.as_deref().unwrap_or("");
-        println!();
-        println!("=== Issue Body ===");
-        print_diff(&local_body, remote_body);
+        writeln!(writer)?;
+        writeln!(writer, "=== Issue Body ===")?;
+        write_diff(writer, &local_body, remote_body)?;
     }
 
     // Show title diff
     if changes.title_changed
         && let Ok(local_metadata) = storage.read_metadata()
     {
-        println!();
-        println!("=== Title ===");
-        println!("- {}", local_metadata.title);
-        println!("+ {}", remote_issue.title);
+        writeln!(writer)?;
+        writeln!(writer, "=== Title ===")?;
+        writeln!(writer, "- {}", local_metadata.title)?;
+        writeln!(writer, "+ {}", remote_issue.title)?;
     }
 
     // Show comment changes (read comments once for both modified and new)
@@ -125,9 +143,9 @@ fn display_local_changes(
                     && changes.modified_comment_ids.contains(comment_id)
                     && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
                 {
-                    println!();
-                    println!("=== Comment: {} ===", local_comment.filename);
-                    print_diff(&local_comment.body, &remote_comment.body);
+                    writeln!(writer)?;
+                    writeln!(writer, "=== Comment: {} ===", local_comment.filename)?;
+                    write_diff(writer, &local_comment.body, &remote_comment.body)?;
                 }
             }
         }
@@ -135,21 +153,35 @@ fn display_local_changes(
         // Show new comments that will be deleted
         for local_comment in &local_comments {
             if changes.new_comment_files.contains(&local_comment.filename) {
-                println!();
-                println!(
+                writeln!(writer)?;
+                writeln!(
+                    writer,
                     "=== New Comment (will be deleted): {} ===",
                     local_comment.filename
-                );
+                )?;
                 for line in local_comment.body.lines() {
-                    println!("- {}", line);
+                    writeln!(writer, "- {}", line)?;
                 }
             }
         }
     }
 
-    println!();
+    writeln!(writer)?;
 
     Ok(())
+}
+
+/// Format local changes as a string (for testing).
+#[cfg(test)]
+fn format_local_changes(
+    storage: &IssueStorage,
+    remote_issue: &Issue,
+    remote_comments: &[Comment],
+    changes: &LocalChanges,
+) -> anyhow::Result<String> {
+    let mut output = Vec::new();
+    write_local_changes(&mut output, storage, remote_issue, remote_comments, changes)?;
+    Ok(String::from_utf8(output)?)
 }
 
 /// Save issue data to local storage.
@@ -615,19 +647,18 @@ mod tests {
         }
     }
 
-    mod display_local_changes_tests {
+    mod format_local_changes_tests {
         use super::*;
         use crate::commands::gh::issue_agent::storage::LocalChanges;
 
         #[rstest]
-        fn test_display_body_changes(test_dir: TempDir) {
+        fn test_body_changes(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
-            // Create local file with different content
-            fs::write(test_dir.path().join("issue.md"), "Local body content\n").unwrap();
+            fs::write(test_dir.path().join("issue.md"), "Local body\n").unwrap();
 
             let remote_issue = factories::issue_with(|i| {
-                i.body = Some("Remote body content".to_string());
+                i.body = Some("Remote body".to_string());
             });
 
             let changes = LocalChanges {
@@ -637,16 +668,25 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            // Should not panic and should display the diff
-            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
-            assert!(result.is_ok());
+            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Issue Body ===
+                    -Local body
+                    +Remote body
+
+                "}
+            );
         }
 
         #[rstest]
-        fn test_display_title_changes(test_dir: TempDir) {
+        fn test_title_changes(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
-            // Create local metadata with different title
             let local_metadata = IssueMetadata {
                 number: 123,
                 title: "Local Title".to_string(),
@@ -671,15 +711,25 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
-            assert!(result.is_ok());
+            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Title ===
+                    - Local Title
+                    + Remote Title
+
+                "}
+            );
         }
 
         #[rstest]
-        fn test_display_modified_comments(test_dir: TempDir) {
+        fn test_modified_comments(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
-            // Create local comment with different content
             let comments_dir = test_dir.path().join("comments");
             fs::create_dir_all(&comments_dir).unwrap();
             fs::write(
@@ -690,7 +740,7 @@ mod tests {
                     <!-- id: IC_abc123 -->
                     <!-- databaseId: 12345 -->
 
-                    Local comment body
+                    Local comment
                 "},
             )
             .unwrap();
@@ -699,7 +749,7 @@ mod tests {
             let remote_comments = vec![factories::comment_with(|c| {
                 c.id = "IC_abc123".to_string();
                 c.database_id = 12345;
-                c.body = "Remote comment body".to_string();
+                c.body = "Remote comment".to_string();
             })];
 
             let changes = LocalChanges {
@@ -709,20 +759,31 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let result = display_local_changes(&storage, &remote_issue, &remote_comments, &changes);
-            assert!(result.is_ok());
+            let output =
+                format_local_changes(&storage, &remote_issue, &remote_comments, &changes).unwrap();
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Comment: 001_comment_12345.md ===
+                    -Local comment
+                    +Remote comment
+
+                "}
+            );
         }
 
         #[rstest]
-        fn test_display_new_comments_to_be_deleted(test_dir: TempDir) {
+        fn test_new_comments_to_be_deleted(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
-            // Create new comment file that will be deleted
             let comments_dir = test_dir.path().join("comments");
             fs::create_dir_all(&comments_dir).unwrap();
             fs::write(
                 comments_dir.join("new_my_comment.md"),
-                "New comment that will be lost",
+                "New comment line 1\nNew comment line 2",
             )
             .unwrap();
 
@@ -735,8 +796,101 @@ mod tests {
                 new_comment_files: vec!["new_my_comment.md".to_string()],
             };
 
-            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
-            assert!(result.is_ok());
+            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === New Comment (will be deleted): new_my_comment.md ===
+                    - New comment line 1
+                    - New comment line 2
+
+                "}
+            );
+        }
+
+        #[rstest]
+        fn test_all_changes_combined(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+
+            // Set up body
+            fs::write(test_dir.path().join("issue.md"), "Local body\n").unwrap();
+
+            // Set up metadata
+            let local_metadata = IssueMetadata {
+                number: 123,
+                title: "Local Title".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            };
+            storage.save_metadata(&local_metadata).unwrap();
+
+            // Set up comments
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: testuser -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Local comment
+                "},
+            )
+            .unwrap();
+            fs::write(comments_dir.join("new_draft.md"), "Draft comment").unwrap();
+
+            let remote_issue = factories::issue_with(|i| {
+                i.title = "Remote Title".to_string();
+                i.body = Some("Remote body".to_string());
+            });
+            let remote_comments = vec![factories::comment_with(|c| {
+                c.id = "IC_abc123".to_string();
+                c.database_id = 12345;
+                c.body = "Remote comment".to_string();
+            })];
+
+            let changes = LocalChanges {
+                body_changed: true,
+                title_changed: true,
+                modified_comment_ids: vec!["IC_abc123".to_string()],
+                new_comment_files: vec!["new_draft.md".to_string()],
+            };
+
+            let output =
+                format_local_changes(&storage, &remote_issue, &remote_comments, &changes).unwrap();
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Issue Body ===
+                    -Local body
+                    +Remote body
+
+                    === Title ===
+                    - Local Title
+                    + Remote Title
+
+                    === Comment: 001_comment_12345.md ===
+                    -Local comment
+                    +Remote comment
+
+                    === New Comment (will be deleted): new_draft.md ===
+                    - Draft comment
+
+                "}
+            );
         }
     }
 }

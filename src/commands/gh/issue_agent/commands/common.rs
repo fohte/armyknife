@@ -1,5 +1,6 @@
 //! Common utilities shared across issue-agent commands.
 
+use std::io::{self, Write};
 use std::path::Path;
 
 use similar::{ChangeTag, TextDiff};
@@ -27,33 +28,39 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     Ok(format!("{}/{}", owner, repo))
 }
 
-/// Print unified diff between old and new text.
+/// Print unified diff between old and new text to stdout.
 pub fn print_diff(old: &str, new: &str) {
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        // change already includes newline, so use print! instead of println!
-        print!("{}{}", sign, change);
-    }
+    write_diff(&mut io::stdout(), old, new).unwrap();
 }
 
-/// Format diff as a string (for testing).
-#[cfg(test)]
-pub fn format_diff(old: &str, new: &str) -> String {
+/// Write unified diff between old and new text to a writer.
+pub fn write_diff<W: Write>(writer: &mut W, old: &str, new: &str) -> io::Result<()> {
     let diff = TextDiff::from_lines(old, new);
-    let mut result = String::new();
     for change in diff.iter_all_changes() {
         let sign = match change.tag() {
             ChangeTag::Delete => "-",
             ChangeTag::Insert => "+",
             ChangeTag::Equal => " ",
         };
-        result.push_str(sign);
-        result.push_str(&change.to_string());
+        // change already includes newline, so no newline here
+        write!(writer, "{}{}", sign, change)?;
+    }
+    Ok(())
+}
+
+/// Format unified diff between old and new text as a string.
+#[cfg(test)]
+pub fn format_diff(old: &str, new: &str) -> String {
+    use std::fmt::Write as _;
+    let mut result = String::new();
+    let diff = TextDiff::from_lines(old, new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        write!(result, "{}{}", sign, change).unwrap();
     }
     result
 }
