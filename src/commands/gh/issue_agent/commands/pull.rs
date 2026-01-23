@@ -31,11 +31,7 @@ pub(super) async fn run_with_client(
     let action = if args.force { "Refreshing" } else { "Fetching" };
     eprintln!("{action} issue #{issue_number} from {repo}...");
 
-    let (owner, repo_name) = parse_repo(&repo)?;
-
-    // Fetch issue to get its number for storage path
-    let issue = client.get_issue(&owner, &repo_name, issue_number).await?;
-    let storage = IssueStorage::new(&repo, issue.number);
+    let storage = IssueStorage::new(&repo, issue_number as i64);
 
     let title = run_with_client_and_storage(args, client, &storage).await?;
 
