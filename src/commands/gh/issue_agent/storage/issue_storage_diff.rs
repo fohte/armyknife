@@ -231,4 +231,56 @@ mod tests {
         assert!(changes.has_changes());
         assert_eq!(changes.new_comment_files, vec!["new_my_comment.md"]);
     }
+
+    /// Test that comments with whitespace-only differences are not detected as changed.
+    /// GitHub API may return body with leading/trailing newlines, but local file parsing
+    /// normalizes them via lines().join("\n").
+    #[rstest]
+    #[case::trailing_newline("Original comment", "Original comment\n")]
+    #[case::trailing_multiple_newlines("Original comment", "Original comment\n\n")]
+    #[case::trailing_spaces("Original comment", "Original comment  ")]
+    #[case::leading_newline("Original comment", "\nOriginal comment")]
+    #[case::leading_multiple_newlines("Original comment", "\n\nOriginal comment")]
+    fn test_no_change_with_whitespace_difference(
+        test_dir: TempDir,
+        test_issue: Issue,
+        #[case] local_body: &str,
+        #[case] remote_body: &str,
+    ) {
+        let storage = IssueStorage::from_dir(test_dir.path());
+        let comments_dir = test_dir.path().join("comments");
+        fs::create_dir(&comments_dir).unwrap();
+        fs::write(
+            comments_dir.join("001_comment_12345.md"),
+            format!(
+                indoc! {"
+                    <!-- author: testuser -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    {}
+                "},
+                local_body
+            ),
+        )
+        .unwrap();
+
+        let comment = Comment {
+            id: "IC_abc123".to_string(),
+            database_id: 12345,
+            author: Some(Author {
+                login: "testuser".to_string(),
+            }),
+            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+            body: remote_body.to_string(),
+        };
+
+        let changes = storage.detect_changes(&test_issue, &[comment]).unwrap();
+        assert!(
+            !changes.has_changes(),
+            "Expected no changes, but got: {:?}",
+            changes
+        );
+    }
 }
