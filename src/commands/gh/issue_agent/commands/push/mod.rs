@@ -106,7 +106,7 @@ async fn run_with_client_and_user(
         eprintln!("{}", msg);
         eprintln!();
         anyhow::bail!(
-            "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
+            "Remote has changed. Use --force to overwrite, or 'pull --force' to update local copy."
         );
     }
 
