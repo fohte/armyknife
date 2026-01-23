@@ -24,8 +24,8 @@ use std::path::Path;
 
 /// Trait for types that handle the review completion callback.
 ///
-/// Each use case (PR draft, issue comment, PR review reply) implements this trait
-/// to define how to handle the document after the user finishes editing.
+/// Each use case (PR draft, issue comment, PR review reply, or simple file editing)
+/// implements this trait to define how to handle the document after the user finishes editing.
 pub trait ReviewHandler<S: DocumentSchema> {
     /// Build the command-line arguments for the review-complete subcommand.
     ///
@@ -41,7 +41,10 @@ pub trait ReviewHandler<S: DocumentSchema> {
     /// Called after the user finishes editing and closes Neovim.
     ///
     /// This is where you check the document's approval status and take appropriate action.
-    fn on_review_complete(&self, document: &Document<S>) -> Result<()>;
+    /// Default implementation does nothing, suitable for simple editing workflows.
+    fn on_review_complete(&self, _document: &Document<S>) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Start a review session by launching WezTerm with Neovim.
