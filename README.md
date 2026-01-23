@@ -68,20 +68,19 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command   | Description                                         |
-| --------- | --------------------------------------------------- |
-| `view`    | View issue and comments (read-only, no local cache) |
-| `pull`    | Fetch issue and save locally                        |
-| `refresh` | Discard local changes and fetch latest from GitHub  |
-| `push`    | Push local changes to GitHub                        |
+| Command | Description                                         |
+| ------- | --------------------------------------------------- |
+| `view`  | View issue and comments (read-only, no local cache) |
+| `pull`  | Fetch issue and save locally                        |
+| `push`  | Push local changes to GitHub                        |
 
-| Option           | Description                                 |
-| ---------------- | ------------------------------------------- |
-| `-R <repo>`      | Target repository (default: current repo)   |
-| `--dry-run`      | Show what would be changed without applying |
-| `--force`        | Allow overwriting remote changes            |
-| `--edit-others`  | Allow editing other users' comments         |
-| `--allow-delete` | Allow deleting comments removed locally     |
+| Option           | Description                                        |
+| ---------------- | -------------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)          |
+| `--dry-run`      | Show what would be changed without applying        |
+| `--force`        | Overwrite local/remote changes (context-dependent) |
+| `--edit-others`  | Allow editing other users' comments                |
+| `--allow-delete` | Allow deleting comments removed locally            |
 
 #### `a gh check-pr-review`
 
