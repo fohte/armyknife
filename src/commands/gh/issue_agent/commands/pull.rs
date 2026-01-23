@@ -33,37 +33,24 @@ pub(super) async fn run_with_client(
 
     let (owner, repo_name) = parse_repo(&repo)?;
 
-    // Fetch issue and comments from GitHub
+    // Fetch issue to get its number for storage path
     let issue = client.get_issue(&owner, &repo_name, issue_number).await?;
-    let comments = client
-        .get_comments(&owner, &repo_name, issue_number)
-        .await?;
-
     let storage = IssueStorage::new(&repo, issue.number);
 
-    // Check for local changes before overwriting (skip if --force)
-    if !args.force && storage.dir().exists() && storage.has_changes(&issue, &comments)? {
-        anyhow::bail!(
-            "Local changes would be overwritten. Use 'pull --force' to discard local changes."
-        );
-    }
-
-    // Save to local storage
-    save_issue_to_storage(&storage, &issue, &comments)?;
+    let title = run_with_client_and_storage(args, client, &storage).await?;
 
     // Print success message
-    print_fetch_success(issue_number, &issue.title, storage.dir());
+    print_fetch_success(issue_number, &title, storage.dir());
 
     Ok(())
 }
 
-/// Internal implementation with custom storage for testability.
-#[cfg(test)]
-pub(super) async fn run_with_client_and_storage(
+/// Core implementation with custom storage. Returns the issue title on success.
+async fn run_with_client_and_storage(
     args: &PullArgs,
     client: &OctocrabClient,
     storage: &IssueStorage,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -85,7 +72,7 @@ pub(super) async fn run_with_client_and_storage(
     // Save to local storage
     save_issue_to_storage(storage, &issue, &comments)?;
 
-    Ok(())
+    Ok(issue.title.clone())
 }
 
 /// Save issue data to local storage.
