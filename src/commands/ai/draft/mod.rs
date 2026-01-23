@@ -88,13 +88,17 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
         .canonicalize()
         .with_context(|| format!("Failed to resolve path: {}", args.path.display()))?;
 
-    let window_title = args.title.clone().unwrap_or_else(|| {
-        let file_name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        format!("Draft: {}", file_name)
-    });
+    let window_title = args
+        .title
+        .clone()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| {
+            let file_name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            format!("Draft: {}", file_name)
+        });
 
     start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler)?;
 
