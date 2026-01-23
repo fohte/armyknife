@@ -265,7 +265,8 @@ mod tests {
                     <!-- id: IC_new -->
                     <!-- databaseId: 99999 -->
 
-                    New comment from refresh"}
+                    New comment from refresh
+                "}
             );
         }
     }

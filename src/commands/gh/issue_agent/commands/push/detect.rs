@@ -108,7 +108,9 @@ pub(super) fn detect_comment_changes<'a>(
             continue;
         };
 
-        if local_comment.body == remote_comment.body {
+        // Compare with whitespace normalized to handle inconsistencies
+        // between GitHub API responses and local file parsing
+        if local_comment.body.trim() == remote_comment.body.trim() {
             continue;
         }
 
@@ -451,6 +453,57 @@ mod tests {
                 detect_comment_changes(&local_comments, &remote_comments, "alice", false, false);
 
             assert!(result.unwrap_err().to_string().contains("--allow-delete"));
+        }
+
+        /// Test that comments with whitespace-only differences are not detected as changed.
+        /// GitHub API may return body with leading/trailing newlines, but local file parsing
+        /// normalizes them via lines().join("\n").
+        #[rstest]
+        #[case::trailing_newline("body", "body\n")]
+        #[case::trailing_multiple_newlines("body", "body\n\n")]
+        #[case::trailing_spaces("body", "body  ")]
+        #[case::leading_newline("body", "\nbody")]
+        #[case::leading_multiple_newlines("body", "\n\nbody")]
+        fn test_no_change_with_whitespace_difference(
+            #[case] local_body: &str,
+            #[case] remote_body: &str,
+        ) {
+            let local_comments = vec![make_local_comment("IC_123", 12345, local_body, "alice")];
+            let remote_comments = vec![make_remote_comment("IC_123", 12345, remote_body, "alice")];
+
+            let result =
+                detect_comment_changes(&local_comments, &remote_comments, "alice", false, false);
+
+            let changes = result.expect("Expected Ok result");
+            assert!(
+                changes.is_empty(),
+                "Expected no changes, but got: {:?}",
+                changes
+            );
+        }
+
+        /// Test that actual content changes are still detected.
+        #[rstest]
+        fn test_actual_change_is_detected() {
+            let local_comments = vec![make_local_comment(
+                "IC_123",
+                12345,
+                "modified body",
+                "alice",
+            )];
+            let remote_comments = vec![make_remote_comment(
+                "IC_123",
+                12345,
+                "original body",
+                "alice",
+            )];
+
+            let result =
+                detect_comment_changes(&local_comments, &remote_comments, "alice", false, false);
+
+            let changes = result.expect("Expected Ok result");
+            assert_eq!(changes.len(), 1);
+            assert!(matches!(&changes[0], CommentChange::Updated { .. }));
         }
     }
 }
