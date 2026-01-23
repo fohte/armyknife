@@ -64,10 +64,10 @@ async fn run_with_client_and_storage(
     if storage.dir().exists() {
         let changes = storage.detect_changes(&issue, &comments)?;
         if changes.has_changes() {
-            if args.force {
-                // Show diff of changes that will be discarded
-                display_discarded_changes(storage, &issue, &comments, &changes)?;
-            } else {
+            // Always show diff when there are local changes
+            display_local_changes(storage, &issue, &comments, &changes)?;
+
+            if !args.force {
                 anyhow::bail!(
                     "Local changes would be overwritten. Use 'pull --force' to discard local changes."
                 );
@@ -81,15 +81,15 @@ async fn run_with_client_and_storage(
     Ok(issue.title.clone())
 }
 
-/// Display local changes that will be discarded by force pull.
-fn display_discarded_changes(
+/// Display local changes that differ from remote.
+fn display_local_changes(
     storage: &IssueStorage,
     remote_issue: &Issue,
     remote_comments: &[Comment],
     changes: &LocalChanges,
 ) -> anyhow::Result<()> {
     eprintln!();
-    eprintln!("=== Local changes will be discarded ===");
+    eprintln!("=== Local changes detected ===");
 
     // Show body diff (local -> remote, so local changes are shown as deleted)
     if changes.body_changed
@@ -616,7 +616,7 @@ mod tests {
         }
     }
 
-    mod display_discarded_changes_tests {
+    mod display_local_changes_tests {
         use super::*;
         use crate::commands::gh::issue_agent::storage::LocalChanges;
 
@@ -639,7 +639,7 @@ mod tests {
             };
 
             // Should not panic and should display the diff
-            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
             assert!(result.is_ok());
         }
 
@@ -672,7 +672,7 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
             assert!(result.is_ok());
         }
 
@@ -710,8 +710,7 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let result =
-                display_discarded_changes(&storage, &remote_issue, &remote_comments, &changes);
+            let result = display_local_changes(&storage, &remote_issue, &remote_comments, &changes);
             assert!(result.is_ok());
         }
 
@@ -737,7 +736,7 @@ mod tests {
                 new_comment_files: vec!["new_my_comment.md".to_string()],
             };
 
-            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            let result = display_local_changes(&storage, &remote_issue, &[], &changes);
             assert!(result.is_ok());
         }
     }
