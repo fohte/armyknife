@@ -88,16 +88,16 @@ fn display_local_changes(
     remote_comments: &[Comment],
     changes: &LocalChanges,
 ) -> anyhow::Result<()> {
-    eprintln!();
-    eprintln!("=== Local changes detected ===");
+    println!();
+    println!("=== Local changes detected ===");
 
     // Show body diff (local -> remote, so local changes are shown as deleted)
     if changes.body_changed
         && let Ok(local_body) = storage.read_body()
     {
         let remote_body = remote_issue.body.as_deref().unwrap_or("");
-        eprintln!();
-        eprintln!("=== Issue Body ===");
+        println!();
+        println!("=== Issue Body ===");
         print_diff(&local_body, remote_body);
     }
 
@@ -105,50 +105,49 @@ fn display_local_changes(
     if changes.title_changed
         && let Ok(local_metadata) = storage.read_metadata()
     {
-        eprintln!();
-        eprintln!("=== Title ===");
-        eprintln!("- {}", local_metadata.title);
-        eprintln!("+ {}", remote_issue.title);
+        println!();
+        println!("=== Title ===");
+        println!("- {}", local_metadata.title);
+        println!("+ {}", remote_issue.title);
     }
 
-    // Show modified comments
-    if !changes.modified_comment_ids.is_empty()
+    // Show comment changes (read comments once for both modified and new)
+    if (!changes.modified_comment_ids.is_empty() || !changes.new_comment_files.is_empty())
         && let Ok(local_comments) = storage.read_comments()
     {
-        let remote_comments_map: HashMap<&str, &Comment> =
-            remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+        // Show modified comments
+        if !changes.modified_comment_ids.is_empty() {
+            let remote_comments_map: HashMap<&str, &Comment> =
+                remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
 
-        for local_comment in &local_comments {
-            if let Some(comment_id) = &local_comment.metadata.id
-                && changes.modified_comment_ids.contains(comment_id)
-                && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
-            {
-                eprintln!();
-                eprintln!("=== Comment: {} ===", local_comment.filename);
-                print_diff(&local_comment.body, &remote_comment.body);
+            for local_comment in &local_comments {
+                if let Some(comment_id) = &local_comment.metadata.id
+                    && changes.modified_comment_ids.contains(comment_id)
+                    && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
+                {
+                    println!();
+                    println!("=== Comment: {} ===", local_comment.filename);
+                    print_diff(&local_comment.body, &remote_comment.body);
+                }
             }
         }
-    }
 
-    // Show new comments that will be deleted
-    if !changes.new_comment_files.is_empty()
-        && let Ok(local_comments) = storage.read_comments()
-    {
+        // Show new comments that will be deleted
         for local_comment in &local_comments {
             if changes.new_comment_files.contains(&local_comment.filename) {
-                eprintln!();
-                eprintln!(
+                println!();
+                println!(
                     "=== New Comment (will be deleted): {} ===",
                     local_comment.filename
                 );
                 for line in local_comment.body.lines() {
-                    eprintln!("- {}", line);
+                    println!("- {}", line);
                 }
             }
         }
     }
 
-    eprintln!();
+    println!();
 
     Ok(())
 }

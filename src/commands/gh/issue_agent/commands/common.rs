@@ -29,37 +29,33 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
 
 /// Print unified diff between old and new text.
 pub fn print_diff(old: &str, new: &str) {
-    for (sign, text) in diff_lines(old, new) {
-        // text already includes newline, so use print! instead of println!
-        print!("{}{}", sign, text);
+    let diff = TextDiff::from_lines(old, new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        // change already includes newline, so use print! instead of println!
+        print!("{}{}", sign, change);
     }
 }
 
 /// Format diff as a string (for testing).
 #[cfg(test)]
 pub fn format_diff(old: &str, new: &str) -> String {
+    let diff = TextDiff::from_lines(old, new);
     let mut result = String::new();
-    for (sign, text) in diff_lines(old, new) {
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
         result.push_str(sign);
-        result.push_str(&text);
+        result.push_str(&change.to_string());
     }
     result
-}
-
-/// Generate diff lines with their signs.
-fn diff_lines(old: &str, new: &str) -> impl Iterator<Item = (&'static str, String)> {
-    let diff = TextDiff::from_lines(old, new);
-    diff.iter_all_changes()
-        .map(|change| {
-            let sign = match change.tag() {
-                ChangeTag::Delete => "-",
-                ChangeTag::Insert => "+",
-                ChangeTag::Equal => " ",
-            };
-            (sign, change.to_string())
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
 }
 
 /// Print success message after fetching issue.
