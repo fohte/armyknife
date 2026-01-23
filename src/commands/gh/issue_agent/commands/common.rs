@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use similar::{ChangeTag, TextDiff};
+
 use crate::infra::git;
 
 // Re-export git::parse_repo for convenience.
@@ -23,6 +25,21 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     })?;
 
     Ok(format!("{}/{}", owner, repo))
+}
+
+/// Print unified diff between old and new text.
+pub fn print_diff(old: &str, new: &str) {
+    let diff = TextDiff::from_lines(old, new);
+
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        // change already includes newline, so use print! instead of println!
+        print!("{}{}", sign, change);
+    }
 }
 
 /// Print success message after fetching issue.

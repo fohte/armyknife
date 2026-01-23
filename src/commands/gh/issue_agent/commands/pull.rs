@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success};
-use crate::commands::gh::issue_agent::models::IssueMetadata;
-use crate::commands::gh::issue_agent::storage::IssueStorage;
+use super::common::{get_repo_from_arg_or_git, parse_repo, print_diff, print_fetch_success};
+use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
+use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
 use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -58,17 +60,97 @@ async fn run_with_client_and_storage(
         .get_comments(&owner, &repo_name, issue_number)
         .await?;
 
-    // Check for local changes before overwriting (skip if --force)
-    if !args.force && storage.dir().exists() && storage.has_changes(&issue, &comments)? {
-        anyhow::bail!(
-            "Local changes would be overwritten. Use 'pull --force' to discard local changes."
-        );
+    // Check for local changes before overwriting
+    if storage.dir().exists() {
+        let changes = storage.detect_changes(&issue, &comments)?;
+        if changes.has_changes() {
+            if args.force {
+                // Show diff of changes that will be discarded
+                display_discarded_changes(storage, &issue, &comments, &changes)?;
+            } else {
+                anyhow::bail!(
+                    "Local changes would be overwritten. Use 'pull --force' to discard local changes."
+                );
+            }
+        }
     }
 
     // Save to local storage
     save_issue_to_storage(storage, &issue, &comments)?;
 
     Ok(issue.title.clone())
+}
+
+/// Display local changes that will be discarded by force pull.
+fn display_discarded_changes(
+    storage: &IssueStorage,
+    remote_issue: &Issue,
+    remote_comments: &[Comment],
+    changes: &LocalChanges,
+) -> anyhow::Result<()> {
+    eprintln!();
+    eprintln!("=== Local changes will be discarded ===");
+
+    // Show body diff (local -> remote, so local changes are shown as deleted)
+    if changes.body_changed
+        && let Ok(local_body) = storage.read_body()
+    {
+        let remote_body = remote_issue.body.as_deref().unwrap_or("");
+        eprintln!();
+        eprintln!("=== Issue Body ===");
+        print_diff(&local_body, remote_body);
+    }
+
+    // Show title diff
+    if changes.title_changed
+        && let Ok(local_metadata) = storage.read_metadata()
+    {
+        eprintln!();
+        eprintln!("=== Title ===");
+        eprintln!("- {}", local_metadata.title);
+        eprintln!("+ {}", remote_issue.title);
+    }
+
+    // Show modified comments
+    if !changes.modified_comment_ids.is_empty()
+        && let Ok(local_comments) = storage.read_comments()
+    {
+        let remote_comments_map: HashMap<&str, &Comment> =
+            remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+
+        for local_comment in &local_comments {
+            if let Some(comment_id) = &local_comment.metadata.id
+                && changes.modified_comment_ids.contains(comment_id)
+                && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
+            {
+                eprintln!();
+                eprintln!("=== Comment: {} ===", local_comment.filename);
+                print_diff(&local_comment.body, &remote_comment.body);
+            }
+        }
+    }
+
+    // Show new comments that will be deleted
+    if !changes.new_comment_files.is_empty()
+        && let Ok(local_comments) = storage.read_comments()
+    {
+        for local_comment in &local_comments {
+            if changes.new_comment_files.contains(&local_comment.filename) {
+                eprintln!();
+                eprintln!(
+                    "=== New Comment (will be deleted): {} ===",
+                    local_comment.filename
+                );
+                for line in local_comment.body.lines() {
+                    eprintln!("- {}", line);
+                }
+            }
+        }
+    }
+
+    eprintln!();
+
+    Ok(())
 }
 
 /// Save issue data to local storage.
@@ -531,6 +613,132 @@ mod tests {
                     New comment from refresh
                 "}
             );
+        }
+    }
+
+    mod display_discarded_changes_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::storage::LocalChanges;
+
+        #[rstest]
+        fn test_display_body_changes(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+
+            // Create local file with different content
+            fs::write(test_dir.path().join("issue.md"), "Local body content\n").unwrap();
+
+            let remote_issue = factories::issue_with(|i| {
+                i.body = Some("Remote body content".to_string());
+            });
+
+            let changes = LocalChanges {
+                body_changed: true,
+                title_changed: false,
+                modified_comment_ids: vec![],
+                new_comment_files: vec![],
+            };
+
+            // Should not panic and should display the diff
+            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn test_display_title_changes(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+
+            // Create local metadata with different title
+            let local_metadata = IssueMetadata {
+                number: 123,
+                title: "Local Title".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            };
+            storage.save_metadata(&local_metadata).unwrap();
+
+            let remote_issue = factories::issue_with(|i| {
+                i.title = "Remote Title".to_string();
+            });
+
+            let changes = LocalChanges {
+                body_changed: false,
+                title_changed: true,
+                modified_comment_ids: vec![],
+                new_comment_files: vec![],
+            };
+
+            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn test_display_modified_comments(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+
+            // Create local comment with different content
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: testuser -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Local comment body
+                "},
+            )
+            .unwrap();
+
+            let remote_issue = factories::issue();
+            let remote_comments = vec![factories::comment_with(|c| {
+                c.id = "IC_abc123".to_string();
+                c.database_id = 12345;
+                c.body = "Remote comment body".to_string();
+            })];
+
+            let changes = LocalChanges {
+                body_changed: false,
+                title_changed: false,
+                modified_comment_ids: vec!["IC_abc123".to_string()],
+                new_comment_files: vec![],
+            };
+
+            let result =
+                display_discarded_changes(&storage, &remote_issue, &remote_comments, &changes);
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn test_display_new_comments_to_be_deleted(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+
+            // Create new comment file that will be deleted
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("new_my_comment.md"),
+                "New comment that will be lost",
+            )
+            .unwrap();
+
+            let remote_issue = factories::issue();
+
+            let changes = LocalChanges {
+                body_changed: false,
+                title_changed: false,
+                modified_comment_ids: vec![],
+                new_comment_files: vec!["new_my_comment.md".to_string()],
+            };
+
+            let result = display_discarded_changes(&storage, &remote_issue, &[], &changes);
+            assert!(result.is_ok());
         }
     }
 }

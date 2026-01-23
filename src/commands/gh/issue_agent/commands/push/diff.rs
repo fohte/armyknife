@@ -1,21 +1,10 @@
 //! Diff display utilities for push command.
 
+// Re-export from common module for backward compatibility
+pub(super) use super::super::common::print_diff;
+
+#[cfg(test)]
 use similar::{ChangeTag, TextDiff};
-
-/// Print unified diff between old and new text.
-pub(super) fn print_diff(old: &str, new: &str) {
-    let diff = TextDiff::from_lines(old, new);
-
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        // change already includes newline, so use print! instead of println!
-        print!("{}{}", sign, change);
-    }
-}
 
 /// Format diff as a string (for testing).
 #[cfg(test)]
