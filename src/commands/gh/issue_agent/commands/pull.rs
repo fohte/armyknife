@@ -196,7 +196,8 @@ mod tests {
                     <!-- id: IC_abc123 -->
                     <!-- databaseId: 12345 -->
 
-                    Test comment body"}
+                    Test comment body
+                "}
             );
         }
 

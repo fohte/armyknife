@@ -110,8 +110,12 @@ impl LocalComment {
         let created_at = comment.created_at.to_rfc3339();
 
         format!(
-            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}",
-            author, created_at, comment.id, comment.database_id, comment.body
+            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}\n",
+            author,
+            created_at,
+            comment.id,
+            comment.database_id,
+            comment.body.trim()
         )
     }
 }

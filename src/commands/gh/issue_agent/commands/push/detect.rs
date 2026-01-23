@@ -108,7 +108,9 @@ pub(super) fn detect_comment_changes<'a>(
             continue;
         };
 
-        if local_comment.body == remote_comment.body {
+        // Compare with whitespace normalized to handle inconsistencies
+        // between GitHub API responses and local file parsing
+        if local_comment.body.trim() == remote_comment.body.trim() {
             continue;
         }
 

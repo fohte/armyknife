@@ -70,7 +70,9 @@ impl IssueStorage {
                         .push(local_comment.filename.clone());
                 } else if let Some(comment_id) = &local_comment.metadata.id
                     && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
-                    && local_comment.body != remote_comment.body
+                    // Compare with whitespace normalized to handle inconsistencies
+                    // between GitHub API responses and local file parsing
+                    && local_comment.body.trim() != remote_comment.body.trim()
                 {
                     // Local comment differs from remote
                     changes.modified_comment_ids.push(comment_id.clone());
