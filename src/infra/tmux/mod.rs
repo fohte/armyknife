@@ -101,27 +101,39 @@ pub fn in_tmux() -> bool {
 
 /// Get the tmux session name for a repository path.
 ///
-/// First tries `tmux-name session <path>`, falls back to directory basename.
+/// Returns `org/repo` format from the last two path components.
+/// Strips `/.worktrees/<name>` suffix if present.
+/// Replaces `.` with `_` to comply with tmux session name conventions.
 pub fn get_session_name(repo_root: &str) -> String {
-    // Try tmux-name command first
-    if let Some(output) = Command::new("tmux-name")
-        .args(["session", repo_root])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-    {
-        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !name.is_empty() {
-            return name;
-        }
-    }
+    let path = Path::new(repo_root);
 
-    // Fallback: use the directory name
-    Path::new(repo_root)
+    // Strip /.worktrees/<name> suffix if present
+    let path = strip_worktree_suffix(path);
+
+    // Extract org/repo from path (last two components)
+    let repo = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("default")
-        .to_string()
+        .unwrap_or("default");
+    let org = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    format!("{org}/{repo}").replace('.', "_")
+}
+
+/// Strip `/.worktrees/<name>` suffix from a path.
+fn strip_worktree_suffix(path: &Path) -> &Path {
+    // Check if path ends with /.worktrees/<something>
+    if let Some(parent) = path.parent()
+        && parent.file_name().and_then(|n| n.to_str()) == Some(".worktrees")
+        && let Some(repo_root) = parent.parent()
+    {
+        return repo_root;
+    }
+    path
 }
 
 /// Check if a session exists.
@@ -225,4 +237,60 @@ pub fn create_split_window(
     }
 
     run_tmux(&args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("/Users/fohte/ghq/github.com/fohte/armyknife", "fohte/armyknife")]
+    #[case("/Users/fohte/ghq/github.com/fohte/dotfiles", "fohte/dotfiles")]
+    #[case("/home/user/projects/org/my-repo", "org/my-repo")]
+    fn test_get_session_name_normal_path(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(get_session_name(input), expected);
+    }
+
+    #[rstest]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/armyknife/.worktrees/feature-branch",
+        "fohte/armyknife"
+    )]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/dotfiles/.worktrees/fix-bug",
+        "fohte/dotfiles"
+    )]
+    fn test_get_session_name_worktree_path(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(get_session_name(input), expected);
+    }
+
+    #[rstest]
+    #[case("/Users/fohte/ghq/github.com/fohte/my.dotfiles", "fohte/my_dotfiles")]
+    #[case("/Users/fohte/ghq/github.com/some.org/some.repo", "some_org/some_repo")]
+    fn test_get_session_name_replaces_dots(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(get_session_name(input), expected);
+    }
+
+    #[rstest]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/armyknife/.worktrees/feature-branch",
+        "/Users/fohte/ghq/github.com/fohte/armyknife"
+    )]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/dotfiles/.worktrees/fix-bug",
+        "/Users/fohte/ghq/github.com/fohte/dotfiles"
+    )]
+    fn test_strip_worktree_suffix_with_worktree(#[case] input: &str, #[case] expected: &str) {
+        let result = strip_worktree_suffix(Path::new(input));
+        assert_eq!(result, Path::new(expected));
+    }
+
+    #[rstest]
+    #[case("/Users/fohte/ghq/github.com/fohte/armyknife")]
+    #[case("/Users/fohte/projects/myrepo")]
+    fn test_strip_worktree_suffix_without_worktree(#[case] input: &str) {
+        let result = strip_worktree_suffix(Path::new(input));
+        assert_eq!(result, Path::new(input));
+    }
 }
