@@ -166,7 +166,7 @@ async fn test_remote_changed_fails(test_dir: TempDir) {
     .await;
     assert_eq!(
         result.unwrap_err().to_string(),
-        "Remote has changed. Use --force to overwrite, or 'refresh' to update local copy."
+        "Remote has changed. Use --force to overwrite, or 'pull --force' to update local copy."
     );
 }
 

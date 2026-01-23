@@ -12,11 +12,8 @@ pub enum IssueAgentCommands {
     /// View issue and comments (read-only)
     View(commands::ViewArgs),
 
-    /// Fetch issue and save locally
+    /// Fetch issue and save locally (use --force to overwrite local changes)
     Pull(commands::PullArgs),
-
-    /// Discard local changes and fetch latest
-    Refresh(commands::RefreshArgs),
 
     /// Push local changes to GitHub
     Push(commands::PushArgs),
@@ -27,7 +24,6 @@ impl IssueAgentCommands {
         match self {
             Self::View(args) => commands::run_view(args).await,
             Self::Pull(args) => commands::run_pull(args).await,
-            Self::Refresh(args) => commands::run_refresh(args).await,
             Self::Push(args) => commands::run_push(args).await,
         }
     }

@@ -9,6 +9,10 @@ use crate::infra::github::OctocrabClient;
 pub struct PullArgs {
     #[command(flatten)]
     pub issue: super::IssueArgs,
+
+    /// Discard local changes and fetch latest (force overwrite)
+    #[arg(short, long)]
+    pub force: bool,
 }
 
 pub async fn run(args: &PullArgs) -> anyhow::Result<()> {
@@ -24,41 +28,25 @@ pub(super) async fn run_with_client(
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
-    eprintln!("Fetching issue #{issue_number} from {repo}...");
+    let action = if args.force { "Refreshing" } else { "Fetching" };
+    eprintln!("{action} issue #{issue_number} from {repo}...");
 
-    let (owner, repo_name) = parse_repo(&repo)?;
+    let storage = IssueStorage::new(&repo, issue_number as i64);
 
-    // Fetch issue and comments from GitHub
-    let issue = client.get_issue(&owner, &repo_name, issue_number).await?;
-    let comments = client
-        .get_comments(&owner, &repo_name, issue_number)
-        .await?;
-
-    let storage = IssueStorage::new(&repo, issue.number);
-
-    // Check for local changes before overwriting
-    if storage.dir().exists() && storage.has_changes(&issue, &comments)? {
-        anyhow::bail!(
-            "Local changes would be overwritten. Use 'refresh' to discard local changes."
-        );
-    }
-
-    // Save to local storage
-    save_issue_to_storage(&storage, &issue, &comments)?;
+    let title = run_with_client_and_storage(args, client, &storage).await?;
 
     // Print success message
-    print_fetch_success(issue_number, &issue.title, storage.dir());
+    print_fetch_success(issue_number, &title, storage.dir());
 
     Ok(())
 }
 
-/// Internal implementation with custom storage for testability.
-#[cfg(test)]
-pub(super) async fn run_with_client_and_storage(
+/// Core implementation with custom storage. Returns the issue title on success.
+async fn run_with_client_and_storage(
     args: &PullArgs,
     client: &OctocrabClient,
     storage: &IssueStorage,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -70,17 +58,17 @@ pub(super) async fn run_with_client_and_storage(
         .get_comments(&owner, &repo_name, issue_number)
         .await?;
 
-    // Check for local changes before overwriting
-    if storage.dir().exists() && storage.has_changes(&issue, &comments)? {
+    // Check for local changes before overwriting (skip if --force)
+    if !args.force && storage.dir().exists() && storage.has_changes(&issue, &comments)? {
         anyhow::bail!(
-            "Local changes would be overwritten. Use 'refresh' to discard local changes."
+            "Local changes would be overwritten. Use 'pull --force' to discard local changes."
         );
     }
 
     // Save to local storage
     save_issue_to_storage(storage, &issue, &comments)?;
 
-    Ok(())
+    Ok(issue.title.clone())
 }
 
 /// Save issue data to local storage.
@@ -250,6 +238,7 @@ mod tests {
                     issue_number: 123,
                     repo: Some("owner/repo".to_string()),
                 },
+                force: false,
             };
 
             run_with_client_and_storage(&args, &client, &storage)
@@ -281,13 +270,14 @@ mod tests {
                     issue_number: 123,
                     repo: Some("owner/repo".to_string()),
                 },
+                force: false,
             };
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
             assert!(result.is_err());
             assert_eq!(
                 result.unwrap_err().to_string(),
-                "Local changes would be overwritten. Use 'refresh' to discard local changes."
+                "Local changes would be overwritten. Use 'pull --force' to discard local changes."
             );
         }
 
@@ -310,6 +300,7 @@ mod tests {
                     issue_number: 123,
                     repo: Some("owner/repo".to_string()),
                 },
+                force: false,
             };
 
             // Should succeed because local content matches remote
@@ -333,6 +324,7 @@ mod tests {
                     issue_number: 123,
                     repo: Some("owner/repo".to_string()),
                 },
+                force: false,
             };
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
@@ -354,6 +346,7 @@ mod tests {
                     issue_number: 999,
                     repo: Some("owner/repo".to_string()),
                 },
+                force: false,
             };
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
@@ -372,6 +365,7 @@ mod tests {
                     issue_number: 123,
                     repo: Some("invalid-repo-format".to_string()),
                 },
+                force: false,
             };
 
             let result = run_with_client_and_storage(&args, &client, &storage).await;
@@ -379,6 +373,163 @@ mod tests {
             assert_eq!(
                 result.unwrap_err().to_string(),
                 "Invalid input: Invalid repository format: invalid-repo-format. Expected owner/repo"
+            );
+        }
+    }
+
+    mod run_with_client_and_storage_force_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
+        use indoc::indoc;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_force_overwrites_local_changes(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
+
+            // Create storage dir with different content (simulating local changes)
+            fs::create_dir_all(test_dir.path()).unwrap();
+            fs::write(
+                test_dir.path().join("issue.md"),
+                "Old content that will be overwritten\n",
+            )
+            .unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: true,
+            };
+
+            // With --force, should succeed even with local changes
+            let result = run_with_client_and_storage(&args, &client, &storage).await;
+            assert!(result.is_ok());
+
+            // Verify content was overwritten
+            let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            assert_eq!(body, "Test body\n");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_force_fetches_and_saves_issue(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql_with(
+                "owner",
+                "repo",
+                123,
+                &[RemoteComment {
+                    id: "IC_abc123",
+                    database_id: 12345,
+                    author: "commenter",
+                    body: "Test comment body",
+                }],
+            )
+            .await;
+
+            let client = mock.client();
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: true,
+            };
+
+            run_with_client_and_storage(&args, &client, &storage)
+                .await
+                .unwrap();
+
+            // Verify files were created
+            assert!(test_dir.path().join("issue.md").exists());
+            assert!(test_dir.path().join("metadata.json").exists());
+            assert!(test_dir.path().join("comments").exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_force_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+
+            let client = mock.client();
+
+            // Use a non-existent subdirectory
+            let storage = IssueStorage::from_dir(test_dir.path().join("new_dir"));
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: true,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage).await;
+            assert!(result.is_ok());
+            assert!(test_dir.path().join("new_dir/issue.md").exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_force_overwrites_comments(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            mock.mock_get_issue("owner", "repo", 123).await;
+            mock.mock_get_comments_graphql_with(
+                "owner",
+                "repo",
+                123,
+                &[RemoteComment {
+                    id: "IC_new",
+                    database_id: 99999,
+                    author: "newuser",
+                    body: "New comment from refresh",
+                }],
+            )
+            .await;
+
+            let client = mock.client();
+
+            // Create storage dir with old comments
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(comments_dir.join("001_comment_11111.md"), "Old comment").unwrap();
+
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: true,
+            };
+
+            run_with_client_and_storage(&args, &client, &storage)
+                .await
+                .unwrap();
+
+            // Verify new comment file exists with expected content
+            assert!(comments_dir.join("001_comment_99999.md").exists());
+            let content = fs::read_to_string(comments_dir.join("001_comment_99999.md")).unwrap();
+            assert_eq!(
+                content,
+                indoc! {"
+                    <!-- author: newuser -->
+                    <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                    <!-- id: IC_new -->
+                    <!-- databaseId: 99999 -->
+
+                    New comment from refresh
+                "}
             );
         }
     }
