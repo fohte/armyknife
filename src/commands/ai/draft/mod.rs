@@ -27,9 +27,15 @@ pub struct DraftArgs {
     pub complete: bool,
 }
 
-/// Empty schema for simple file editing (no frontmatter parsing needed).
+/// Permissive schema for simple file editing that accepts any frontmatter.
+///
+/// Uses `#[serde(flatten)]` with a catch-all map to ignore unknown fields,
+/// allowing files with arbitrary YAML frontmatter to be opened without errors.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EmptySchema;
+pub struct EmptySchema {
+    #[serde(flatten)]
+    _extra: std::collections::HashMap<String, serde_yaml::Value>,
+}
 
 impl DocumentSchema for EmptySchema {
     fn is_approved(&self) -> bool {
