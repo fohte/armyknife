@@ -6,7 +6,6 @@ use anyhow::Context;
 use git2::{BranchType, Repository, WorktreePruneOptions};
 
 use super::error::{Result, WmError};
-use super::git::local_branch_exists;
 
 /// Get the main repository, resolving from a worktree if necessary.
 pub fn get_main_repo(repo: &Repository) -> Result<Repository> {
@@ -53,10 +52,12 @@ pub fn delete_worktree(repo: &Repository, worktree_name: &str) -> Result<bool> {
 
 /// Delete a local branch if it exists. Returns true if deleted.
 pub fn delete_branch_if_exists(repo: &Repository, branch: &str) -> bool {
-    if branch.is_empty() || !local_branch_exists(branch) {
+    if branch.is_empty() {
         return false;
     }
 
+    // Use the provided repo directly instead of opening from current directory,
+    // because the worktree directory may already be deleted at this point.
     if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local) {
         branch_ref.delete().is_ok()
     } else {
@@ -363,5 +364,63 @@ mod tests {
         // Should return main repo's branch (master), not the worktree's branch (feature)
         let (branch, _commit) = get_main_worktree_info(&wt_repo);
         assert_eq!(branch, "master");
+    }
+
+    #[test]
+    fn delete_branch_if_exists_works_after_worktree_deleted() {
+        // This test reproduces the bug where branch deletion fails when:
+        // 1. Current directory is the worktree being deleted
+        // 2. Worktree is deleted first
+        // 3. Then delete_branch_if_exists is called
+        //
+        // The bug occurs because local_branch_exists() uses open_repo() which
+        // opens from current directory - but the worktree directory is already gone.
+
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature-to-delete");
+
+        let repo = test_repo.open();
+        let wt_path = test_repo.worktree_path("feature-to-delete");
+
+        // Verify the branch exists before deletion
+        assert!(
+            repo.find_branch("feature-to-delete", BranchType::Local)
+                .is_ok(),
+            "Branch should exist before deletion"
+        );
+
+        // RAII guard to restore current directory even on panic
+        struct DirGuard(std::path::PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                // Ignore result since we can't panic in drop
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        let branch_deleted = {
+            let _guard = DirGuard(std::env::current_dir().unwrap());
+            std::env::set_current_dir(&wt_path).unwrap();
+
+            // Delete the worktree first (this is what happens in delete.rs)
+            let deleted = delete_worktree(&repo, "feature-to-delete").unwrap();
+            assert!(deleted, "Worktree should be deleted");
+
+            // Now try to delete the branch - this should succeed but fails due to the bug
+            // because local_branch_exists() tries to open repo from current dir (deleted worktree)
+            delete_branch_if_exists(&repo, "feature-to-delete")
+        };
+
+        assert!(
+            branch_deleted,
+            "Branch should be deleted even after worktree is removed"
+        );
+
+        // Verify the branch is actually gone
+        assert!(
+            repo.find_branch("feature-to-delete", BranchType::Local)
+                .is_err(),
+            "Branch should not exist after deletion"
+        );
     }
 }
