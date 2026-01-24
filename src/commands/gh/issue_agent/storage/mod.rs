@@ -1,6 +1,6 @@
 // These types will be used in future phases of gh-issue-agent
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![expect(dead_code, reason = "module reserved for future use")]
+#![expect(unused_imports, reason = "imports reserved for future use")]
 
 mod error;
 mod issue_storage;

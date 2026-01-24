@@ -54,7 +54,7 @@ pub fn setup_local_comment(dir: &Path, filename: &str, content: &str) {
 
 // Default timestamps for tests
 pub const DEFAULT_TS: &str = "2024-01-02T00:00:00+00:00";
-#[allow(dead_code)]
+#[expect(dead_code, reason = "constant reserved for future test use")]
 pub const OLD_TS: &str = "2024-01-01T00:00:00+00:00";
 
 /// Macro to generate builder setter methods.
@@ -83,7 +83,6 @@ macro_rules! builder_setters {
 ///     .await;
 /// let client = mock.client();
 /// ```
-#[allow(dead_code)]
 pub struct TestSetup<'a> {
     dir: &'a Path,
     // Remote state (what GitHub API returns)

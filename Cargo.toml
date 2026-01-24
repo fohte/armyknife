@@ -41,3 +41,7 @@ indicatif = "=0.18.3"
 rstest = "=0.26.1"
 wiremock = "=0.6.5"
 serial_test = "=3.2.0"
+
+[lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

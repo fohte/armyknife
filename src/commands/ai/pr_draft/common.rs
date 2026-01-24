@@ -144,7 +144,7 @@ pub struct Steps {
 }
 
 /// Type alias for PR draft documents.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "type alias reserved for future use")]
 pub type PrDraftDocument = Document<Frontmatter>;
 
 #[derive(Debug, Clone)]
@@ -223,7 +223,7 @@ impl DraftFile {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "used in tests"))]
     pub fn save_approval(&self) -> Result<()> {
         let hash = self.compute_hash()?;
         let approve_path = Self::approve_path(&self.path);

@@ -3,7 +3,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
-    #[allow(dead_code)] // Used in tests
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used in tests via deserialization")
+    )]
     pub database_id: i64,
     pub author: Option<Author>,
     pub body: String,

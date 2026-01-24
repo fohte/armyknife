@@ -5,7 +5,6 @@ use super::issue::Issue;
 
 /// Metadata stored locally in metadata.json for an issue.
 /// This is a flattened representation suitable for local storage.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueMetadata {
@@ -20,7 +19,6 @@ pub struct IssueMetadata {
     pub updated_at: String,
 }
 
-#[allow(dead_code)]
 impl IssueMetadata {
     /// Create metadata from an Issue, flattening nested structures.
     pub fn from_issue(issue: &Issue) -> Self {

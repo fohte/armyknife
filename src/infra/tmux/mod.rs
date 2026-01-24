@@ -187,7 +187,7 @@ pub fn kill_window(window_id: &str) -> Result<()> {
 }
 
 /// Create a new window in a session.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "function reserved for future use")]
 pub fn new_window(session: &str, cwd: &str, window_name: &str) -> Result<()> {
     run_tmux(&["new-window", "-t", session, "-c", cwd, "-n", window_name])
 }

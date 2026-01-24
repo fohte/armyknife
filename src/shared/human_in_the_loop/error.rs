@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum HumanInTheLoopError {
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),

@@ -6,7 +6,6 @@
 ///
 /// # Returns
 /// The indented text with each line prefixed by the indent string.
-#[allow(dead_code)]
 pub fn indent_text(text: &str, indent: &str) -> String {
     let mut result = text
         .lines()

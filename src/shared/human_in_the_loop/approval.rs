@@ -8,7 +8,6 @@ use super::error::{HumanInTheLoopError, Result};
 ///
 /// When a document is approved, a hash of its content is saved to a separate file.
 /// This allows detecting if the document was modified after approval.
-#[allow(dead_code)]
 pub struct ApprovalManager {
     document_path: PathBuf,
     approve_path: PathBuf,

@@ -200,10 +200,10 @@ pub struct RemoteComment<'a> {
 pub struct GitHubMockServer {
     server: MockServer,
     /// Track created PRs for assertions in tests.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "field for test assertions")]
     pub created_prs: Arc<Mutex<Vec<CreatePrParams>>>,
     /// Track browser opens for assertions.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "field for test assertions")]
     pub opened_urls: Arc<Mutex<Vec<String>>>,
 }
 
@@ -507,7 +507,7 @@ impl GitHubMockServer {
     }
 
     /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs (used by get_pr_for_branch).
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "test helper for future use")]
     pub async fn mock_list_pulls_empty(&self, owner: &str, repo: &str) {
         Mock::given(method("GET"))
             .and(path(format!("/repos/{owner}/{repo}/pulls")))
@@ -517,7 +517,7 @@ impl GitHubMockServer {
     }
 
     /// Mock GET /repos/{owner}/{repo}/pulls with a PR for a specific branch.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "test helper for future use")]
     pub async fn mock_list_pulls_with_pr(
         &self,
         owner: &str,

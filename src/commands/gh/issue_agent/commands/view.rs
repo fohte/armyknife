@@ -19,7 +19,6 @@ pub async fn run(args: &ViewArgs) -> anyhow::Result<()> {
 }
 
 /// Internal implementation that returns the formatted output for testability.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn run_with_client_and_output(
     args: &ViewArgs,
     client: &OctocrabClient,
@@ -54,7 +53,7 @@ where
 }
 
 /// Format the complete view output for an issue and its comments.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "function reserved for future use")]
 fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> String {
     format_issue_view_with(issue, issue_number, comments, format_relative_time)
 }
@@ -82,7 +81,7 @@ fn format_state(state: &str) -> &str {
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "function reserved for future use")]
 fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> String {
     format_issue_with(issue, issue_number, comment_count, format_relative_time)
 }
@@ -142,7 +141,7 @@ where
     output
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "function reserved for future use")]
 fn format_comments(comments: &[Comment]) -> String {
     format_comments_with(comments, format_relative_time)
 }

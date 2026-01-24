@@ -32,7 +32,6 @@ pub trait DocumentSchema: Serialize + DeserializeOwned + Clone + Default {
 pub struct Document<S> {
     pub path: PathBuf,
     pub frontmatter: S,
-    #[allow(dead_code)]
     pub body: String,
 }
 
@@ -54,7 +53,7 @@ impl<S: DocumentSchema> Document<S> {
     }
 
     /// Save the document back to its file.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "method reserved for future use")]
     pub fn save(&self) -> Result<()> {
         let content = self.to_string()?;
         fs::write(&self.path, content)?;
@@ -62,7 +61,6 @@ impl<S: DocumentSchema> Document<S> {
     }
 
     /// Convert the document to a string (frontmatter + body).
-    #[allow(dead_code)]
     pub fn to_string(&self) -> Result<String> {
         let yaml = serde_yaml::to_string(&self.frontmatter)?;
         Ok(format!("---\n{}---\n{}", yaml, self.body))
@@ -79,7 +77,7 @@ impl<S: DocumentSchema> Document<S> {
     }
 
     /// Verify that the document hasn't been modified since approval.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "method reserved for future use")]
     pub fn verify_approval(&self) -> Result<()> {
         self.approval_manager().verify()
     }

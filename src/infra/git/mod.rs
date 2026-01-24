@@ -10,7 +10,10 @@ mod repo;
 #[cfg(test)]
 pub mod test_utils;
 
-#[allow(unused_imports)] // MergeStatus is returned by get_merge_status
+#[expect(
+    unused_imports,
+    reason = "MergeStatus is used as return type of get_merge_status"
+)]
 pub use branch::{
     MergeStatus, branch_exists, find_base_branch, get_merge_status, local_branch_exists,
     remote_branch_exists,
