@@ -52,12 +52,6 @@ where
     ))
 }
 
-/// Format the complete view output for an issue and its comments.
-#[expect(dead_code, reason = "function reserved for future use")]
-fn format_issue_view(issue: &Issue, issue_number: u64, comments: &[Comment]) -> String {
-    format_issue_view_with(issue, issue_number, comments, format_relative_time)
-}
-
 /// Testable version that accepts a custom time formatter.
 fn format_issue_view_with<F>(
     issue: &Issue,
@@ -79,11 +73,6 @@ fn format_state(state: &str) -> &str {
         "CLOSED" => "Closed",
         _ => state,
     }
-}
-
-#[expect(dead_code, reason = "function reserved for future use")]
-fn format_issue(issue: &Issue, issue_number: u64, comment_count: usize) -> String {
-    format_issue_with(issue, issue_number, comment_count, format_relative_time)
 }
 
 fn format_issue_with<F>(
@@ -139,11 +128,6 @@ where
     }
 
     output
-}
-
-#[expect(dead_code, reason = "function reserved for future use")]
-fn format_comments(comments: &[Comment]) -> String {
-    format_comments_with(comments, format_relative_time)
 }
 
 fn format_comments_with<F>(comments: &[Comment], time_formatter: F) -> String

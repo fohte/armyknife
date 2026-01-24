@@ -4,12 +4,10 @@
 //! This is used across all tests that need to interact with GitHub APIs.
 
 use serde_json::json;
-use std::sync::{Arc, Mutex};
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::client::OctocrabClient;
-use super::pr::CreatePrParams;
 
 /// Create a mock user JSON object for octocrab Author model.
 fn mock_user(login: &str) -> serde_json::Value {
@@ -199,12 +197,6 @@ pub struct RemoteComment<'a> {
 /// to verify actual HTTP requests rather than mocking at the trait level.
 pub struct GitHubMockServer {
     server: MockServer,
-    /// Track created PRs for assertions in tests.
-    #[expect(dead_code, reason = "field for test assertions")]
-    pub created_prs: Arc<Mutex<Vec<CreatePrParams>>>,
-    /// Track browser opens for assertions.
-    #[expect(dead_code, reason = "field for test assertions")]
-    pub opened_urls: Arc<Mutex<Vec<String>>>,
 }
 
 impl GitHubMockServer {
@@ -212,8 +204,6 @@ impl GitHubMockServer {
     pub async fn start() -> Self {
         Self {
             server: MockServer::start().await,
-            created_prs: Arc::new(Mutex::new(Vec::new())),
-            opened_urls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -501,42 +491,6 @@ impl GitHubMockServer {
             .respond_with(
                 ResponseTemplate::new(201)
                     .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
-            )
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs (used by get_pr_for_branch).
-    #[expect(dead_code, reason = "test helper for future use")]
-    pub async fn mock_list_pulls_empty(&self, owner: &str, repo: &str) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/pulls")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock GET /repos/{owner}/{repo}/pulls with a PR for a specific branch.
-    #[expect(dead_code, reason = "test helper for future use")]
-    pub async fn mock_list_pulls_with_pr(
-        &self,
-        owner: &str,
-        repo: &str,
-        head_branch: &str,
-        pr_number: u64,
-        _state: &str,
-    ) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/pulls")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
-                    owner,
-                    repo,
-                    pr_number,
-                    "Test PR",
-                    "Test body",
-                    head_branch
-                )])),
             )
             .mount(&self.server)
             .await;

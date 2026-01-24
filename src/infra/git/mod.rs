@@ -10,13 +10,8 @@ mod repo;
 #[cfg(test)]
 pub mod test_utils;
 
-#[expect(
-    unused_imports,
-    reason = "MergeStatus is used as return type of get_merge_status"
-)]
 pub use branch::{
-    MergeStatus, branch_exists, find_base_branch, get_merge_status, local_branch_exists,
-    remote_branch_exists,
+    branch_exists, find_base_branch, get_merge_status, local_branch_exists, remote_branch_exists,
 };
 pub use error::GitError;
 pub use github::{get_owner_repo, github_owner_and_repo};

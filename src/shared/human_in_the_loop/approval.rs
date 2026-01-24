@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::error::{HumanInTheLoopError, Result};
+use super::error::Result;
 
 /// Manages document approval state using SHA256 hashes.
 ///
@@ -31,22 +31,6 @@ impl ApprovalManager {
     pub fn save(&self) -> Result<()> {
         let hash = self.compute_hash()?;
         fs::write(&self.approve_path, hash)?;
-        Ok(())
-    }
-
-    /// Verify that the document hasn't been modified since approval.
-    pub fn verify(&self) -> Result<()> {
-        if !self.exists() {
-            return Err(HumanInTheLoopError::NotApproved);
-        }
-
-        let saved_hash = fs::read_to_string(&self.approve_path)?.trim().to_string();
-        let current_hash = self.compute_hash()?;
-
-        if saved_hash != current_hash {
-            return Err(HumanInTheLoopError::ModifiedAfterApproval);
-        }
-
         Ok(())
     }
 
