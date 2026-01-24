@@ -97,6 +97,15 @@ a gh check-pr-review <pr-number> [options]
 | `--include-resolved` | Include resolved threads              |
 | `--open-details`     | Expand `<details>` blocks in comments |
 
+### `a cc`
+
+Claude Code session monitoring with tmux integration.
+
+| Action         | Description                                           |
+| -------------- | ----------------------------------------------------- |
+| `hook <event>` | Record session events (called from Claude Code hooks) |
+| `list`         | List all Claude Code sessions with status             |
+
 ### `a wm`
 
 Git worktree management with tmux integration.
