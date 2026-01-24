@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.32](https://github.com/fohte/armyknife/compare/v0.1.31...v0.1.32) (2026-01-24)
+
+
+### Features
+
+* **gh/issue-agent:** show local changes diff on `pull` ([#127](https://github.com/fohte/armyknife/issues/127)) ([89e45b1](https://github.com/fohte/armyknife/commit/89e45b1b5501c1e8933989ef86bb78ff3cc2fd8b))
+
 ## [0.1.31](https://github.com/fohte/armyknife/compare/v0.1.30...v0.1.31) (2026-01-23)
 
 
