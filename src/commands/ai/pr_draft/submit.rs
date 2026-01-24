@@ -2,7 +2,9 @@ use clap::Args;
 use std::path::PathBuf;
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
-use crate::infra::github::{CreatePrParams, OctocrabClient, PrClient, RepoClient};
+use crate::infra::github::{
+    CreatePrParams, OctocrabClient, PrClient, PrState, RepoClient, UpdatePrParams,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -92,18 +94,39 @@ async fn run_impl(
         }
     }
 
-    // Create PR using GitHub API
-    let pr_url = gh_client
-        .create_pull_request(CreatePrParams {
-            owner: target.owner.clone(),
-            repo: target.repo.clone(),
-            title: draft.frontmatter.title.clone(),
-            body: draft.body.clone(),
-            head: target.branch.clone(),
-            base: args.base.clone(),
-            draft: args.draft,
-        })
+    // Check if PR already exists for this branch
+    let existing_pr = gh_client
+        .get_pr_for_branch(&target.owner, &target.repo, &target.branch)
         .await?;
+
+    let pr_url = match existing_pr {
+        Some(pr_info) if pr_info.state == PrState::Open => {
+            // Update existing PR
+            gh_client
+                .update_pull_request(UpdatePrParams {
+                    owner: target.owner.clone(),
+                    repo: target.repo.clone(),
+                    number: pr_info.number,
+                    title: draft.frontmatter.title.clone(),
+                    body: draft.body.clone(),
+                })
+                .await?
+        }
+        _ => {
+            // Create new PR
+            gh_client
+                .create_pull_request(CreatePrParams {
+                    owner: target.owner.clone(),
+                    repo: target.repo.clone(),
+                    title: draft.frontmatter.title.clone(),
+                    body: draft.body.clone(),
+                    head: target.branch.clone(),
+                    base: args.base.clone(),
+                    draft: args.draft,
+                })
+                .await?
+        }
+    };
 
     println!("{pr_url}");
 
@@ -139,6 +162,7 @@ mod tests {
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
         let mock = GitHubMockServer::start().await;
         mock.mock_get_repo(owner, repo, true).await;
+        mock.mock_list_pull_requests_empty(owner, repo).await;
         mock.mock_create_pull_request(owner, repo).await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
@@ -331,5 +355,45 @@ mod tests {
             err_msg.contains("title"),
             "error message should mention title: {err_msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn submit_updates_existing_pr() {
+        let mock = GitHubMockServer::start().await;
+        let owner = "owner";
+        let repo = "repo_submit_update";
+        let branch = "feature/existing-pr";
+
+        mock.mock_get_repo(owner, repo, true).await;
+        mock.mock_list_pull_requests_with(owner, repo, 42, "Old title", "Old body", branch)
+            .await;
+        mock.mock_update_pull_request(owner, repo, 42, "Updated title", "Updated body", branch)
+            .await;
+
+        let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
+        if draft_dir.exists() {
+            let _ = fs::remove_dir_all(&draft_dir);
+        }
+
+        let draft_path =
+            create_approved_draft(owner, repo, branch, "Updated title", "Updated body");
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let client = mock.client();
+        let result = run_impl(&args, &client).await;
+
+        assert!(
+            result.is_ok(),
+            "submit should update existing PR: {:?}",
+            result.err()
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&draft_dir);
     }
 }
