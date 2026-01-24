@@ -4,7 +4,7 @@
 //! This is used across all tests that need to interact with GitHub APIs.
 
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::client::OctocrabClient;
@@ -490,6 +490,57 @@ impl GitHubMockServer {
             .and(path(format!("/repos/{owner}/{repo}/pulls")))
             .respond_with(
                 ResponseTemplate::new(201)
+                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs (returns empty list).
+    pub async fn mock_list_pull_requests_empty(&self, owner: &str, repo: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs with existing PR.
+    pub async fn mock_list_pull_requests_with(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
+                    owner, repo, pr_number, title, body, head
+                )])),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mock PATCH /repos/{owner}/{repo}/pulls/{pr_number} for updating PR.
+    pub async fn mock_update_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pr_number}")))
+            .respond_with(
+                ResponseTemplate::new(200)
                     .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
             )
             .mount(&self.server)

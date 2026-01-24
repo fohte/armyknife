@@ -14,5 +14,5 @@ pub use client::OctocrabClient;
 pub use error::GitHubError;
 #[cfg(test)]
 pub use mock::{GitHubMockServer, RemoteComment};
-pub use pr::{CreatePrParams, PrClient, PrState};
+pub use pr::{CreatePrParams, PrClient, PrState, UpdatePrParams};
 pub use repo::RepoClient;
