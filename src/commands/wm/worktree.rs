@@ -389,20 +389,27 @@ mod tests {
             "Branch should exist before deletion"
         );
 
-        // Change current directory to the worktree (simulating `a wm delete` from within worktree)
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&wt_path).unwrap();
+        // RAII guard to restore current directory even on panic
+        struct DirGuard(std::path::PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                // Ignore result since we can't panic in drop
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
 
-        // Delete the worktree first (this is what happens in delete.rs)
-        let deleted = delete_worktree(&repo, "feature-to-delete").unwrap();
-        assert!(deleted, "Worktree should be deleted");
+        let branch_deleted = {
+            let _guard = DirGuard(std::env::current_dir().unwrap());
+            std::env::set_current_dir(&wt_path).unwrap();
 
-        // Now try to delete the branch - this should succeed but fails due to the bug
-        // because local_branch_exists() tries to open repo from current dir (deleted worktree)
-        let branch_deleted = delete_branch_if_exists(&repo, "feature-to-delete");
+            // Delete the worktree first (this is what happens in delete.rs)
+            let deleted = delete_worktree(&repo, "feature-to-delete").unwrap();
+            assert!(deleted, "Worktree should be deleted");
 
-        // Restore original directory before assertions (cleanup)
-        std::env::set_current_dir(original_dir).unwrap();
+            // Now try to delete the branch - this should succeed but fails due to the bug
+            // because local_branch_exists() tries to open repo from current dir (deleted worktree)
+            delete_branch_if_exists(&repo, "feature-to-delete")
+        };
 
         assert!(
             branch_deleted,
