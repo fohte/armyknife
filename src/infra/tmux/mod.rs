@@ -126,9 +126,11 @@ pub fn get_session_name(repo_root: &str) -> String {
 
 /// Strip `/.worktrees/<name>` suffix from a path.
 fn strip_worktree_suffix(path: &Path) -> &Path {
+    use std::ffi::OsStr;
+
     // Check if path ends with /.worktrees/<something>
     if let Some(parent) = path.parent()
-        && parent.file_name().and_then(|n| n.to_str()) == Some(".worktrees")
+        && parent.file_name() == Some(OsStr::new(".worktrees"))
         && let Some(repo_root) = parent.parent()
     {
         return repo_root;
