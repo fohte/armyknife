@@ -46,15 +46,46 @@ Generate a branch name from a description using AI.
 Commands designed for AI agents (e.g., Claude Code) to call programmatically.
 These provide structured inputs/outputs suitable for AI workflows.
 
+#### `a ai draft <path>`
+
+Open a file in editor for review (no approval flow).
+
+| Option            | Description                                                |
+| ----------------- | ---------------------------------------------------------- |
+| `--title <title>` | Window title for WezTerm (defaults to "Draft: <filename>") |
+
 #### `a ai pr-draft`
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                         |
-| -------- | ----------------------------------- |
-| `new`    | Create a new PR body draft file     |
-| `review` | Open the draft in editor for review |
-| `submit` | Create a PR from the approved draft |
+| Action   | Description                                                        |
+| -------- | ------------------------------------------------------------------ |
+| `new`    | Create a new PR body draft file                                    |
+| `review` | Open the draft in editor for review                                |
+| `submit` | Create a PR from the approved draft (updates existing PR if found) |
+
+`submit` options:
+
+| Option         | Description            |
+| -------------- | ---------------------- |
+| `--base <ref>` | Base branch for the PR |
+| `--draft`      | Create as draft PR     |
+
+#### `a ai review`
+
+Request or wait for bot reviews on a PR.
+
+| Command   | Description                                                  |
+| --------- | ------------------------------------------------------------ |
+| `request` | Request a review from a bot reviewer and wait for completion |
+| `wait`    | Wait for an existing review to complete                      |
+
+| Option                  | Description                                      |
+| ----------------------- | ------------------------------------------------ |
+| `-R, --repo <repo>`     | Target repository (owner/repo)                   |
+| `-r, --reviewer <name>` | Reviewer to request/wait for (default: `gemini`) |
+| `--interval <seconds>`  | Polling interval (default: 15)                   |
+| `--timeout <seconds>`   | Timeout (default: 300)                           |
 
 ### `a gh`
 
@@ -107,6 +138,17 @@ Git worktree management with tmux integration.
 | `new <branch>`      | Create a new worktree and open tmux window |
 | `delete [worktree]` | Delete a worktree and its branch           |
 | `clean`             | Bulk delete merged worktrees               |
+
+### `a completions <shell>`
+
+Generate shell completion scripts.
+
+Supported shells: `bash`, `elvish`, `fish`, `powershell`, `zsh`
+
+```sh
+# Example: Add to your shell profile
+a completions zsh > ~/.zfunc/_a
+```
 
 ## License
 
