@@ -281,8 +281,12 @@ fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
     if let Some(captures) = FRONTMATTER_RE.captures(content) {
         let yaml_str = captures.get(1).map_or("", |m| m.as_str());
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
-        let full_match = captures.get(0).map(|m| m.end()).unwrap_or(0);
-        let body = content[full_match..].to_string();
+        // group 0 (full match) always exists when regex matches
+        let end = captures
+            .get(0)
+            .map(|m| m.end())
+            .ok_or_else(|| PrDraftError::CommandFailed("regex capture failed".to_string()))?;
+        let body = content[end..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((
