@@ -40,7 +40,7 @@ indicatif = "=0.18.3"
 [dev-dependencies]
 rstest = "=0.26.1"
 wiremock = "=0.6.5"
-serial_test = "=3.2.0"
+serial_test = "=3.3.1"
 
 [lints.clippy]
 allow_attributes = "warn"
