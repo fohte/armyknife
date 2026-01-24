@@ -356,9 +356,6 @@ impl<'a> MockRepoContext<'a> {
             owner: self.owner,
             repo: self.repo,
             number,
-            title: "Test PR",
-            body: "Test body",
-            head: "feature",
         }
     }
 }
@@ -597,33 +594,9 @@ pub struct MockPullRequestBuilder<'a> {
     owner: &'a str,
     repo: &'a str,
     number: u64,
-    title: &'a str,
-    body: &'a str,
-    head: &'a str,
 }
 
 impl<'a> MockPullRequestBuilder<'a> {
-    /// Set the PR title.
-    #[expect(dead_code, reason = "builder method for future use")]
-    pub fn title(mut self, title: &'a str) -> Self {
-        self.title = title;
-        self
-    }
-
-    /// Set the PR body.
-    #[expect(dead_code, reason = "builder method for future use")]
-    pub fn body(mut self, body: &'a str) -> Self {
-        self.body = body;
-        self
-    }
-
-    /// Set the head branch.
-    #[expect(dead_code, reason = "builder method for future use")]
-    pub fn head(mut self, head: &'a str) -> Self {
-        self.head = head;
-        self
-    }
-
     /// Mount mock for POST /repos/{owner}/{repo}/pulls.
     pub async fn create(self) {
         let owner = self.owner;
@@ -634,9 +607,9 @@ impl<'a> MockPullRequestBuilder<'a> {
                 owner,
                 repo,
                 self.number,
-                self.title,
-                self.body,
-                self.head,
+                "Test PR",
+                "Test body",
+                "feature",
             )))
             .mount(self.server)
             .await;
