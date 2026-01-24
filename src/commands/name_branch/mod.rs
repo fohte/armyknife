@@ -29,7 +29,7 @@ impl NameBranchArgs {
                 ProgressStyle::default_spinner()
                     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
                     .template("{spinner} {msg}")
-                    .unwrap(),
+                    .unwrap_or(ProgressStyle::default_spinner()),
             );
             s.set_message("Generating branch name...");
             s.enable_steady_tick(std::time::Duration::from_millis(80));

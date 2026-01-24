@@ -371,14 +371,16 @@ impl OctocrabClient {
 /// Get GitHub token from `gh auth token` command.
 /// This reuses the authentication from GitHub CLI.
 ///
-/// # Panics
-/// Panics when called during tests to prevent accidental real API calls.
+/// # Errors
+/// Returns an error when called during tests to prevent accidental real API calls.
 /// Use `OctocrabClient::with_base_url` in tests instead.
 fn get_gh_token() -> Result<String> {
     #[cfg(test)]
-    panic!(
+    return Err(GitHubError::TokenError(
         "get_gh_token should not be called in tests. Use OctocrabClient::with_base_url instead."
-    );
+            .to_string(),
+    )
+    .into());
 
     #[cfg(not(test))]
     {

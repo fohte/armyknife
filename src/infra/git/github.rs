@@ -1,25 +1,17 @@
 //! GitHub-related git operations.
 
 use git2::Repository;
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::regex_captures;
 
 use super::error::{GitError, Result};
 use super::repo::{open_repo, origin_url};
 
-static GITHUB_URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap());
-
 /// Parse owner and repo from a GitHub URL.
 /// Supports both SSH (git@github.com:owner/repo.git) and HTTPS formats.
 pub fn parse_github_url(url: &str) -> Result<(String, String)> {
-    if let Some(captures) = GITHUB_URL_RE.captures(url) {
-        let owner = captures.get(1).unwrap().as_str().to_string();
-        let repo = captures.get(2).unwrap().as_str().to_string();
-        Ok((owner, repo))
-    } else {
-        Err(GitError::InvalidGitHubUrl(url.to_string()).into())
-    }
+    let (_, owner, repo) = regex_captures!(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$", url)
+        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
+    Ok((owner.to_string(), repo.to_string()))
 }
 
 /// Get owner and repo from the origin remote.

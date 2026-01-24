@@ -1,21 +1,15 @@
 use indoc::formatdoc;
-use regex::Regex;
+use lazy_regex::{regex_captures, regex_is_match};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use thiserror::Error;
 
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::human_in_the_loop::DocumentSchema;
-
-static FRONTMATTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
-static JAPANESE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -271,10 +265,9 @@ impl DraftFile {
 }
 
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
-    if let Some(captures) = FRONTMATTER_RE.captures(content) {
-        let yaml_str = captures.get(1).map_or("", |m| m.as_str());
+    if let Some((whole, yaml_str)) = regex_captures!(r"^---\n([\s\S]*?)\n---\n?", content) {
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
-        let body = content[captures.get(0).unwrap().end()..].to_string();
+        let body = content[whole.len()..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((
@@ -313,7 +306,7 @@ pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
 }
 
 pub fn contains_japanese(text: &str) -> bool {
-    JAPANESE_RE.is_match(text)
+    regex_is_match!(r"[\p{Hiragana}\p{Katakana}\p{Han}]", text)
 }
 
 pub fn read_stdin_if_available() -> Option<String> {
