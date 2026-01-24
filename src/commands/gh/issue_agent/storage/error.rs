@@ -3,9 +3,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
-    #[error("Issue directory not found: {0}")]
-    IssueDirectoryNotFound(PathBuf),
-
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 

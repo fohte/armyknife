@@ -200,12 +200,6 @@ pub fn kill_window(window_id: &str) -> Result<()> {
     run_tmux(&["kill-window", "-t", window_id])
 }
 
-/// Create a new window in a session.
-#[allow(dead_code)]
-pub fn new_window(session: &str, cwd: &str, window_name: &str) -> Result<()> {
-    run_tmux(&["new-window", "-t", session, "-c", cwd, "-n", window_name])
-}
-
 /// Create a new window with a horizontal split and run commands in each pane.
 ///
 /// - Left pane (pane 1): runs `left_cmd`

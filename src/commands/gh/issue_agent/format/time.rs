@@ -9,7 +9,6 @@ use chrono::{DateTime, Utc};
 ///
 /// # Returns
 /// A human-readable relative time string, or the original timestamp if parsing fails.
-#[allow(dead_code)]
 pub fn format_relative_time(timestamp: &str) -> String {
     let parsed: DateTime<Utc> = match timestamp.parse() {
         Ok(dt) => dt,

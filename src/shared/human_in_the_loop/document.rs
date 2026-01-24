@@ -32,8 +32,6 @@ pub trait DocumentSchema: Serialize + DeserializeOwned + Clone + Default {
 pub struct Document<S> {
     pub path: PathBuf,
     pub frontmatter: S,
-    #[allow(dead_code)]
-    pub body: String,
 }
 
 impl<S: DocumentSchema> Document<S> {
@@ -44,28 +42,9 @@ impl<S: DocumentSchema> Document<S> {
         }
 
         let content = fs::read_to_string(&path)?;
-        let (frontmatter, body) = parse_frontmatter(&content)?;
+        let (frontmatter, _body) = parse_frontmatter(&content)?;
 
-        Ok(Self {
-            path,
-            frontmatter,
-            body,
-        })
-    }
-
-    /// Save the document back to its file.
-    #[allow(dead_code)]
-    pub fn save(&self) -> Result<()> {
-        let content = self.to_string()?;
-        fs::write(&self.path, content)?;
-        Ok(())
-    }
-
-    /// Convert the document to a string (frontmatter + body).
-    #[allow(dead_code)]
-    pub fn to_string(&self) -> Result<String> {
-        let yaml = serde_yaml::to_string(&self.frontmatter)?;
-        Ok(format!("---\n{}---\n{}", yaml, self.body))
+        Ok(Self { path, frontmatter })
     }
 
     /// Get an ApprovalManager for this document.
@@ -76,12 +55,6 @@ impl<S: DocumentSchema> Document<S> {
     /// Save the approval hash for this document.
     pub fn save_approval(&self) -> Result<()> {
         self.approval_manager().save()
-    }
-
-    /// Verify that the document hasn't been modified since approval.
-    #[allow(dead_code)]
-    pub fn verify_approval(&self) -> Result<()> {
-        self.approval_manager().verify()
     }
 
     /// Remove the approval file.

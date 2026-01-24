@@ -28,12 +28,6 @@ impl LocalChanges {
 }
 
 impl IssueStorage {
-    /// Check if there are local changes compared to remote data.
-    pub fn has_changes(&self, remote_issue: &Issue, remote_comments: &[Comment]) -> Result<bool> {
-        let changes = self.detect_changes(remote_issue, remote_comments)?;
-        Ok(changes.has_changes())
-    }
-
     /// Detect local changes compared to remote data, returning detailed change info.
     pub fn detect_changes(
         &self,

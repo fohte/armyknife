@@ -30,6 +30,7 @@ impl IssueStorage {
 
     /// Create an IssueStorage from an existing directory path.
     /// Useful for testing or custom storage locations.
+    #[cfg(test)]
     pub fn from_dir(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }

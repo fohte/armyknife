@@ -207,7 +207,6 @@ impl OctocrabClient {
     // ============ Comment Operations ============
 
     /// GraphQL data for fetching comments.
-    #[allow(dead_code)]
     async fn get_comments_inner(
         &self,
         owner: &str,

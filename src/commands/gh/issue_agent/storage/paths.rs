@@ -24,6 +24,7 @@ pub fn get_issue_dir(repo: &str, issue_number: i64) -> PathBuf {
     get_cache_dir().join(repo).join(issue_number.to_string())
 }
 
+#[cfg(test)]
 /// Internal function for testability.
 fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i64) -> PathBuf {
     cache_dir.join(repo).join(issue_number.to_string())
