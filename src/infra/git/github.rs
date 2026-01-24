@@ -7,19 +7,27 @@ use std::sync::LazyLock;
 use super::error::{GitError, Result};
 use super::repo::{open_repo, origin_url};
 
-static GITHUB_URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").unwrap());
+// Static regex pattern is validated at compile-test time
+#[allow(clippy::expect_used)]
+static GITHUB_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").expect("valid regex")
+});
 
 /// Parse owner and repo from a GitHub URL.
 /// Supports both SSH (git@github.com:owner/repo.git) and HTTPS formats.
 pub fn parse_github_url(url: &str) -> Result<(String, String)> {
-    if let Some(captures) = GITHUB_URL_RE.captures(url) {
-        let owner = captures.get(1).unwrap().as_str().to_string();
-        let repo = captures.get(2).unwrap().as_str().to_string();
-        Ok((owner, repo))
-    } else {
-        Err(GitError::InvalidGitHubUrl(url.to_string()).into())
-    }
+    let captures = GITHUB_URL_RE
+        .captures(url)
+        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
+    let owner = captures
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
+    let repo = captures
+        .get(2)
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
+    Ok((owner, repo))
 }
 
 /// Get owner and repo from the origin remote.

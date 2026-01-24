@@ -12,10 +12,13 @@ use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::human_in_the_loop::{Document, DocumentSchema};
 
+// Static regex patterns are validated at compile-test time
+#[allow(clippy::expect_used)]
 static FRONTMATTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
+    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").expect("valid regex"));
+#[allow(clippy::expect_used)]
 static JAPANESE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").unwrap());
+    LazyLock::new(|| Regex::new(r"[\p{Hiragana}\p{Katakana}\p{Han}]").expect("valid regex"));
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -278,7 +281,8 @@ fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
     if let Some(captures) = FRONTMATTER_RE.captures(content) {
         let yaml_str = captures.get(1).map_or("", |m| m.as_str());
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
-        let body = content[captures.get(0).unwrap().end()..].to_string();
+        let full_match = captures.get(0).map(|m| m.end()).unwrap_or(0);
+        let body = content[full_match..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((

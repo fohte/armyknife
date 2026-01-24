@@ -1,7 +1,5 @@
 //! GitHub API error types.
 
-use std::fmt::Write;
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -23,10 +21,11 @@ pub enum GitHubError {
 fn format_octocrab_error(err: &octocrab::Error) -> String {
     match err {
         octocrab::Error::GitHub { source, .. } => {
-            let mut msg = format!("GitHub API error: {}", source.message);
-
-            // Add HTTP status code
-            write!(&mut msg, " (HTTP {})", source.status_code.as_u16()).unwrap();
+            let mut msg = format!(
+                "GitHub API error: {} (HTTP {})",
+                source.message,
+                source.status_code.as_u16()
+            );
 
             // Add detailed error information if available
             if let Some(errors) = &source.errors {

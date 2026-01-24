@@ -25,11 +25,12 @@ impl NameBranchArgs {
 
         let spinner = if std::io::stderr().is_terminal() {
             let s = ProgressBar::new_spinner();
+            #[allow(clippy::expect_used)] // static template string
             s.set_style(
                 ProgressStyle::default_spinner()
                     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
                     .template("{spinner} {msg}")
-                    .unwrap(),
+                    .expect("valid template"),
             );
             s.set_message("Generating branch name...");
             s.enable_steady_tick(std::time::Duration::from_millis(80));

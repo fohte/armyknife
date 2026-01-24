@@ -8,8 +8,10 @@ use std::sync::LazyLock;
 use super::approval::ApprovalManager;
 use super::error::{HumanInTheLoopError, Result};
 
+// Static regex pattern is validated at compile-test time
+#[allow(clippy::expect_used)]
 static FRONTMATTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").unwrap());
+    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").expect("valid regex"));
 
 /// Trait for frontmatter schemas.
 ///
@@ -98,7 +100,8 @@ pub fn parse_frontmatter<S: DeserializeOwned + Default>(content: &str) -> Result
     if let Some(captures) = FRONTMATTER_RE.captures(content) {
         let yaml_str = captures.get(1).map_or("", |m| m.as_str());
         let frontmatter: S = serde_yaml::from_str(yaml_str)?;
-        let body = content[captures.get(0).unwrap().end()..].to_string();
+        let full_match = captures.get(0).map(|m| m.end()).unwrap_or(0);
+        let body = content[full_match..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((S::default(), content.to_string()))

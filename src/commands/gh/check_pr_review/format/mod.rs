@@ -15,12 +15,14 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
-// Matches <details> blocks with optional <summary>
+// Static regex patterns are validated at compile-test time
+#[allow(clippy::expect_used)]
 static DETAILS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<details[^>]*>(.*?)</details>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?s)<details[^>]*>(.*?)</details>").expect("valid regex"));
 
+#[allow(clippy::expect_used)]
 static SUMMARY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)^\s*<summary[^>]*>(.*?)</summary>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?s)^\s*<summary[^>]*>(.*?)</summary>").expect("valid regex"));
 
 #[derive(Default)]
 pub struct FormatOptions {
