@@ -11,7 +11,7 @@ pub fn get_tmux_info_from_tty(tty: &str) -> Option<TmuxInfo> {
             "list-panes",
             "-a",
             "-F",
-            "#{pane_tty} #{session_name} #{window_name} #{window_index} #{pane_id}",
+            "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
         ])
         .output()
         .ok()?;
@@ -33,25 +33,21 @@ pub fn get_tmux_info_from_tty(tty: &str) -> Option<TmuxInfo> {
 }
 
 /// Parses a single line from tmux list-panes output.
-/// Format: "#{pane_tty} #{session_name} #{window_name} #{window_index} #{pane_id}"
+/// Format: "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
 fn parse_tmux_pane_line(line: &str, target_tty: &str) -> Option<TmuxInfo> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
+    let mut parts = line.split('\t');
 
-    if parts.len() < 5 {
-        return None;
-    }
-
-    let pane_tty = parts[0];
+    let pane_tty = parts.next()?;
 
     // Check if this line matches our target TTY
     if pane_tty != target_tty {
         return None;
     }
 
-    let session_name = parts[1].to_string();
-    let window_name = parts[2].to_string();
-    let window_index = parts[3].parse::<u32>().ok()?;
-    let pane_id = parts[4].to_string();
+    let session_name = parts.next()?.to_string();
+    let window_name = parts.next()?.to_string();
+    let window_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_id = parts.next()?.to_string();
 
     Some(TmuxInfo {
         session_name,
@@ -68,17 +64,22 @@ mod tests {
 
     #[rstest]
     #[case::standard_line(
-        "/dev/ttys001 main editor 0 %0",
+        "/dev/ttys001\tmain\teditor\t0\t%0",
         "/dev/ttys001",
         Some(("main", "editor", 0, "%0"))
     )]
-    #[case::different_tty("/dev/ttys002 work terminal 1 %5", "/dev/ttys001", None)]
+    #[case::different_tty("/dev/ttys002\twork\tterminal\t1\t%5", "/dev/ttys001", None)]
     #[case::high_window_index(
-        "/dev/pts/0 session window 99 %123",
+        "/dev/pts/0\tsession\twindow\t99\t%123",
         "/dev/pts/0",
         Some(("session", "window", 99, "%123"))
     )]
-    #[case::insufficient_parts("/dev/ttys001 main", "/dev/ttys001", None)]
+    #[case::session_with_spaces(
+        "/dev/ttys001\tmy session\tmy window\t0\t%0",
+        "/dev/ttys001",
+        Some(("my session", "my window", 0, "%0"))
+    )]
+    #[case::insufficient_parts("/dev/ttys001\tmain", "/dev/ttys001", None)]
     #[case::empty_line("", "/dev/ttys001", None)]
     fn test_parse_tmux_pane_line(
         #[case] line: &str,

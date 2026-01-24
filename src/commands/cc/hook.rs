@@ -1,4 +1,4 @@
-use std::io::{self, BufRead};
+use std::io::{self, Read};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -72,18 +72,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
 /// Reads and parses JSON from stdin.
 fn read_stdin_json() -> Result<HookInput> {
-    let stdin = io::stdin();
-    let mut lines = Vec::new();
+    let mut json_str = String::new();
+    io::stdin().lock().read_to_string(&mut json_str)?;
 
-    for line in stdin.lock().lines() {
-        lines.push(line?);
-    }
-
-    if lines.is_empty() {
+    if json_str.is_empty() {
         return Err(CcError::NoStdinInput.into());
     }
 
-    let json_str = lines.join("\n");
     let input: HookInput = serde_json::from_str(&json_str)?;
 
     Ok(input)
