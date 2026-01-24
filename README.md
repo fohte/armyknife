@@ -75,10 +75,10 @@ Manage PR body drafts with human-in-the-loop review.
 
 Request or wait for bot reviews on a PR.
 
-| Command   | Description                                                  |
-| --------- | ------------------------------------------------------------ |
-| `request` | Request a review from a bot reviewer and wait for completion |
-| `wait`    | Wait for an existing review to complete                      |
+| Command   | Description                                                           |
+| --------- | --------------------------------------------------------------------- |
+| `request` | Request a review from a bot reviewer and wait for completion          |
+| `wait`    | Wait for an existing review to complete (does not trigger new review) |
 
 | Option                  | Description                                      |
 | ----------------------- | ------------------------------------------------ |
