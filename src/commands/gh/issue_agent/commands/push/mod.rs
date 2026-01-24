@@ -2,7 +2,6 @@
 
 mod changeset;
 mod detect;
-mod diff;
 #[cfg(test)]
 mod integration_tests;
 
@@ -129,7 +128,7 @@ async fn run_with_client_and_user(
 
     // Display and apply changes
     let has_changes = changeset.has_changes();
-    changeset.display();
+    changeset.display()?;
 
     if !args.dry_run && has_changes {
         changeset
