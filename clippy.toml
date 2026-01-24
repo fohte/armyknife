@@ -1,3 +1,10 @@
+# Allow unwrap/expect/panic in test code.
+# These lints are denied in Cargo.toml for production code,
+# but tests commonly use these for clarity and brevity.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
 # Prevent Tokio runtime nesting issues.
 # Only main() should create a runtime via #[tokio::main].
 # All other async code should use async fn and .await.
