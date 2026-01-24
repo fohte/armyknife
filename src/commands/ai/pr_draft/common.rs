@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
-use crate::shared::human_in_the_loop::{Document, DocumentSchema};
+use crate::shared::human_in_the_loop::DocumentSchema;
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -137,10 +137,6 @@ pub struct Steps {
     pub submit: bool,
 }
 
-/// Type alias for PR draft documents.
-#[allow(dead_code)]
-pub type PrDraftDocument = Document<Frontmatter>;
-
 #[derive(Debug, Clone)]
 pub struct DraftFile {
     pub path: PathBuf,
@@ -217,7 +213,7 @@ impl DraftFile {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn save_approval(&self) -> Result<()> {
         let hash = self.compute_hash()?;
         let approve_path = Self::approve_path(&self.path);

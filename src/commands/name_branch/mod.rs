@@ -25,7 +25,7 @@ impl NameBranchArgs {
 
         let spinner = if std::io::stderr().is_terminal() {
             let s = ProgressBar::new_spinner();
-            #[allow(clippy::expect_used)] // static template string
+            #[expect(clippy::expect_used, reason = "static template string never fails")]
             s.set_style(
                 ProgressStyle::default_spinner()
                     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")

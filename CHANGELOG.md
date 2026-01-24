@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.33](https://github.com/fohte/armyknife/compare/v0.1.32...v0.1.33) (2026-01-24)
+
+
+### Bug Fixes
+
+* **tmux:** remove external `tmux-name` command dependency ([#129](https://github.com/fohte/armyknife/issues/129)) ([9cdde04](https://github.com/fohte/armyknife/commit/9cdde04ebbfe99c8baad16045f2a5b56a52db8c9))
+
 ## [0.1.32](https://github.com/fohte/armyknife/compare/v0.1.31...v0.1.32) (2026-01-24)
 
 
