@@ -357,26 +357,54 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn submit_updates_existing_pr() {
+    async fn setup_test_env_with_existing_pr(
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        pr_number: u64,
+    ) -> TestEnv {
         let mock = GitHubMockServer::start().await;
-        let owner = "owner";
-        let repo = "repo_submit_update";
-        let branch = "feature/existing-pr";
-
         mock.mock_get_repo(owner, repo, true).await;
-        mock.mock_list_pull_requests_with(owner, repo, 42, "Old title", "Old body", branch)
+        mock.mock_list_pull_requests_with(owner, repo, pr_number, "Old title", "Old body", branch)
             .await;
-        mock.mock_update_pull_request(owner, repo, 42, "Updated title", "Updated body", branch)
-            .await;
-
+        mock.mock_update_pull_request(
+            owner,
+            repo,
+            pr_number,
+            "Updated title",
+            "Updated body",
+            branch,
+        )
+        .await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
         }
+        TestEnv {
+            mock,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            draft_dir,
+        }
+    }
 
-        let draft_path =
-            create_approved_draft(owner, repo, branch, "Updated title", "Updated body");
+    #[tokio::test]
+    async fn submit_updates_existing_pr() {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            "repo_submit_update",
+            "feature/existing-pr",
+            42,
+        )
+        .await;
+
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/existing-pr",
+            "Updated title",
+            "Updated body",
+        );
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
@@ -384,7 +412,7 @@ mod tests {
             draft: false,
         };
 
-        let client = mock.client();
+        let client = env.mock.client();
         let result = run_impl(&args, &client).await;
 
         assert!(
@@ -392,8 +420,5 @@ mod tests {
             "submit should update existing PR: {:?}",
             result.err()
         );
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&draft_dir);
     }
 }

@@ -4,7 +4,7 @@
 //! This is used across all tests that need to interact with GitHub APIs.
 
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::client::OctocrabClient;
@@ -517,6 +517,7 @@ impl GitHubMockServer {
     ) {
         Mock::given(method("GET"))
             .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
                     owner, repo, pr_number, title, body, head
