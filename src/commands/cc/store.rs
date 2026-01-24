@@ -18,7 +18,15 @@ pub fn sessions_dir() -> Result<PathBuf> {
 
 /// Returns the file path for a specific session.
 /// Path: ~/.cache/armyknife/cc/sessions/<session_id>.json
+///
+/// Validates that session_id does not contain path separators to prevent
+/// path traversal attacks.
 pub fn session_file(session_id: &str) -> Result<PathBuf> {
+    // Reject session IDs with path separators to prevent path traversal
+    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+        return Err(CcError::InvalidSessionId(session_id.to_string()).into());
+    }
+
     sessions_dir().map(|d| d.join(format!("{session_id}.json")))
 }
 
@@ -156,5 +164,18 @@ mod tests {
             serde_json::from_str(&loaded_content).expect("deserialization should succeed");
 
         assert_eq!(loaded.session_id, "save-load-test");
+    }
+
+    #[test]
+    fn test_session_file_rejects_path_traversal() {
+        // Should reject session IDs with path separators
+        assert!(session_file("../etc/passwd").is_err());
+        assert!(session_file("foo/bar").is_err());
+        assert!(session_file("foo\\bar").is_err());
+        assert!(session_file("..").is_err());
+
+        // Should accept valid session IDs
+        assert!(session_file("valid-session-id").is_ok());
+        assert!(session_file("session_123").is_ok());
     }
 }

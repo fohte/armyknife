@@ -10,4 +10,7 @@ pub enum CcError {
 
     #[error("Failed to get cache directory")]
     CacheDirNotFound,
+
+    #[error("Invalid session ID: {0}")]
+    InvalidSessionId(String),
 }
