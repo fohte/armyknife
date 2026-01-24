@@ -1,17 +1,11 @@
-use regex::Regex;
+use lazy_regex::regex_captures;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use super::approval::ApprovalManager;
 use super::error::{HumanInTheLoopError, Result};
-
-// Static regex pattern is validated at compile-test time
-#[allow(clippy::expect_used)]
-static FRONTMATTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^---\n([\s\S]*?)\n---\n?").expect("valid regex"));
 
 /// Trait for frontmatter schemas.
 ///
@@ -97,11 +91,9 @@ impl<S: DocumentSchema> Document<S> {
 /// Returns the parsed frontmatter and the remaining body.
 /// If no frontmatter is found, returns a default-constructed frontmatter and the entire content as body.
 pub fn parse_frontmatter<S: DeserializeOwned + Default>(content: &str) -> Result<(S, String)> {
-    if let Some(captures) = FRONTMATTER_RE.captures(content) {
-        let yaml_str = captures.get(1).map_or("", |m| m.as_str());
+    if let Some((whole, yaml_str)) = regex_captures!(r"^---\n([\s\S]*?)\n---\n?", content) {
         let frontmatter: S = serde_yaml::from_str(yaml_str)?;
-        let full_match = captures.get(0).map(|m| m.end()).unwrap_or(0);
-        let body = content[full_match..].to_string();
+        let body = content[whole.len()..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((S::default(), content.to_string()))

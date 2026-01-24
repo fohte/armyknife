@@ -10,19 +10,11 @@ pub use full::format_review_details;
 pub use summary::format_summary;
 
 use super::models::{Review, ReviewState};
-use regex::Regex;
+use lazy_regex::{Lazy, Regex, lazy_regex, regex_captures};
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
 
-// Static regex patterns are validated at compile-test time
-#[allow(clippy::expect_used)]
-static DETAILS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<details[^>]*>(.*?)</details>").expect("valid regex"));
-
-#[allow(clippy::expect_used)]
-static SUMMARY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)^\s*<summary[^>]*>(.*?)</summary>").expect("valid regex"));
+static DETAILS_RE: Lazy<Regex> = lazy_regex!(r"(?s)<details[^>]*>(.*?)</details>");
 
 #[derive(Default)]
 pub struct FormatOptions {
@@ -45,8 +37,10 @@ fn collapse_details(text: &str) -> String {
     DETAILS_RE
         .replace_all(text, |caps: &regex::Captures| {
             let inner = &caps[1];
-            if let Some(summary_caps) = SUMMARY_RE.captures(inner) {
-                format!("[▶ {}]", &summary_caps[1])
+            if let Some((_, summary)) =
+                regex_captures!(r"(?s)^\s*<summary[^>]*>(.*?)</summary>", inner)
+            {
+                format!("[▶ {summary}]")
             } else {
                 "[▶ ...]".to_string()
             }

@@ -105,6 +105,7 @@ dependencies = [
  "http",
  "indicatif 0.18.3",
  "indoc",
+ "lazy-regex",
  "octocrab",
  "open",
  "regex",

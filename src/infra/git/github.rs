@@ -1,33 +1,17 @@
 //! GitHub-related git operations.
 
 use git2::Repository;
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::regex_captures;
 
 use super::error::{GitError, Result};
 use super::repo::{open_repo, origin_url};
 
-// Static regex pattern is validated at compile-test time
-#[allow(clippy::expect_used)]
-static GITHUB_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$").expect("valid regex")
-});
-
 /// Parse owner and repo from a GitHub URL.
 /// Supports both SSH (git@github.com:owner/repo.git) and HTTPS formats.
 pub fn parse_github_url(url: &str) -> Result<(String, String)> {
-    let captures = GITHUB_URL_RE
-        .captures(url)
+    let (_, owner, repo) = regex_captures!(r"(?:github\.com[:/])([^/]+)/([^/]+?)(?:\.git)?$", url)
         .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
-    let owner = captures
-        .get(1)
-        .map(|m| m.as_str().to_string())
-        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
-    let repo = captures
-        .get(2)
-        .map(|m| m.as_str().to_string())
-        .ok_or_else(|| GitError::InvalidGitHubUrl(url.to_string()))?;
-    Ok((owner, repo))
+    Ok((owner.to_string(), repo.to_string()))
 }
 
 /// Get owner and repo from the origin remote.
