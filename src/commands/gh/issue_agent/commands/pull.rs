@@ -171,19 +171,6 @@ fn write_local_changes<W: Write>(
     Ok(())
 }
 
-/// Format local changes as a string (for testing).
-#[cfg(test)]
-fn format_local_changes(
-    storage: &IssueStorage,
-    remote_issue: &Issue,
-    remote_comments: &[Comment],
-    changes: &LocalChanges,
-) -> anyhow::Result<String> {
-    let mut output = Vec::new();
-    write_local_changes(&mut output, storage, remote_issue, remote_comments, changes)?;
-    Ok(String::from_utf8(output)?)
-}
-
 /// Save issue data to local storage.
 pub(super) fn save_issue_to_storage(
     storage: &IssueStorage,
@@ -647,9 +634,18 @@ mod tests {
         }
     }
 
-    mod format_local_changes_tests {
+    mod write_local_changes_tests {
         use super::*;
         use crate::commands::gh::issue_agent::storage::LocalChanges;
+
+        fn to_string<F>(f: F) -> String
+        where
+            F: FnOnce(&mut Vec<u8>) -> anyhow::Result<()>,
+        {
+            let mut buf = Vec::new();
+            f(&mut buf).unwrap();
+            String::from_utf8(buf).unwrap()
+        }
 
         #[rstest]
         fn test_body_changes(test_dir: TempDir) {
@@ -668,7 +664,8 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            let output =
+                to_string(|w| write_local_changes(w, &storage, &remote_issue, &[], &changes));
             assert_eq!(
                 output,
                 indoc! {"
@@ -711,7 +708,8 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            let output =
+                to_string(|w| write_local_changes(w, &storage, &remote_issue, &[], &changes));
             assert_eq!(
                 output,
                 indoc! {"
@@ -759,8 +757,9 @@ mod tests {
                 new_comment_files: vec![],
             };
 
-            let output =
-                format_local_changes(&storage, &remote_issue, &remote_comments, &changes).unwrap();
+            let output = to_string(|w| {
+                write_local_changes(w, &storage, &remote_issue, &remote_comments, &changes)
+            });
             assert_eq!(
                 output,
                 indoc! {"
@@ -796,7 +795,8 @@ mod tests {
                 new_comment_files: vec!["new_my_comment.md".to_string()],
             };
 
-            let output = format_local_changes(&storage, &remote_issue, &[], &changes).unwrap();
+            let output =
+                to_string(|w| write_local_changes(w, &storage, &remote_issue, &[], &changes));
             assert_eq!(
                 output,
                 indoc! {"
@@ -866,8 +866,9 @@ mod tests {
                 new_comment_files: vec!["new_draft.md".to_string()],
             };
 
-            let output =
-                format_local_changes(&storage, &remote_issue, &remote_comments, &changes).unwrap();
+            let output = to_string(|w| {
+                write_local_changes(w, &storage, &remote_issue, &remote_comments, &changes)
+            });
             assert_eq!(
                 output,
                 indoc! {"

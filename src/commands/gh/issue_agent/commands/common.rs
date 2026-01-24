@@ -48,23 +48,6 @@ pub fn write_diff<W: Write>(writer: &mut W, old: &str, new: &str) -> io::Result<
     Ok(())
 }
 
-/// Format unified diff between old and new text as a string.
-#[cfg(test)]
-pub fn format_diff(old: &str, new: &str) -> String {
-    use std::fmt::Write as _;
-    let mut result = String::new();
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        write!(result, "{}{}", sign, change).unwrap();
-    }
-    result
-}
-
 /// Print success message after fetching issue.
 pub fn print_fetch_success(issue_number: u64, title: &str, dir: &Path) {
     eprintln!();
@@ -120,9 +103,10 @@ mod tests {
         #[case::modify("old\n", "new\n", "-old\n+new\n")]
         #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
         #[case::empty_both("", "", "")]
-        fn test_format_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
-            let diff = format_diff(old, new);
-            assert_eq!(diff, expected);
+        fn test_write_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
+            let mut output = Vec::new();
+            write_diff(&mut output, old, new).unwrap();
+            assert_eq!(String::from_utf8(output).unwrap(), expected);
         }
     }
 }
