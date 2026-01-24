@@ -138,8 +138,9 @@ mod tests {
 
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo(owner, repo, true).await;
-        mock.mock_create_pull_request(owner, repo).await;
+        let ctx = mock.repo(owner, repo);
+        ctx.repo_info().private(true).get().await;
+        ctx.pull_request(1).create().await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);

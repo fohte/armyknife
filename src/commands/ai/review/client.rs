@@ -310,6 +310,15 @@ pub mod mock {
         pub created_at: DateTime<Utc>,
     }
 
+    /// Posted comment data for test assertions.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct PostedComment {
+        pub owner: String,
+        pub repo: String,
+        pub pr_number: u64,
+        pub reviewer: Reviewer,
+    }
+
     /// Mock implementation for testing.
     #[derive(Clone, Default)]
     pub struct MockReviewClient {
@@ -320,7 +329,7 @@ pub mod mock {
         /// Latest commit time.
         pub latest_commit_time: Arc<Mutex<Option<DateTime<Utc>>>>,
         /// Posted comments (for assertions).
-        pub posted_comments: Arc<Mutex<Vec<(String, String, u64, Reviewer)>>>,
+        pub posted_comments: Arc<Mutex<Vec<PostedComment>>>,
         /// Number of find_latest_review calls before returning reviews.
         /// If set, the first N calls will return None.
         pub skip_first_n_reviews: Arc<Mutex<usize>>,
@@ -410,7 +419,7 @@ pub mod mock {
                 .filter(|r| {
                     // On first call, apply cutoff filter if set
                     if current_call == 1 || current_call == skip_n + 1 {
-                        cutoff.map_or(true, |c| r.created_at < c)
+                        cutoff.is_none_or(|c| r.created_at < c)
                     } else {
                         true
                     }
@@ -474,12 +483,12 @@ pub mod mock {
             pr_number: u64,
             reviewer: Reviewer,
         ) -> Result<()> {
-            self.posted_comments.lock().unwrap().push((
-                owner.to_string(),
-                repo.to_string(),
+            self.posted_comments.lock().unwrap().push(PostedComment {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
                 pr_number,
                 reviewer,
-            ));
+            });
 
             Ok(())
         }
@@ -563,12 +572,12 @@ pub mod mock {
             assert_eq!(posted.len(), 1);
             assert_eq!(
                 posted[0],
-                (
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    42,
-                    Reviewer::Gemini
-                )
+                PostedComment {
+                    owner: "owner".to_string(),
+                    repo: "repo".to_string(),
+                    pr_number: 42,
+                    reviewer: Reviewer::Gemini,
+                }
             );
         }
 

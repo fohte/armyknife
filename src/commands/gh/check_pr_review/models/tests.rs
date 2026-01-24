@@ -95,7 +95,7 @@ fn test_empty_body_review_preserved() {
 
 #[test]
 fn test_count_unresolved() {
-    let threads = vec![
+    let threads = [
         make_thread(Some(1), false),
         make_thread(Some(1), true),
         make_thread(Some(1), false),

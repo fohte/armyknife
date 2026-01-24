@@ -122,30 +122,26 @@ impl<'a> TestSetup<'a> {
         local_body: &'a str,
         local_labels: Vec<&'a str>,
         local_ts: &'a str,
-        current_user: &'a str,
     }
 
     /// Build the GitHubMockServer and IssueStorage.
     pub async fn build(self) -> (GitHubMockServer, IssueStorage) {
         let mock = GitHubMockServer::start().await;
+        let ctx = mock.repo("owner", "repo");
 
         // Set up remote issue mock
-        mock.mock_get_issue_with(
-            "owner",
-            "repo",
-            123,
-            self.remote_title,
-            self.remote_body,
-            self.remote_ts,
-        )
-        .await;
-
-        // Set up remote comments mock
-        mock.mock_get_comments_graphql_with("owner", "repo", 123, &self.remote_comments)
+        ctx.issue(123)
+            .title(self.remote_title)
+            .body(self.remote_body)
+            .updated_at(self.remote_ts)
+            .get()
             .await;
 
+        // Set up remote comments mock
+        ctx.graphql_comments(&self.remote_comments).await;
+
         // Set up current user mock
-        mock.mock_get_current_user(self.current_user).await;
+        mock.current_user(self.current_user).await;
 
         // Set up local storage
         fs::create_dir_all(self.dir).unwrap();

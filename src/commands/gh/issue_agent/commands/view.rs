@@ -423,35 +423,29 @@ mod tests {
 
         #[tokio::test]
         async fn test_fetches_and_displays_issue_with_comments() {
+            use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
+
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_with(
-                "owner",
-                "repo",
-                123,
-                "Test Issue",
-                "Test body content",
-                "2024-01-02T00:00:00Z",
-            )
-            .await;
-            mock.mock_get_comments_graphql_with(
-                "owner",
-                "repo",
-                123,
-                &[
-                    crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment {
-                        id: "IC_1",
-                        database_id: 1001,
-                        author: "commenter1",
-                        body: "First comment",
-                    },
-                    crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment {
-                        id: "IC_2",
-                        database_id: 1002,
-                        author: "commenter2",
-                        body: "Second comment",
-                    },
-                ],
-            )
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123)
+                .title("Test Issue")
+                .body("Test body content")
+                .get()
+                .await;
+            ctx.graphql_comments(&[
+                RemoteComment {
+                    id: "IC_1",
+                    database_id: 1001,
+                    author: "commenter1",
+                    body: "First comment",
+                },
+                RemoteComment {
+                    id: "IC_2",
+                    database_id: 1002,
+                    author: "commenter2",
+                    body: "Second comment",
+                },
+            ])
             .await;
 
             let client = mock.client();
@@ -494,16 +488,13 @@ mod tests {
         #[tokio::test]
         async fn test_displays_issue_without_comments() {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_with(
-                "owner",
-                "repo",
-                42,
-                "No Comments Issue",
-                "Body without comments",
-                "2024-01-02T00:00:00Z",
-            )
-            .await;
-            mock.mock_get_comments_graphql("owner", "repo", 42).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(42)
+                .title("No Comments Issue")
+                .body("Body without comments")
+                .get()
+                .await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -533,7 +524,7 @@ mod tests {
         #[tokio::test]
         async fn test_fails_when_issue_not_found() {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_not_found("owner", "repo", 999).await;
+            mock.repo("owner", "repo").issue(999).get_not_found().await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -570,16 +561,9 @@ mod tests {
         #[tokio::test]
         async fn test_displays_issue_without_body() {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_with(
-                "owner",
-                "repo",
-                10,
-                "Empty Body Issue",
-                "",
-                "2024-01-02T00:00:00Z",
-            )
-            .await;
-            mock.mock_get_comments_graphql("owner", "repo", 10).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(10).title("Empty Body Issue").body("").get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -609,17 +593,14 @@ mod tests {
         #[tokio::test]
         async fn test_displays_issue_with_multiple_labels() {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_with_labels(
-                "owner",
-                "repo",
-                15,
-                "Multi Label Issue",
-                "Body",
-                "2024-01-02T00:00:00Z",
-                &["bug", "enhancement", "help wanted"],
-            )
-            .await;
-            mock.mock_get_comments_graphql("owner", "repo", 15).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(15)
+                .title("Multi Label Issue")
+                .body("Body")
+                .labels(vec!["bug", "enhancement", "help wanted"])
+                .get()
+                .await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {

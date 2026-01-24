@@ -71,8 +71,9 @@ async fn test_body_update(test_dir: TempDir) {
         .remote_body("Remote")
         .build()
         .await;
-    mock.mock_update_issue("owner", "repo", 123).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.issue(123).update().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -110,8 +111,9 @@ async fn test_updates_title(test_dir: TempDir) {
         .local_title("New Title")
         .build()
         .await;
-    mock.mock_update_issue("owner", "repo", 123).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.issue(123).update().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -131,9 +133,10 @@ async fn test_updates_labels(test_dir: TempDir) {
         .local_labels(vec!["enhancement"])
         .build()
         .await;
-    mock.mock_remove_label("owner", "repo", 123, "bug").await;
-    mock.mock_add_labels("owner", "repo", 123).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.issue(123).remove_label("bug").await;
+    ctx.issue(123).add_labels().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -235,8 +238,9 @@ async fn test_updates_own_comment(test_dir: TempDir) {
             "Updated",
         ),
     );
-    mock.mock_update_comment("owner", "repo", 12345).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.comment().update().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -254,8 +258,9 @@ async fn test_updates_own_comment(test_dir: TempDir) {
 async fn test_creates_new_comment(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
-    mock.mock_create_comment("owner", "repo", 123).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.issue(123).create_comment().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -331,8 +336,9 @@ async fn test_edit_others_comment_allowed_with_flag(test_dir: TempDir) {
             "Modified",
         ),
     );
-    mock.mock_update_comment("owner", "repo", 12345).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.comment().update().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -355,9 +361,10 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
         .remote_title("New Title")
         .build()
         .await;
-    // Local title differs from remote, so we need mock_update_issue
-    mock.mock_update_issue("owner", "repo", 123).await;
-    // mock_get_issue is already called by TestSetup for initial fetch,
+    // Local title differs from remote, so we need issue update mock
+    let ctx = mock.repo("owner", "repo");
+    ctx.issue(123).update().await;
+    // issue.get() is already called by TestSetup for initial fetch,
     // and will be called again after push to refresh metadata
 
     let client = mock.client();
@@ -413,8 +420,9 @@ async fn test_delete_comment_allowed_with_flag(test_dir: TempDir) {
         .build()
         .await;
     // Don't create local comment file - simulating deletion
-    mock.mock_delete_comment("owner", "repo", 12345).await;
-    mock.mock_get_issue("owner", "repo", 123).await;
+    let ctx = mock.repo("owner", "repo");
+    ctx.comment().delete().await;
+    ctx.issue(123).get().await;
 
     let client = mock.client();
     let result = run_with_client_and_storage(

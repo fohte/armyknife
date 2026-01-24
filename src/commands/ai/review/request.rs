@@ -103,7 +103,7 @@ pub(crate) async fn run_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::ai::review::client::mock::MockReviewClient;
+    use crate::commands::ai::review::client::mock::{MockReviewClient, PostedComment};
     use chrono::Duration as ChronoDuration;
     use rstest::rstest;
 
@@ -215,12 +215,12 @@ mod tests {
         assert_eq!(posted.len(), 1);
         assert_eq!(
             posted[0],
-            (
-                "test-owner".to_string(),
-                "test-repo".to_string(),
-                42,
-                reviewer
-            )
+            PostedComment {
+                owner: "test-owner".to_string(),
+                repo: "test-repo".to_string(),
+                pr_number: 42,
+                reviewer,
+            }
         );
     }
 }
