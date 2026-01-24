@@ -29,8 +29,14 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
 }
 
 /// Print unified diff between old and new text to stdout.
-pub fn print_diff(old: &str, new: &str) {
-    write_diff(&mut io::stdout(), old, new).unwrap();
+/// Ignores BrokenPipe errors (e.g., when piped to `head`).
+pub fn print_diff(old: &str, new: &str) -> anyhow::Result<()> {
+    if let Err(e) = write_diff(&mut io::stdout(), old, new)
+        && e.kind() != io::ErrorKind::BrokenPipe
+    {
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 /// Write unified diff between old and new text to a writer.

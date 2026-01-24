@@ -83,19 +83,29 @@ async fn run_with_client_and_storage(
 }
 
 /// Display local changes that differ from remote to stdout.
+/// Ignores BrokenPipe errors (e.g., when piped to `head`).
 fn display_local_changes(
     storage: &IssueStorage,
     remote_issue: &Issue,
     remote_comments: &[Comment],
     changes: &LocalChanges,
 ) -> anyhow::Result<()> {
-    write_local_changes(
+    if let Err(e) = write_local_changes(
         &mut io::stdout(),
         storage,
         remote_issue,
         remote_comments,
         changes,
-    )
+    ) {
+        // Ignore BrokenPipe errors (e.g., when piped to `head`)
+        if let Some(io_err) = e.downcast_ref::<io::Error>()
+            && io_err.kind() == io::ErrorKind::BrokenPipe
+        {
+            return Ok(());
+        }
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Write local changes that differ from remote to a writer.

@@ -107,11 +107,11 @@ impl<'a> ChangeSet<'a> {
             || !self.comments.is_empty()
     }
 
-    pub(super) fn display(&self) {
+    pub(super) fn display(&self) -> anyhow::Result<()> {
         if let Some(change) = &self.body {
             println!();
             println!("=== Issue Body ===");
-            print_diff(change.remote, change.local);
+            print_diff(change.remote, change.local)?;
         }
 
         if let Some(change) = &self.title {
@@ -149,7 +149,7 @@ impl<'a> ChangeSet<'a> {
                     } else {
                         println!("=== Comment: {} ===", filename);
                     }
-                    print_diff(remote_body, local_body);
+                    print_diff(remote_body, local_body)?;
                 }
                 CommentChange::Deleted {
                     database_id,
@@ -168,6 +168,7 @@ impl<'a> ChangeSet<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     pub(super) async fn apply(
