@@ -4,13 +4,16 @@ mod hook;
 mod list;
 mod store;
 mod tty;
+mod tui;
 mod types;
+mod watch;
 
 use clap::Subcommand;
 
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
+pub use watch::WatchArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CcCommands {
@@ -19,6 +22,9 @@ pub enum CcCommands {
 
     /// List Claude Code sessions
     List(ListArgs),
+
+    /// Watch Claude Code sessions in real-time (TUI)
+    Watch(WatchArgs),
 
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
@@ -29,6 +35,7 @@ impl CcCommands {
         match self {
             Self::Hook(args) => hook::run(args)?,
             Self::List(args) => list::run(args)?,
+            Self::Watch(args) => watch::run(args)?,
             Self::Focus(args) => focus::run(args)?,
         }
         Ok(())
