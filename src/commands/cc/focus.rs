@@ -1,11 +1,10 @@
-use std::process::Command;
-
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Args;
 
 use super::error::CcError;
 use super::store;
 use super::types::{Session, TmuxInfo};
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct FocusArgs {
@@ -36,35 +35,9 @@ fn extract_tmux_info(session_id: &str, session: Option<Session>) -> Result<TmuxI
 /// Focuses the tmux pane specified by TmuxInfo.
 /// Runs `tmux select-window` followed by `tmux select-pane`.
 fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
-    // First, select the window
     let window_target = format!("{}:{}", info.session_name, info.window_index);
-    let select_window = Command::new("tmux")
-        .args(["select-window", "-t", &window_target])
-        .output()?;
-
-    if !select_window.status.success() {
-        let stderr = String::from_utf8_lossy(&select_window.stderr);
-        bail!(
-            "Failed to select tmux window '{}': {}",
-            window_target,
-            stderr.trim()
-        );
-    }
-
-    // Then, select the pane
-    let select_pane = Command::new("tmux")
-        .args(["select-pane", "-t", &info.pane_id])
-        .output()?;
-
-    if !select_pane.status.success() {
-        let stderr = String::from_utf8_lossy(&select_pane.stderr);
-        bail!(
-            "Failed to select tmux pane '{}': {}",
-            info.pane_id,
-            stderr.trim()
-        );
-    }
-
+    tmux::select_window(&window_target)?;
+    tmux::select_pane(&info.pane_id)?;
     Ok(())
 }
 

@@ -200,6 +200,16 @@ pub fn kill_window(window_id: &str) -> Result<()> {
     run_tmux(&["kill-window", "-t", window_id])
 }
 
+/// Select a tmux window by target (e.g., "session:0" or "session:window_name").
+pub fn select_window(target: &str) -> Result<()> {
+    run_tmux(&["select-window", "-t", target])
+}
+
+/// Select a tmux pane by ID (e.g., "%0").
+pub fn select_pane(pane_id: &str) -> Result<()> {
+    run_tmux(&["select-pane", "-t", pane_id])
+}
+
 /// Create a new window with a horizontal split and run commands in each pane.
 ///
 /// - Left pane (pane 1): runs `left_cmd`
