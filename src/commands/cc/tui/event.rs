@@ -23,8 +23,8 @@ pub enum AppEvent {
 /// Event handler that combines keyboard input and file system events.
 pub struct EventHandler {
     receiver: Receiver<AppEvent>,
-    #[expect(dead_code, reason = "watcher must be kept alive to receive events")]
-    watcher: Option<RecommendedWatcher>,
+    /// Watcher must be kept alive to receive events.
+    _watcher: Option<RecommendedWatcher>,
 }
 
 impl EventHandler {
@@ -50,7 +50,7 @@ impl EventHandler {
 
         Ok(Self {
             receiver: rx,
-            watcher,
+            _watcher: watcher,
         })
     }
 

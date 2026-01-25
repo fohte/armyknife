@@ -94,14 +94,6 @@ impl App {
         }
     }
 
-    /// Returns the currently selected session, if any.
-    #[expect(dead_code, reason = "will be used in Phase 3 for tmux pane focus")]
-    pub fn selected_session(&self) -> Option<&Session> {
-        self.list_state
-            .selected()
-            .and_then(|i| self.sessions.get(i))
-    }
-
     /// Signals that the application should quit.
     pub fn quit(&mut self) {
         self.should_quit = true;
@@ -196,23 +188,6 @@ mod tests {
         // Zero should not change selection
         app.select_by_number(0);
         assert_eq!(app.list_state.selected(), Some(1));
-    }
-
-    #[test]
-    fn test_selected_session() {
-        let mut app = App {
-            sessions: vec![create_test_session("first"), create_test_session("second")],
-            list_state: ListState::default(),
-            should_quit: false,
-        };
-
-        assert!(app.selected_session().is_none());
-
-        app.list_state.select(Some(1));
-        assert_eq!(
-            app.selected_session().map(|s| s.session_id.as_str()),
-            Some("second")
-        );
     }
 
     #[test]
