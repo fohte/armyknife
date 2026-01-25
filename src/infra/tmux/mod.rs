@@ -1,9 +1,8 @@
 //! Tmux session and window management.
 
+use std::fmt;
 use std::path::Path;
 use std::process::Command;
-
-use std::fmt;
 
 use thiserror::Error;
 
@@ -210,6 +209,66 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux(&["select-pane", "-t", pane_id])
 }
 
+/// Information about a tmux pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfo {
+    pub session_name: String,
+    pub window_name: String,
+    pub window_index: u32,
+    pub pane_id: String,
+}
+
+/// Gets tmux pane information for a given TTY device.
+/// Returns None if not running in tmux or if the TTY is not found.
+pub fn get_pane_info_by_tty(tty: &str) -> Option<PaneInfo> {
+    let output = Command::new("tmux")
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for line in stdout.lines() {
+        if let Some(info) = parse_pane_line(line, tty) {
+            return Some(info);
+        }
+    }
+
+    None
+}
+
+/// Parses a single line from tmux list-panes output.
+/// Format: "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
+fn parse_pane_line(line: &str, target_tty: &str) -> Option<PaneInfo> {
+    let mut parts = line.split('\t');
+
+    let pane_tty = parts.next()?;
+    if pane_tty != target_tty {
+        return None;
+    }
+
+    let session_name = parts.next()?.to_string();
+    let window_name = parts.next()?.to_string();
+    let window_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_id = parts.next()?.to_string();
+
+    Some(PaneInfo {
+        session_name,
+        window_name,
+        window_index,
+        pane_id,
+    })
+}
+
 /// Create a new window with a horizontal split and run commands in each pane.
 ///
 /// - Left pane (pane 1): runs `left_cmd`
@@ -298,5 +357,43 @@ mod tests {
     fn test_strip_worktree_suffix_without_worktree(#[case] input: &str) {
         let result = strip_worktree_suffix(Path::new(input));
         assert_eq!(result, Path::new(input));
+    }
+
+    #[rstest]
+    #[case::standard_line(
+        "/dev/ttys001\tmain\teditor\t0\t%0",
+        "/dev/ttys001",
+        Some(("main", "editor", 0, "%0"))
+    )]
+    #[case::different_tty("/dev/ttys002\twork\tterminal\t1\t%5", "/dev/ttys001", None)]
+    #[case::high_window_index(
+        "/dev/pts/0\tsession\twindow\t99\t%123",
+        "/dev/pts/0",
+        Some(("session", "window", 99, "%123"))
+    )]
+    #[case::session_with_spaces(
+        "/dev/ttys001\tmy session\tmy window\t0\t%0",
+        "/dev/ttys001",
+        Some(("my session", "my window", 0, "%0"))
+    )]
+    #[case::insufficient_parts("/dev/ttys001\tmain", "/dev/ttys001", None)]
+    #[case::empty_line("", "/dev/ttys001", None)]
+    fn test_parse_pane_line(
+        #[case] line: &str,
+        #[case] target_tty: &str,
+        #[case] expected: Option<(&str, &str, u32, &str)>,
+    ) {
+        let result = parse_pane_line(line, target_tty);
+
+        match expected {
+            Some((session, window, index, pane)) => {
+                let info = result.expect("expected Some(PaneInfo)");
+                assert_eq!(info.session_name, session);
+                assert_eq!(info.window_name, window);
+                assert_eq!(info.window_index, index);
+                assert_eq!(info.pane_id, pane);
+            }
+            None => assert!(result.is_none()),
+        }
     }
 }
