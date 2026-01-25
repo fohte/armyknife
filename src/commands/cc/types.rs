@@ -76,6 +76,7 @@ pub enum HookEvent {
     PostToolUse,
     Notification,
     Stop,
+    SessionEnd,
 }
 
 impl HookEvent {
@@ -86,6 +87,7 @@ impl HookEvent {
             "post-tool-use" => Ok(Self::PostToolUse),
             "notification" => Ok(Self::Notification),
             "stop" => Ok(Self::Stop),
+            "session-end" => Ok(Self::SessionEnd),
             _ => Err(CcError::UnknownHookEvent(s.to_string()).into()),
         }
     }

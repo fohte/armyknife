@@ -58,6 +58,18 @@ pub fn save_session(session: &Session) -> Result<()> {
     Ok(())
 }
 
+/// Deletes a session from disk.
+/// Returns Ok(()) even if the session file doesn't exist.
+pub fn delete_session(session_id: &str) -> Result<()> {
+    let path = session_file(session_id)?;
+
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
+
+    Ok(())
+}
+
 /// Lists all sessions from disk.
 /// Reads all .json files in the sessions directory.
 pub fn list_sessions() -> Result<Vec<Session>> {

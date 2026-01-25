@@ -25,6 +25,11 @@ pub fn run(args: &HookArgs) -> Result<()> {
     // Read JSON from stdin
     let input = read_stdin_json()?;
 
+    // Handle session end by deleting the session file
+    if event == HookEvent::SessionEnd {
+        return store::delete_session(&input.session_id);
+    }
+
     // Get TTY from ancestor processes
     let tty = tty::get_tty_from_ancestors();
 
@@ -85,6 +90,7 @@ fn read_stdin_json() -> Result<HookInput> {
 }
 
 /// Determines the session status based on the event and input.
+/// Note: SessionEnd is handled separately in run() before this function is called.
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     match event {
         HookEvent::Stop => SessionStatus::Stopped,
@@ -100,9 +106,10 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
                 SessionStatus::Running
             }
         }
-        HookEvent::UserPromptSubmit | HookEvent::PreToolUse | HookEvent::PostToolUse => {
-            SessionStatus::Running
-        }
+        HookEvent::UserPromptSubmit
+        | HookEvent::PreToolUse
+        | HookEvent::PostToolUse
+        | HookEvent::SessionEnd => SessionStatus::Running,
     }
 }
 
@@ -164,6 +171,10 @@ mod tests {
         assert_eq!(
             HookEvent::from_str("stop").expect("valid event"),
             HookEvent::Stop
+        );
+        assert_eq!(
+            HookEvent::from_str("session-end").expect("valid event"),
+            HookEvent::SessionEnd
         );
 
         assert!(HookEvent::from_str("unknown").is_err());

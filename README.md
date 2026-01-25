@@ -129,7 +129,10 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
     "Notification": [
       { "hooks": [{ "type": "command", "command": "a cc hook notification" }] }
     ],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "a cc hook stop" }] }]
+    "Stop": [{ "hooks": [{ "type": "command", "command": "a cc hook stop" }] }],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "a cc hook session-end" }] }
+    ]
   }
 }
 ```
