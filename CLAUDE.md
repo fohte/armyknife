@@ -34,7 +34,7 @@ Generic framework for interactive document editing:
 
 - Use `thiserror` for domain-specific error types
 - Define `Result<T>` type aliases per module
-- Use `anyhow::Result<T>` for function return types (NOT `std::result::Result<T, E>` directly)
+- Use `anyhow::Result<T>` for application-level function return types (e.g., command handlers)
 
 ## Standards
 
