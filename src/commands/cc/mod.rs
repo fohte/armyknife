@@ -3,7 +3,6 @@ mod focus;
 mod hook;
 mod list;
 mod store;
-mod tmux;
 mod tty;
 mod types;
 
