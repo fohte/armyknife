@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::commands::ai::AiCommands;
+use crate::commands::cc::CcCommands;
 use crate::commands::gh::GhCommands;
 use crate::commands::name_branch::NameBranchArgs;
 use crate::commands::wm::WmCommands;
@@ -25,6 +26,10 @@ pub enum Commands {
     /// AI-related tools
     #[command(subcommand)]
     Ai(AiCommands),
+
+    /// Claude Code session monitor
+    #[command(subcommand)]
+    Cc(CcCommands),
 
     /// GitHub-related tools
     #[command(subcommand)]

@@ -128,6 +128,48 @@ a gh check-pr-review <pr-number> [options]
 | `--include-resolved` | Include resolved threads              |
 | `--open-details`     | Expand `<details>` blocks in comments |
 
+### `a cc`
+
+Claude Code session monitoring with tmux integration.
+
+| Action         | Description                                           |
+| -------------- | ----------------------------------------------------- |
+| `hook <event>` | Record session events (called from Claude Code hooks) |
+| `list`         | List all Claude Code sessions with status             |
+
+#### Setup
+
+Add the following to your Claude Code settings (`~/.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a cc hook user-prompt-submit" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "a cc hook pre-tool-use" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "a cc hook post-tool-use" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "a cc hook notification" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "a cc hook stop" }] }],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "a cc hook session-end" }] }
+    ]
+  }
+}
+```
+
+These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
+
 ### `a wm`
 
 Git worktree management with tmux integration.
