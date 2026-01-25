@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.35](https://github.com/fohte/armyknife/compare/v0.1.34...v0.1.35) (2026-01-25)
+
+
+### Bug Fixes
+
+* **wm/delete:** delete branch when running from within worktree ([#138](https://github.com/fohte/armyknife/issues/138)) ([360ce2b](https://github.com/fohte/armyknife/commit/360ce2b80a9b66253668c3fd94c7d60142b6f064))
+
 ## [0.1.34](https://github.com/fohte/armyknife/compare/v0.1.33...v0.1.34) (2026-01-24)
 
 
