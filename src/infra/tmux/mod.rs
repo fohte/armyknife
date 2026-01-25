@@ -235,15 +235,9 @@ pub fn get_pane_info_by_tty(tty: &str) -> Option<PaneInfo> {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines() {
-        if let Some(info) = parse_pane_line(line, tty) {
-            return Some(info);
-        }
-    }
-
-    None
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| parse_pane_line(line, tty))
 }
 
 /// Parses a single line from tmux list-panes output.
