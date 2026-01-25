@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.36](https://github.com/fohte/armyknife/compare/v0.1.35...v0.1.36) (2026-01-25)
+
+
+### Features
+
+* **cc:** add Claude Code session monitoring ([#137](https://github.com/fohte/armyknife/issues/137)) ([e51bc46](https://github.com/fohte/armyknife/commit/e51bc469072bfd3fb093d7b1daa95d352f99a02e))
+
 ## [0.1.35](https://github.com/fohte/armyknife/compare/v0.1.34...v0.1.35) (2026-01-25)
 
 
