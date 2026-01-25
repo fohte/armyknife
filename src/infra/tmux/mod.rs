@@ -10,6 +10,9 @@ use thiserror::Error;
 pub enum TmuxError {
     #[error("{}", .0)]
     CommandFailed(CommandFailedError),
+
+    #[error("Not running inside tmux")]
+    NotInTmux,
 }
 
 #[derive(Debug)]
@@ -75,10 +78,10 @@ fn run_tmux_output(args: &[&str]) -> Result<String> {
 }
 
 /// Run a tmux command, returning Ok(()) on success.
-/// No-op if not running inside tmux.
+/// Returns an error if not running inside tmux.
 fn run_tmux(args: &[&str]) -> Result<()> {
     if !in_tmux() {
-        return Ok(());
+        return Err(TmuxError::NotInTmux);
     }
     run_tmux_output(args).map(|_| ())
 }
