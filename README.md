@@ -106,6 +106,24 @@ Claude Code session monitoring with tmux integration.
 | `hook <event>` | Record session events (called from Claude Code hooks) |
 | `list`         | List all Claude Code sessions with status             |
 
+#### Setup
+
+Add the following to your Claude Code settings (`~/.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "user-prompt-submit": [{ "command": "a cc hook user-prompt-submit" }],
+    "pre-tool-use": [{ "command": "a cc hook pre-tool-use" }],
+    "post-tool-use": [{ "command": "a cc hook post-tool-use" }],
+    "notification": [{ "command": "a cc hook notification" }],
+    "stop": [{ "command": "a cc hook stop" }]
+  }
+}
+```
+
+These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
+
 ### `a wm`
 
 Git worktree management with tmux integration.
