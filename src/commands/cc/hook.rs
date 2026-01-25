@@ -6,9 +6,9 @@ use clap::Args;
 
 use super::error::CcError;
 use super::store;
-use super::tmux;
 use super::tty;
-use super::types::{HookEvent, HookInput, Session, SessionStatus};
+use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
@@ -34,7 +34,14 @@ pub fn run(args: &HookArgs) -> Result<()> {
     let tty = tty::get_tty_from_ancestors();
 
     // Get tmux info if TTY is available
-    let tmux_info = tty.as_ref().and_then(|t| tmux::get_tmux_info_from_tty(t));
+    let tmux_info = tty.as_ref().and_then(|t| {
+        tmux::get_pane_info_by_tty(t).map(|info| TmuxInfo {
+            session_name: info.session_name,
+            window_name: info.window_name,
+            window_index: info.window_index,
+            pane_id: info.pane_id,
+        })
+    });
 
     // Determine status based on event
     let status = determine_status(event, &input);

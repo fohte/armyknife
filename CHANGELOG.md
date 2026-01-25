@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.37](https://github.com/fohte/armyknife/compare/v0.1.36...v0.1.37) (2026-01-25)
+
+
+### Features
+
+* **cc:** add `a cc focus` command ([#142](https://github.com/fohte/armyknife/issues/142)) ([1aa481a](https://github.com/fohte/armyknife/commit/1aa481a7fa85e37caee53b2935f75ba0d0864b62))
+
 ## [0.1.36](https://github.com/fohte/armyknife/compare/v0.1.35...v0.1.36) (2026-01-25)
 
 
