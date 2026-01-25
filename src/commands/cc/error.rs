@@ -13,4 +13,10 @@ pub enum CcError {
 
     #[error("Invalid session ID: {0}")]
     InvalidSessionId(String),
+
+    #[error("Session not found: {0}")]
+    SessionNotFound(String),
+
+    #[error("Session '{0}' has no tmux information (was not started in tmux)")]
+    NoTmuxInfo(String),
 }

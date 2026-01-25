@@ -1,4 +1,5 @@
 mod error;
+mod focus;
 mod hook;
 mod list;
 mod store;
@@ -8,6 +9,7 @@ mod types;
 
 use clap::Subcommand;
 
+pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
 
@@ -18,6 +20,9 @@ pub enum CcCommands {
 
     /// List Claude Code sessions
     List(ListArgs),
+
+    /// Focus on a Claude Code session's tmux pane
+    Focus(FocusArgs),
 }
 
 impl CcCommands {
@@ -25,6 +30,7 @@ impl CcCommands {
         match self {
             Self::Hook(args) => hook::run(args)?,
             Self::List(args) => list::run(args)?,
+            Self::Focus(args) => focus::run(args)?,
         }
         Ok(())
     }

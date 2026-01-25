@@ -132,10 +132,11 @@ a gh check-pr-review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration.
 
-| Action         | Description                                           |
-| -------------- | ----------------------------------------------------- |
-| `hook <event>` | Record session events (called from Claude Code hooks) |
-| `list`         | List all Claude Code sessions with status             |
+| Action               | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `hook <event>`       | Record session events (called from Claude Code hooks) |
+| `list`               | List all Claude Code sessions with status             |
+| `focus <session_id>` | Focus on a session's tmux pane                        |
 
 #### Setup
 
