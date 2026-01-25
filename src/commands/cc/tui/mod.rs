@@ -60,6 +60,9 @@ fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
 
 /// Handles key events.
 fn handle_key_event(app: &mut App, key: KeyCode) {
+    // Clear error message on any key press
+    app.clear_error();
+
     match key {
         // Quit
         KeyCode::Char('q') | KeyCode::Esc => {
@@ -78,8 +81,9 @@ fn handle_key_event(app: &mut App, key: KeyCode) {
         KeyCode::Enter | KeyCode::Char('f') => {
             if let Some(session) = app.selected_session()
                 && let Some(ref tmux_info) = session.tmux_info
+                && let Err(e) = focus_tmux_pane(tmux_info)
             {
-                let _ = focus_tmux_pane(tmux_info);
+                app.set_error(format!("Failed to focus tmux pane: {e}"));
             }
         }
 
@@ -125,6 +129,7 @@ mod tests {
             sessions,
             list_state,
             should_quit: false,
+            error_message: None,
         }
     }
 

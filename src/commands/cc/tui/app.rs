@@ -11,6 +11,8 @@ pub struct App {
     pub list_state: ListState,
     /// Whether the application should quit.
     pub should_quit: bool,
+    /// Error message to display (cleared on next action).
+    pub error_message: Option<String>,
 }
 
 impl App {
@@ -28,6 +30,7 @@ impl App {
             sessions,
             list_state,
             should_quit: false,
+            error_message: None,
         })
     }
 
@@ -117,6 +120,16 @@ impl App {
     pub fn quit(&mut self) {
         self.should_quit = true;
     }
+
+    /// Sets an error message to display.
+    pub fn set_error(&mut self, message: String) {
+        self.error_message = Some(message);
+    }
+
+    /// Clears the error message.
+    pub fn clear_error(&mut self) {
+        self.error_message = None;
+    }
 }
 
 /// Loads sessions from disk with cleanup.
@@ -152,6 +165,7 @@ mod tests {
             sessions: vec![],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
 
         app.select_next();
@@ -164,6 +178,7 @@ mod tests {
             sessions: vec![create_test_session("1"), create_test_session("2")],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
         app.list_state.select(Some(1));
 
@@ -177,6 +192,7 @@ mod tests {
             sessions: vec![create_test_session("1"), create_test_session("2")],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
         app.list_state.select(Some(0));
 
@@ -194,6 +210,7 @@ mod tests {
             ],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
         app.list_state.select(Some(0));
 
@@ -215,6 +232,7 @@ mod tests {
             sessions: vec![],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
 
         assert!(!app.should_quit);
@@ -228,6 +246,7 @@ mod tests {
             sessions: vec![create_test_session("first"), create_test_session("second")],
             list_state: ListState::default(),
             should_quit: false,
+            error_message: None,
         };
 
         assert!(app.selected_session().is_none());
@@ -237,5 +256,23 @@ mod tests {
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("second")
         );
+    }
+
+    #[test]
+    fn test_error_message() {
+        let mut app = App {
+            sessions: vec![],
+            list_state: ListState::default(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        assert!(app.error_message.is_none());
+
+        app.set_error("Test error".to_string());
+        assert_eq!(app.error_message, Some("Test error".to_string()));
+
+        app.clear_error();
+        assert!(app.error_message.is_none());
     }
 }

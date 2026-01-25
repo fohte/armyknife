@@ -15,16 +15,32 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let now = Utc::now();
     let area = frame.area();
 
-    let [header_area, list_area, help_area] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    // Add error area if there's an error message
+    let has_error = app.error_message.is_some();
+    let layouts: Vec<Constraint> = if has_error {
+        vec![
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    };
 
-    render_header(frame, header_area, &app.sessions);
-    render_session_list(frame, list_area, app, now);
-    render_help(frame, help_area);
+    let areas = Layout::vertical(layouts).split(area);
+
+    render_header(frame, areas[0], &app.sessions);
+    render_session_list(frame, areas[1], app, now);
+    render_help(frame, areas[2]);
+
+    if has_error {
+        render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
+    }
 }
 
 /// Renders the header with status counts.
@@ -104,6 +120,20 @@ fn render_help(frame: &mut Frame, area: Rect) {
 
     let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, area);
+}
+
+/// Renders an error message at the bottom.
+fn render_error(frame: &mut Frame, area: Rect, message: &str) {
+    let error_text = Line::from(vec![
+        Span::styled(
+            "  Error: ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(message, Style::default().fg(Color::Red)),
+    ]);
+
+    let error = Paragraph::new(error_text);
+    frame.render_widget(error, area);
 }
 
 /// Creates a list item for a session.
