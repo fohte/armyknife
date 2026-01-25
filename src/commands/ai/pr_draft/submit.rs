@@ -2,7 +2,9 @@ use clap::Args;
 use std::path::PathBuf;
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
-use crate::infra::github::{CreatePrParams, OctocrabClient, PrClient, RepoClient};
+use crate::infra::github::{
+    CreatePrParams, OctocrabClient, PrClient, PrState, RepoClient, UpdatePrParams,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -92,18 +94,39 @@ async fn run_impl(
         }
     }
 
-    // Create PR using GitHub API
-    let pr_url = gh_client
-        .create_pull_request(CreatePrParams {
-            owner: target.owner.clone(),
-            repo: target.repo.clone(),
-            title: draft.frontmatter.title.clone(),
-            body: draft.body.clone(),
-            head: target.branch.clone(),
-            base: args.base.clone(),
-            draft: args.draft,
-        })
+    // Check if PR already exists for this branch
+    let existing_pr = gh_client
+        .get_pr_for_branch(&target.owner, &target.repo, &target.branch)
         .await?;
+
+    let pr_url = match existing_pr {
+        Some(pr_info) if pr_info.state == PrState::Open => {
+            // Update existing PR
+            gh_client
+                .update_pull_request(UpdatePrParams {
+                    owner: target.owner.clone(),
+                    repo: target.repo.clone(),
+                    number: pr_info.number,
+                    title: draft.frontmatter.title.clone(),
+                    body: draft.body.clone(),
+                })
+                .await?
+        }
+        _ => {
+            // Create new PR
+            gh_client
+                .create_pull_request(CreatePrParams {
+                    owner: target.owner.clone(),
+                    repo: target.repo.clone(),
+                    title: draft.frontmatter.title.clone(),
+                    body: draft.body.clone(),
+                    head: target.branch.clone(),
+                    base: args.base.clone(),
+                    draft: args.draft,
+                })
+                .await?
+        }
+    };
 
     println!("{pr_url}");
 
@@ -140,6 +163,7 @@ mod tests {
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
+        ctx.list_pull_requests_empty().await;
         ctx.pull_request(1).create().await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
@@ -331,6 +355,65 @@ mod tests {
         assert!(
             err_msg.contains("title"),
             "error message should mention title: {err_msg}"
+        );
+    }
+
+    async fn setup_test_env_with_existing_pr(
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        pr_number: u64,
+    ) -> TestEnv {
+        let mock = GitHubMockServer::start().await;
+        let ctx = mock.repo(owner, repo);
+        ctx.repo_info().private(true).get().await;
+        ctx.list_pull_requests_with(pr_number, "Old title", "Old body", branch)
+            .await;
+        ctx.update_pull_request(pr_number, "Updated title", "Updated body", branch)
+            .await;
+        let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
+        if draft_dir.exists() {
+            let _ = fs::remove_dir_all(&draft_dir);
+        }
+        TestEnv {
+            mock,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            draft_dir,
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_updates_existing_pr() {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            "repo_submit_update",
+            "feature/existing-pr",
+            42,
+        )
+        .await;
+
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/existing-pr",
+            "Updated title",
+            "Updated body",
+        );
+
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let client = env.mock.client();
+        let result = run_impl(&args, &client).await;
+
+        assert!(
+            result.is_ok(),
+            "submit should update existing PR: {:?}",
+            result.err()
         );
     }
 }

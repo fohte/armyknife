@@ -37,7 +37,7 @@
 //! ```
 
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::client::OctocrabClient;
@@ -357,6 +357,51 @@ impl<'a> MockRepoContext<'a> {
             repo: self.repo,
             number,
         }
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls returning empty list (no existing PRs).
+    pub async fn list_pull_requests_empty(&self) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{}/{}/pulls", self.owner, self.repo)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls returning a PR for specific branch.
+    pub async fn list_pull_requests_with(
+        &self,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
+                    owner, repo, pr_number, title, body, head
+                )])),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock PATCH /repos/{owner}/{repo}/pulls/{pr_number} for updating PR.
+    pub async fn update_pull_request(&self, pr_number: u64, title: &str, body: &str, head: &str) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pr_number}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
+            )
+            .mount(self.server)
+            .await;
     }
 }
 

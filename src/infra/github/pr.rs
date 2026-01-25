@@ -26,8 +26,19 @@ pub enum PrState {
 /// PR information from GitHub API.
 #[derive(Debug, Clone)]
 pub struct PrInfo {
+    pub number: u64,
     pub state: PrState,
     pub url: String,
+}
+
+/// Parameters for updating a pull request.
+#[derive(Debug, Clone)]
+pub struct UpdatePrParams {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub body: String,
 }
 
 /// Trait for pull request operations.
@@ -35,6 +46,9 @@ pub struct PrInfo {
 pub trait PrClient: Send + Sync {
     /// Create a pull request and return its URL.
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String>;
+
+    /// Update a pull request's title and body, return its URL.
+    async fn update_pull_request(&self, params: UpdatePrParams) -> Result<String>;
 
     /// Get PR state for a branch. Returns None if no PR exists.
     async fn get_pr_for_branch(
@@ -79,6 +93,21 @@ impl PrClient for OctocrabClient {
             .ok_or_else(|| GitHubError::MissingPrUrl.into())
     }
 
+    async fn update_pull_request(&self, params: UpdatePrParams) -> Result<String> {
+        let pr = self
+            .client
+            .pulls(&params.owner, &params.repo)
+            .update(params.number)
+            .title(&params.title)
+            .body(&params.body)
+            .send()
+            .await?;
+
+        pr.html_url
+            .map(|u| u.to_string())
+            .ok_or_else(|| GitHubError::MissingPrUrl.into())
+    }
+
     async fn get_pr_for_branch(
         &self,
         owner: &str,
@@ -112,7 +141,11 @@ impl PrClient for OctocrabClient {
 
         let url = pr.html_url.map(|u| u.to_string()).unwrap_or_default();
 
-        Ok(Some(PrInfo { state, url }))
+        Ok(Some(PrInfo {
+            number: pr.number,
+            state,
+            url,
+        }))
     }
 
     fn open_in_browser(&self, url: &str) {

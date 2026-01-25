@@ -39,3 +39,4 @@ Generic framework for interactive document editing:
 
 - Comments: English (public repo), explain WHY not WHAT
 - Tests: Use `test` skill when writing/running tests
+- Documentation: Update README.md when adding, changing, or removing commands/subcommands

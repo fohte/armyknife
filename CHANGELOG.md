@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.34](https://github.com/fohte/armyknife/compare/v0.1.33...v0.1.34) (2026-01-24)
+
+
+### Features
+
+* **ai/pr-draft:** support updating existing PR on submit ([#133](https://github.com/fohte/armyknife/issues/133)) ([2ce9d82](https://github.com/fohte/armyknife/commit/2ce9d82db677c1b0128f34a90a98f957f33f2ee3))
+
 ## [0.1.33](https://github.com/fohte/armyknife/compare/v0.1.32...v0.1.33) (2026-01-24)
 
 
