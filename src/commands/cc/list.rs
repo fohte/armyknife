@@ -144,8 +144,11 @@ fn truncate(s: &str, max_len: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max_len {
         s.to_string()
+    } else if max_len < 3 {
+        // Too short for ellipsis, just truncate
+        s.chars().take(max_len).collect()
     } else {
-        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        let truncated: String = s.chars().take(max_len - 3).collect();
         format!("{truncated}...")
     }
 }
@@ -229,6 +232,10 @@ mod tests {
     #[case::exact("hello", 5, "hello")]
     #[case::truncate("hello world", 8, "hello...")]
     #[case::truncate_short("hello", 4, "h...")]
+    #[case::max_len_3("hello", 3, "...")]
+    #[case::max_len_2("hello", 2, "he")]
+    #[case::max_len_1("hello", 1, "h")]
+    #[case::max_len_0("hello", 0, "")]
     fn test_truncate(#[case] input: &str, #[case] max_len: usize, #[case] expected: &str) {
         assert_eq!(truncate(input, max_len), expected);
     }
