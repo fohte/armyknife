@@ -34,9 +34,20 @@ Generic framework for interactive document editing:
 
 - Use `thiserror` for domain-specific error types
 - Define `Result<T>` type aliases per module
+- Use `anyhow::Result<T>` for function return types (NOT `std::result::Result<T, E>` directly)
 
 ## Standards
 
 - Comments: English (public repo), explain WHY not WHAT
 - Tests: Use `test` skill when writing/running tests
 - Documentation: Update README.md when adding, changing, or removing commands/subcommands
+
+### Lints
+
+- `unwrap()`, `expect()`, `panic!()` are forbidden in production code (allowed in tests)
+- Use `#[expect(lint_name, reason = "...")]` instead of `#[allow]` when suppressing lints
+- Do not create Tokio runtime directly; use async fn with the existing runtime from main()
+
+### Dependencies
+
+- Pin exact versions with `=` (e.g., `anyhow = "=1.0.100"`)
