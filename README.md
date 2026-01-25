@@ -113,11 +113,23 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 ```json
 {
   "hooks": {
-    "user-prompt-submit": [{ "command": "a cc hook user-prompt-submit" }],
-    "pre-tool-use": [{ "command": "a cc hook pre-tool-use" }],
-    "post-tool-use": [{ "command": "a cc hook post-tool-use" }],
-    "notification": [{ "command": "a cc hook notification" }],
-    "stop": [{ "command": "a cc hook stop" }]
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a cc hook user-prompt-submit" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "a cc hook pre-tool-use" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "a cc hook post-tool-use" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "a cc hook notification" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "a cc hook stop" }] }]
   }
 }
 ```
