@@ -338,8 +338,9 @@ mod tests {
         #[tokio::test]
         async fn test_fetches_and_saves_issue(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
             let storage = IssueStorage::from_dir(test_dir.path());
@@ -365,8 +366,9 @@ mod tests {
         #[tokio::test]
         async fn test_fails_when_local_changes_exist(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
 
@@ -395,8 +397,9 @@ mod tests {
         #[tokio::test]
         async fn test_succeeds_when_no_local_changes(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
 
@@ -422,8 +425,9 @@ mod tests {
         #[tokio::test]
         async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
 
@@ -446,7 +450,7 @@ mod tests {
         #[tokio::test]
         async fn test_fails_when_issue_not_found(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue_not_found("owner", "repo", 999).await;
+            mock.repo("owner", "repo").issue(999).get_not_found().await;
 
             let client = mock.client();
 
@@ -496,8 +500,9 @@ mod tests {
         #[tokio::test]
         async fn test_force_overwrites_local_changes(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
 
@@ -531,18 +536,14 @@ mod tests {
         #[tokio::test]
         async fn test_force_fetches_and_saves_issue(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql_with(
-                "owner",
-                "repo",
-                123,
-                &[RemoteComment {
-                    id: "IC_abc123",
-                    database_id: 12345,
-                    author: "commenter",
-                    body: "Test comment body",
-                }],
-            )
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_abc123",
+                database_id: 12345,
+                author: "commenter",
+                body: "Test comment body",
+            }])
             .await;
 
             let client = mock.client();
@@ -569,8 +570,9 @@ mod tests {
         #[tokio::test]
         async fn test_force_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql("owner", "repo", 123).await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
 
             let client = mock.client();
 
@@ -593,18 +595,14 @@ mod tests {
         #[tokio::test]
         async fn test_force_overwrites_comments(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
-            mock.mock_get_issue("owner", "repo", 123).await;
-            mock.mock_get_comments_graphql_with(
-                "owner",
-                "repo",
-                123,
-                &[RemoteComment {
-                    id: "IC_new",
-                    database_id: 99999,
-                    author: "newuser",
-                    body: "New comment from refresh",
-                }],
-            )
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_new",
+                database_id: 99999,
+                author: "newuser",
+                body: "New comment from refresh",
+            }])
             .await;
 
             let client = mock.client();

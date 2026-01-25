@@ -2,6 +2,39 @@
 //!
 //! Provides `GitHubMockServer` for HTTP-level mocking of GitHub API calls.
 //! This is used across all tests that need to interact with GitHub APIs.
+//!
+//! # Usage
+//!
+//! Use the builder pattern via `mock.repo(owner, repo)` for a fluent API:
+//!
+//! ```ignore
+//! let mock = GitHubMockServer::start().await;
+//! let ctx = mock.repo("owner", "repo");
+//!
+//! // Issue operations
+//! ctx.issue(123).get().await;
+//! ctx.issue(123).title("Custom").body("Body").get().await;
+//! ctx.issue(123).get_not_found().await;
+//! ctx.issue(123).update().await;
+//! ctx.issue(123).add_labels().await;
+//! ctx.issue(123).remove_label("bug").await;
+//!
+//! // Comment operations
+//! ctx.issue(123).create_comment().await;
+//! ctx.comment().update().await;
+//! ctx.comment().delete().await;
+//! ctx.graphql_comments(&[]).await;
+//!
+//! // Repository operations
+//! ctx.repo_info().get().await;
+//! ctx.repo_info().private(true).default_branch("develop").get().await;
+//!
+//! // Pull request operations
+//! ctx.pull_request(1).create().await;
+//!
+//! // User operations (server-level, not repo-scoped)
+//! mock.current_user("testuser").await;
+//! ```
 
 use serde_json::json;
 use wiremock::matchers::{method, path, path_regex, query_param};
@@ -212,144 +245,69 @@ impl GitHubMockServer {
         OctocrabClient::with_base_url(&self.server.uri(), "test-token").unwrap()
     }
 
-    // ============ Issue Operations ============
+    /// Create a repository context for building mocks.
+    ///
+    /// This is the preferred way to set up mocks. Example:
+    /// ```ignore
+    /// let ctx = mock.repo("owner", "repo");
+    /// ctx.issue(123).title("Title").get().await;
+    /// ```
+    pub fn repo<'a>(&'a self, owner: &'a str, repo: &'a str) -> MockRepoContext<'a> {
+        MockRepoContext {
+            server: &self.server,
+            owner,
+            repo,
+        }
+    }
 
-    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number}
-    pub async fn mock_get_issue(&self, owner: &str, repo: &str, issue_number: u64) {
+    /// Mock GET /user for current user.
+    pub async fn current_user(&self, login: &str) {
         Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
-                owner,
-                repo,
-                issue_number,
-                "Test Issue",
-                "Test body",
-                "2024-01-02T00:00:00Z",
-            )))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_user(login)))
             .mount(&self.server)
             .await;
     }
+}
 
-    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} with custom data
-    pub async fn mock_get_issue_with(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        title: &str,
-        body: &str,
-        updated_at: &str,
-    ) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
-                owner,
-                repo,
-                issue_number,
-                title,
-                body,
-                updated_at,
-            )))
-            .mount(&self.server)
-            .await;
+// ============ Builder Pattern API ============
+
+/// Repository context for building mocks.
+///
+/// Created via `GitHubMockServer::repo()`. Provides builders for various
+/// GitHub API endpoints scoped to a specific repository.
+pub struct MockRepoContext<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+}
+
+impl<'a> MockRepoContext<'a> {
+    /// Create an issue mock builder.
+    pub fn issue(&self, number: u64) -> MockIssueBuilder<'_> {
+        MockIssueBuilder {
+            server: self.server,
+            owner: self.owner,
+            repo: self.repo,
+            number,
+            title: "Test Issue",
+            body: "Test body",
+            updated_at: "2024-01-02T00:00:00Z",
+            labels: vec!["bug"],
+        }
     }
 
-    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} with custom labels
-    pub async fn mock_get_issue_with_labels(
-        &self,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
-        title: &str,
-        body: &str,
-        updated_at: &str,
-        labels: &[&str],
-    ) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(mock_issue_with_labels(
-                    owner,
-                    repo,
-                    issue_number,
-                    title,
-                    body,
-                    updated_at,
-                    labels,
-                )),
-            )
-            .mount(&self.server)
-            .await;
+    /// Create a comment mock builder (for update/delete operations).
+    pub fn comment(&self) -> MockCommentBuilder<'_> {
+        MockCommentBuilder {
+            server: self.server,
+            owner: self.owner,
+            repo: self.repo,
+        }
     }
 
-    /// Mock GET /repos/{owner}/{repo}/issues/{issue_number} returning 404
-    pub async fn mock_get_issue_not_found(&self, owner: &str, repo: &str, issue_number: u64) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
-            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-                "message": "Not Found",
-                "documentation_url": "https://docs.github.com/rest"
-            })))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock PATCH /repos/{owner}/{repo}/issues/{issue_number} for body update
-    pub async fn mock_update_issue(&self, owner: &str, repo: &str, issue_number: u64) {
-        Mock::given(method("PATCH"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{issue_number}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
-                owner,
-                repo,
-                issue_number,
-                "Test Issue",
-                "Updated body",
-                "2024-01-03T00:00:00Z",
-            )))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock POST /repos/{owner}/{repo}/issues/{issue_number}/labels
-    pub async fn mock_add_labels(&self, owner: &str, repo: &str, issue_number: u64) {
-        Mock::given(method("POST"))
-            .and(path(format!(
-                "/repos/{owner}/{repo}/issues/{issue_number}/labels"
-            )))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([mock_label("enhancement")])),
-            )
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{label}
-    pub async fn mock_remove_label(&self, owner: &str, repo: &str, issue_number: u64, label: &str) {
-        Mock::given(method("DELETE"))
-            .and(path(format!(
-                "/repos/{owner}/{repo}/issues/{issue_number}/labels/{label}"
-            )))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-            .mount(&self.server)
-            .await;
-    }
-
-    // ============ Comment Operations ============
-
-    /// Mock GraphQL endpoint for get_comments
-    pub async fn mock_get_comments_graphql(&self, _owner: &str, _repo: &str, _issue_number: u64) {
-        self.mock_get_comments_graphql_with(_owner, _repo, _issue_number, &[])
-            .await;
-    }
-
-    /// Mock GraphQL endpoint for get_comments with custom comments
-    pub async fn mock_get_comments_graphql_with(
-        &self,
-        _owner: &str,
-        _repo: &str,
-        _issue_number: u64,
-        comments: &[RemoteComment<'_>],
-    ) {
+    /// Mock GraphQL endpoint for fetching comments.
+    pub async fn graphql_comments(&self, comments: &[RemoteComment<'_>]) {
         let nodes: Vec<serde_json::Value> = comments
             .iter()
             .map(|c| {
@@ -376,31 +334,235 @@ impl GitHubMockServer {
                     }
                 }
             })))
-            .mount(&self.server)
+            .mount(self.server)
             .await;
     }
 
-    /// Mock POST /repos/{owner}/{repo}/issues/{issue_number}/comments
-    pub async fn mock_create_comment(&self, owner: &str, repo: &str, issue_number: u64) {
+    /// Create a repository info mock builder.
+    pub fn repo_info(&self) -> MockRepoInfoBuilder<'_> {
+        MockRepoInfoBuilder {
+            server: self.server,
+            owner: self.owner,
+            repo: self.repo,
+            is_private: false,
+            default_branch: "main",
+        }
+    }
+
+    /// Create a pull request mock builder.
+    pub fn pull_request(&self, number: u64) -> MockPullRequestBuilder<'_> {
+        MockPullRequestBuilder {
+            server: self.server,
+            owner: self.owner,
+            repo: self.repo,
+            number,
+        }
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls returning empty list (no existing PRs).
+    pub async fn list_pull_requests_empty(&self) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{}/{}/pulls", self.owner, self.repo)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls returning a PR for specific branch.
+    pub async fn list_pull_requests_with(
+        &self,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
+                    owner, repo, pr_number, title, body, head
+                )])),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock PATCH /repos/{owner}/{repo}/pulls/{pr_number} for updating PR.
+    pub async fn update_pull_request(&self, pr_number: u64, title: &str, body: &str, head: &str) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pr_number}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
+            )
+            .mount(self.server)
+            .await;
+    }
+}
+
+/// Builder for mocking issue endpoints.
+pub struct MockIssueBuilder<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+    number: u64,
+    title: &'a str,
+    body: &'a str,
+    updated_at: &'a str,
+    labels: Vec<&'a str>,
+}
+
+impl<'a> MockIssueBuilder<'a> {
+    /// Set the issue title.
+    pub fn title(mut self, title: &'a str) -> Self {
+        self.title = title;
+        self
+    }
+
+    /// Set the issue body.
+    pub fn body(mut self, body: &'a str) -> Self {
+        self.body = body;
+        self
+    }
+
+    /// Set the updated_at timestamp.
+    pub fn updated_at(mut self, updated_at: &'a str) -> Self {
+        self.updated_at = updated_at;
+        self
+    }
+
+    /// Set the labels.
+    pub fn labels(mut self, labels: Vec<&'a str>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    /// Mount mock for GET /repos/{owner}/{repo}/issues/{number} (success).
+    pub async fn get(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{number}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mock_issue_with_labels(
+                    owner,
+                    repo,
+                    number,
+                    self.title,
+                    self.body,
+                    self.updated_at,
+                    &self.labels,
+                )),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for GET /repos/{owner}/{repo}/issues/{number} returning 404.
+    pub async fn get_not_found(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{number}")))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for PATCH /repos/{owner}/{repo}/issues/{number}.
+    pub async fn update(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{number}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue(
+                owner,
+                repo,
+                number,
+                "Test Issue",
+                "Updated body",
+                "2024-01-03T00:00:00Z",
+            )))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/labels.
+    pub async fn add_labels(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
         Mock::given(method("POST"))
             .and(path(format!(
-                "/repos/{owner}/{repo}/issues/{issue_number}/comments"
+                "/repos/{owner}/{repo}/issues/{number}/labels"
+            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_label("enhancement")])),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for DELETE /repos/{owner}/{repo}/issues/{number}/labels/{label}.
+    pub async fn remove_label(self, label: &str) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("DELETE"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/issues/{number}/labels/{label}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/comments.
+    pub async fn create_comment(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/issues/{number}/comments"
             )))
             .respond_with(ResponseTemplate::new(201).set_body_json(mock_comment(
                 owner,
                 repo,
-                issue_number,
+                number,
                 99999,
                 "IC_new_comment",
                 "testuser",
                 "New comment",
             )))
-            .mount(&self.server)
+            .mount(self.server)
             .await;
     }
+}
 
-    /// Mock PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
-    pub async fn mock_update_comment(&self, owner: &str, repo: &str, _comment_id: u64) {
+/// Builder for mocking comment update/delete endpoints.
+pub struct MockCommentBuilder<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+}
+
+impl<'a> MockCommentBuilder<'a> {
+    /// Mount mock for PATCH /repos/{owner}/{repo}/issues/comments/{id}.
+    pub async fn update(self) {
+        let owner = self.owner;
+        let repo = self.repo;
         Mock::given(method("PATCH"))
             .and(path_regex(format!(
                 r"/repos/{owner}/{repo}/issues/comments/\d+"
@@ -414,136 +576,87 @@ impl GitHubMockServer {
                 "testuser",
                 "Updated comment",
             )))
-            .mount(&self.server)
+            .mount(self.server)
             .await;
     }
 
-    /// Mock DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
-    pub async fn mock_delete_comment(&self, owner: &str, repo: &str, _comment_id: u64) {
+    /// Mount mock for DELETE /repos/{owner}/{repo}/issues/comments/{id}.
+    pub async fn delete(self) {
+        let owner = self.owner;
+        let repo = self.repo;
         Mock::given(method("DELETE"))
             .and(path_regex(format!(
                 r"/repos/{owner}/{repo}/issues/comments/\d+"
             )))
             .respond_with(ResponseTemplate::new(204))
-            .mount(&self.server)
+            .mount(self.server)
             .await;
     }
+}
 
-    // ============ User Operations ============
+/// Builder for mocking repository info endpoints.
+pub struct MockRepoInfoBuilder<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+    is_private: bool,
+    default_branch: &'a str,
+}
 
-    /// Mock GET /user for current user
-    pub async fn mock_get_current_user(&self, login: &str) {
-        Mock::given(method("GET"))
-            .and(path("/user"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_user(login)))
-            .mount(&self.server)
-            .await;
+impl<'a> MockRepoInfoBuilder<'a> {
+    /// Set whether the repository is private.
+    pub fn private(mut self, is_private: bool) -> Self {
+        self.is_private = is_private;
+        self
     }
 
-    // ============ Repository Operations ============
-
-    /// Mock GET /repos/{owner}/{repo} for repository info
-    pub async fn mock_get_repo(&self, owner: &str, repo: &str, is_private: bool) {
-        self.mock_get_repo_with_branch(owner, repo, is_private, "main")
-            .await;
+    /// Set the default branch.
+    pub fn default_branch(mut self, branch: &'a str) -> Self {
+        self.default_branch = branch;
+        self
     }
 
-    /// Mock GET /repos/{owner}/{repo} with custom default branch
-    pub async fn mock_get_repo_with_branch(
-        &self,
-        owner: &str,
-        repo: &str,
-        is_private: bool,
-        default_branch: &str,
-    ) {
+    /// Mount mock for GET /repos/{owner}/{repo}.
+    pub async fn get(self) {
+        let owner = self.owner;
+        let repo = self.repo;
         Mock::given(method("GET"))
             .and(path(format!("/repos/{owner}/{repo}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_repository(
                 owner,
                 repo,
-                is_private,
-                default_branch,
+                self.is_private,
+                self.default_branch,
             )))
-            .mount(&self.server)
+            .mount(self.server)
             .await;
     }
+}
 
-    // ============ Pull Request Operations ============
+/// Builder for mocking pull request endpoints.
+pub struct MockPullRequestBuilder<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+    number: u64,
+}
 
-    /// Mock POST /repos/{owner}/{repo}/pulls for PR creation.
-    pub async fn mock_create_pull_request(&self, owner: &str, repo: &str) {
-        self.mock_create_pull_request_with(owner, repo, 1, "Test PR", "Test body", "feature")
-            .await;
-    }
-
-    /// Mock POST /repos/{owner}/{repo}/pulls with custom data.
-    pub async fn mock_create_pull_request_with(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        title: &str,
-        body: &str,
-        head: &str,
-    ) {
+impl<'a> MockPullRequestBuilder<'a> {
+    /// Mount mock for POST /repos/{owner}/{repo}/pulls.
+    pub async fn create(self) {
+        let owner = self.owner;
+        let repo = self.repo;
         Mock::given(method("POST"))
             .and(path(format!("/repos/{owner}/{repo}/pulls")))
-            .respond_with(
-                ResponseTemplate::new(201)
-                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
-            )
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs (returns empty list).
-    pub async fn mock_list_pull_requests_empty(&self, owner: &str, repo: &str) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/pulls")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock GET /repos/{owner}/{repo}/pulls for listing PRs with existing PR.
-    pub async fn mock_list_pull_requests_with(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        title: &str,
-        body: &str,
-        head: &str,
-    ) {
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/pulls")))
-            .and(query_param("head", format!("{owner}:{head}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
-                    owner, repo, pr_number, title, body, head
-                )])),
-            )
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock PATCH /repos/{owner}/{repo}/pulls/{pr_number} for updating PR.
-    pub async fn mock_update_pull_request(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        title: &str,
-        body: &str,
-        head: &str,
-    ) {
-        Mock::given(method("PATCH"))
-            .and(path(format!("/repos/{owner}/{repo}/pulls/{pr_number}")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(mock_pull_request(owner, repo, pr_number, title, body, head)),
-            )
-            .mount(&self.server)
+            .respond_with(ResponseTemplate::new(201).set_body_json(mock_pull_request(
+                owner,
+                repo,
+                self.number,
+                "Test PR",
+                "Test body",
+                "feature",
+            )))
+            .mount(self.server)
             .await;
     }
 }
@@ -556,7 +669,7 @@ mod tests {
     #[tokio::test]
     async fn mock_server_returns_repository_info() {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo("owner", "repo", false).await;
+        mock.repo("owner", "repo").repo_info().get().await;
 
         let client = mock.client();
         let is_private = client.is_repo_private("owner", "repo").await.unwrap();
@@ -566,7 +679,10 @@ mod tests {
     #[tokio::test]
     async fn mock_server_returns_configured_default_branch() {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo_with_branch("owner", "repo", false, "develop")
+        mock.repo("owner", "repo")
+            .repo_info()
+            .default_branch("develop")
+            .get()
             .await;
 
         let client = mock.client();

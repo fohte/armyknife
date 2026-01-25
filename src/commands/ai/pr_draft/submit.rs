@@ -161,9 +161,10 @@ mod tests {
 
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo(owner, repo, true).await;
-        mock.mock_list_pull_requests_empty(owner, repo).await;
-        mock.mock_create_pull_request(owner, repo).await;
+        let ctx = mock.repo(owner, repo);
+        ctx.repo_info().private(true).get().await;
+        ctx.list_pull_requests_empty().await;
+        ctx.pull_request(1).create().await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
@@ -364,18 +365,12 @@ mod tests {
         pr_number: u64,
     ) -> TestEnv {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo(owner, repo, true).await;
-        mock.mock_list_pull_requests_with(owner, repo, pr_number, "Old title", "Old body", branch)
+        let ctx = mock.repo(owner, repo);
+        ctx.repo_info().private(true).get().await;
+        ctx.list_pull_requests_with(pr_number, "Old title", "Old body", branch)
             .await;
-        mock.mock_update_pull_request(
-            owner,
-            repo,
-            pr_number,
-            "Updated title",
-            "Updated body",
-            branch,
-        )
-        .await;
+        ctx.update_pull_request(pr_number, "Updated title", "Updated body", branch)
+            .await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);

@@ -123,7 +123,11 @@ mod tests {
 
     async fn setup_test_env(owner: &str, repo: &str, is_private: bool) -> TestEnv {
         let mock = GitHubMockServer::start().await;
-        mock.mock_get_repo(owner, repo, is_private).await;
+        mock.repo(owner, repo)
+            .repo_info()
+            .private(is_private)
+            .get()
+            .await;
         let temp_repo = TempRepo::new(owner, repo, "feature-test");
 
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
