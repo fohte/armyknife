@@ -78,12 +78,17 @@ fn run_tmux_output(args: &[&str]) -> Result<String> {
 }
 
 /// Run a tmux command, returning Ok(()) on success.
-/// Returns an error if not running inside tmux.
 fn run_tmux(args: &[&str]) -> Result<()> {
+    run_tmux_output(args).map(|_| ())
+}
+
+/// Run a tmux command that requires being inside a tmux session.
+/// Returns an error if not running inside tmux.
+fn run_tmux_in_session(args: &[&str]) -> Result<()> {
     if !in_tmux() {
         return Err(TmuxError::NotInTmux);
     }
-    run_tmux_output(args).map(|_| ())
+    run_tmux(args)
 }
 
 /// Query a tmux value using display-message with a format string.
@@ -164,6 +169,7 @@ pub fn current_session() -> Option<String> {
 }
 
 /// Switch to a different tmux session.
+/// Returns an error if not running inside tmux.
 pub fn switch_to_session(target_session: &str) -> Result<()> {
     if let Some(current) = current_session()
         && current == target_session
@@ -171,7 +177,7 @@ pub fn switch_to_session(target_session: &str) -> Result<()> {
         return Ok(());
     }
 
-    run_tmux(&["switch-client", "-t", target_session])
+    run_tmux_in_session(&["switch-client", "-t", target_session])
 }
 
 /// Get the current pane's working directory.
@@ -203,13 +209,15 @@ pub fn kill_window(window_id: &str) -> Result<()> {
 }
 
 /// Select a tmux window by target (e.g., "session:0" or "session:window_name").
+/// Returns an error if not running inside tmux.
 pub fn select_window(target: &str) -> Result<()> {
-    run_tmux(&["select-window", "-t", target])
+    run_tmux_in_session(&["select-window", "-t", target])
 }
 
 /// Select a tmux pane by ID (e.g., "%0").
+/// Returns an error if not running inside tmux.
 pub fn select_pane(pane_id: &str) -> Result<()> {
-    run_tmux(&["select-pane", "-t", pane_id])
+    run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
 /// Information about a tmux pane.
