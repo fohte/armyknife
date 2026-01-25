@@ -75,7 +75,11 @@ fn run_tmux_output(args: &[&str]) -> Result<String> {
 }
 
 /// Run a tmux command, returning Ok(()) on success.
+/// No-op if not running inside tmux.
 fn run_tmux(args: &[&str]) -> Result<()> {
+    if !in_tmux() {
+        return Ok(());
+    }
     run_tmux_output(args).map(|_| ())
 }
 
@@ -156,12 +160,8 @@ pub fn current_session() -> Option<String> {
     query_tmux_value("#{session_name}")
 }
 
-/// Switch to a different tmux session (only if inside tmux).
+/// Switch to a different tmux session.
 pub fn switch_to_session(target_session: &str) -> Result<()> {
-    if !in_tmux() {
-        return Ok(());
-    }
-
     if let Some(current) = current_session()
         && current == target_session
     {
