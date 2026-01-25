@@ -20,14 +20,18 @@ pub fn run(_args: &ListArgs) -> Result<()> {
     let sessions = store::list_sessions()?;
 
     let mut stdout = io::stdout().lock();
-    render_sessions(&mut stdout, &sessions)?;
+    render_sessions(&mut stdout, &sessions, Utc::now())?;
 
     Ok(())
 }
 
 /// Renders sessions to the given writer.
 /// Separated from run() to enable testing.
-fn render_sessions<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
+fn render_sessions<W: Write>(
+    writer: &mut W,
+    sessions: &[Session],
+    now: chrono::DateTime<Utc>,
+) -> Result<()> {
     if sessions.is_empty() {
         writeln!(writer, "No active Claude Code sessions.")?;
         return Ok(());
@@ -42,18 +46,22 @@ fn render_sessions<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()>
 
     // Print each session
     for session in sessions {
-        render_session_row(writer, session)?;
+        render_session_row(writer, session, now)?;
     }
 
     Ok(())
 }
 
 /// Renders a single session row to the given writer.
-fn render_session_row<W: Write>(writer: &mut W, session: &Session) -> Result<()> {
+fn render_session_row<W: Write>(
+    writer: &mut W,
+    session: &Session,
+    now: chrono::DateTime<Utc>,
+) -> Result<()> {
     let session_name = get_session_display_name(session);
     let window_name = get_window_display_name(session);
     let status_display = format_status(session.status);
-    let updated_display = format_relative_time(session.updated_at);
+    let updated_display = format_relative_time(session.updated_at, now);
 
     writeln!(
         writer,
@@ -107,9 +115,8 @@ fn format_status(status: SessionStatus) -> String {
     }
 }
 
-/// Formats a datetime as a relative time string.
-fn format_relative_time(dt: chrono::DateTime<Utc>) -> String {
-    let now = Utc::now();
+/// Formats a datetime as a relative time string from a given reference time.
+fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> String {
     let duration = now.signed_duration_since(dt);
 
     let seconds = duration.num_seconds();
@@ -212,8 +219,9 @@ mod tests {
     #[case::one_day(86400, "1d ago")]
     #[case::days(172800, "2d ago")]
     fn test_format_relative_time(#[case] seconds_ago: i64, #[case] expected: &str) {
-        let dt = Utc::now() - Duration::seconds(seconds_ago);
-        assert_eq!(format_relative_time(dt), expected);
+        let now = Utc::now();
+        let dt = now - Duration::seconds(seconds_ago);
+        assert_eq!(format_relative_time(dt, now), expected);
     }
 
     #[rstest]
@@ -239,7 +247,7 @@ mod tests {
     #[test]
     fn test_render_sessions_empty() {
         let mut output = Vec::new();
-        render_sessions(&mut output, &[]).expect("render should succeed");
+        render_sessions(&mut output, &[], Utc::now()).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(result, "No active Claude Code sessions.\n");
@@ -247,23 +255,28 @@ mod tests {
 
     #[test]
     fn test_render_sessions_single_without_tmux() {
-        let session = create_test_session();
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now;
+
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session]).expect("render should succeed");
+        render_sessions(&mut output, &[session], now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                  SESSION                  WINDOW               STATUS     UPDATED
-                  myproject                -                    ● \x1b[32mrunning \x1b[0m just now
+                SESSION                  WINDOW               STATUS     UPDATED
+                myproject                -                    ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
 
     #[test]
     fn test_render_sessions_single_with_tmux() {
+        let now = Utc::now();
         let mut session = create_test_session();
+        session.updated_at = now;
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
             window_name: "editor".to_string(),
@@ -272,14 +285,14 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session]).expect("render should succeed");
+        render_sessions(&mut output, &[session], now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                  SESSION                  WINDOW               STATUS     UPDATED
-                  dev                      editor               ● \x1b[32mrunning \x1b[0m just now
+                SESSION                  WINDOW               STATUS     UPDATED
+                dev                      editor               ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -324,23 +337,25 @@ mod tests {
         ];
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &sessions).expect("render should succeed");
+        render_sessions(&mut output, &sessions, now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                  SESSION                  WINDOW               STATUS     UPDATED
-                  running                  -                    ● \x1b[32mrunning \x1b[0m just now
-                  waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
-                  stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
+                SESSION                  WINDOW               STATUS     UPDATED
+                running                  -                    ● \x1b[32mrunning \x1b[0m just now
+                waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
+                stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
             "}
         );
     }
 
     #[test]
     fn test_render_sessions_truncates_long_names() {
+        let now = Utc::now();
         let mut session = create_test_session();
+        session.updated_at = now;
         session.tmux_info = Some(TmuxInfo {
             session_name: "this-is-a-very-long-session-name-that-exceeds-limit".to_string(),
             window_name: "also-a-very-long-window-name".to_string(),
@@ -349,14 +364,33 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session]).expect("render should succeed");
+        render_sessions(&mut output, &[session], now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                  SESSION                  WINDOW               STATUS     UPDATED
-                  this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+                SESSION                  WINDOW               STATUS     UPDATED
+                this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_relative_time() {
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now - Duration::hours(2);
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session], now).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                SESSION                  WINDOW               STATUS     UPDATED
+                myproject                -                    ● \x1b[32mrunning \x1b[0m 2h ago
             "}
         );
     }
