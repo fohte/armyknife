@@ -8,6 +8,8 @@ use ratatui::DefaultTerminal;
 
 use self::app::App;
 use self::event::{AppEvent, EventHandler};
+use crate::commands::cc::types::TmuxInfo;
+use crate::infra::tmux;
 
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
@@ -47,6 +49,15 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     Ok(())
 }
 
+/// Focuses the tmux pane specified by TmuxInfo.
+fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
+    tmux::switch_to_session(&info.session_name)?;
+    let window_target = format!("{}:{}", info.session_name, info.window_index);
+    tmux::select_window(&window_target)?;
+    tmux::select_pane(&info.pane_id)?;
+    Ok(())
+}
+
 /// Handles key events.
 fn handle_key_event(app: &mut App, key: KeyCode) {
     match key {
@@ -63,9 +74,13 @@ fn handle_key_event(app: &mut App, key: KeyCode) {
             app.select_previous();
         }
 
-        // Focus (placeholder for Phase 3)
+        // Focus on selected session's tmux pane
         KeyCode::Enter | KeyCode::Char('f') => {
-            // Will implement tmux pane focus in Phase 3
+            if let Some(session) = app.selected_session()
+                && let Some(ref tmux_info) = session.tmux_info
+            {
+                let _ = focus_tmux_pane(tmux_info);
+            }
         }
 
         // Quick select (1-9)

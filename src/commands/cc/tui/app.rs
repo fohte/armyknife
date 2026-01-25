@@ -94,6 +94,13 @@ impl App {
         }
     }
 
+    /// Returns the currently selected session, if any.
+    pub fn selected_session(&self) -> Option<&Session> {
+        self.list_state
+            .selected()
+            .and_then(|i| self.sessions.get(i))
+    }
+
     /// Signals that the application should quit.
     pub fn quit(&mut self) {
         self.should_quit = true;

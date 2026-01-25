@@ -33,7 +33,7 @@ fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
 
     let status_line = Line::from(vec![
         Span::styled(
-            "  Claude Code Monitor",
+            "  Claude Code Sessions",
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw("                       "),
