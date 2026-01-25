@@ -44,7 +44,7 @@ fn print_session_row(session: &Session) {
     let updated_display = format_relative_time(session.updated_at);
 
     println!(
-        "  {:<24} {:<20} {} {:<8} {}",
+        "  {:<24} {:<20} {} {} {}",
         truncate(&session_name, 24),
         truncate(&window_name, 20),
         session.status.display_symbol(),
@@ -80,13 +80,15 @@ fn get_window_display_name(session: &Session) -> String {
 }
 
 /// Formats the status with color codes.
+/// Padding is applied inside color codes to ensure correct column alignment.
 fn format_status(status: SessionStatus) -> String {
     let name = status.display_name();
 
+    // Apply padding inside ANSI codes to avoid column misalignment
     match status {
-        SessionStatus::Running => format!("\x1b[32m{name}\x1b[0m"), // Green
-        SessionStatus::WaitingInput => format!("\x1b[33m{name}\x1b[0m"), // Yellow
-        SessionStatus::Stopped => format!("\x1b[90m{name}\x1b[0m"), // Gray
+        SessionStatus::Running => format!("\x1b[32m{name:<8}\x1b[0m"), // Green
+        SessionStatus::WaitingInput => format!("\x1b[33m{name:<8}\x1b[0m"), // Yellow
+        SessionStatus::Stopped => format!("\x1b[90m{name:<8}\x1b[0m"), // Gray
     }
 }
 
