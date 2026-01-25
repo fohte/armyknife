@@ -1,3 +1,5 @@
+use std::io::{self, Write};
+
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
@@ -17,40 +19,53 @@ pub fn run(_args: &ListArgs) -> Result<()> {
     // Load all sessions
     let sessions = store::list_sessions()?;
 
+    let mut stdout = io::stdout().lock();
+    render_sessions(&mut stdout, &sessions)?;
+
+    Ok(())
+}
+
+/// Renders sessions to the given writer.
+/// Separated from run() to enable testing.
+fn render_sessions<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
     if sessions.is_empty() {
-        println!("No active Claude Code sessions.");
+        writeln!(writer, "No active Claude Code sessions.")?;
         return Ok(());
     }
 
     // Print header
-    println!(
+    writeln!(
+        writer,
         "  {:<24} {:<20} {:<10} UPDATED",
         "SESSION", "WINDOW", "STATUS"
-    );
+    )?;
 
     // Print each session
     for session in sessions {
-        print_session_row(&session);
+        render_session_row(writer, session)?;
     }
 
     Ok(())
 }
 
-/// Prints a single session row.
-fn print_session_row(session: &Session) {
+/// Renders a single session row to the given writer.
+fn render_session_row<W: Write>(writer: &mut W, session: &Session) -> Result<()> {
     let session_name = get_session_display_name(session);
     let window_name = get_window_display_name(session);
     let status_display = format_status(session.status);
     let updated_display = format_relative_time(session.updated_at);
 
-    println!(
+    writeln!(
+        writer,
         "  {:<24} {:<20} {} {} {}",
         truncate(&session_name, 24),
         truncate(&window_name, 20),
         session.status.display_symbol(),
         status_display,
         updated_display
-    );
+    )?;
+
+    Ok(())
 }
 
 /// Gets the display name for a session.
@@ -218,5 +233,126 @@ mod tests {
         assert_eq!(SessionStatus::Running.display_name(), "running");
         assert_eq!(SessionStatus::WaitingInput.display_name(), "waiting");
         assert_eq!(SessionStatus::Stopped.display_name(), "stopped");
+    }
+
+    #[test]
+    fn test_render_sessions_empty() {
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(result, "No active Claude Code sessions.\n");
+    }
+
+    #[test]
+    fn test_render_sessions_single_without_tmux() {
+        let session = create_test_session();
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            "  SESSION                  WINDOW               STATUS     UPDATED
+  myproject                -                    ● \x1b[32mrunning \x1b[0m just now
+"
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_single_with_tmux() {
+        let mut session = create_test_session();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            "  SESSION                  WINDOW               STATUS     UPDATED
+  dev                      editor               ● \x1b[32mrunning \x1b[0m just now
+"
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_multiple_statuses() {
+        let now = Utc::now();
+        let sessions = vec![
+            Session {
+                session_id: "s1".to_string(),
+                cwd: PathBuf::from("/project/running"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+            },
+            Session {
+                session_id: "s2".to_string(),
+                cwd: PathBuf::from("/project/waiting"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::WaitingInput,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+            },
+            Session {
+                session_id: "s3".to_string(),
+                cwd: PathBuf::from("/project/stopped"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Stopped,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+            },
+        ];
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &sessions).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            "  SESSION                  WINDOW               STATUS     UPDATED
+  running                  -                    ● \x1b[32mrunning \x1b[0m just now
+  waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
+  stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
+"
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_truncates_long_names() {
+        let mut session = create_test_session();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "this-is-a-very-long-session-name-that-exceeds-limit".to_string(),
+            window_name: "also-a-very-long-window-name".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            "  SESSION                  WINDOW               STATUS     UPDATED
+  this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+"
+        );
     }
 }
