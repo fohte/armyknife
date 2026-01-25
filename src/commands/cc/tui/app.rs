@@ -32,10 +32,22 @@ impl App {
     }
 
     /// Reloads sessions from disk.
+    /// Preserves the selection by session_id if possible.
     pub fn reload_sessions(&mut self) -> Result<()> {
+        // Remember the currently selected session_id
+        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+
         self.sessions = load_sessions()?;
 
-        // Adjust selection if needed
+        // Try to restore selection by session_id
+        if let Some(ref id) = selected_session_id
+            && let Some(new_index) = self.sessions.iter().position(|s| &s.session_id == id)
+        {
+            self.list_state.select(Some(new_index));
+            return Ok(());
+        }
+
+        // Fallback: adjust selection if needed
         if self.sessions.is_empty() {
             self.list_state.select(None);
         } else if let Some(selected) = self.list_state.selected() {
@@ -208,5 +220,22 @@ mod tests {
         assert!(!app.should_quit);
         app.quit();
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_selected_session() {
+        let mut app = App {
+            sessions: vec![create_test_session("first"), create_test_session("second")],
+            list_state: ListState::default(),
+            should_quit: false,
+        };
+
+        assert!(app.selected_session().is_none());
+
+        app.list_state.select(Some(1));
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("second")
+        );
     }
 }
