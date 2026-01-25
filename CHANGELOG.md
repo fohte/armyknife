@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.38](https://github.com/fohte/armyknife/compare/v0.1.37...v0.1.38) (2026-01-25)
+
+
+### Features
+
+* **cc:** add `a cc watch` command for TUI-based session monitoring ([#144](https://github.com/fohte/armyknife/issues/144)) ([6e42df6](https://github.com/fohte/armyknife/commit/6e42df65e9a91520deb087ef6cdb32992e9fb57a))
+
 ## [0.1.37](https://github.com/fohte/armyknife/compare/v0.1.36...v0.1.37) (2026-01-25)
 
 
