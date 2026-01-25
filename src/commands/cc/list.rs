@@ -36,7 +36,7 @@ fn render_sessions<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()>
     // Print header
     writeln!(
         writer,
-        "  {:<24} {:<20} {:<10} UPDATED",
+        "{:<24} {:<20} {:<10} UPDATED",
         "SESSION", "WINDOW", "STATUS"
     )?;
 
@@ -57,7 +57,7 @@ fn render_session_row<W: Write>(writer: &mut W, session: &Session) -> Result<()>
 
     writeln!(
         writer,
-        "  {:<24} {:<20} {} {} {}",
+        "{:<24} {:<20} {} {} {}",
         truncate(&session_name, 24),
         truncate(&window_name, 20),
         session.status.display_symbol(),
@@ -148,6 +148,7 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::TmuxInfo;
     use chrono::Duration;
+    use indoc::indoc;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -253,9 +254,10 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "  SESSION                  WINDOW               STATUS     UPDATED
-  myproject                -                    ● \x1b[32mrunning \x1b[0m just now
-"
+            indoc! {"
+                  SESSION                  WINDOW               STATUS     UPDATED
+                  myproject                -                    ● \x1b[32mrunning \x1b[0m just now
+            "}
         );
     }
 
@@ -275,9 +277,10 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "  SESSION                  WINDOW               STATUS     UPDATED
-  dev                      editor               ● \x1b[32mrunning \x1b[0m just now
-"
+            indoc! {"
+                  SESSION                  WINDOW               STATUS     UPDATED
+                  dev                      editor               ● \x1b[32mrunning \x1b[0m just now
+            "}
         );
     }
 
@@ -326,11 +329,12 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "  SESSION                  WINDOW               STATUS     UPDATED
-  running                  -                    ● \x1b[32mrunning \x1b[0m just now
-  waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
-  stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
-"
+            indoc! {"
+                  SESSION                  WINDOW               STATUS     UPDATED
+                  running                  -                    ● \x1b[32mrunning \x1b[0m just now
+                  waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
+                  stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
+            "}
         );
     }
 
@@ -350,9 +354,10 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "  SESSION                  WINDOW               STATUS     UPDATED
-  this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
-"
+            indoc! {"
+                  SESSION                  WINDOW               STATUS     UPDATED
+                  this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+            "}
         );
     }
 }
