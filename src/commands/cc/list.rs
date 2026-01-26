@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::claude_sessions;
 use super::store;
@@ -41,8 +42,11 @@ fn render_sessions<W: Write>(
     // Print header
     writeln!(
         writer,
-        "{:<30} {:<16} {:<12} {:<10} UPDATED",
-        "TITLE", "SESSION", "WINDOW", "STATUS"
+        "{} {} {} {:<10} UPDATED",
+        pad_or_truncate("TITLE", 30),
+        pad_or_truncate("SESSION", 16),
+        pad_or_truncate("WINDOW", 12),
+        "STATUS"
     )?;
 
     // Print each session
@@ -67,10 +71,10 @@ fn render_session_row<W: Write>(
 
     writeln!(
         writer,
-        "{:<30} {:<16} {:<12} {} {} {}",
-        truncate(&title, 30),
-        truncate(&session_name, 16),
-        truncate(&window_name, 12),
+        "{} {} {} {} {} {}",
+        pad_or_truncate(&title, 30),
+        pad_or_truncate(&session_name, 16),
+        pad_or_truncate(&window_name, 12),
         session.status.display_symbol(),
         status_display,
         updated_display
@@ -149,18 +153,43 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
     }
 }
 
-/// Truncates a string to the specified length (character-based, not byte-based).
-fn truncate(s: &str, max_len: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
-        s.to_string()
-    } else if max_len < 3 {
+/// Pads or truncates a string to exactly the specified display width.
+/// Uses unicode display width for proper alignment with CJK characters.
+fn pad_or_truncate(s: &str, width: usize) -> String {
+    let display_width = s.width();
+
+    if display_width <= width {
+        // Pad with spaces to reach target width
+        let padding = width - display_width;
+        format!("{}{}", s, " ".repeat(padding))
+    } else if width < 3 {
         // Too short for ellipsis, just truncate
-        s.chars().take(max_len).collect()
+        truncate_to_width(s, width)
     } else {
-        let truncated: String = s.chars().take(max_len - 3).collect();
-        format!("{truncated}...")
+        // Truncate and add ellipsis
+        let truncated = truncate_to_width(s, width - 3);
+        let truncated_width = truncated.width();
+        // Use saturating_sub to avoid underflow when CJK chars cause width mismatch
+        let padding = width.saturating_sub(truncated_width).saturating_sub(3);
+        format!("{}...{}", truncated, " ".repeat(padding))
     }
+}
+
+/// Truncates a string to fit within the specified display width.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for c in s.chars() {
+        let char_width = c.width().unwrap_or(0);
+        if current_width + char_width > max_width {
+            break;
+        }
+        result.push(c);
+        current_width += char_width;
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -238,7 +267,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::short("hello", 10, "hello")]
+    #[case::short("hello", 10, "hello     ")]
     #[case::exact("hello", 5, "hello")]
     #[case::truncate("hello world", 8, "hello...")]
     #[case::truncate_short("hello", 4, "h...")]
@@ -246,8 +275,11 @@ mod tests {
     #[case::max_len_2("hello", 2, "he")]
     #[case::max_len_1("hello", 1, "h")]
     #[case::max_len_0("hello", 0, "")]
-    fn test_truncate(#[case] input: &str, #[case] max_len: usize, #[case] expected: &str) {
-        assert_eq!(truncate(input, max_len), expected);
+    #[case::cjk_short("日本語", 10, "日本語    ")]
+    #[case::cjk_exact("日本語", 6, "日本語")]
+    #[case::cjk_truncate("日本語テスト", 8, "日本... ")]
+    fn test_pad_or_truncate(#[case] input: &str, #[case] width: usize, #[case] expected: &str) {
+        assert_eq!(pad_or_truncate(input, width), expected);
     }
 
     #[test]

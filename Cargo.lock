@@ -131,6 +131,7 @@ dependencies = [
  "termimad",
  "thiserror 2.0.17",
  "tokio",
+ "unicode-width 0.2.2",
  "wiremock",
 ]
 
