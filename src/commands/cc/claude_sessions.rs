@@ -2,9 +2,13 @@
 //!
 //! This module reads session metadata from Claude Code's sessions-index.json files
 //! located at ~/.claude/projects/{encoded-path}/sessions-index.json
+//!
+//! Falls back to reading the first user prompt from .jsonl files when
+//! sessions-index.json is not available.
 
 use serde::Deserialize;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 /// Claude Code sessions-index.json structure
@@ -25,6 +29,20 @@ pub struct SessionEntry {
     pub summary: Option<String>,
 }
 
+/// User message entry in .jsonl files
+#[derive(Debug, Deserialize)]
+struct JsonlEntry {
+    #[serde(rename = "type")]
+    entry_type: Option<String>,
+    message: Option<JsonlMessage>,
+}
+
+/// Message content in .jsonl user entries
+#[derive(Debug, Deserialize)]
+struct JsonlMessage {
+    content: Option<String>,
+}
+
 /// Encodes a project path to Claude Code's directory format.
 ///
 /// Claude Code encodes paths by replacing '/' and '.' with '-'.
@@ -36,25 +54,46 @@ pub fn encode_project_path(path: &Path) -> String {
         .collect()
 }
 
+/// Returns the path to Claude Code's project directory.
+///
+/// Path format: ~/.claude/projects/{encoded-path}/
+fn project_dir(project_path: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let encoded = encode_project_path(project_path);
+    Some(home.join(".claude").join("projects").join(encoded))
+}
+
 /// Returns the path to Claude Code's sessions-index.json for a project.
 ///
 /// Path format: ~/.claude/projects/{encoded-path}/sessions-index.json
 pub fn sessions_index_path(project_path: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let encoded = encode_project_path(project_path);
-    Some(
-        home.join(".claude")
-            .join("projects")
-            .join(encoded)
-            .join("sessions-index.json"),
-    )
+    Some(project_dir(project_path)?.join("sessions-index.json"))
+}
+
+/// Returns the path to a session's .jsonl file.
+///
+/// Path format: ~/.claude/projects/{encoded-path}/{session_id}.jsonl
+fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
+    Some(project_dir(project_path)?.join(format!("{session_id}.jsonl")))
 }
 
 /// Retrieves the session title from Claude Code's sessions-index.json.
 ///
 /// Returns the summary if available, otherwise the first ~50 characters of firstPrompt.
-/// Returns None if the session cannot be found or the file doesn't exist.
+/// Falls back to reading the first user prompt from the .jsonl file if sessions-index.json
+/// doesn't exist or doesn't contain the session.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
+    // First, try to get from sessions-index.json
+    if let Some(title) = get_title_from_index(project_path, session_id) {
+        return Some(title);
+    }
+
+    // Fall back to reading from .jsonl file directly
+    get_title_from_jsonl(project_path, session_id)
+}
+
+/// Tries to get session title from sessions-index.json.
+fn get_title_from_index(project_path: &Path, session_id: &str) -> Option<String> {
     let index_path = sessions_index_path(project_path)?;
 
     if !index_path.exists() {
@@ -76,6 +115,37 @@ pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String
                 return Some(truncate_first_prompt(&first_prompt, 50));
             }
             return None;
+        }
+    }
+
+    None
+}
+
+/// Reads the first user prompt from a session's .jsonl file.
+fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String> {
+    let jsonl_path = session_jsonl_path(project_path, session_id)?;
+
+    if !jsonl_path.exists() {
+        return None;
+    }
+
+    let file = File::open(&jsonl_path).ok()?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let line = line.ok()?;
+        if line.is_empty() {
+            continue;
+        }
+
+        let entry: JsonlEntry = serde_json::from_str(&line).ok()?;
+
+        // Look for the first "user" type entry with message content
+        if entry.entry_type.as_deref() == Some("user")
+            && let Some(message) = entry.message
+            && let Some(content) = message.content
+        {
+            return Some(truncate_first_prompt(&content, 50));
         }
     }
 

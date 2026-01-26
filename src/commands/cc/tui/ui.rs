@@ -141,30 +141,27 @@ fn render_error(frame: &mut Frame, area: Rect, message: &str) {
 fn create_session_item(index: usize, session: &Session, now: DateTime<Utc>) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
+    let session_info = get_session_info(session);
     let title = get_title_display_name(session);
     let time_ago = format_relative_time(session.updated_at, now);
 
-    // First line: [number] status title time
+    // First line: [number] status session:window time
     let line1 = Line::from(vec![
         Span::raw(format!("  [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
         Span::styled(
-            truncate(&title, 50),
+            truncate(&session_info, 50),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(time_ago, Style::default().fg(Color::DarkGray)),
     ]);
 
-    // Second line: session info (tmux session:window or cwd)
-    let session_info = get_session_info(session);
+    // Second line: title (from Claude Code session)
     let line2 = Line::from(vec![
         Span::raw("      "),
-        Span::styled(
-            truncate(&session_info, 60),
-            Style::default().fg(Color::Gray),
-        ),
+        Span::styled(truncate(&title, 60), Style::default().fg(Color::Gray)),
     ]);
 
     // Empty line for spacing
