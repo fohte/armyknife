@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.39](https://github.com/fohte/armyknife/compare/v0.1.38...v0.1.39) (2026-01-26)
+
+
+### Bug Fixes
+
+* **cc:** mark session as stopped on `idle_prompt` notification ([#146](https://github.com/fohte/armyknife/issues/146)) ([efc57f2](https://github.com/fohte/armyknife/commit/efc57f26df958b4944dadddf281fe54f449d7ad8))
+
 ## [0.1.38](https://github.com/fohte/armyknife/compare/v0.1.37...v0.1.38) (2026-01-25)
 
 
