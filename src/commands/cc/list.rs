@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
 
+use super::claude_sessions;
 use super::store;
 use super::types::{Session, SessionStatus};
 
@@ -40,8 +41,8 @@ fn render_sessions<W: Write>(
     // Print header
     writeln!(
         writer,
-        "{:<24} {:<20} {:<10} UPDATED",
-        "SESSION", "WINDOW", "STATUS"
+        "{:<30} {:<16} {:<12} {:<10} UPDATED",
+        "TITLE", "SESSION", "WINDOW", "STATUS"
     )?;
 
     // Print each session
@@ -58,6 +59,7 @@ fn render_session_row<W: Write>(
     session: &Session,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
+    let title = get_title_display_name(session);
     let session_name = get_session_display_name(session);
     let window_name = get_window_display_name(session);
     let status_display = format_status(session.status);
@@ -65,15 +67,23 @@ fn render_session_row<W: Write>(
 
     writeln!(
         writer,
-        "{:<24} {:<20} {} {} {}",
-        truncate(&session_name, 24),
-        truncate(&window_name, 20),
+        "{:<30} {:<16} {:<12} {} {} {}",
+        truncate(&title, 30),
+        truncate(&session_name, 16),
+        truncate(&window_name, 12),
         session.status.display_symbol(),
         status_display,
         updated_display
     )?;
 
     Ok(())
+}
+
+/// Gets the title display name for a session.
+/// Fetches from Claude Code's sessions-index.json, returns "-" if not found.
+fn get_title_display_name(session: &Session) -> String {
+    claude_sessions::get_session_title(&session.cwd, &session.session_id)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Gets the display name for a session.
@@ -273,8 +283,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                myproject                -                    ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              myproject        -            ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -298,8 +308,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                dev                      editor               ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              dev              editor       ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -347,13 +357,14 @@ mod tests {
         render_sessions(&mut output, &sessions, now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
+        // Title is fetched from Claude Code's sessions-index.json, returns "-" for test paths
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                running                  -                    ● \x1b[32mrunning \x1b[0m just now
-                waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
-                stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              running          -            ● \x1b[32mrunning \x1b[0m just now
+                -                              waiting          -            ◐ \x1b[33mwaiting \x1b[0m just now
+                -                              stopped          -            ○ \x1b[90mstopped \x1b[0m just now
             "}
         );
     }
@@ -364,7 +375,7 @@ mod tests {
         let mut session = create_test_session();
         session.updated_at = now;
         session.tmux_info = Some(TmuxInfo {
-            session_name: "this-is-a-very-long-session-name-that-exceeds-limit".to_string(),
+            session_name: "this-is-a-very-long-session-name".to_string(),
             window_name: "also-a-very-long-window-name".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
@@ -374,11 +385,12 @@ mod tests {
         render_sessions(&mut output, &[session], now).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
+        // Title returns "-" (no sessions-index.json), session/window names are truncated
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              this-is-a-ver... also-a-ve... ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -396,9 +408,16 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                myproject                -                    ● \x1b[32mrunning \x1b[0m 2h ago
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              myproject        -            ● \x1b[32mrunning \x1b[0m 2h ago
             "}
         );
+    }
+
+    #[test]
+    fn test_get_title_display_name_without_sessions_index() {
+        // When sessions-index.json doesn't exist, returns "-"
+        let session = create_test_session();
+        assert_eq!(get_title_display_name(&session), "-");
     }
 }

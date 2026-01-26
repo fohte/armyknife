@@ -1,3 +1,4 @@
+use crate::commands::cc::claude_sessions;
 use crate::commands::cc::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -140,27 +141,30 @@ fn render_error(frame: &mut Frame, area: Rect, message: &str) {
 fn create_session_item(index: usize, session: &Session, now: DateTime<Utc>) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
-    let session_name = get_session_display_name(session);
+    let title = get_title_display_name(session);
     let time_ago = format_relative_time(session.updated_at, now);
 
-    // First line: [number] status session_name time
+    // First line: [number] status title time
     let line1 = Line::from(vec![
         Span::raw(format!("  [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
         Span::styled(
-            truncate(&session_name, 50),
+            truncate(&title, 50),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(time_ago, Style::default().fg(Color::DarkGray)),
     ]);
 
-    // Second line: description or last activity
-    let description = get_session_description(session);
+    // Second line: session info (tmux session:window or cwd)
+    let session_info = get_session_info(session);
     let line2 = Line::from(vec![
         Span::raw("      "),
-        Span::styled(truncate(&description, 60), Style::default().fg(Color::Gray)),
+        Span::styled(
+            truncate(&session_info, 60),
+            Style::default().fg(Color::Gray),
+        ),
     ]);
 
     // Empty line for spacing
@@ -195,32 +199,32 @@ fn count_statuses(sessions: &[Session]) -> (usize, usize, usize) {
     (running, waiting, stopped)
 }
 
-/// Gets the display name for a session.
-fn get_session_display_name(session: &Session) -> String {
+/// Gets the title display name for a session.
+/// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
+fn get_title_display_name(session: &Session) -> String {
+    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
+        return title;
+    }
+
+    if let Some(ref tmux_info) = session.tmux_info {
+        return format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+    }
+
+    // Extract last component of cwd path
+    session
+        .cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(String::from)
+        .unwrap_or_else(|| session.cwd.display().to_string())
+}
+
+/// Gets the session info (tmux session:window or cwd path).
+fn get_session_info(session: &Session) -> String {
     if let Some(ref tmux_info) = session.tmux_info {
         format!("{}:{}", tmux_info.session_name, tmux_info.window_name)
     } else {
-        // Extract last component of cwd path
-        session
-            .cwd
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-            .unwrap_or_else(|| session.cwd.display().to_string())
-    }
-}
-
-/// Gets a description for the session.
-fn get_session_description(session: &Session) -> String {
-    if let Some(ref msg) = session.last_message {
-        return msg.clone();
-    }
-
-    // Default description based on status
-    match session.status {
-        SessionStatus::Running => format!("Working in {}", session.cwd.display()),
-        SessionStatus::WaitingInput => "Waiting for input...".to_string(),
-        SessionStatus::Stopped => "Session stopped".to_string(),
+        session.cwd.display().to_string()
     }
 }
 
@@ -315,13 +319,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_session_display_name_without_tmux() {
-        let session = create_test_session("test");
-        assert_eq!(get_session_display_name(&session), "project");
-    }
-
-    #[test]
-    fn test_get_session_display_name_with_tmux() {
+    fn test_get_title_display_name_fallback_to_tmux() {
+        // When sessions-index.json doesn't exist, falls back to tmux info
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
@@ -329,30 +328,32 @@ mod tests {
             window_index: 0,
             pane_id: "%0".to_string(),
         });
-        assert_eq!(get_session_display_name(&session), "dev:editor");
+        assert_eq!(get_title_display_name(&session), "dev:editor");
     }
 
     #[test]
-    fn test_get_session_description_with_message() {
-        let mut session = create_test_session("test");
-        session.last_message = Some("Working on feature X".to_string());
-        assert_eq!(get_session_description(&session), "Working on feature X");
-    }
-
-    #[test]
-    fn test_get_session_description_running() {
+    fn test_get_title_display_name_fallback_to_cwd() {
+        // When sessions-index.json doesn't exist and no tmux, falls back to cwd
         let session = create_test_session("test");
-        assert_eq!(
-            get_session_description(&session),
-            "Working in /home/user/project"
-        );
+        assert_eq!(get_title_display_name(&session), "project");
     }
 
     #[test]
-    fn test_get_session_description_waiting() {
+    fn test_get_session_info_with_tmux() {
         let mut session = create_test_session("test");
-        session.status = SessionStatus::WaitingInput;
-        assert_eq!(get_session_description(&session), "Waiting for input...");
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        assert_eq!(get_session_info(&session), "dev:editor");
+    }
+
+    #[test]
+    fn test_get_session_info_without_tmux() {
+        let session = create_test_session("test");
+        assert_eq!(get_session_info(&session), "/home/user/project");
     }
 
     #[rstest]
