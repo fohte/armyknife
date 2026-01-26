@@ -101,18 +101,11 @@ fn read_stdin_json() -> Result<HookInput> {
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     match event {
         HookEvent::Stop => SessionStatus::Stopped,
-        HookEvent::Notification => {
-            // Check if it's a permission prompt notification
-            if input
-                .notification_type
-                .as_ref()
-                .is_some_and(|t| t == "permission_prompt")
-            {
-                SessionStatus::WaitingInput
-            } else {
-                SessionStatus::Running
-            }
-        }
+        HookEvent::Notification => match input.notification_type.as_deref() {
+            Some("permission_prompt") => SessionStatus::WaitingInput,
+            Some("idle_prompt") => SessionStatus::Stopped,
+            _ => SessionStatus::Running,
+        },
         HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
@@ -147,6 +140,7 @@ mod tests {
         Some("permission_prompt"),
         SessionStatus::WaitingInput
     )]
+    #[case::notification_idle(HookEvent::Notification, Some("idle_prompt"), SessionStatus::Stopped)]
     fn test_determine_status(
         #[case] event: HookEvent,
         #[case] notification_type: Option<&str>,
