@@ -8,8 +8,20 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::App;
+
+/// Fixed width for prefix: "  [N] ● " = 8 chars
+const LINE1_PREFIX_WIDTH: usize = 8;
+/// Fixed width for time suffix: "  XXm ago" = ~10 chars
+const LINE1_SUFFIX_WIDTH: usize = 12;
+/// Fixed width for title prefix: "      " = 6 chars
+const LINE2_PREFIX_WIDTH: usize = 6;
+/// Minimum width for session info
+const MIN_SESSION_INFO_WIDTH: usize = 20;
+/// Minimum width for title
+const MIN_TITLE_WIDTH: usize = 20;
 
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -92,11 +104,12 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         return;
     }
 
+    let term_width = area.width as usize;
     let items: Vec<ListItem> = app
         .sessions
         .iter()
         .enumerate()
-        .map(|(i, session)| create_session_item(i, session, now))
+        .map(|(i, session)| create_session_item(i, session, now, term_width))
         .collect();
 
     let list = List::new(items)
@@ -137,13 +150,40 @@ fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(error, area);
 }
 
+/// Calculates the available width for session info on line 1.
+fn calculate_session_info_width(term_width: usize) -> usize {
+    let fixed_width = LINE1_PREFIX_WIDTH + LINE1_SUFFIX_WIDTH;
+    if term_width > fixed_width + MIN_SESSION_INFO_WIDTH {
+        term_width - fixed_width
+    } else {
+        MIN_SESSION_INFO_WIDTH
+    }
+}
+
+/// Calculates the available width for title on line 2.
+fn calculate_title_width(term_width: usize) -> usize {
+    if term_width > LINE2_PREFIX_WIDTH + MIN_TITLE_WIDTH {
+        term_width - LINE2_PREFIX_WIDTH
+    } else {
+        MIN_TITLE_WIDTH
+    }
+}
+
 /// Creates a list item for a session.
-fn create_session_item(index: usize, session: &Session, now: DateTime<Utc>) -> ListItem<'static> {
+fn create_session_item(
+    index: usize,
+    session: &Session,
+    now: DateTime<Utc>,
+    term_width: usize,
+) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
     let session_info = get_session_info(session);
     let title = get_title_display_name(session);
     let time_ago = format_relative_time(session.updated_at, now);
+
+    let session_info_width = calculate_session_info_width(term_width);
+    let title_width = calculate_title_width(term_width);
 
     // First line: [number] status session:window time
     let line1 = Line::from(vec![
@@ -151,7 +191,7 @@ fn create_session_item(index: usize, session: &Session, now: DateTime<Utc>) -> L
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
         Span::styled(
-            truncate(&session_info, 50),
+            truncate(&session_info, session_info_width),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -161,7 +201,10 @@ fn create_session_item(index: usize, session: &Session, now: DateTime<Utc>) -> L
     // Second line: title (from Claude Code session)
     let line2 = Line::from(vec![
         Span::raw("      "),
-        Span::styled(truncate(&title, 60), Style::default().fg(Color::Gray)),
+        Span::styled(
+            truncate(&title, title_width),
+            Style::default().fg(Color::Gray),
+        ),
     ]);
 
     // Empty line for spacing
@@ -249,17 +292,35 @@ fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
-/// Truncates a string to the specified length.
-fn truncate(s: &str, max_len: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
+/// Truncates a string to fit within the specified display width.
+/// Uses unicode display width for proper handling of CJK characters.
+fn truncate(s: &str, max_width: usize) -> String {
+    let display_width = s.width();
+    if display_width <= max_width {
         s.to_string()
-    } else if max_len < 3 {
-        s.chars().take(max_len).collect()
+    } else if max_width < 3 {
+        truncate_to_width(s, max_width)
     } else {
-        let truncated: String = s.chars().take(max_len - 3).collect();
+        let truncated = truncate_to_width(s, max_width - 3);
         format!("{}...", truncated)
     }
+}
+
+/// Truncates a string to fit within the specified display width.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for c in s.chars() {
+        let char_width = c.width().unwrap_or(0);
+        if current_width + char_width > max_width {
+            break;
+        }
+        result.push(c);
+        current_width += char_width;
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -368,8 +429,11 @@ mod tests {
     #[case::short("hello", 10, "hello")]
     #[case::exact("hello", 5, "hello")]
     #[case::truncate("hello world", 8, "hello...")]
-    fn test_truncate(#[case] input: &str, #[case] max_len: usize, #[case] expected: &str) {
-        assert_eq!(truncate(input, max_len), expected);
+    #[case::cjk_short("日本語", 10, "日本語")]
+    #[case::cjk_exact("日本語", 6, "日本語")]
+    #[case::cjk_truncate("日本語テスト", 8, "日本...")]
+    fn test_truncate(#[case] input: &str, #[case] max_width: usize, #[case] expected: &str) {
+        assert_eq!(truncate(input, max_width), expected);
     }
 
     #[test]
