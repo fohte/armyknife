@@ -9,6 +9,18 @@ use super::claude_sessions;
 use super::store;
 use super::types::{Session, SessionStatus};
 
+/// Column widths for fixed-width columns
+const SESSION_WIDTH: usize = 16;
+const WINDOW_WIDTH: usize = 12;
+/// STATUS column: symbol (1-2) + space (1) + name (8) + space (1) = 11
+const STATUS_WIDTH: usize = 11;
+/// UPDATED column: "just now" (8) or "XXXd ago" (8) = 8
+const UPDATED_WIDTH: usize = 8;
+/// Minimum width for TITLE column
+const MIN_TITLE_WIDTH: usize = 20;
+/// Spaces between columns
+const COLUMN_SPACES: usize = 5;
+
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}
 
@@ -22,9 +34,27 @@ pub fn run(_args: &ListArgs) -> Result<()> {
     let sessions = store::list_sessions()?;
 
     let mut stdout = io::stdout().lock();
-    render_sessions(&mut stdout, &sessions, Utc::now())?;
+    let term_width = get_terminal_width();
+    render_sessions(&mut stdout, &sessions, Utc::now(), term_width)?;
 
     Ok(())
+}
+
+/// Gets the terminal width, defaulting to 80 if unavailable.
+fn get_terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+}
+
+/// Calculates the title column width based on terminal width.
+fn calculate_title_width(term_width: usize) -> usize {
+    let fixed_width = SESSION_WIDTH + WINDOW_WIDTH + STATUS_WIDTH + UPDATED_WIDTH + COLUMN_SPACES;
+    if term_width > fixed_width + MIN_TITLE_WIDTH {
+        term_width - fixed_width
+    } else {
+        MIN_TITLE_WIDTH
+    }
 }
 
 /// Renders sessions to the given writer.
@@ -33,25 +63,28 @@ fn render_sessions<W: Write>(
     writer: &mut W,
     sessions: &[Session],
     now: chrono::DateTime<Utc>,
+    term_width: usize,
 ) -> Result<()> {
     if sessions.is_empty() {
         writeln!(writer, "No active Claude Code sessions.")?;
         return Ok(());
     }
 
+    let title_width = calculate_title_width(term_width);
+
     // Print header
     writeln!(
         writer,
         "{} {} {} {:<10} UPDATED",
-        pad_or_truncate("TITLE", 30),
-        pad_or_truncate("SESSION", 16),
-        pad_or_truncate("WINDOW", 12),
+        pad_or_truncate("TITLE", title_width),
+        pad_or_truncate("SESSION", SESSION_WIDTH),
+        pad_or_truncate("WINDOW", WINDOW_WIDTH),
         "STATUS"
     )?;
 
     // Print each session
     for session in sessions {
-        render_session_row(writer, session, now)?;
+        render_session_row(writer, session, now, title_width)?;
     }
 
     Ok(())
@@ -62,6 +95,7 @@ fn render_session_row<W: Write>(
     writer: &mut W,
     session: &Session,
     now: chrono::DateTime<Utc>,
+    title_width: usize,
 ) -> Result<()> {
     let title = get_title_display_name(session);
     let session_name = get_session_display_name(session);
@@ -72,9 +106,9 @@ fn render_session_row<W: Write>(
     writeln!(
         writer,
         "{} {} {} {} {} {}",
-        pad_or_truncate(&title, 30),
-        pad_or_truncate(&session_name, 16),
-        pad_or_truncate(&window_name, 12),
+        pad_or_truncate(&title, title_width),
+        pad_or_truncate(&session_name, SESSION_WIDTH),
+        pad_or_truncate(&window_name, WINDOW_WIDTH),
         session.status.display_symbol(),
         status_display,
         updated_display
@@ -293,10 +327,14 @@ mod tests {
         assert_eq!(SessionStatus::Stopped.display_name(), "stopped");
     }
 
+    /// Test terminal width that results in TITLE width of 30
+    const TEST_TERM_WIDTH: usize = 82;
+
     #[test]
     fn test_render_sessions_empty() {
         let mut output = Vec::new();
-        render_sessions(&mut output, &[], Utc::now()).expect("render should succeed");
+        render_sessions(&mut output, &[], Utc::now(), TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(result, "No active Claude Code sessions.\n");
@@ -309,7 +347,8 @@ mod tests {
         session.updated_at = now;
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
@@ -334,7 +373,8 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
@@ -386,7 +426,8 @@ mod tests {
         ];
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &sessions, now).expect("render should succeed");
+        render_sessions(&mut output, &sessions, now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         // Title is fetched from Claude Code's sessions-index.json, returns "-" for test paths
@@ -414,7 +455,8 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         // Title returns "-" (no sessions-index.json), session/window names are truncated
@@ -434,7 +476,8 @@ mod tests {
         session.updated_at = now - Duration::hours(2);
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
