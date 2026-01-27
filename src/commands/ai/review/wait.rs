@@ -19,7 +19,7 @@ pub struct WaitArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Reviewers to wait for (can specify multiple, waits for any to complete)
+    /// Reviewers to wait for (can specify multiple, waits for all to complete)
     #[arg(short = 'r', long = "reviewer", value_enum, default_values_t = vec![Reviewer::Gemini, Reviewer::Devin])]
     pub reviewers: Vec<Reviewer>,
 
@@ -57,20 +57,25 @@ pub(crate) async fn run_wait(
     // Record start time to detect "new" reviews
     let start_time = Utc::now();
 
-    // Check if any reviewer has already posted a review
+    // Check if all reviewers have already posted reviews
+    let mut all_completed = true;
     for reviewer in reviewers {
         if let Some(review_time) = client
             .find_latest_review(owner, repo, pr_number, *reviewer)
             .await?
         {
-            // Review already completed
             println!(
                 "{:?} review already completed at {}",
                 reviewer,
                 review_time.format("%Y-%m-%d %H:%M:%S UTC")
             );
-            return Ok(());
+        } else {
+            all_completed = false;
         }
+    }
+    if all_completed {
+        println!("All reviews already completed!");
+        return Ok(());
     }
 
     // Check if any reviewer already posted an "unable to" comment

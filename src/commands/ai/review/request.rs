@@ -19,7 +19,7 @@ pub struct RequestArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Reviewers to request (can specify multiple, waits for any to complete).
+    /// Reviewers to request (can specify multiple, waits for all to complete).
     /// Reviewers that don't support request (like Devin) will be waited for without requesting.
     #[arg(short = 'r', long = "reviewer", value_enum, default_values_t = vec![Reviewer::Gemini, Reviewer::Devin])]
     pub reviewers: Vec<Reviewer>,
