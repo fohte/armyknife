@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.43](https://github.com/fohte/armyknife/compare/v0.1.42...v0.1.43) (2026-01-27)
+
+
+### Features
+
+* **cc:** add notification support to `a cc hook` ([#154](https://github.com/fohte/armyknife/issues/154)) ([cf3b6f3](https://github.com/fohte/armyknife/commit/cf3b6f3a0bab2b90139e6d2b80b2e496b7534148))
+
 ## [0.1.42](https://github.com/fohte/armyknife/compare/v0.1.41...v0.1.42) (2026-01-27)
 
 
