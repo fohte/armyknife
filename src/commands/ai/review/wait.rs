@@ -1,7 +1,7 @@
 //! Wait for an existing review from a bot reviewer.
 
 use super::client::{ReviewClient, get_client};
-use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_review};
+use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
 use chrono::{DateTime, Utc};
@@ -19,9 +19,9 @@ pub struct WaitArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Reviewer to wait for
-    #[arg(short = 'r', long = "reviewer", value_enum, default_value = "gemini")]
-    pub reviewer: Reviewer,
+    /// Reviewers to wait for (can specify multiple, waits for all to complete)
+    #[arg(short = 'r', long = "reviewer", value_enum, default_values_t = vec![Reviewer::Gemini, Reviewer::Devin])]
+    pub reviewers: Vec<Reviewer>,
 
     /// Polling interval in seconds
     #[arg(long, default_value_t = POLL_INTERVAL_SECS)]
@@ -51,55 +51,88 @@ pub(crate) async fn run_wait(
     repo: &str,
     pr_number: u64,
 ) -> Result<()> {
-    println!("Checking PR #{pr_number} for {:?} review...", args.reviewer);
+    let reviewers = &args.reviewers;
+    println!("Checking PR #{pr_number} for {:?} review(s)...", reviewers);
 
     // Record start time to detect "new" reviews
     let start_time = Utc::now();
 
-    // Check if reviewer has already posted a review
-    let existing_review = client
-        .find_latest_review(owner, repo, pr_number, args.reviewer)
-        .await?;
-
-    if let Some(review_time) = existing_review {
-        // Review already completed
-        println!(
-            "{:?} review already completed at {}",
-            args.reviewer,
-            review_time.format("%Y-%m-%d %H:%M:%S UTC")
-        );
+    // Check if all reviewers have already posted reviews
+    let mut all_completed = true;
+    for reviewer in reviewers {
+        if let Some(review_time) = client
+            .find_latest_review(owner, repo, pr_number, *reviewer)
+            .await?
+        {
+            println!(
+                "{:?} review already completed at {}",
+                reviewer,
+                review_time.format("%Y-%m-%d %H:%M:%S UTC")
+            );
+        } else {
+            all_completed = false;
+        }
+    }
+    if all_completed {
+        println!("All reviews already completed!");
         return Ok(());
     }
 
-    // Check if reviewer already posted an "unable to" comment
+    // Check if any reviewer already posted an "unable to" comment
     // Use a time in the past to check for any existing "unable" comment
     let past_time = DateTime::<Utc>::MIN_UTC;
-    if let Some(unable_msg) = client
-        .check_reviewer_unable_comment(owner, repo, pr_number, past_time, args.reviewer)
-        .await?
-    {
-        return Err(ReviewError::ReviewerUnable(unable_msg).into());
+    for reviewer in reviewers {
+        if let Some(unable_msg) = client
+            .check_reviewer_unable_comment(owner, repo, pr_number, past_time, *reviewer)
+            .await?
+        {
+            return Err(ReviewError::ReviewerUnable(unable_msg).into());
+        }
     }
 
-    // Check if review has started by looking for any comment from the reviewer
-    if !client
-        .has_reviewer_activity(owner, repo, pr_number, args.reviewer)
-        .await?
-    {
-        return Err(ReviewError::ReviewNotStarted.into());
+    // Check if review has started for reviewers that require start detection.
+    // For reviewers that don't require start detection (e.g., Devin), skip this check.
+    let reviewers_requiring_start: Vec<_> = reviewers
+        .iter()
+        .filter(|r| r.requires_start_detection())
+        .collect();
+
+    if !reviewers_requiring_start.is_empty() {
+        let mut any_started = false;
+        for reviewer in &reviewers_requiring_start {
+            if client
+                .has_reviewer_activity(owner, repo, pr_number, **reviewer)
+                .await?
+            {
+                any_started = true;
+                break;
+            }
+        }
+
+        // If all reviewers require start detection and none have started, return error.
+        // But if some reviewers don't require start detection, we can still wait.
+        let has_no_start_detection_reviewers =
+            reviewers.iter().any(|r| !r.requires_start_detection());
+
+        if !any_started && !has_no_start_detection_reviewers {
+            return Err(ReviewError::ReviewNotStarted.into());
+        }
     }
 
-    println!("Waiting for {:?} review to complete...", args.reviewer);
+    println!(
+        "Waiting for all reviews to complete from {:?}...",
+        reviewers
+    );
 
-    // Poll for new review
+    // Poll for new reviews from all reviewers
     let config = WaitConfig {
-        reviewer: args.reviewer,
+        reviewers: reviewers.clone(),
         interval: args.interval,
         timeout: args.timeout,
     };
-    wait_for_review(client, owner, repo, pr_number, start_time, &config).await?;
+    wait_for_all_reviews(client, owner, repo, pr_number, start_time, &config).await?;
 
-    println!("\n{:?} review completed!", args.reviewer);
+    println!("\nAll reviews completed!");
     Ok(())
 }
 
@@ -110,11 +143,21 @@ mod tests {
     use chrono::Duration as ChronoDuration;
     use rstest::rstest;
 
-    fn make_args(interval: u64, timeout: u64) -> WaitArgs {
+    fn make_args_single(reviewer: Reviewer, interval: u64, timeout: u64) -> WaitArgs {
         WaitArgs {
             pr: Some(1),
             repo: Some("owner/repo".to_string()),
-            reviewer: Reviewer::Gemini,
+            reviewers: vec![reviewer],
+            interval,
+            timeout,
+        }
+    }
+
+    fn make_args_both(interval: u64, timeout: u64) -> WaitArgs {
+        WaitArgs {
+            pr: Some(1),
+            repo: Some("owner/repo".to_string()),
+            reviewers: vec![Reviewer::Gemini, Reviewer::Devin],
             interval,
             timeout,
         }
@@ -124,28 +167,31 @@ mod tests {
     fn build_success_client(scenario: &str) -> MockReviewClient {
         let now = Utc::now();
         match scenario {
-            "already_completed" => {
-                // Review already exists
+            "already_completed_both" => {
+                // Reviews already exist from both reviewers
                 MockReviewClient::new()
                     .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
             }
-            "in_progress_completes" => {
-                // Reviewer has activity, review appears after polling
+            "in_progress_completes_both" => {
+                // Both reviews appear after polling
                 MockReviewClient::new()
                     .with_comment("gemini-code-assist", "Starting review...", now)
                     .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+                    .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+                    .skip_first_n_review_calls(2) // Skip initial check for both
             }
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
 
     #[rstest]
-    #[case::already_completed("already_completed")]
-    #[case::in_progress_completes("in_progress_completes")]
+    #[case::already_completed_both("already_completed_both")]
+    #[case::in_progress_completes_both("in_progress_completes_both")]
     #[tokio::test]
     async fn wait_succeeds(#[case] scenario: &str) {
         let client = build_success_client(scenario);
-        let args = make_args(1, 5);
+        let args = make_args_both(1, 5);
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
@@ -153,13 +199,12 @@ mod tests {
     }
 
     /// Helper to build a mock client for error cases.
-    fn build_error_client(scenario: &str) -> (MockReviewClient, u64) {
+    fn build_error_client(scenario: &str) -> (MockReviewClient, WaitArgs) {
         let now = Utc::now();
         match scenario {
-            "not_started" => (MockReviewClient::new(), 5),
-            "not_started_other_bot" => (
-                MockReviewClient::new().with_comment("other-bot", "Some comment", now),
-                5,
+            "not_started_gemini_only" => (
+                MockReviewClient::new(),
+                make_args_single(Reviewer::Gemini, 1, 5),
             ),
             "unable_existing" => (
                 MockReviewClient::new().with_comment(
@@ -167,7 +212,7 @@ mod tests {
                     "Gemini is unable to review this PR.",
                     now - ChronoDuration::hours(1),
                 ),
-                5,
+                make_args_both(1, 5),
             ),
             "unable_during_wait" => (
                 MockReviewClient::new()
@@ -177,30 +222,24 @@ mod tests {
                         "Gemini is unable to review this PR.",
                         now + ChronoDuration::milliseconds(100),
                     ),
-                5,
+                make_args_both(1, 5),
             ),
             "timeout" => (
-                MockReviewClient::new().with_comment(
-                    "gemini-code-assist",
-                    "Starting review...",
-                    now,
-                ),
-                1, // 1 second timeout
+                MockReviewClient::new(),
+                make_args_both(1, 1), // 1 second timeout
             ),
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
 
     #[rstest]
-    #[case::not_started("not_started", "Review has not started yet")]
-    #[case::not_started_other_bot("not_started_other_bot", "Review has not started yet")]
+    #[case::not_started_gemini_only("not_started_gemini_only", "Review has not started yet")]
     #[case::unable_existing("unable_existing", "Reviewer is unable to review this PR")]
     #[case::unable_during_wait("unable_during_wait", "Reviewer is unable to review this PR")]
     #[case::timeout("timeout", "Timeout waiting for review")]
     #[tokio::test]
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
-        let (client, timeout) = build_error_client(scenario);
-        let args = make_args(1, timeout);
+        let (client, args) = build_error_client(scenario);
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
@@ -214,18 +253,58 @@ mod tests {
 
     #[rstest]
     #[case::gemini(Reviewer::Gemini)]
+    #[case::devin(Reviewer::Devin)]
     #[tokio::test]
     async fn wait_detects_correct_reviewer(#[case] reviewer: Reviewer) {
         let client =
             MockReviewClient::new().with_review(reviewer, Utc::now() - ChronoDuration::hours(1));
 
-        let args = WaitArgs {
-            pr: Some(1),
-            repo: Some("owner/repo".to_string()),
-            reviewer,
-            interval: 1,
-            timeout: 5,
-        };
+        let args = make_args_single(reviewer, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_skips_start_detection_when_devin_included() {
+        // When both Gemini and Devin are included, and Gemini has not started,
+        // we should still wait because Devin doesn't require start detection
+        let now = Utc::now();
+        let client = MockReviewClient::new()
+            // No comments from either (Gemini not started)
+            // But both reviews appear after polling
+            .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+            .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+            .skip_first_n_review_calls(2); // Skip first check for both reviewers
+
+        let args = make_args_both(1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_requires_start_detection_for_gemini_only() {
+        // When only Gemini is specified and it has no activity, return error
+        let client = MockReviewClient::new();
+
+        let args = make_args_single(Reviewer::Gemini, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Review has not started yet"));
+    }
+
+    #[tokio::test]
+    async fn wait_requires_all_reviewers_to_complete() {
+        // When waiting for both, should wait until all complete (not just one)
+        let now = Utc::now();
+        let client = MockReviewClient::new()
+            .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+            .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+            .skip_first_n_review_calls(2);
+
+        let args = make_args_both(1, 5);
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
         assert!(result.is_ok());
