@@ -1,5 +1,5 @@
-use std::fs;
-use std::io::{self, Read};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -122,28 +122,45 @@ fn read_stdin_json() -> Result<HookInput> {
 }
 
 /// Writes the raw stdin content to a log file for debugging.
-/// Returns the path to the log file.
-fn write_error_log(content: &str) -> PathBuf {
-    write_error_log_to_dir(content, &logs_dir())
+/// Returns the path to the log file if successful, None otherwise.
+fn write_error_log(content: &str) -> Option<PathBuf> {
+    let logs_dir = logs_dir()?;
+    write_error_log_to_dir(content, &logs_dir)
 }
 
 /// Writes the raw stdin content to a log file in the specified directory.
-/// Returns the path to the log file.
-fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> PathBuf {
-    if let Err(e) = fs::create_dir_all(logs_dir) {
-        eprintln!("Warning: Failed to create logs directory: {e}");
-        return logs_dir.join("error.log");
-    }
-
+/// Returns the path to the log file if successful, None otherwise.
+fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> {
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
     let filename = format!("hook_error_{timestamp}.log");
     let log_path = logs_dir.join(&filename);
 
-    if let Err(e) = fs::write(&log_path, content) {
-        eprintln!("Warning: Failed to write error log: {e}");
+    if let Err(e) = fs::create_dir_all(logs_dir) {
+        eprintln!("Warning: Failed to create logs directory: {e}");
+        return None;
     }
 
-    log_path
+    match write_file_with_permissions(&log_path, content) {
+        Ok(()) => Some(log_path),
+        Err(e) => {
+            eprintln!("Warning: Failed to write error log: {e}");
+            None
+        }
+    }
+}
+
+/// Writes content to a file with restrictive permissions (0600 on Unix).
+fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> {
+    let mut file = File::create(path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+
+    file.write_all(content.as_bytes())?;
+    Ok(())
 }
 
 /// Returns the directory for storing error logs.
@@ -152,10 +169,8 @@ fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> PathBuf {
 ///
 /// Note: Ideally logs should go to XDG_STATE_HOME (~/.local/state/), but the `dirs` crate
 /// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
-fn logs_dir() -> PathBuf {
-    cache::base_dir()
-        .map(|d| d.join("cc").join("logs"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/armyknife/cc/logs"))
+fn logs_dir() -> Option<PathBuf> {
+    cache::base_dir().map(|d| d.join("cc").join("logs"))
 }
 
 /// Formats the current tool display string from hook input.
@@ -277,7 +292,7 @@ mod tests {
             let logs_dir = temp_dir.path().to_path_buf();
 
             let content = r#"{"invalid": json"#;
-            let log_path = write_error_log_to_dir(content, &logs_dir);
+            let log_path = write_error_log_to_dir(content, &logs_dir).expect("should succeed");
 
             assert!(log_path.exists(), "log file should be created");
             let written = fs::read_to_string(&log_path).expect("should read log file");
@@ -289,7 +304,8 @@ mod tests {
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
-            let log_path = write_error_log_to_dir("test content", &logs_dir);
+            let log_path =
+                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
             let filename = log_path
                 .file_name()
                 .expect("should have filename")
@@ -304,11 +320,27 @@ mod tests {
 
         #[test]
         fn logs_dir_uses_cache_directory() {
-            let logs = logs_dir();
+            let logs = logs_dir().expect("should have cache directory");
             assert!(
                 logs.ends_with("cc/logs"),
                 "logs dir should end with cc/logs, got: {logs:?}"
             );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn log_file_has_restrictive_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path =
+                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
+            let metadata = fs::metadata(&log_path).expect("should get metadata");
+            let mode = metadata.permissions().mode() & 0o777;
+
+            assert_eq!(mode, 0o600, "log file should have 0600 permissions");
         }
     }
 }

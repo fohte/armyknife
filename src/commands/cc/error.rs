@@ -10,10 +10,10 @@ pub enum CcError {
     #[error("No input from stdin")]
     NoStdinInput,
 
-    #[error("Failed to parse JSON from stdin: {source}\nSee {log_path} for the raw input")]
+    #[error("Failed to parse JSON from stdin: {source}{}", log_path.as_ref().map(|p| format!("\nSee {} for the raw input", p.display())).unwrap_or_default())]
     JsonParseError {
         source: serde_json::Error,
-        log_path: PathBuf,
+        log_path: Option<PathBuf>,
     },
 
     #[error("Failed to get cache directory")]
