@@ -185,12 +185,14 @@ fn should_notify(event: HookEvent, input: &HookInput) -> bool {
 }
 
 /// Sends a notification for the given event.
-/// Errors are silently ignored to avoid failing the hook.
+/// Errors are printed to stderr but don't fail the hook.
 fn send_notification(event: HookEvent, input: &HookInput, session: &Session) {
     let notification = build_notification(event, input, session);
 
-    // Ignore notification errors to avoid failing the hook
-    let _ = crate::infra::notification::send(&notification);
+    // Print notification errors to stderr without failing the hook
+    if let Err(e) = crate::infra::notification::send(&notification) {
+        eprintln!("[armyknife] warning: failed to send notification: {e}");
+    }
 }
 
 /// Builds a notification for the given event.
@@ -210,10 +212,9 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
 
     // Add click action to focus tmux pane if available
     if let Some(tmux_info) = &session.tmux_info {
-        let command = format!(
-            "tmux switch-client -t '{}'; open -a WezTerm",
-            tmux_info.pane_id
-        );
+        // Escape pane_id to prevent shell injection
+        let escaped_pane_id = shlex::try_quote(&tmux_info.pane_id).unwrap_or_default();
+        let command = format!("tmux switch-client -t {}; open -a WezTerm", escaped_pane_id);
         notification = notification.with_action(NotificationAction::new(command));
     }
 

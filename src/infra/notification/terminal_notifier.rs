@@ -13,9 +13,9 @@ pub fn send(notification: &Notification) -> Result<()> {
     cmd.arg("-message").arg(notification.message());
 
     // Add click action if present
+    // terminal-notifier's -execute runs the command directly in a shell
     if let Some(action) = notification.action() {
-        cmd.arg("-execute")
-            .arg(format!("zsh -c \"{}\"", action.command()));
+        cmd.arg("-execute").arg(action.command());
     }
 
     let output = cmd
