@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -7,6 +9,12 @@ pub enum CcError {
 
     #[error("No input from stdin")]
     NoStdinInput,
+
+    #[error("Failed to parse JSON from stdin: {source}\nSee {log_path} for the raw input")]
+    JsonParseError {
+        source: serde_json::Error,
+        log_path: PathBuf,
+    },
 
     #[error("Failed to get cache directory")]
     CacheDirNotFound,

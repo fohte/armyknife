@@ -9,7 +9,7 @@ use super::types::Session;
 use crate::shared::cache;
 
 /// Returns the directory for storing Claude Code session data.
-/// Path: ~/.cache/armyknife/cc/sessions/
+/// Path: ~/Library/Caches/armyknife/cc/sessions/ (macOS) or ~/.cache/armyknife/cc/sessions/ (Linux)
 pub fn sessions_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("sessions"))
@@ -17,7 +17,8 @@ pub fn sessions_dir() -> Result<PathBuf> {
 }
 
 /// Returns the file path for a specific session.
-/// Path: ~/.cache/armyknife/cc/sessions/<session_id>.json
+/// Path: ~/Library/Caches/armyknife/cc/sessions/<session_id>.json (macOS)
+///       ~/.cache/armyknife/cc/sessions/<session_id>.json (Linux)
 ///
 /// Validates that session_id does not contain path separators to prevent
 /// path traversal attacks.
