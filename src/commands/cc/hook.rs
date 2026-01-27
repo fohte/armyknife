@@ -212,9 +212,10 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
     let mut notification = Notification::new(title, message);
 
     // Add click action to focus tmux pane if available
-    if let Some(tmux_info) = &session.tmux_info {
-        // Escape pane_id to prevent shell injection
-        let escaped_pane_id = shlex::try_quote(&tmux_info.pane_id).unwrap_or_default();
+    // Skip action if pane_id cannot be safely quoted (e.g., contains null bytes)
+    if let Some(tmux_info) = &session.tmux_info
+        && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
+    {
         let command = format!("tmux switch-client -t {}; open -a WezTerm", escaped_pane_id);
         notification = notification.with_action(NotificationAction::new(command));
     }
