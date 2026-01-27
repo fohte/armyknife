@@ -6,7 +6,7 @@ Rust CLI toolkit for AI-assisted development workflows.
 
 - Rust (see rust-toolchain.toml)
 - clap (CLI framework with derive macros)
-- rstest, serial_test (testing)
+- rstest (testing)
 - thiserror (error handling)
 - serde, serde_yaml (serialization)
 
