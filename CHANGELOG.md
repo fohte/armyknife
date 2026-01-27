@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.40](https://github.com/fohte/armyknife/compare/v0.1.39...v0.1.40) (2026-01-27)
+
+
+### Features
+
+* **cc:** display Claude Code session titles in `a cc list` / `a cc watch` ([#148](https://github.com/fohte/armyknife/issues/148)) ([852b694](https://github.com/fohte/armyknife/commit/852b6945145b5975c1e704a7d34a1acfd3d7c6dd))
+
 ## [0.1.39](https://github.com/fohte/armyknife/compare/v0.1.38...v0.1.39) (2026-01-26)
 
 
