@@ -194,11 +194,7 @@ fn create_session_item(
         .as_deref()
         .or(session.last_message.as_deref())
         .unwrap_or("");
-    let line3_style = if session.current_tool.is_some() {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().add_modifier(Modifier::DIM)
-    };
+    let line3_style = Style::default().add_modifier(Modifier::DIM);
     let line3 = Line::from(vec![
         Span::raw("      "),
         Span::styled(truncate(line3_content, title_width), line3_style),
