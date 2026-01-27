@@ -134,12 +134,18 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
     let reader = BufReader::new(file);
 
     for line in reader.lines() {
-        let line = line.ok()?;
+        // Skip lines that fail to read (continue to next line instead of early return)
+        let Ok(line) = line else {
+            continue;
+        };
         if line.is_empty() {
             continue;
         }
 
-        let entry: JsonlEntry = serde_json::from_str(&line).ok()?;
+        // Skip lines that fail to parse as JSON (may contain non-JSON data)
+        let Ok(entry) = serde_json::from_str::<JsonlEntry>(&line) else {
+            continue;
+        };
 
         // Look for the first "user" type entry with message content
         if entry.entry_type.as_deref() == Some("user")
