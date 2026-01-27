@@ -77,6 +77,14 @@ fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> 
     Some(project_dir(project_path)?.join(format!("{session_id}.jsonl")))
 }
 
+/// Normalizes a title string for display.
+///
+/// Trims whitespace and replaces newlines with spaces to prevent
+/// breaking table formatting.
+fn normalize_title(s: &str) -> String {
+    s.trim().replace('\n', " ").replace('\r', "")
+}
+
 /// Retrieves the session title from Claude Code's sessions-index.json.
 ///
 /// Returns the summary if available, otherwise the first ~50 characters of firstPrompt.
@@ -109,11 +117,11 @@ fn get_title_from_index(project_path: &Path, session_id: &str) -> Option<String>
             if let Some(summary) = entry.summary
                 && !summary.is_empty()
             {
-                return Some(summary);
+                return Some(normalize_title(&summary));
             }
             if let Some(first_prompt) = entry.first_prompt {
-                // Return full prompt; truncation is handled by the display layer
-                return Some(first_prompt.trim().to_string());
+                // Truncation is handled by the display layer
+                return Some(normalize_title(&first_prompt));
             }
             return None;
         }
@@ -152,8 +160,8 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
             && let Some(message) = entry.message
             && let Some(content) = message.content
         {
-            // Return full content; truncation is handled by the display layer
-            return Some(content.trim().to_string());
+            // Truncation is handled by the display layer
+            return Some(normalize_title(&content));
         }
     }
 
@@ -201,5 +209,16 @@ mod tests {
         let path = Path::new("/nonexistent/path/that/does/not/exist");
         let result = get_session_title(path, "test-session-id");
         assert!(result.is_none());
+    }
+
+    #[rstest]
+    #[case::simple("hello world", "hello world")]
+    #[case::with_newline("hello\nworld", "hello world")]
+    #[case::with_crlf("hello\r\nworld", "hello world")]
+    #[case::with_multiple_newlines("line1\nline2\nline3", "line1 line2 line3")]
+    #[case::with_leading_whitespace("  hello  ", "hello")]
+    #[case::with_trailing_newline("hello\n", "hello")]
+    fn test_normalize_title(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(normalize_title(input), expected);
     }
 }
