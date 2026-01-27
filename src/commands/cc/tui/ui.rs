@@ -188,14 +188,20 @@ fn create_session_item(
         ),
     ]);
 
-    // Third line: last assistant message
-    let last_message = session.last_message.as_deref().unwrap_or("");
+    // Third line: current tool (if running) or last assistant message
+    let line3_content = session
+        .current_tool
+        .as_deref()
+        .or(session.last_message.as_deref())
+        .unwrap_or("");
+    let line3_style = if session.current_tool.is_some() {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
     let line3 = Line::from(vec![
         Span::raw("      "),
-        Span::styled(
-            truncate(last_message, title_width),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(truncate(line3_content, title_width), line3_style),
     ]);
 
     // Empty line for spacing
@@ -423,6 +429,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
+            current_tool: None,
         }
     }
 

@@ -59,6 +59,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         created_at: now,
         updated_at: now,
         last_message: None,
+        current_tool: None,
     });
 
     // Update session fields
@@ -81,6 +82,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
     session.last_message =
         claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id);
 
+    // Update current_tool based on event type
+    session.current_tool = match event {
+        HookEvent::PreToolUse => format_current_tool(&input),
+        HookEvent::PostToolUse | HookEvent::Stop => None,
+        _ => session.current_tool, // Keep existing value for other events
+    };
+
     // Save updated session
     store::save_session(&session)?;
 
@@ -99,6 +107,25 @@ fn read_stdin_json() -> Result<HookInput> {
     let input: HookInput = serde_json::from_str(&json_str)?;
 
     Ok(input)
+}
+
+/// Formats the current tool display string from hook input.
+/// Returns format like "Bash(cargo test)" or "Read(src/main.rs)" or just "Task".
+fn format_current_tool(input: &HookInput) -> Option<String> {
+    let tool_name = input.tool_name.as_deref()?;
+
+    let detail = input.tool_input.as_ref().and_then(|ti| {
+        // Try command (Bash), then file_path (Read/Write/Edit), then pattern (Grep/Glob)
+        ti.command
+            .as_deref()
+            .or(ti.file_path.as_deref())
+            .or(ti.pattern.as_deref())
+    });
+
+    match detail {
+        Some(d) => Some(format!("{}({})", tool_name, d)),
+        None => Some(tool_name.to_string()),
+    }
 }
 
 /// Determines the session status based on the event and input.
