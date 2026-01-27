@@ -495,4 +495,144 @@ mod tests {
         let session = create_test_session();
         assert_eq!(get_title_display_name(&session), "-");
     }
+
+    // =========================================================================
+    // Integration tests for terminal width adaptation
+    // =========================================================================
+
+    #[test]
+    fn test_calculate_title_width_wide_terminal() {
+        // Wide terminal (120 chars) should give more space to TITLE
+        // fixed_width = 16 + 12 + 11 + 8 + 5 = 52
+        // title_width = 120 - 52 = 68
+        assert_eq!(calculate_title_width(120), 68);
+    }
+
+    #[test]
+    fn test_calculate_title_width_narrow_terminal() {
+        // Narrow terminal should use minimum TITLE width
+        // fixed_width = 52, min_title = 20
+        // If term_width <= 72, use minimum
+        assert_eq!(calculate_title_width(60), MIN_TITLE_WIDTH);
+        assert_eq!(calculate_title_width(72), MIN_TITLE_WIDTH);
+    }
+
+    #[test]
+    fn test_render_sessions_wide_terminal() {
+        // Wide terminal (100 chars) - TITLE width = 100 - 52 = 48
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session], now, 100).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // TITLE width = 48, SESSION = 16, WINDOW = 12
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                                            SESSION          WINDOW       STATUS     UPDATED
+                -                                                dev              editor       ● \x1b[32mrunning \x1b[0m just now
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_narrow_terminal() {
+        // Narrow terminal (60 chars) - uses MIN_TITLE_WIDTH (20)
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session], now, 60).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // TITLE width = 20 (minimum)
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                SESSION          WINDOW       STATUS     UPDATED
+                -                    dev              editor       ● \x1b[32mrunning \x1b[0m just now
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_full_output_with_all_statuses() {
+        let now = Utc::now();
+        let sessions = vec![
+            Session {
+                session_id: "s1".to_string(),
+                cwd: PathBuf::from("/home/user/webapp"),
+                transcript_path: None,
+                tty: Some("/dev/ttys001".to_string()),
+                tmux_info: Some(TmuxInfo {
+                    session_name: "webapp".to_string(),
+                    window_name: "dev".to_string(),
+                    window_index: 0,
+                    pane_id: "%0".to_string(),
+                }),
+                status: SessionStatus::Running,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+            },
+            Session {
+                session_id: "s2".to_string(),
+                cwd: PathBuf::from("/home/user/api"),
+                transcript_path: None,
+                tty: Some("/dev/ttys002".to_string()),
+                tmux_info: Some(TmuxInfo {
+                    session_name: "api".to_string(),
+                    window_name: "test".to_string(),
+                    window_index: 1,
+                    pane_id: "%1".to_string(),
+                }),
+                status: SessionStatus::WaitingInput,
+                created_at: now,
+                updated_at: now - Duration::minutes(5),
+                last_message: None,
+            },
+            Session {
+                session_id: "s3".to_string(),
+                cwd: PathBuf::from("/home/user/docs"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Stopped,
+                created_at: now,
+                updated_at: now - Duration::hours(1),
+                last_message: None,
+            },
+        ];
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &sessions, now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              webapp           dev          ● \x1b[32mrunning \x1b[0m just now
+                -                              api              test         ◐ \x1b[33mwaiting \x1b[0m 5m ago
+                -                              docs             -            ○ \x1b[90mstopped \x1b[0m 1h ago
+            "}
+        );
+    }
 }

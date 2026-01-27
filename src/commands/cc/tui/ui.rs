@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -97,26 +97,7 @@ fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
 
 /// Renders the session list.
 fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
-    if app.sessions.is_empty() {
-        let empty_message = Paragraph::new("  No active Claude Code sessions.")
-            .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(empty_message, area);
-        return;
-    }
-
-    let term_width = area.width as usize;
-    let items: Vec<ListItem> = app
-        .sessions
-        .iter()
-        .enumerate()
-        .map(|(i, session)| create_session_item(i, session, now, term_width))
-        .collect();
-
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
-
-    frame.render_stateful_widget(list, area, &mut app.list_state);
+    render_session_list_internal(frame, area, &app.sessions, &mut app.list_state, now);
 }
 
 /// Renders the help bar at the bottom.
@@ -167,6 +148,46 @@ fn calculate_title_width(term_width: usize) -> usize {
     } else {
         MIN_TITLE_WIDTH
     }
+}
+
+/// Session display text for a single session item.
+/// Separated from ListItem creation to enable testing.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionDisplayText {
+    /// First line: "  [N] ● session:window  Xm ago"
+    line1: String,
+    /// Second line: "      title"
+    line2: String,
+}
+
+/// Formats a session into display text lines.
+#[cfg(test)]
+fn format_session_display(
+    index: usize,
+    session: &Session,
+    now: DateTime<Utc>,
+    term_width: usize,
+) -> SessionDisplayText {
+    let status_symbol = session.status.display_symbol();
+    let session_info = get_session_info(session);
+    let title = get_title_display_name(session);
+    let time_ago = format_relative_time(session.updated_at, now);
+
+    let session_info_width = calculate_session_info_width(term_width);
+    let title_width = calculate_title_width(term_width);
+
+    let line1 = format!(
+        "  [{}] {} {}  {}",
+        index + 1,
+        status_symbol,
+        truncate(&session_info, session_info_width),
+        time_ago
+    );
+
+    let line2 = format!("      {}", truncate(&title, title_width));
+
+    SessionDisplayText { line1, line2 }
 }
 
 /// Creates a list item for a session.
@@ -323,11 +344,101 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
     result
 }
 
+/// Renders the entire UI to a TestBackend for testing.
+/// Returns the rendered output as a string.
+#[cfg(test)]
+fn render_to_string(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+) -> String {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    // Create a minimal App state for rendering
+    let mut list_state = ListState::default();
+    list_state.select(selected_index);
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let areas = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+            render_header(frame, areas[0], sessions);
+            render_session_list_internal(frame, areas[1], sessions, &mut list_state, now);
+            render_help(frame, areas[2]);
+        })
+        .unwrap();
+
+    // Convert buffer to string
+    let backend = terminal.backend();
+    let buffer = backend.buffer();
+    let mut output = String::new();
+
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            output.push_str(cell.symbol());
+        }
+        // Trim trailing whitespace and add newline
+        let trimmed = output.trim_end_matches(' ');
+        output.truncate(trimmed.len());
+        output.push('\n');
+    }
+
+    // Remove trailing newline
+    if output.ends_with('\n') {
+        output.pop();
+    }
+
+    output
+}
+
+/// Internal render function for session list used by both main render and test render.
+fn render_session_list_internal(
+    frame: &mut Frame,
+    area: Rect,
+    sessions: &[Session],
+    list_state: &mut ListState,
+    now: DateTime<Utc>,
+) {
+    if sessions.is_empty() {
+        let empty_message = Paragraph::new("  No active Claude Code sessions.")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(empty_message, area);
+        return;
+    }
+
+    let term_width = area.width as usize;
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, session)| create_session_item(i, session, now, term_width))
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
+
+    frame.render_stateful_widget(list, area, list_state);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::cc::types::TmuxInfo;
     use chrono::Duration;
+    use indoc::indoc;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -441,5 +552,455 @@ mod tests {
         assert_eq!(status_color(SessionStatus::Running), Color::Green);
         assert_eq!(status_color(SessionStatus::WaitingInput), Color::Yellow);
         assert_eq!(status_color(SessionStatus::Stopped), Color::DarkGray);
+    }
+
+    // =========================================================================
+    // Integration tests for session display rendering
+    // =========================================================================
+
+    #[rstest]
+    #[case::narrow(40, 20, 34)]
+    #[case::medium(80, 60, 74)]
+    #[case::wide(120, 100, 114)]
+    fn test_width_calculations(
+        #[case] term_width: usize,
+        #[case] expected_session_info_width: usize,
+        #[case] expected_title_width: usize,
+    ) {
+        assert_eq!(
+            calculate_session_info_width(term_width),
+            expected_session_info_width
+        );
+        assert_eq!(calculate_title_width(term_width), expected_title_width);
+    }
+
+    #[test]
+    fn test_format_session_display_with_tmux() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "myproject".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session.status = SessionStatus::Running;
+
+        // term_width=80: session_info_width=60, title_width=74
+        let display = format_session_display(0, &session, now, 80);
+
+        // Title falls back to tmux session:window when sessions-index.json doesn't exist
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ● myproject:editor  just now".to_string(),
+                line2: "      myproject:editor".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_without_tmux() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.status = SessionStatus::WaitingInput;
+
+        let display = format_session_display(0, &session, now, 80);
+
+        // Without tmux, session_info shows cwd path, title shows cwd basename
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ◐ /home/user/project  just now".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_stopped_status() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.status = SessionStatus::Stopped;
+
+        let display = format_session_display(0, &session, now, 80);
+
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ○ /home/user/project  just now".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_relative_times() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.status = SessionStatus::Running;
+
+        // 5 minutes ago
+        session.updated_at = now - Duration::minutes(5);
+        assert_eq!(
+            format_session_display(0, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [1] ● /home/user/project  5m ago".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+
+        // 2 hours ago
+        session.updated_at = now - Duration::hours(2);
+        assert_eq!(
+            format_session_display(0, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [1] ● /home/user/project  2h ago".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+
+        // 3 days ago
+        session.updated_at = now - Duration::days(3);
+        assert_eq!(
+            format_session_display(0, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [1] ● /home/user/project  3d ago".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_multiple_indices() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+
+        assert_eq!(
+            format_session_display(0, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [1] ● /home/user/project  just now".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+
+        assert_eq!(
+            format_session_display(4, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [5] ● /home/user/project  just now".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+
+        assert_eq!(
+            format_session_display(8, &session, now, 80),
+            SessionDisplayText {
+                line1: "  [9] ● /home/user/project  just now".to_string(),
+                line2: "      project".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_truncates_long_session_info() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "very-long-session-name".to_string(),
+            window_name: "also-long-window".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session.status = SessionStatus::Running;
+
+        // Narrow terminal (40): session_info_width=20, title_width=34
+        let display = format_session_display(0, &session, now, 40);
+
+        // "very-long-session-name:also-long-window" truncated
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ● very-long-session...  just now".to_string(),
+                line2: "      very-long-session-name:also-lon...".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_wide_terminal() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "myproject".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session.status = SessionStatus::Running;
+
+        // Wide terminal (120): session_info_width=100, title_width=114
+        let display = format_session_display(0, &session, now, 120);
+
+        // Full session info without truncation
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ● myproject:editor  just now".to_string(),
+                line2: "      myproject:editor".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_cjk_truncation() {
+        let now = Utc::now();
+        let mut session = create_test_session("test-session");
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "日本語プロジェクト".to_string(),
+            window_name: "エディタ".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session.status = SessionStatus::Running;
+
+        // Narrow terminal (40): session_info_width=20, title_width=34
+        // "日本語プロジェクト:エディタ" = 27 display width
+        // Title fits within 34 width so no truncation
+        let display = format_session_display(0, &session, now, 40);
+
+        // CJK chars have width 2, so fewer chars fit in session_info
+        assert_eq!(
+            display,
+            SessionDisplayText {
+                line1: "  [1] ● 日本語プロジェク...  just now".to_string(),
+                line2: "      日本語プロジェクト:エディタ".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_format_session_display_full_scenario() {
+        // Comprehensive test with multiple sessions at term_width=80
+        let now = Utc::now();
+
+        // Session 1: Running with tmux
+        let mut session1 = create_test_session("s1");
+        session1.updated_at = now;
+        session1.tmux_info = Some(TmuxInfo {
+            session_name: "webapp".to_string(),
+            window_name: "dev".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session1.status = SessionStatus::Running;
+
+        // Session 2: WaitingInput with tmux
+        let mut session2 = create_test_session("s2");
+        session2.updated_at = now - Duration::minutes(5);
+        session2.tmux_info = Some(TmuxInfo {
+            session_name: "api".to_string(),
+            window_name: "test".to_string(),
+            window_index: 1,
+            pane_id: "%1".to_string(),
+        });
+        session2.status = SessionStatus::WaitingInput;
+
+        // Session 3: Stopped without tmux
+        let mut session3 = create_test_session("s3");
+        session3.cwd = PathBuf::from("/home/user/docs");
+        session3.updated_at = now - Duration::hours(1);
+        session3.status = SessionStatus::Stopped;
+
+        assert_eq!(
+            format_session_display(0, &session1, now, 80),
+            SessionDisplayText {
+                line1: "  [1] ● webapp:dev  just now".to_string(),
+                line2: "      webapp:dev".to_string(),
+            }
+        );
+
+        assert_eq!(
+            format_session_display(1, &session2, now, 80),
+            SessionDisplayText {
+                line1: "  [2] ◐ api:test  5m ago".to_string(),
+                line2: "      api:test".to_string(),
+            }
+        );
+
+        assert_eq!(
+            format_session_display(2, &session3, now, 80),
+            SessionDisplayText {
+                line1: "  [3] ○ /home/user/docs  1h ago".to_string(),
+                line2: "      docs".to_string(),
+            }
+        );
+    }
+
+    // =========================================================================
+    // Full-screen integration tests using TestBackend
+    // =========================================================================
+
+    #[test]
+    fn test_render_full_screen_with_sessions() {
+        let now = Utc::now();
+
+        // Session 1: Running with tmux
+        let mut session1 = create_test_session("s1");
+        session1.updated_at = now;
+        session1.tmux_info = Some(TmuxInfo {
+            session_name: "webapp".to_string(),
+            window_name: "dev".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session1.status = SessionStatus::Running;
+
+        // Session 2: WaitingInput with tmux
+        let mut session2 = create_test_session("s2");
+        session2.updated_at = now - Duration::minutes(5);
+        session2.tmux_info = Some(TmuxInfo {
+            session_name: "api".to_string(),
+            window_name: "test".to_string(),
+            window_index: 1,
+            pane_id: "%1".to_string(),
+        });
+        session2.status = SessionStatus::WaitingInput;
+
+        // Session 3: Stopped without tmux
+        let mut session3 = create_test_session("s3");
+        session3.cwd = PathBuf::from("/home/user/docs");
+        session3.updated_at = now - Duration::hours(1);
+        session3.status = SessionStatus::Stopped;
+
+        let sessions = vec![session1, session2, session3];
+        let output = render_to_string(&sessions, Some(0), now, 60, 15);
+
+        // Note: ratatui's highlight_symbol ">" adds an extra space before it
+        // and ListItem with 3 lines creates extra vertical spacing
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1│
+            └──────────────────────────────────────────────────────────┘
+            >  [1] ● webapp:dev  just now
+                   webapp:dev
+
+               [2] ◐ api:test  5m ago
+                   api:test
+
+               [3] ○ /home/user/docs  1h ago
+                   docs
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+        };
+
+        assert_eq!(output, expected.trim_end());
+    }
+
+    #[test]
+    fn test_render_full_screen_empty_sessions() {
+        let now = Utc::now();
+        let sessions: Vec<Session> = vec![];
+        let output = render_to_string(&sessions, None, now, 60, 8);
+
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 0│
+            └──────────────────────────────────────────────────────────┘
+              No active Claude Code sessions.
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+        };
+
+        assert_eq!(output, expected.trim_end());
+    }
+
+    #[test]
+    fn test_render_full_screen_narrow_terminal() {
+        let now = Utc::now();
+
+        let mut session = create_test_session("s1");
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "very-long-session-name".to_string(),
+            window_name: "window".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session.status = SessionStatus::Running;
+
+        let sessions = vec![session];
+        let output = render_to_string(&sessions, Some(0), now, 40, 8);
+
+        // Note: header status counts get truncated on narrow terminal
+        let expected = indoc! {"
+            ┌──────────────────────────────────────┐
+            │  Claude Code Sessions                │
+            └──────────────────────────────────────┘
+            >  [1] ● very-long-session...  just now
+                   very-long-session-name:window
+
+
+              j/k: move  Enter/f: focus  1-9: quick"
+        };
+
+        assert_eq!(output, expected.trim_end());
+    }
+
+    #[test]
+    fn test_render_full_screen_selection_middle() {
+        let now = Utc::now();
+
+        let mut session1 = create_test_session("s1");
+        session1.updated_at = now;
+        session1.tmux_info = Some(TmuxInfo {
+            session_name: "webapp".to_string(),
+            window_name: "dev".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+        session1.status = SessionStatus::Running;
+
+        let mut session2 = create_test_session("s2");
+        session2.updated_at = now - Duration::minutes(5);
+        session2.tmux_info = Some(TmuxInfo {
+            session_name: "api".to_string(),
+            window_name: "test".to_string(),
+            window_index: 1,
+            pane_id: "%1".to_string(),
+        });
+        session2.status = SessionStatus::WaitingInput;
+
+        let sessions = vec![session1, session2];
+        // Select the second session (index 1)
+        let output = render_to_string(&sessions, Some(1), now, 60, 12);
+
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0│
+            └──────────────────────────────────────────────────────────┘
+               [1] ● webapp:dev  just now
+                   webapp:dev
+
+            >  [2] ◐ api:test  5m ago
+                   api:test
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+        };
+
+        assert_eq!(output, expected.trim_end());
     }
 }
