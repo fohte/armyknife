@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ use super::error::CcError;
 use super::store;
 use super::tty;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
+use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
 
@@ -95,6 +97,11 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Save updated session
     store::save_session(&session)?;
+
+    // Send notification if applicable (errors are logged but don't fail the hook)
+    if should_notify(event, &input) {
+        send_notification(event, &input, &session);
+    }
 
     Ok(())
 }
@@ -226,19 +233,108 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     }
 }
 
+/// Checks if notifications are enabled via environment variable.
+fn is_notification_enabled() -> bool {
+    match env::var("ARMYKNIFE_CC_NOTIFY") {
+        Ok(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
+        Err(_) => true, // enabled by default
+    }
+}
+
+/// Determines if a notification should be sent for the given event.
+fn should_notify(event: HookEvent, input: &HookInput) -> bool {
+    is_notification_enabled() && is_notifiable_event(event, input)
+}
+
+/// Checks if the event type and input warrant a notification.
+fn is_notifiable_event(event: HookEvent, input: &HookInput) -> bool {
+    match event {
+        HookEvent::Stop => true,
+        HookEvent::Notification => {
+            matches!(
+                input.notification_type.as_deref(),
+                Some("permission_prompt")
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Sends a notification for the given event.
+/// Errors are printed to stderr but don't fail the hook.
+fn send_notification(event: HookEvent, input: &HookInput, session: &Session) {
+    let notification = build_notification(event, input, session);
+
+    // Print notification errors to stderr without failing the hook
+    if let Err(e) = crate::infra::notification::send(&notification) {
+        eprintln!("[armyknife] warning: failed to send notification: {e}");
+    }
+}
+
+/// Builds a notification for the given event.
+fn build_notification(event: HookEvent, input: &HookInput, session: &Session) -> Notification {
+    let title = "Claude Code";
+
+    let message = match event {
+        HookEvent::Stop => "Session stopped".to_string(),
+        HookEvent::Notification => input
+            .message
+            .clone()
+            .unwrap_or_else(|| "Permission required".to_string()),
+        _ => "Notification".to_string(),
+    };
+
+    let mut notification = Notification::new(title, message).with_sound("Glass");
+
+    // Add subtitle with tmux session and window info
+    if let Some(tmux_info) = &session.tmux_info {
+        let subtitle = format!(
+            "[{}] {}:{}",
+            tmux_info.session_name, tmux_info.window_index, tmux_info.window_name
+        );
+        notification = notification.with_subtitle(subtitle);
+    }
+
+    // Add click action to focus tmux pane if available
+    // Skip action if pane_id cannot be safely quoted (e.g., contains null bytes)
+    if let Some(tmux_info) = &session.tmux_info
+        && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
+    {
+        // Use tmux switch-client with the first available client
+        let command = format!(
+            r#"client_name=$(tmux list-clients -F '#{{client_name}}' | head -n1); tmux switch-client -c "$client_name" -t {}; open -a WezTerm"#,
+            escaped_pane_id
+        );
+        notification = notification.with_action(NotificationAction::new(command));
+    }
+
+    notification
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
-        let json = match notification_type {
-            Some(t) => format!(
-                r#"{{"session_id":"test-123","cwd":"/tmp/test","notification_type":"{}"}}"#,
-                t
-            ),
-            None => r#"{"session_id":"test-123","cwd":"/tmp/test"}"#.to_string(),
-        };
+        create_test_input_with_message(notification_type, None)
+    }
+
+    fn create_test_input_with_message(
+        notification_type: Option<&str>,
+        message: Option<&str>,
+    ) -> HookInput {
+        let mut json_parts = vec![
+            r#""session_id":"test-123""#.to_string(),
+            r#""cwd":"/tmp/test""#.to_string(),
+        ];
+        if let Some(t) = notification_type {
+            json_parts.push(format!(r#""notification_type":"{}""#, t));
+        }
+        if let Some(m) = message {
+            json_parts.push(format!(r#""message":"{}""#, m));
+        }
+        let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")
     }
 
@@ -292,6 +388,93 @@ mod tests {
         );
 
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    #[rstest]
+    #[case::stop_always_notifies(HookEvent::Stop, None, true)]
+    #[case::permission_prompt_notifies(HookEvent::Notification, Some("permission_prompt"), true)]
+    #[case::idle_prompt_no_notification(HookEvent::Notification, Some("idle_prompt"), false)]
+    #[case::generic_notification_no_notify(HookEvent::Notification, Some("info"), false)]
+    #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, None, false)]
+    #[case::pre_tool_no_notification(HookEvent::PreToolUse, None, false)]
+    #[case::post_tool_no_notification(HookEvent::PostToolUse, None, false)]
+    fn test_is_notifiable_event(
+        #[case] event: HookEvent,
+        #[case] notification_type: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let input = create_test_input(notification_type);
+        let result = is_notifiable_event(event, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_build_notification_stop_event() {
+        let input = create_test_input(None);
+        let session = create_test_session(None);
+        let notification = build_notification(HookEvent::Stop, &input, &session);
+
+        assert_eq!(notification.title(), "Claude Code");
+        assert_eq!(notification.message(), "Session stopped");
+        assert_eq!(notification.sound(), Some("Glass"));
+        assert!(notification.subtitle().is_none());
+        assert!(notification.action().is_none());
+    }
+
+    #[test]
+    fn test_build_notification_permission_with_message() {
+        let input = create_test_input_with_message(Some("permission_prompt"), Some("Allow edit?"));
+        let session = create_test_session(None);
+        let notification = build_notification(HookEvent::Notification, &input, &session);
+
+        assert_eq!(notification.title(), "Claude Code");
+        assert_eq!(notification.message(), "Allow edit?");
+    }
+
+    #[test]
+    fn test_build_notification_permission_without_message() {
+        let input = create_test_input(Some("permission_prompt"));
+        let session = create_test_session(None);
+        let notification = build_notification(HookEvent::Notification, &input, &session);
+
+        assert_eq!(notification.message(), "Permission required");
+    }
+
+    #[test]
+    fn test_build_notification_with_tmux_info() {
+        let input = create_test_input(None);
+        let session = create_test_session(Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "dev".to_string(),
+            window_index: 1,
+            pane_id: "%123".to_string(),
+        }));
+        let notification = build_notification(HookEvent::Stop, &input, &session);
+
+        // Subtitle should contain session and window info
+        assert_eq!(notification.subtitle(), Some("[main] 1:dev"));
+
+        // Action should switch to the correct pane
+        assert!(notification.action().is_some());
+        let action = notification.action().expect("action present");
+        assert!(action.command().contains("tmux switch-client"));
+        assert!(action.command().contains("%123"));
+        assert!(action.command().contains("list-clients"));
+    }
+
+    fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
+        Session {
+            session_id: "test-123".to_string(),
+            cwd: "/tmp/test".into(),
+            transcript_path: None,
+            tty: None,
+            tmux_info,
+            status: SessionStatus::Running,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+        }
     }
 
     mod write_error_log_tests {

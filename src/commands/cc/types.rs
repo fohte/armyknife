@@ -67,6 +67,10 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
+    // Message from notification events (e.g., permission prompt message)
+    #[serde(default)]
+    pub message: Option<String>,
+
     // Pre-tool-use / Post-tool-use event fields
     #[serde(default)]
     pub tool_name: Option<String>,

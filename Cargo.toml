@@ -41,6 +41,7 @@ indicatif = "=0.18.3"
 ratatui = "=0.30.0"
 crossterm = "=0.29.0"
 notify = "=8.2.0"
+notify-rust = "=4.11.7"
 
 [dev-dependencies]
 rstest = "=0.26.1"
