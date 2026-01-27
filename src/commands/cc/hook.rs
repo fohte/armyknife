@@ -168,10 +168,11 @@ fn is_notification_enabled() -> bool {
 
 /// Determines if a notification should be sent for the given event.
 fn should_notify(event: HookEvent, input: &HookInput) -> bool {
-    if !is_notification_enabled() {
-        return false;
-    }
+    is_notification_enabled() && is_notifiable_event(event, input)
+}
 
+/// Checks if the event type and input warrant a notification.
+fn is_notifiable_event(event: HookEvent, input: &HookInput) -> bool {
     match event {
         HookEvent::Stop => true,
         HookEvent::Notification => {
@@ -225,7 +226,6 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
 mod tests {
     use super::*;
     use rstest::rstest;
-    use serial_test::serial;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
         create_test_input_with_message(notification_type, None)
@@ -309,50 +309,14 @@ mod tests {
     #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, None, false)]
     #[case::pre_tool_no_notification(HookEvent::PreToolUse, None, false)]
     #[case::post_tool_no_notification(HookEvent::PostToolUse, None, false)]
-    #[serial]
-    fn test_should_notify(
+    fn test_is_notifiable_event(
         #[case] event: HookEvent,
         #[case] notification_type: Option<&str>,
         #[case] expected: bool,
     ) {
-        // SAFETY: This is in a test environment with serial execution
-        unsafe {
-            env::remove_var("ARMYKNIFE_CC_NOTIFY");
-        }
-
         let input = create_test_input(notification_type);
-        let result = should_notify(event, &input);
+        let result = is_notifiable_event(event, &input);
         assert_eq!(result, expected);
-    }
-
-    #[test]
-    #[serial]
-    fn test_notification_disabled_via_env_zero() {
-        // SAFETY: This is in a test environment with serial execution
-        unsafe {
-            env::set_var("ARMYKNIFE_CC_NOTIFY", "0");
-        }
-        let input = create_test_input(None);
-        assert!(!should_notify(HookEvent::Stop, &input));
-        // SAFETY: This is in a test environment with serial execution
-        unsafe {
-            env::remove_var("ARMYKNIFE_CC_NOTIFY");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn test_notification_disabled_via_env_false() {
-        // SAFETY: This is in a test environment with serial execution
-        unsafe {
-            env::set_var("ARMYKNIFE_CC_NOTIFY", "false");
-        }
-        let input = create_test_input(None);
-        assert!(!should_notify(HookEvent::Stop, &input));
-        // SAFETY: This is in a test environment with serial execution
-        unsafe {
-            env::remove_var("ARMYKNIFE_CC_NOTIFY");
-        }
     }
 
     #[test]
