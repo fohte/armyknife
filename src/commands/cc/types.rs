@@ -64,6 +64,10 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
+    // Message from notification events (e.g., permission prompt message)
+    #[serde(default)]
+    pub message: Option<String>,
+
     // Ignore other fields from Claude Code hooks
     #[serde(flatten)]
     _extra: serde_json::Value,

@@ -9,6 +9,7 @@ use std::process::Output;
 use anyhow::bail;
 
 use super::error::Result;
+use crate::shared::command::is_command_available;
 
 /// Backend trait for generating text from a prompt.
 ///
@@ -25,34 +26,6 @@ pub fn detect_backend() -> Box<dyn Backend> {
     } else {
         Box::new(OpenCode)
     }
-}
-
-/// Check if a command is available in PATH.
-fn is_command_available(cmd: &str) -> bool {
-    let path_var = match std::env::var_os("PATH") {
-        Some(p) => p,
-        None => return false,
-    };
-
-    std::env::split_paths(&path_var).any(|dir| {
-        let path = dir.join(cmd);
-        is_executable(&path)
-    })
-}
-
-#[cfg(unix)]
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && path
-            .metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &std::path::Path) -> bool {
-    path.is_file()
 }
 
 /// Check command output status and return error if failed.
