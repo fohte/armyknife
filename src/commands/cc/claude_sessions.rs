@@ -112,7 +112,8 @@ fn get_title_from_index(project_path: &Path, session_id: &str) -> Option<String>
                 return Some(summary);
             }
             if let Some(first_prompt) = entry.first_prompt {
-                return Some(truncate_first_prompt(&first_prompt, 50));
+                // Return full prompt; truncation is handled by the display layer
+                return Some(first_prompt.trim().to_string());
             }
             return None;
         }
@@ -145,24 +146,12 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
             && let Some(message) = entry.message
             && let Some(content) = message.content
         {
-            return Some(truncate_first_prompt(&content, 50));
+            // Return full content; truncation is handled by the display layer
+            return Some(content.trim().to_string());
         }
     }
 
     None
-}
-
-/// Truncates the first prompt to a reasonable display length.
-fn truncate_first_prompt(prompt: &str, max_chars: usize) -> String {
-    let trimmed = prompt.trim();
-    let char_count = trimmed.chars().count();
-
-    if char_count <= max_chars {
-        trimmed.to_string()
-    } else {
-        let truncated: String = trimmed.chars().take(max_chars - 3).collect();
-        format!("{truncated}...")
-    }
 }
 
 #[cfg(test)]
@@ -184,17 +173,6 @@ mod tests {
     fn test_encode_project_path(#[case] input: &str, #[case] expected: &str) {
         let path = Path::new(input);
         assert_eq!(encode_project_path(path), expected);
-    }
-
-    #[rstest]
-    #[case::short("hello", 10, "hello")]
-    #[case::exact("hello", 5, "hello")]
-    #[case::with_whitespace("  hello  ", 10, "hello")]
-    #[case::truncate_long("this is a very long prompt", 15, "this is a ve...")]
-    #[case::truncate_exact_boundary("hello world", 11, "hello world")]
-    #[case::truncate_one_over("hello world!", 11, "hello wo...")]
-    fn test_truncate_first_prompt(#[case] input: &str, #[case] max: usize, #[case] expected: &str) {
-        assert_eq!(truncate_first_prompt(input, max), expected);
     }
 
     #[test]
