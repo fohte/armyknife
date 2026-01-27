@@ -12,3 +12,9 @@ allow-panic-in-tests = true
 [[disallowed-methods]]
 path = "tokio::runtime::Runtime::new"
 reason = "Do not create new runtimes. Use async fn and .await with the existing runtime from main()"
+
+# Disallow serial_test crate - tests requiring serialization indicate
+# side effects that should be eliminated through proper test isolation
+[[disallowed-macros]]
+path = "serial_test::serial"
+reason = "serial_test is forbidden. Tests requiring serial execution have side effects and should be redesigned for proper isolation"

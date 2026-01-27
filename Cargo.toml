@@ -46,11 +46,11 @@ notify-rust = "=4.11.7"
 [dev-dependencies]
 rstest = "=0.26.1"
 wiremock = "=0.6.5"
-serial_test = "=3.2.0"
 
 [lints.clippy]
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+disallowed_macros = "deny"
 expect_used = "deny"
 panic = "deny"
 unwrap_used = "deny"

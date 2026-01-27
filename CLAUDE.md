@@ -6,7 +6,7 @@ Rust CLI toolkit for AI-assisted development workflows.
 
 - Rust (see rust-toolchain.toml)
 - clap (CLI framework with derive macros)
-- rstest, serial_test (testing)
+- rstest (testing)
 - thiserror (error handling)
 - serde, serde_yaml (serialization)
 
@@ -39,7 +39,7 @@ Generic framework for interactive document editing:
 ## Standards
 
 - Comments: English (public repo), explain WHY not WHAT
-- Tests: Use `test` skill when writing/running tests
+- Tests: Use `test` skill when writing/running tests. Tests must be isolated without side effects (no shared state, no serial execution)
 - Documentation: Update README.md when adding, changing, or removing commands/subcommands
 
 ### Lints
