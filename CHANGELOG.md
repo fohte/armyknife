@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.44](https://github.com/fohte/armyknife/compare/v0.1.43...v0.1.44) (2026-01-27)
+
+
+### Features
+
+* **ai/review:** support Devin Review and allow waiting for multiple reviewers ([#157](https://github.com/fohte/armyknife/issues/157)) ([a164158](https://github.com/fohte/armyknife/commit/a1641581423d74ab61f10cf4553516cb82f4e615))
+
 ## [0.1.43](https://github.com/fohte/armyknife/compare/v0.1.42...v0.1.43) (2026-01-27)
 
 
