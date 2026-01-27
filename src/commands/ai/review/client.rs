@@ -271,7 +271,9 @@ impl ReviewClient for OctocrabReviewClient {
         pr_number: u64,
         reviewer: Reviewer,
     ) -> Result<()> {
-        let review_command = reviewer.review_command();
+        let review_command = reviewer
+            .review_command()
+            .ok_or(ReviewError::RequestNotSupported(reviewer))?;
         let client = OctocrabClient::get()?;
 
         client

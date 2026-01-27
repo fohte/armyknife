@@ -1,5 +1,6 @@
 //! Error types for review command.
 
+use super::reviewer::Reviewer;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -27,6 +28,9 @@ pub enum ReviewError {
 
     #[error("Review has not started yet")]
     ReviewNotStarted,
+
+    #[error("Reviewer {0:?} does not support request command (use wait instead)")]
+    RequestNotSupported(Reviewer),
 }
 
 pub type Result<T> = anyhow::Result<T>;

@@ -60,20 +60,21 @@ pub async fn get_pr_number(owner: &str, repo: &str, pr_arg: Option<u64>) -> Resu
 
 /// Configuration for polling a review
 pub struct WaitConfig {
-    pub reviewer: Reviewer,
+    pub reviewers: Vec<Reviewer>,
     pub interval: u64,
     pub timeout: u64,
 }
 
-/// Poll until reviewer posts a review after start_time
-pub async fn wait_for_review(
+/// Poll until any reviewer posts a review after start_time.
+/// Returns the reviewer that completed the review.
+pub async fn wait_for_any_review(
     client: &dyn ReviewClient,
     owner: &str,
     repo: &str,
     pr_number: u64,
     start_time: DateTime<Utc>,
     config: &WaitConfig,
-) -> Result<()> {
+) -> Result<Reviewer> {
     let poll_interval = Duration::from_secs(config.interval);
     let timeout_duration = Duration::from_secs(config.timeout);
     let started_at = Instant::now();
@@ -85,28 +86,32 @@ pub async fn wait_for_review(
             return Err(ReviewError::Timeout(config.timeout).into());
         }
 
-        // Check for new review
-        if let Some(review_time) = client
-            .find_latest_review(owner, repo, pr_number, config.reviewer)
-            .await?
-            && review_time > start_time
-        {
-            return Ok(());
+        // Check for new review from any reviewer
+        for reviewer in &config.reviewers {
+            if let Some(review_time) = client
+                .find_latest_review(owner, repo, pr_number, *reviewer)
+                .await?
+                && review_time > start_time
+            {
+                return Ok(*reviewer);
+            }
         }
 
-        // Check if reviewer posted an "unable to" comment
-        if let Some(unable_msg) = client
-            .check_reviewer_unable_comment(owner, repo, pr_number, start_time, config.reviewer)
-            .await?
-        {
-            return Err(ReviewError::ReviewerUnable(unable_msg).into());
+        // Check if any reviewer posted an "unable to" comment
+        for reviewer in &config.reviewers {
+            if let Some(unable_msg) = client
+                .check_reviewer_unable_comment(owner, repo, pr_number, start_time, *reviewer)
+                .await?
+            {
+                return Err(ReviewError::ReviewerUnable(unable_msg).into());
+            }
         }
 
         // Print progress
         let elapsed_secs = elapsed.as_secs();
         print!(
-            "\rWaiting for {:?} review... ({elapsed_secs}s elapsed, timeout: {}s)   ",
-            config.reviewer, config.timeout
+            "\rWaiting for review from {:?}... ({elapsed_secs}s elapsed, timeout: {}s)   ",
+            config.reviewers, config.timeout
         );
         std::io::stdout().flush().ok();
 
