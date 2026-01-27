@@ -4,7 +4,9 @@ use std::io::{self, Read};
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
+use lazy_regex::regex_replace_all;
 
+use super::claude_sessions;
 use super::error::CcError;
 use super::store;
 use super::tty;
@@ -60,6 +62,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         created_at: now,
         updated_at: now,
         last_message: None,
+        current_tool: None,
     });
 
     // Update session fields
@@ -77,6 +80,17 @@ pub fn run(args: &HookArgs) -> Result<()> {
     if input.transcript_path.is_some() {
         session.transcript_path.clone_from(&input.transcript_path);
     }
+
+    // Update last_message from Claude Code's transcript
+    session.last_message =
+        claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id);
+
+    // Update current_tool based on event type
+    session.current_tool = match event {
+        HookEvent::PreToolUse => format_current_tool(&input),
+        HookEvent::PostToolUse | HookEvent::Stop => None,
+        _ => session.current_tool, // Keep existing value for other events
+    };
 
     // Save updated session
     store::save_session(&session)?;
@@ -101,6 +115,30 @@ fn read_stdin_json() -> Result<HookInput> {
     let input: HookInput = serde_json::from_str(&json_str)?;
 
     Ok(input)
+}
+
+/// Formats the current tool display string from hook input.
+/// Returns format like "Bash(cargo test)" or "Read(src/main.rs)" or just "Task".
+///
+/// Strips ANSI escape sequences to prevent terminal injection.
+fn format_current_tool(input: &HookInput) -> Option<String> {
+    let tool_name = input.tool_name.as_deref()?;
+
+    let detail = input.tool_input.as_ref().and_then(|ti| {
+        // Try command (Bash), then file_path (Read/Write/Edit), then pattern (Grep/Glob)
+        ti.command
+            .as_deref()
+            .or(ti.file_path.as_deref())
+            .or(ti.pattern.as_deref())
+    });
+
+    let result = match detail {
+        Some(d) => format!("{}({})", tool_name, d),
+        None => tool_name.to_string(),
+    };
+
+    // Strip ANSI escape sequences
+    Some(regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", &result, |_| "").to_string())
 }
 
 /// Determines the session status based on the event and input.
@@ -374,6 +412,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
+            current_tool: None,
         }
     }
 }

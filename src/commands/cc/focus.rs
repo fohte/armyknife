@@ -61,6 +61,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
+            current_tool: None,
         }
     }
 

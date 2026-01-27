@@ -246,6 +246,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
+            current_tool: None,
         }
     }
 
@@ -400,6 +401,7 @@ mod tests {
                 created_at: now,
                 updated_at: now,
                 last_message: None,
+                current_tool: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -411,6 +413,7 @@ mod tests {
                 created_at: now,
                 updated_at: now,
                 last_message: None,
+                current_tool: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -422,6 +425,7 @@ mod tests {
                 created_at: now,
                 updated_at: now,
                 last_message: None,
+                current_tool: None,
             },
         ];
 
@@ -590,6 +594,7 @@ mod tests {
                 created_at: now,
                 updated_at: now,
                 last_message: None,
+                current_tool: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -606,6 +611,7 @@ mod tests {
                 created_at: now,
                 updated_at: now - Duration::minutes(5),
                 last_message: None,
+                current_tool: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -617,6 +623,7 @@ mod tests {
                 created_at: now,
                 updated_at: now - Duration::hours(1),
                 last_message: None,
+                current_tool: None,
             },
         ];
 
