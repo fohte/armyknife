@@ -147,7 +147,11 @@ fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> PathBuf {
 }
 
 /// Returns the directory for storing error logs.
+///
 /// Path: ~/Library/Caches/armyknife/cc/logs/ (macOS) or ~/.cache/armyknife/cc/logs/ (Linux)
+///
+/// Note: Ideally logs should go to XDG_STATE_HOME (~/.local/state/), but the `dirs` crate
+/// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
 fn logs_dir() -> PathBuf {
     cache::base_dir()
         .map(|d| d.join("cc").join("logs"))
