@@ -43,6 +43,28 @@ struct JsonlMessage {
     content: Option<String>,
 }
 
+/// Assistant message entry in .jsonl files
+#[derive(Debug, Deserialize)]
+struct AssistantJsonlEntry {
+    #[serde(rename = "type")]
+    entry_type: Option<String>,
+    message: Option<AssistantMessage>,
+}
+
+/// Message content in .jsonl assistant entries
+#[derive(Debug, Deserialize)]
+struct AssistantMessage {
+    content: Option<Vec<MessageContent>>,
+}
+
+/// Content item in assistant message content array
+#[derive(Debug, Deserialize)]
+struct MessageContent {
+    #[serde(rename = "type")]
+    content_type: Option<String>,
+    text: Option<String>,
+}
+
 /// Encodes a project path to Claude Code's directory format.
 ///
 /// Claude Code encodes paths by replacing '/' and '.' with '-'.
@@ -168,10 +190,155 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
     None
 }
 
+/// Retrieves the last assistant text message from a session's .jsonl file.
+///
+/// Scans the file and returns the text content from the last assistant message
+/// that contains a text element. Skips assistant messages that only have tool_use.
+pub fn get_last_assistant_message(project_path: &Path, session_id: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
+    get_last_assistant_message_in_home(&home, project_path, session_id)
+}
+
+/// Internal function for testing: allows overriding the home directory.
+fn get_last_assistant_message_in_home(
+    home: &Path,
+    project_path: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let encoded = encode_project_path(project_path);
+    let jsonl_path = home
+        .join(".claude")
+        .join("projects")
+        .join(&encoded)
+        .join(format!("{session_id}.jsonl"));
+
+    if !jsonl_path.exists() {
+        return None;
+    }
+
+    let file = File::open(&jsonl_path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut last_text: Option<String> = None;
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line.is_empty() {
+            continue;
+        }
+
+        let Ok(entry) = serde_json::from_str::<AssistantJsonlEntry>(&line) else {
+            continue;
+        };
+
+        // Look for "assistant" type entries
+        if entry.entry_type.as_deref() != Some("assistant") {
+            continue;
+        }
+
+        // Extract text from content array
+        if let Some(message) = entry.message
+            && let Some(contents) = message.content
+        {
+            for content in contents {
+                if content.content_type.as_deref() == Some("text")
+                    && let Some(text) = content.text
+                    && !text.is_empty()
+                {
+                    last_text = Some(normalize_title(&text));
+                    break; // Take the first text element in this message
+                }
+            }
+        }
+    }
+
+    last_text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// Creates a test project directory structure with a .jsonl file.
+    fn create_test_project_with_jsonl(
+        home_dir: &Path,
+        project_path: &str,
+        session_id: &str,
+        jsonl_content: &str,
+    ) {
+        let encoded = encode_project_path(Path::new(project_path));
+        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let jsonl_path = project_dir.join(format!("{session_id}.jsonl"));
+        let mut file = File::create(&jsonl_path).unwrap();
+        file.write_all(jsonl_content.as_bytes()).unwrap();
+    }
+
+    // =========================================================================
+    // Tests for get_last_assistant_message
+    // =========================================================================
+
+    #[rstest]
+    #[case::returns_last_text(
+        r#"{"type":"user","message":{"content":"Hello"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}
+{"type":"user","message":{"content":"How are you?"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'm doing well, thanks!"}]}}"#,
+        Some("I'm doing well, thanks!")
+    )]
+    #[case::with_tool_use_and_text(
+        r#"{"type":"user","message":{"content":"Read the file"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"I've read the file."}]}}"#,
+        Some("I've read the file.")
+    )]
+    #[case::skips_tool_use_only(
+        r#"{"type":"user","message":{"content":"Hello"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here's my response"}]}}
+{"type":"user","message":{"content":"Do something"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+        Some("Here's my response")
+    )]
+    #[case::normalizes_newlines(
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Line 1\nLine 2\nLine 3"}]}}"#,
+        Some("Line 1 Line 2 Line 3")
+    )]
+    fn test_get_last_assistant_message(
+        #[case] jsonl_content: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "test-session";
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
+
+        let result =
+            get_last_assistant_message_in_home(home_dir, Path::new(project_path), session_id);
+
+        assert_eq!(result, expected.map(String::from));
+    }
+
+    #[test]
+    fn test_get_last_assistant_message_handles_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let result = get_last_assistant_message_in_home(
+            home_dir,
+            Path::new("/nonexistent/path"),
+            "test-session",
+        );
+
+        assert!(result.is_none());
+    }
 
     #[rstest]
     #[case::simple_path("/Users/fohte/project", "-Users-fohte-project")]

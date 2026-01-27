@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
 
+use super::claude_sessions;
 use super::error::CcError;
 use super::store;
 use super::tty;
@@ -75,6 +76,10 @@ pub fn run(args: &HookArgs) -> Result<()> {
     if input.transcript_path.is_some() {
         session.transcript_path.clone_from(&input.transcript_path);
     }
+
+    // Update last_message from Claude Code's transcript
+    session.last_message =
+        claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id);
 
     // Save updated session
     store::save_session(&session)?;
