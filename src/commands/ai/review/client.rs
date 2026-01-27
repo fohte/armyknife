@@ -337,9 +337,10 @@ pub mod mock {
         pub skip_first_n_reviews: Arc<Mutex<usize>>,
         /// Counter for find_latest_review calls.
         pub find_review_call_count: Arc<Mutex<usize>>,
-        /// Cutoff time: only return reviews before this time on first call.
-        /// After first call, return all reviews.
+        /// Cutoff time: only return reviews before this time on initial calls.
         pub initial_review_cutoff: Arc<Mutex<Option<DateTime<Utc>>>>,
+        /// Number of calls to apply cutoff to (default: 1).
+        pub initial_review_cutoff_calls: Arc<Mutex<usize>>,
     }
 
     impl MockReviewClient {
@@ -382,11 +383,12 @@ pub mod mock {
         }
 
         /// Set a cutoff time for initial review check.
-        /// On first call, only reviews before this time are returned.
+        /// On the first `num_calls` calls, only reviews before `cutoff` are returned.
         /// On subsequent calls, all reviews are returned.
         /// Useful for simulating "existing review is old, new review appears during polling".
-        pub fn with_initial_review_cutoff(self, cutoff: DateTime<Utc>) -> Self {
+        pub fn with_initial_review_cutoff(self, cutoff: DateTime<Utc>, num_calls: usize) -> Self {
             *self.initial_review_cutoff.lock().unwrap() = Some(cutoff);
+            *self.initial_review_cutoff_calls.lock().unwrap() = num_calls;
             self
         }
     }
@@ -414,13 +416,17 @@ pub mod mock {
 
             let reviews = self.reviews.lock().unwrap();
             let cutoff = *self.initial_review_cutoff.lock().unwrap();
+            let cutoff_calls = *self.initial_review_cutoff_calls.lock().unwrap();
+
+            // Determine effective call number (after skipping)
+            let effective_call = current_call.saturating_sub(skip_n);
 
             let latest = reviews
                 .iter()
                 .filter(|r| r.reviewer == reviewer)
                 .filter(|r| {
-                    // On first call, apply cutoff filter if set
-                    if current_call == 1 || current_call == skip_n + 1 {
+                    // Apply cutoff filter on initial calls (up to cutoff_calls)
+                    if effective_call > 0 && effective_call <= cutoff_calls {
                         cutoff.is_none_or(|c| r.created_at < c)
                     } else {
                         true

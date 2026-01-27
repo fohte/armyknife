@@ -65,19 +65,21 @@ pub struct WaitConfig {
     pub timeout: u64,
 }
 
-/// Poll until any reviewer posts a review after start_time.
-/// Returns the reviewer that completed the review.
-pub async fn wait_for_any_review(
+/// Poll until all reviewers post a review after start_time.
+/// Returns the list of reviewers that completed reviews.
+pub async fn wait_for_all_reviews(
     client: &dyn ReviewClient,
     owner: &str,
     repo: &str,
     pr_number: u64,
     start_time: DateTime<Utc>,
     config: &WaitConfig,
-) -> Result<Reviewer> {
+) -> Result<Vec<Reviewer>> {
     let poll_interval = Duration::from_secs(config.interval);
     let timeout_duration = Duration::from_secs(config.timeout);
     let started_at = Instant::now();
+
+    let mut completed: Vec<Reviewer> = Vec::new();
 
     loop {
         // Check timeout
@@ -86,19 +88,33 @@ pub async fn wait_for_any_review(
             return Err(ReviewError::Timeout(config.timeout).into());
         }
 
-        // Check for new review from any reviewer
+        // Check for new reviews from all reviewers
         for reviewer in &config.reviewers {
+            if completed.contains(reviewer) {
+                continue;
+            }
+
             if let Some(review_time) = client
                 .find_latest_review(owner, repo, pr_number, *reviewer)
                 .await?
                 && review_time > start_time
             {
-                return Ok(*reviewer);
+                completed.push(*reviewer);
+                println!("\n{:?} review completed!", reviewer);
             }
+        }
+
+        // Check if all reviewers have completed
+        if completed.len() == config.reviewers.len() {
+            return Ok(completed);
         }
 
         // Check if any reviewer posted an "unable to" comment
         for reviewer in &config.reviewers {
+            if completed.contains(reviewer) {
+                continue;
+            }
+
             if let Some(unable_msg) = client
                 .check_reviewer_unable_comment(owner, repo, pr_number, start_time, *reviewer)
                 .await?
@@ -109,9 +125,14 @@ pub async fn wait_for_any_review(
 
         // Print progress
         let elapsed_secs = elapsed.as_secs();
+        let pending: Vec<_> = config
+            .reviewers
+            .iter()
+            .filter(|r| !completed.contains(r))
+            .collect();
         print!(
             "\rWaiting for review from {:?}... ({elapsed_secs}s elapsed, timeout: {}s)   ",
-            config.reviewers, config.timeout
+            pending, config.timeout
         );
         std::io::stdout().flush().ok();
 

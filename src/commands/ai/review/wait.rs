@@ -1,7 +1,7 @@
 //! Wait for an existing review from a bot reviewer.
 
 use super::client::{ReviewClient, get_client};
-use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_any_review};
+use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
 use chrono::{DateTime, Utc};
@@ -115,20 +115,19 @@ pub(crate) async fn run_wait(
     }
 
     println!(
-        "Waiting for review to complete from any of {:?}...",
+        "Waiting for all reviews to complete from {:?}...",
         reviewers
     );
 
-    // Poll for new review from any reviewer
+    // Poll for new reviews from all reviewers
     let config = WaitConfig {
         reviewers: reviewers.clone(),
         interval: args.interval,
         timeout: args.timeout,
     };
-    let completed_reviewer =
-        wait_for_any_review(client, owner, repo, pr_number, start_time, &config).await?;
+    wait_for_all_reviews(client, owner, repo, pr_number, start_time, &config).await?;
 
-    println!("\n{:?} review completed!", completed_reviewer);
+    println!("\nAll reviews completed!");
     Ok(())
 }
 
@@ -163,36 +162,27 @@ mod tests {
     fn build_success_client(scenario: &str) -> MockReviewClient {
         let now = Utc::now();
         match scenario {
-            "already_completed_gemini" => {
-                // Review already exists from Gemini
+            "already_completed_both" => {
+                // Reviews already exist from both reviewers
                 MockReviewClient::new()
                     .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
             }
-            "already_completed_devin" => {
-                // Review already exists from Devin
-                MockReviewClient::new().with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
-            }
-            "in_progress_completes_gemini" => {
-                // Gemini has activity, review appears after polling
+            "in_progress_completes_both" => {
+                // Both reviews appear after polling
                 MockReviewClient::new()
                     .with_comment("gemini-code-assist", "Starting review...", now)
                     .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
-            }
-            "in_progress_completes_devin" => {
-                // Devin review appears after polling (no start signal)
-                MockReviewClient::new()
                     .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
-                    .skip_first_n_review_calls(1)
+                    .skip_first_n_review_calls(2) // Skip initial check for both
             }
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
 
     #[rstest]
-    #[case::already_completed_gemini("already_completed_gemini")]
-    #[case::already_completed_devin("already_completed_devin")]
-    #[case::in_progress_completes_gemini("in_progress_completes_gemini")]
-    #[case::in_progress_completes_devin("in_progress_completes_devin")]
+    #[case::already_completed_both("already_completed_both")]
+    #[case::in_progress_completes_both("in_progress_completes_both")]
     #[tokio::test]
     async fn wait_succeeds(#[case] scenario: &str) {
         let client = build_success_client(scenario);
@@ -277,7 +267,8 @@ mod tests {
         let now = Utc::now();
         let client = MockReviewClient::new()
             // No comments from either (Gemini not started)
-            // But Devin review appears after polling
+            // But both reviews appear after polling
+            .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
             .skip_first_n_review_calls(2); // Skip first check for both reviewers
 
@@ -300,10 +291,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_succeeds_when_any_reviewer_completes() {
-        // When waiting for both, succeed when Devin completes first
+    async fn wait_requires_all_reviewers_to_complete() {
+        // When waiting for both, should wait until all complete (not just one)
         let now = Utc::now();
         let client = MockReviewClient::new()
+            .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
             .skip_first_n_review_calls(2);
 

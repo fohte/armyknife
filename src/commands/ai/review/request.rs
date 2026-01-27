@@ -1,7 +1,7 @@
 //! Request a review from a bot reviewer.
 
 use super::client::{ReviewClient, get_client};
-use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_any_review};
+use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::error::Result;
 use super::reviewer::Reviewer;
 use chrono::Utc;
@@ -58,19 +58,25 @@ pub(crate) async fn run_request(
     // Record start time to detect "new" reviews
     let start_time = Utc::now();
 
-    // Check if any reviewer has already posted a review
+    // Fetch review times for all reviewers once to avoid redundant API calls
+    let mut review_times = Vec::new();
     for reviewer in reviewers {
-        if let Some(review_time) = client
+        let review_time = client
             .find_latest_review(owner, repo, pr_number, *reviewer)
-            .await?
-        {
-            // Check if there are new commits after the last review
-            let latest_commit_time = client
-                .get_latest_commit_time(owner, repo, pr_number)
-                .await?;
+            .await?;
+        review_times.push((*reviewer, review_time));
+    }
 
-            if let Some(commit_time) = latest_commit_time
-                && commit_time <= review_time
+    // Fetch latest commit time once
+    let latest_commit_time = client
+        .get_latest_commit_time(owner, repo, pr_number)
+        .await?;
+
+    // Check if any reviewer has an up-to-date review
+    if let Some(commit_time) = latest_commit_time {
+        for (reviewer, review_time) in &review_times {
+            if let Some(rt) = review_time
+                && commit_time <= *rt
             {
                 // No new commits since last review
                 println!(
@@ -82,24 +88,14 @@ pub(crate) async fn run_request(
         }
     }
 
-    // Request review from reviewers that support it
-    let requestable_reviewers: Vec<_> = reviewers
-        .iter()
-        .filter(|r| r.review_command().is_some())
-        .collect();
-
-    for reviewer in &requestable_reviewers {
-        // Check if this reviewer needs a re-review (has old review with new commits)
-        let existing_review = client
-            .find_latest_review(owner, repo, pr_number, **reviewer)
-            .await?;
-
-        if existing_review.is_some() {
-            // New commits exist (we already checked above that commit > review),
+    // Request re-review from reviewers that support it and have old reviews
+    for (reviewer, review_time) in &review_times {
+        if reviewer.review_command().is_some() && review_time.is_some() {
+            // New commits exist (we already checked above that no up-to-date review exists),
             // so request re-review
             println!("Posting {:?} review command...", reviewer);
             client
-                .post_review_comment(owner, repo, pr_number, **reviewer)
+                .post_review_comment(owner, repo, pr_number, *reviewer)
                 .await?;
         }
     }
@@ -117,20 +113,19 @@ pub(crate) async fn run_request(
     }
 
     println!(
-        "Waiting for review to complete from any of {:?}...",
+        "Waiting for all reviews to complete from {:?}...",
         reviewers
     );
 
-    // Poll for new review from any reviewer
+    // Poll for new reviews from all reviewers
     let config = WaitConfig {
         reviewers: reviewers.clone(),
         interval: args.interval,
         timeout: args.timeout,
     };
-    let completed_reviewer =
-        wait_for_any_review(client, owner, repo, pr_number, start_time, &config).await?;
+    wait_for_all_reviews(client, owner, repo, pr_number, start_time, &config).await?;
 
-    println!("\n{:?} review completed!", completed_reviewer);
+    println!("\nAll reviews completed!");
     Ok(())
 }
 
@@ -155,59 +150,36 @@ mod tests {
     fn build_success_client(scenario: &str) -> MockReviewClient {
         let now = Utc::now();
         match scenario {
-            "first_review_gemini" => {
-                // No existing review, Gemini review appears after polling
-                // Skip 4 calls: 2 in first loop (check existing) + 2 in re-review loop
+            "first_review_both" => {
+                // No existing reviews, both reviews appear after polling
+                // Skip 2 calls: initial check for both reviewers
                 MockReviewClient::new()
                     .with_review(Reviewer::Gemini, now + ChronoDuration::milliseconds(100))
-                    .skip_first_n_review_calls(4)
-            }
-            "first_review_devin" => {
-                // No existing review, Devin review appears after polling
-                MockReviewClient::new()
                     .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
-                    .skip_first_n_review_calls(4)
+                    .skip_first_n_review_calls(2)
             }
-            "already_reviewed_gemini" => {
-                // Gemini review exists, commit older than review -> skip
+            "already_reviewed_both" => {
+                // Both reviews exist, commit older than reviews -> skip
                 MockReviewClient::new()
                     .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
-                    .with_latest_commit_time(now - ChronoDuration::hours(2))
-            }
-            "already_reviewed_devin" => {
-                // Devin review exists, commit older than review -> skip
-                MockReviewClient::new()
                     .with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
                     .with_latest_commit_time(now - ChronoDuration::hours(2))
-            }
-            "re_review_gemini" => {
-                // Old Gemini review exists, new commit -> post comment, wait for new review
-                MockReviewClient::new()
-                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(2))
-                    .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
-                    .with_latest_commit_time(now - ChronoDuration::hours(1))
-                    .with_initial_review_cutoff(now)
             }
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
 
     #[rstest]
-    #[case::first_review_gemini("first_review_gemini", false)]
-    #[case::first_review_devin("first_review_devin", false)]
-    #[case::already_reviewed_gemini("already_reviewed_gemini", false)]
-    #[case::already_reviewed_devin("already_reviewed_devin", false)]
-    #[case::re_review_gemini("re_review_gemini", true)]
+    #[case::first_review_both("first_review_both")]
+    #[case::already_reviewed_both("already_reviewed_both")]
     #[tokio::test]
-    async fn request_succeeds(#[case] scenario: &str, #[case] expects_comment: bool) {
+    async fn request_succeeds(#[case] scenario: &str) {
         let client = build_success_client(scenario);
         let args = make_args_both(1, 5);
 
         let result = run_request(&args, &client, "owner", "repo", 1).await;
 
         assert!(result.is_ok());
-        let posted = client.posted_comments.lock().unwrap();
-        assert_eq!(!posted.is_empty(), expects_comment);
     }
 
     #[rstest]
@@ -239,14 +211,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_posts_gemini_command_only() {
-        // When both reviewers specified, only post command for Gemini (Devin doesn't support it)
+    async fn request_posts_gemini_command_only_when_rereview_needed() {
+        // When Gemini has an old review and new commits exist,
+        // only post command for Gemini (Devin doesn't support command-based requests)
+        // Devin has no old review, so no re-review is triggered for it
         let now = Utc::now();
         let client = MockReviewClient::new()
+            // Only Gemini has an old review
             .with_review(Reviewer::Gemini, now - ChronoDuration::hours(2))
+            // New reviews appear after polling (both reviewers)
             .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+            .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+            // New commit after old review
             .with_latest_commit_time(now - ChronoDuration::hours(1))
-            .with_initial_review_cutoff(now);
+            // Apply cutoff to initial round (first 2 calls: one for each reviewer)
+            .with_initial_review_cutoff(now, 2);
 
         let args = make_args_both(1, 5);
 
@@ -254,17 +233,19 @@ mod tests {
 
         assert!(result.is_ok());
         let posted = client.posted_comments.lock().unwrap();
+        // Only Gemini gets a comment (it has an old review and supports command-based requests)
         assert_eq!(posted.len(), 1);
         assert_eq!(posted[0].reviewer, Reviewer::Gemini);
     }
 
     #[tokio::test]
-    async fn request_waits_for_devin_without_posting() {
-        // When Devin completes first, no comment should be posted for it
+    async fn request_waits_for_both_reviewers() {
+        // Both reviewers must complete for success (not just one)
         let now = Utc::now();
         let client = MockReviewClient::new()
+            .with_review(Reviewer::Gemini, now + ChronoDuration::milliseconds(100))
             .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
-            .skip_first_n_review_calls(4); // Skip initial check loop + re-review check loop
+            .skip_first_n_review_calls(2); // Skip initial check for both reviewers
 
         let args = make_args_both(1, 5);
 
@@ -272,6 +253,6 @@ mod tests {
 
         assert!(result.is_ok());
         let posted = client.posted_comments.lock().unwrap();
-        assert!(posted.is_empty()); // No comments posted for Devin
+        assert!(posted.is_empty()); // No comments posted (no existing reviews to re-request)
     }
 }
