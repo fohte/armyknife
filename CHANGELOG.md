@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.42](https://github.com/fohte/armyknife/compare/v0.1.41...v0.1.42) (2026-01-27)
+
+
+### Features
+
+* **cc:** log raw stdin to file on JSON parse error ([#155](https://github.com/fohte/armyknife/issues/155)) ([4a63ca8](https://github.com/fohte/armyknife/commit/4a63ca82392c5f26b9beeff67fe22648523b6be9))
+
 ## [0.1.41](https://github.com/fohte/armyknife/compare/v0.1.40...v0.1.41) (2026-01-27)
 
 
