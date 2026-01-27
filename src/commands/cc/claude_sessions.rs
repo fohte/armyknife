@@ -260,6 +260,7 @@ fn get_last_assistant_message_in_home(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
     use std::io::Write;
     use tempfile::TempDir;
@@ -286,22 +287,28 @@ mod tests {
 
     #[rstest]
     #[case::returns_last_text(
-        r#"{"type":"user","message":{"content":"Hello"}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}
-{"type":"user","message":{"content":"How are you?"}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"I'm doing well, thanks!"}]}}"#,
+        indoc! {r#"
+            {"type":"user","message":{"content":"Hello"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}
+            {"type":"user","message":{"content":"How are you?"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"I'm doing well, thanks!"}]}}
+        "#},
         Some("I'm doing well, thanks!")
     )]
     #[case::with_tool_use_and_text(
-        r#"{"type":"user","message":{"content":"Read the file"}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"I've read the file."}]}}"#,
+        indoc! {r#"
+            {"type":"user","message":{"content":"Read the file"}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"I've read the file."}]}}
+        "#},
         Some("I've read the file.")
     )]
     #[case::skips_tool_use_only(
-        r#"{"type":"user","message":{"content":"Hello"}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Here's my response"}]}}
-{"type":"user","message":{"content":"Do something"}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+        indoc! {r#"
+            {"type":"user","message":{"content":"Hello"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Here's my response"}]}}
+            {"type":"user","message":{"content":"Do something"}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}
+        "#},
         Some("Here's my response")
     )]
     #[case::normalizes_newlines(
