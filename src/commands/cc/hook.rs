@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
@@ -141,7 +141,10 @@ fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> 
     }
 
     match write_file_with_permissions(&log_path, content) {
-        Ok(()) => Some(log_path),
+        Ok(()) => {
+            eprintln!("Raw stdin content saved to: {}", log_path.display());
+            Some(log_path)
+        }
         Err(e) => {
             eprintln!("Warning: Failed to write error log: {e}");
             None
@@ -151,15 +154,24 @@ fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> 
 
 /// Writes content to a file with restrictive permissions (0600 on Unix).
 fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> {
-    let mut file = File::create(path)?;
-
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content.as_bytes())?;
     }
 
-    file.write_all(content.as_bytes())?;
+    #[cfg(not(unix))]
+    {
+        let mut file = File::create(path)?;
+        file.write_all(content.as_bytes())?;
+    }
+
     Ok(())
 }
 
