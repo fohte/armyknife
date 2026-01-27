@@ -10,7 +10,16 @@ pub fn send(notification: &Notification) -> Result<()> {
     let mut cmd = Command::new("terminal-notifier");
 
     cmd.arg("-title").arg(notification.title());
+
+    if let Some(subtitle) = notification.subtitle() {
+        cmd.arg("-subtitle").arg(subtitle);
+    }
+
     cmd.arg("-message").arg(notification.message());
+
+    if let Some(sound) = notification.sound() {
+        cmd.arg("-sound").arg(sound);
+    }
 
     // Add click action if present
     // terminal-notifier's -execute runs the command directly in a shell

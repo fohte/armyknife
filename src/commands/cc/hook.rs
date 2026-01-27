@@ -284,14 +284,27 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
         _ => "Notification".to_string(),
     };
 
-    let mut notification = Notification::new(title, message);
+    let mut notification = Notification::new(title, message).with_sound("Glass");
+
+    // Add subtitle with tmux session and window info
+    if let Some(tmux_info) = &session.tmux_info {
+        let subtitle = format!(
+            "[{}] {}:{}",
+            tmux_info.session_name, tmux_info.window_index, tmux_info.window_name
+        );
+        notification = notification.with_subtitle(subtitle);
+    }
 
     // Add click action to focus tmux pane if available
     // Skip action if pane_id cannot be safely quoted (e.g., contains null bytes)
     if let Some(tmux_info) = &session.tmux_info
         && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
     {
-        let command = format!("tmux switch-client -t {}; open -a WezTerm", escaped_pane_id);
+        // Use tmux switch-client with the first available client
+        let command = format!(
+            r#"client_name=$(tmux list-clients -F '#{{client_name}}' | head -n1); tmux switch-client -c "$client_name" -t {}; open -a WezTerm"#,
+            escaped_pane_id
+        );
         notification = notification.with_action(NotificationAction::new(command));
     }
 
@@ -403,6 +416,8 @@ mod tests {
 
         assert_eq!(notification.title(), "Claude Code");
         assert_eq!(notification.message(), "Session stopped");
+        assert_eq!(notification.sound(), Some("Glass"));
+        assert!(notification.subtitle().is_none());
         assert!(notification.action().is_none());
     }
 
@@ -426,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_notification_with_tmux_action() {
+    fn test_build_notification_with_tmux_info() {
         let input = create_test_input(None);
         let session = create_test_session(Some(TmuxInfo {
             session_name: "main".to_string(),
@@ -436,10 +451,15 @@ mod tests {
         }));
         let notification = build_notification(HookEvent::Stop, &input, &session);
 
+        // Subtitle should contain session and window info
+        assert_eq!(notification.subtitle(), Some("[main] 1:dev"));
+
+        // Action should switch to the correct pane
         assert!(notification.action().is_some());
         let action = notification.action().expect("action present");
         assert!(action.command().contains("tmux switch-client"));
         assert!(action.command().contains("%123"));
+        assert!(action.command().contains("list-clients"));
     }
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
