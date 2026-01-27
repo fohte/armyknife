@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.41](https://github.com/fohte/armyknife/compare/v0.1.40...v0.1.41) (2026-01-27)
+
+
+### Features
+
+* **cc:** display session status details in `a cc watch` ([#151](https://github.com/fohte/armyknife/issues/151)) ([28c73fe](https://github.com/fohte/armyknife/commit/28c73fedec4afc2ad7f35bd8d0bcdb64591ad65b))
+
 ## [0.1.40](https://github.com/fohte/armyknife/compare/v0.1.39...v0.1.40) (2026-01-27)
 
 
