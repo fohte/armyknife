@@ -168,7 +168,7 @@ fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> 
 
     #[cfg(not(unix))]
     {
-        let mut file = File::create(path)?;
+        let mut file = fs::File::create(path)?;
         file.write_all(content.as_bytes())?;
     }
 
