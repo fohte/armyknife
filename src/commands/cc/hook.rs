@@ -1,4 +1,6 @@
-use std::io::{self, Read};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -11,6 +13,7 @@ use super::store;
 use super::tty;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
 use crate::infra::tmux;
+use crate::shared::cache;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
@@ -105,9 +108,81 @@ fn read_stdin_json() -> Result<HookInput> {
         return Err(CcError::NoStdinInput.into());
     }
 
-    let input: HookInput = serde_json::from_str(&json_str)?;
+    match serde_json::from_str(&json_str) {
+        Ok(input) => Ok(input),
+        Err(e) => {
+            let log_path = write_error_log(&json_str);
+            Err(CcError::JsonParseError {
+                source: e,
+                log_path,
+            }
+            .into())
+        }
+    }
+}
 
-    Ok(input)
+/// Writes the raw stdin content to a log file for debugging.
+/// Returns the path to the log file if successful, None otherwise.
+fn write_error_log(content: &str) -> Option<PathBuf> {
+    let logs_dir = logs_dir()?;
+    write_error_log_to_dir(content, &logs_dir)
+}
+
+/// Writes the raw stdin content to a log file in the specified directory.
+/// Returns the path to the log file if successful, None otherwise.
+fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let filename = format!("hook_error_{timestamp}.log");
+    let log_path = logs_dir.join(&filename);
+
+    if let Err(e) = fs::create_dir_all(logs_dir) {
+        eprintln!("Warning: Failed to create logs directory: {e}");
+        return None;
+    }
+
+    match write_file_with_permissions(&log_path, content) {
+        Ok(()) => {
+            eprintln!("Raw stdin content saved to: {}", log_path.display());
+            Some(log_path)
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to write error log: {e}");
+            None
+        }
+    }
+}
+
+/// Writes content to a file with restrictive permissions (0600 on Unix).
+fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content.as_bytes())?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let mut file = fs::File::create(path)?;
+        file.write_all(content.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+/// Returns the directory for storing error logs.
+///
+/// Path: ~/Library/Caches/armyknife/cc/logs/ (macOS) or ~/.cache/armyknife/cc/logs/ (Linux)
+///
+/// Note: Ideally logs should go to XDG_STATE_HOME (~/.local/state/), but the `dirs` crate
+/// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
+fn logs_dir() -> Option<PathBuf> {
+    cache::base_dir().map(|d| d.join("cc").join("logs"))
 }
 
 /// Formats the current tool display string from hook input.
@@ -217,5 +292,67 @@ mod tests {
         );
 
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    mod write_error_log_tests {
+        use super::*;
+        use tempfile::TempDir;
+
+        #[test]
+        fn creates_log_file_with_content() {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let content = r#"{"invalid": json"#;
+            let log_path = write_error_log_to_dir(content, &logs_dir).expect("should succeed");
+
+            assert!(log_path.exists(), "log file should be created");
+            let written = fs::read_to_string(&log_path).expect("should read log file");
+            assert_eq!(written, content);
+        }
+
+        #[test]
+        fn log_filename_contains_timestamp() {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path =
+                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
+            let filename = log_path
+                .file_name()
+                .expect("should have filename")
+                .to_string_lossy();
+
+            assert!(
+                filename.starts_with("hook_error_"),
+                "filename should start with hook_error_"
+            );
+            assert!(filename.ends_with(".log"), "filename should end with .log");
+        }
+
+        #[test]
+        fn logs_dir_uses_cache_directory() {
+            let logs = logs_dir().expect("should have cache directory");
+            assert!(
+                logs.ends_with("cc/logs"),
+                "logs dir should end with cc/logs, got: {logs:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn log_file_has_restrictive_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path =
+                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
+            let metadata = fs::metadata(&log_path).expect("should get metadata");
+            let mode = metadata.permissions().mode() & 0o777;
+
+            assert_eq!(mode, 0o600, "log file should have 0600 permissions");
+        }
     }
 }
