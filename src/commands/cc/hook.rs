@@ -3,6 +3,7 @@ use std::io::{self, Read};
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
+use lazy_regex::regex_replace_all;
 
 use super::claude_sessions;
 use super::error::CcError;
@@ -111,6 +112,8 @@ fn read_stdin_json() -> Result<HookInput> {
 
 /// Formats the current tool display string from hook input.
 /// Returns format like "Bash(cargo test)" or "Read(src/main.rs)" or just "Task".
+///
+/// Strips ANSI escape sequences to prevent terminal injection.
 fn format_current_tool(input: &HookInput) -> Option<String> {
     let tool_name = input.tool_name.as_deref()?;
 
@@ -122,10 +125,13 @@ fn format_current_tool(input: &HookInput) -> Option<String> {
             .or(ti.pattern.as_deref())
     });
 
-    match detail {
-        Some(d) => Some(format!("{}({})", tool_name, d)),
-        None => Some(tool_name.to_string()),
-    }
+    let result = match detail {
+        Some(d) => format!("{}({})", tool_name, d),
+        None => tool_name.to_string(),
+    };
+
+    // Strip ANSI escape sequences
+    Some(regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", &result, |_| "").to_string())
 }
 
 /// Determines the session status based on the event and input.

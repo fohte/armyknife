@@ -6,6 +6,7 @@
 //! Falls back to reading the first user prompt from .jsonl files when
 //! sessions-index.json is not available.
 
+use lazy_regex::regex_replace_all;
 use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -101,10 +102,13 @@ fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> 
 
 /// Normalizes a title string for display.
 ///
-/// Trims whitespace and replaces newlines with spaces to prevent
-/// breaking table formatting.
+/// - Strips ANSI escape sequences to prevent terminal injection
+/// - Trims whitespace and replaces newlines with spaces to prevent
+///   breaking table formatting
 fn normalize_title(s: &str) -> String {
-    s.trim().replace('\n', " ").replace('\r', "")
+    // Strip ANSI escape sequences (CSI sequences like \x1b[...m)
+    let stripped = regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", s, |_| "");
+    stripped.trim().replace('\n', " ").replace('\r', "")
 }
 
 /// Retrieves the session title from Claude Code's sessions-index.json.
@@ -392,6 +396,9 @@ mod tests {
     #[case::with_multiple_newlines("line1\nline2\nline3", "line1 line2 line3")]
     #[case::with_leading_whitespace("  hello  ", "hello")]
     #[case::with_trailing_newline("hello\n", "hello")]
+    #[case::with_ansi_color("\x1b[31mred text\x1b[0m", "red text")]
+    #[case::with_ansi_bold("\x1b[1mbold\x1b[0m normal", "bold normal")]
+    #[case::with_multiple_ansi("\x1b[32m\x1b[1mgreen bold\x1b[0m", "green bold")]
     fn test_normalize_title(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(normalize_title(input), expected);
     }
