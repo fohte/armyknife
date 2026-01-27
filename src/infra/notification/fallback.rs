@@ -1,7 +1,6 @@
+use anyhow::{Context, Result};
 use notify_rust::Notification as RustNotification;
 
-use super::Result;
-use super::error::NotificationError;
 use super::types::Notification;
 
 const FALLBACK_HINT: &str = "(Install terminal-notifier for click-to-focus)";
@@ -19,7 +18,7 @@ pub fn send(notification: &Notification) -> Result<()> {
         .summary(notification.title())
         .body(&message)
         .show()
-        .map_err(|e| NotificationError::NotifyRustFailed(e.to_string()))?;
+        .context("failed to send notification via notify-rust")?;
 
     Ok(())
 }

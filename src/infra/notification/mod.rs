@@ -1,15 +1,12 @@
-mod error;
 mod fallback;
 mod terminal_notifier;
 mod types;
 
-pub use error::NotificationError;
 pub use types::{Notification, NotificationAction};
 
-use crate::shared::command::is_command_available;
+use anyhow::Result;
 
-/// Result type for notification operations.
-pub type Result<T> = std::result::Result<T, NotificationError>;
+use crate::shared::command::is_command_available;
 
 /// Sends a notification using the best available method.
 /// Prefers terminal-notifier for click actions, falls back to notify-rust.
