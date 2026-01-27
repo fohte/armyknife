@@ -16,6 +16,9 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
+    /// Currently executing tool name (e.g., "Bash", "Read", "Edit")
+    #[serde(default)]
+    pub current_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,9 +67,26 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
+    // Pre-tool-use / Post-tool-use event fields
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_input: Option<ToolInput>,
+
     // Ignore other fields from Claude Code hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
+}
+
+/// Tool input data from pre-tool-use events.
+#[derive(Debug, Deserialize)]
+pub struct ToolInput {
+    /// Command for Bash tool
+    pub command: Option<String>,
+    /// File path for Read/Write/Edit tools
+    pub file_path: Option<String>,
+    /// Pattern for Grep/Glob tools
+    pub pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
