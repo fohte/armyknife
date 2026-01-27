@@ -1,3 +1,4 @@
+mod claude_sessions;
 mod error;
 mod focus;
 mod hook;

@@ -3,9 +3,23 @@ use std::io::{self, Write};
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::claude_sessions;
 use super::store;
 use super::types::{Session, SessionStatus};
+
+/// Column widths for fixed-width columns
+const SESSION_WIDTH: usize = 16;
+const WINDOW_WIDTH: usize = 12;
+/// STATUS column: symbol (1-2) + space (1) + name (8) + space (1) = 11
+const STATUS_WIDTH: usize = 11;
+/// UPDATED column: "just now" (8) or "XXXd ago" (8) = 8
+const UPDATED_WIDTH: usize = 8;
+/// Minimum width for TITLE column
+const MIN_TITLE_WIDTH: usize = 20;
+/// Spaces between columns
+const COLUMN_SPACES: usize = 5;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}
@@ -20,9 +34,27 @@ pub fn run(_args: &ListArgs) -> Result<()> {
     let sessions = store::list_sessions()?;
 
     let mut stdout = io::stdout().lock();
-    render_sessions(&mut stdout, &sessions, Utc::now())?;
+    let term_width = get_terminal_width();
+    render_sessions(&mut stdout, &sessions, Utc::now(), term_width)?;
 
     Ok(())
+}
+
+/// Gets the terminal width, defaulting to 80 if unavailable.
+fn get_terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+}
+
+/// Calculates the title column width based on terminal width.
+fn calculate_title_width(term_width: usize) -> usize {
+    let fixed_width = SESSION_WIDTH + WINDOW_WIDTH + STATUS_WIDTH + UPDATED_WIDTH + COLUMN_SPACES;
+    if term_width > fixed_width + MIN_TITLE_WIDTH {
+        term_width - fixed_width
+    } else {
+        MIN_TITLE_WIDTH
+    }
 }
 
 /// Renders sessions to the given writer.
@@ -31,22 +63,28 @@ fn render_sessions<W: Write>(
     writer: &mut W,
     sessions: &[Session],
     now: chrono::DateTime<Utc>,
+    term_width: usize,
 ) -> Result<()> {
     if sessions.is_empty() {
         writeln!(writer, "No active Claude Code sessions.")?;
         return Ok(());
     }
 
+    let title_width = calculate_title_width(term_width);
+
     // Print header
     writeln!(
         writer,
-        "{:<24} {:<20} {:<10} UPDATED",
-        "SESSION", "WINDOW", "STATUS"
+        "{} {} {} {:<10} UPDATED",
+        pad_or_truncate("TITLE", title_width),
+        pad_or_truncate("SESSION", SESSION_WIDTH),
+        pad_or_truncate("WINDOW", WINDOW_WIDTH),
+        "STATUS"
     )?;
 
     // Print each session
     for session in sessions {
-        render_session_row(writer, session, now)?;
+        render_session_row(writer, session, now, title_width)?;
     }
 
     Ok(())
@@ -57,7 +95,9 @@ fn render_session_row<W: Write>(
     writer: &mut W,
     session: &Session,
     now: chrono::DateTime<Utc>,
+    title_width: usize,
 ) -> Result<()> {
+    let title = get_title_display_name(session);
     let session_name = get_session_display_name(session);
     let window_name = get_window_display_name(session);
     let status_display = format_status(session.status);
@@ -65,15 +105,23 @@ fn render_session_row<W: Write>(
 
     writeln!(
         writer,
-        "{:<24} {:<20} {} {} {}",
-        truncate(&session_name, 24),
-        truncate(&window_name, 20),
+        "{} {} {} {} {} {}",
+        pad_or_truncate(&title, title_width),
+        pad_or_truncate(&session_name, SESSION_WIDTH),
+        pad_or_truncate(&window_name, WINDOW_WIDTH),
         session.status.display_symbol(),
         status_display,
         updated_display
     )?;
 
     Ok(())
+}
+
+/// Gets the title display name for a session.
+/// Fetches from Claude Code's sessions-index.json, returns "-" if not found.
+fn get_title_display_name(session: &Session) -> String {
+    claude_sessions::get_session_title(&session.cwd, &session.session_id)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Gets the display name for a session.
@@ -139,18 +187,43 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
     }
 }
 
-/// Truncates a string to the specified length (character-based, not byte-based).
-fn truncate(s: &str, max_len: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
-        s.to_string()
-    } else if max_len < 3 {
+/// Pads or truncates a string to exactly the specified display width.
+/// Uses unicode display width for proper alignment with CJK characters.
+fn pad_or_truncate(s: &str, width: usize) -> String {
+    let display_width = s.width();
+
+    if display_width <= width {
+        // Pad with spaces to reach target width
+        let padding = width - display_width;
+        format!("{}{}", s, " ".repeat(padding))
+    } else if width < 3 {
         // Too short for ellipsis, just truncate
-        s.chars().take(max_len).collect()
+        truncate_to_width(s, width)
     } else {
-        let truncated: String = s.chars().take(max_len - 3).collect();
-        format!("{truncated}...")
+        // Truncate and add ellipsis
+        let truncated = truncate_to_width(s, width - 3);
+        let truncated_width = truncated.width();
+        // Use saturating_sub to avoid underflow when CJK chars cause width mismatch
+        let padding = width.saturating_sub(truncated_width).saturating_sub(3);
+        format!("{}...{}", truncated, " ".repeat(padding))
     }
+}
+
+/// Truncates a string to fit within the specified display width.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for c in s.chars() {
+        let char_width = c.width().unwrap_or(0);
+        if current_width + char_width > max_width {
+            break;
+        }
+        result.push(c);
+        current_width += char_width;
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -228,7 +301,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::short("hello", 10, "hello")]
+    #[case::short("hello", 10, "hello     ")]
     #[case::exact("hello", 5, "hello")]
     #[case::truncate("hello world", 8, "hello...")]
     #[case::truncate_short("hello", 4, "h...")]
@@ -236,8 +309,11 @@ mod tests {
     #[case::max_len_2("hello", 2, "he")]
     #[case::max_len_1("hello", 1, "h")]
     #[case::max_len_0("hello", 0, "")]
-    fn test_truncate(#[case] input: &str, #[case] max_len: usize, #[case] expected: &str) {
-        assert_eq!(truncate(input, max_len), expected);
+    #[case::cjk_short("日本語", 10, "日本語    ")]
+    #[case::cjk_exact("日本語", 6, "日本語")]
+    #[case::cjk_truncate("日本語テスト", 8, "日本... ")]
+    fn test_pad_or_truncate(#[case] input: &str, #[case] width: usize, #[case] expected: &str) {
+        assert_eq!(pad_or_truncate(input, width), expected);
     }
 
     #[test]
@@ -251,10 +327,14 @@ mod tests {
         assert_eq!(SessionStatus::Stopped.display_name(), "stopped");
     }
 
+    /// Test terminal width that results in TITLE width of 30
+    const TEST_TERM_WIDTH: usize = 82;
+
     #[test]
     fn test_render_sessions_empty() {
         let mut output = Vec::new();
-        render_sessions(&mut output, &[], Utc::now()).expect("render should succeed");
+        render_sessions(&mut output, &[], Utc::now(), TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(result, "No active Claude Code sessions.\n");
@@ -267,14 +347,15 @@ mod tests {
         session.updated_at = now;
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                myproject                -                    ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              myproject        -            ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -292,14 +373,15 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                dev                      editor               ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              dev              editor       ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -344,16 +426,18 @@ mod tests {
         ];
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &sessions, now).expect("render should succeed");
+        render_sessions(&mut output, &sessions, now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
+        // Title is fetched from Claude Code's sessions-index.json, returns "-" for test paths
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                running                  -                    ● \x1b[32mrunning \x1b[0m just now
-                waiting                  -                    ◐ \x1b[33mwaiting \x1b[0m just now
-                stopped                  -                    ○ \x1b[90mstopped \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              running          -            ● \x1b[32mrunning \x1b[0m just now
+                -                              waiting          -            ◐ \x1b[33mwaiting \x1b[0m just now
+                -                              stopped          -            ○ \x1b[90mstopped \x1b[0m just now
             "}
         );
     }
@@ -364,21 +448,23 @@ mod tests {
         let mut session = create_test_session();
         session.updated_at = now;
         session.tmux_info = Some(TmuxInfo {
-            session_name: "this-is-a-very-long-session-name-that-exceeds-limit".to_string(),
+            session_name: "this-is-a-very-long-session-name".to_string(),
             window_name: "also-a-very-long-window-name".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
         });
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
+        // Title returns "-" (no sessions-index.json), session/window names are truncated
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                this-is-a-very-long-s... also-a-very-long-... ● \x1b[32mrunning \x1b[0m just now
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              this-is-a-ver... also-a-ve... ● \x1b[32mrunning \x1b[0m just now
             "}
         );
     }
@@ -390,14 +476,162 @@ mod tests {
         session.updated_at = now - Duration::hours(2);
 
         let mut output = Vec::new();
-        render_sessions(&mut output, &[session], now).expect("render should succeed");
+        render_sessions(&mut output, &[session], now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
             indoc! {"
-                SESSION                  WINDOW               STATUS     UPDATED
-                myproject                -                    ● \x1b[32mrunning \x1b[0m 2h ago
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              myproject        -            ● \x1b[32mrunning \x1b[0m 2h ago
+            "}
+        );
+    }
+
+    #[test]
+    fn test_get_title_display_name_without_sessions_index() {
+        // When sessions-index.json doesn't exist, returns "-"
+        let session = create_test_session();
+        assert_eq!(get_title_display_name(&session), "-");
+    }
+
+    // =========================================================================
+    // Integration tests for terminal width adaptation
+    // =========================================================================
+
+    #[test]
+    fn test_calculate_title_width_wide_terminal() {
+        // Wide terminal (120 chars) should give more space to TITLE
+        // fixed_width = 16 + 12 + 11 + 8 + 5 = 52
+        // title_width = 120 - 52 = 68
+        assert_eq!(calculate_title_width(120), 68);
+    }
+
+    #[test]
+    fn test_calculate_title_width_narrow_terminal() {
+        // Narrow terminal should use minimum TITLE width
+        // fixed_width = 52, min_title = 20
+        // If term_width <= 72, use minimum
+        assert_eq!(calculate_title_width(60), MIN_TITLE_WIDTH);
+        assert_eq!(calculate_title_width(72), MIN_TITLE_WIDTH);
+    }
+
+    #[test]
+    fn test_render_sessions_wide_terminal() {
+        // Wide terminal (100 chars) - TITLE width = 100 - 52 = 48
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session], now, 100).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // TITLE width = 48, SESSION = 16, WINDOW = 12
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                                            SESSION          WINDOW       STATUS     UPDATED
+                -                                                dev              editor       ● \x1b[32mrunning \x1b[0m just now
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_narrow_terminal() {
+        // Narrow terminal (60 chars) - uses MIN_TITLE_WIDTH (20)
+        let now = Utc::now();
+        let mut session = create_test_session();
+        session.updated_at = now;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "dev".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+        });
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &[session], now, 60).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // TITLE width = 20 (minimum)
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                SESSION          WINDOW       STATUS     UPDATED
+                -                    dev              editor       ● \x1b[32mrunning \x1b[0m just now
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_sessions_full_output_with_all_statuses() {
+        let now = Utc::now();
+        let sessions = vec![
+            Session {
+                session_id: "s1".to_string(),
+                cwd: PathBuf::from("/home/user/webapp"),
+                transcript_path: None,
+                tty: Some("/dev/ttys001".to_string()),
+                tmux_info: Some(TmuxInfo {
+                    session_name: "webapp".to_string(),
+                    window_name: "dev".to_string(),
+                    window_index: 0,
+                    pane_id: "%0".to_string(),
+                }),
+                status: SessionStatus::Running,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+            },
+            Session {
+                session_id: "s2".to_string(),
+                cwd: PathBuf::from("/home/user/api"),
+                transcript_path: None,
+                tty: Some("/dev/ttys002".to_string()),
+                tmux_info: Some(TmuxInfo {
+                    session_name: "api".to_string(),
+                    window_name: "test".to_string(),
+                    window_index: 1,
+                    pane_id: "%1".to_string(),
+                }),
+                status: SessionStatus::WaitingInput,
+                created_at: now,
+                updated_at: now - Duration::minutes(5),
+                last_message: None,
+            },
+            Session {
+                session_id: "s3".to_string(),
+                cwd: PathBuf::from("/home/user/docs"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Stopped,
+                created_at: now,
+                updated_at: now - Duration::hours(1),
+                last_message: None,
+            },
+        ];
+
+        let mut output = Vec::new();
+        render_sessions(&mut output, &sessions, now, TEST_TERM_WIDTH)
+            .expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                TITLE                          SESSION          WINDOW       STATUS     UPDATED
+                -                              webapp           dev          ● \x1b[32mrunning \x1b[0m just now
+                -                              api              test         ◐ \x1b[33mwaiting \x1b[0m 5m ago
+                -                              docs             -            ○ \x1b[90mstopped \x1b[0m 1h ago
             "}
         );
     }
