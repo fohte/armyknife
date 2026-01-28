@@ -341,14 +341,10 @@ fn build_subtitle(session: &Session) -> Option<String> {
     // Get session title from Claude Code's metadata
     let session_title = claude_sessions::get_session_title(&session.cwd, &session.session_id);
 
+    // Build full subtitle first, then truncate once to avoid double-truncation issues
     let subtitle = match session_title {
-        Some(title) => {
-            // Calculate available space for title (50 total - tmux_part - " | ")
-            let available = 50usize.saturating_sub(tmux_part.chars().count() + 3);
-            let truncated_title = truncate_string(&title, available);
-            format!("{} | {}", tmux_part, truncated_title)
-        }
-        None => tmux_part,
+        Some(title) if !title.is_empty() => format!("{} | {}", tmux_part, title),
+        _ => tmux_part,
     };
 
     Some(truncate_string(&subtitle, 50))
