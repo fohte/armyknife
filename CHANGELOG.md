@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.45](https://github.com/fohte/armyknife/compare/v0.1.44...v0.1.45) (2026-01-28)
+
+
+### Features
+
+* **cc/hook:** show session status, title, and last response in notifications ([#160](https://github.com/fohte/armyknife/issues/160)) ([9745afd](https://github.com/fohte/armyknife/commit/9745afde51783257d2c6835cbf4e03fb3c04fcad))
+
 ## [0.1.44](https://github.com/fohte/armyknife/compare/v0.1.43...v0.1.44) (2026-01-27)
 
 
