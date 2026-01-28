@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.47](https://github.com/fohte/armyknife/compare/v0.1.46...v0.1.47) (2026-01-28)
+
+
+### Features
+
+* **cc/watch:** add search functionality with `/` key ([#163](https://github.com/fohte/armyknife/issues/163)) ([fbd402d](https://github.com/fohte/armyknife/commit/fbd402d8ea4462ca06915491f6cd2170d55ef159))
+
 ## [0.1.46](https://github.com/fohte/armyknife/compare/v0.1.45...v0.1.46) (2026-01-28)
 
 
