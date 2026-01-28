@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.46](https://github.com/fohte/armyknife/compare/v0.1.45...v0.1.46) (2026-01-28)
+
+
+### Features
+
+* **cc/hook:** support log level control via `ARMYKNIFE_CC_HOOK_LOG` env var ([#162](https://github.com/fohte/armyknife/issues/162)) ([34d4ff3](https://github.com/fohte/armyknife/commit/34d4ff3378ede4c75a9e221fb1f6288fadd05a7b))
+
 ## [0.1.45](https://github.com/fohte/armyknife/compare/v0.1.44...v0.1.45) (2026-01-28)
 
 
