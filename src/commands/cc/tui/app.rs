@@ -3,6 +3,7 @@ use crate::commands::cc::store;
 use crate::commands::cc::types::Session;
 use anyhow::Result;
 use ratatui::widgets::ListState;
+use std::collections::HashMap;
 
 /// Application mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,23 +33,35 @@ pub struct App {
     pub filtered_indices: Vec<usize>,
     /// Selection index before entering search mode (for restoration on cancel).
     pub pre_search_selection: Option<usize>,
+    /// Cache of searchable text for each session (keyed by session_id).
+    /// Built once on load/reload for fast search.
+    searchable_text_cache: HashMap<String, String>,
 }
 
 impl App {
     /// Creates a new App instance with initial session data.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
+        Ok(Self::with_sessions(sessions))
+    }
+
+    /// Creates a new App instance with the given sessions.
+    /// Useful for testing without disk I/O.
+    pub fn with_sessions(sessions: Vec<Session>) -> Self {
         let mut list_state = ListState::default();
 
         // Build initial filtered indices (all sessions)
         let filtered_indices: Vec<usize> = (0..sessions.len()).collect();
+
+        // Build searchable text cache for all sessions
+        let searchable_text_cache = build_searchable_text_cache(&sessions);
 
         // Select first item if there are any sessions
         if !sessions.is_empty() {
             list_state.select(Some(0));
         }
 
-        Ok(Self {
+        Self {
             sessions,
             list_state,
             should_quit: false,
@@ -58,7 +71,8 @@ impl App {
             confirmed_query: String::new(),
             filtered_indices,
             pre_search_selection: None,
-        })
+            searchable_text_cache,
+        }
     }
 
     /// Reloads sessions from disk.
@@ -68,6 +82,9 @@ impl App {
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
 
         self.sessions = load_sessions()?;
+
+        // Rebuild searchable text cache for new/changed sessions
+        self.rebuild_searchable_text_cache();
 
         // Re-apply filter with current query
         self.apply_filter();
@@ -241,7 +258,9 @@ impl App {
                 .sessions
                 .iter()
                 .enumerate()
-                .filter(|(_, session)| session_matches(session, query))
+                .filter(|(_, session)| {
+                    session_matches_cached(session, query, &self.searchable_text_cache)
+                })
                 .map(|(i, _)| i)
                 .collect();
         }
@@ -253,21 +272,63 @@ impl App {
             self.list_state.select(Some(0));
         }
     }
+
+    /// Rebuilds the searchable text cache for sessions not already cached.
+    fn rebuild_searchable_text_cache(&mut self) {
+        for session in &self.sessions {
+            if !self.searchable_text_cache.contains_key(&session.session_id) {
+                let searchable_text = build_searchable_text(session);
+                self.searchable_text_cache
+                    .insert(session.session_id.clone(), searchable_text);
+            }
+        }
+    }
 }
 
-/// Checks if a session matches the search query.
+/// Builds the searchable text cache for all sessions.
+fn build_searchable_text_cache(sessions: &[Session]) -> HashMap<String, String> {
+    sessions
+        .iter()
+        .map(|session| {
+            let searchable_text = build_searchable_text(session);
+            (session.session_id.clone(), searchable_text)
+        })
+        .collect()
+}
+
+/// Checks if a session matches the search query using the cache.
 /// Uses case-insensitive partial matching with AND logic for multiple words.
+fn session_matches_cached(session: &Session, query: &str, cache: &HashMap<String, String>) -> bool {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.is_empty() {
+        return true;
+    }
+
+    // Get searchable text from cache, or build it on the fly as fallback
+    let searchable = cache
+        .get(&session.session_id)
+        .map(String::as_str)
+        .unwrap_or("");
+    let searchable_lower = searchable.to_lowercase();
+
+    // All words must match (AND logic)
+    words
+        .iter()
+        .all(|word| searchable_lower.contains(&word.to_lowercase()))
+}
+
+/// Checks if a session matches the search query (without cache).
+/// Used for testing. Builds searchable text on the fly.
+#[cfg(test)]
 fn session_matches(session: &Session, query: &str) -> bool {
     let words: Vec<&str> = query.split_whitespace().collect();
     if words.is_empty() {
         return true;
     }
 
-    // Build searchable text from session fields
     let searchable = build_searchable_text(session);
     let searchable_lower = searchable.to_lowercase();
 
-    // All words must match (AND logic)
     words
         .iter()
         .all(|word| searchable_lower.contains(&word.to_lowercase()))
@@ -334,22 +395,7 @@ mod tests {
     }
 
     fn create_test_app(sessions: Vec<Session>) -> App {
-        let filtered_indices: Vec<usize> = (0..sessions.len()).collect();
-        let mut list_state = ListState::default();
-        if !sessions.is_empty() {
-            list_state.select(Some(0));
-        }
-        App {
-            sessions,
-            list_state,
-            should_quit: false,
-            error_message: None,
-            mode: AppMode::Normal,
-            search_query: String::new(),
-            confirmed_query: String::new(),
-            filtered_indices,
-            pre_search_selection: None,
-        }
+        App::with_sessions(sessions)
     }
 
     #[test]

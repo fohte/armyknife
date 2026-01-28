@@ -181,7 +181,6 @@ mod tests {
     use crate::commands::cc::tui::app::AppMode;
     use crate::commands::cc::types::{Session, SessionStatus};
     use chrono::Utc;
-    use ratatui::widgets::ListState;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -201,23 +200,7 @@ mod tests {
             })
             .collect();
 
-        let filtered_indices: Vec<usize> = (0..count).collect();
-        let mut list_state = ListState::default();
-        if !sessions.is_empty() {
-            list_state.select(Some(0));
-        }
-
-        App {
-            sessions,
-            list_state,
-            should_quit: false,
-            error_message: None,
-            mode: AppMode::Normal,
-            search_query: String::new(),
-            confirmed_query: String::new(),
-            filtered_indices,
-            pre_search_selection: None,
-        }
+        App::with_sessions(sessions)
     }
 
     fn key(code: KeyCode) -> KeyEvent {

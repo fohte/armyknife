@@ -470,21 +470,11 @@ fn render_to_string(
     let mut terminal = Terminal::new(backend).unwrap();
 
     // Create a minimal App state for rendering
-    let filtered_indices: Vec<usize> = (0..sessions.len()).collect();
     let mut list_state = ListState::default();
     list_state.select(selected_index);
 
-    let app = App {
-        sessions: sessions.to_vec(),
-        list_state: list_state.clone(),
-        should_quit: false,
-        error_message: None,
-        mode: AppMode::Normal,
-        search_query: String::new(),
-        confirmed_query: String::new(),
-        filtered_indices,
-        pre_search_selection: None,
-    };
+    let mut app = App::with_sessions(sessions.to_vec());
+    app.list_state = list_state.clone();
 
     terminal
         .draw(|frame| {
