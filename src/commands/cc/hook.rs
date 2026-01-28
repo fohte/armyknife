@@ -271,27 +271,48 @@ fn send_notification(event: HookEvent, input: &HookInput, session: &Session) {
     }
 }
 
+/// Truncates a string to the specified maximum length.
+/// If truncated, appends "..." to indicate truncation.
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+}
+
 /// Builds a notification for the given event.
 fn build_notification(event: HookEvent, input: &HookInput, session: &Session) -> Notification {
-    let title = "Claude Code";
-
-    let message = match event {
-        HookEvent::Stop => "Session stopped".to_string(),
-        HookEvent::Notification => input
-            .message
-            .clone()
-            .unwrap_or_else(|| "Permission required".to_string()),
-        _ => "Notification".to_string(),
+    // Title: "Claude Code - Stopped" or "Claude Code - Waiting"
+    let status_label = match session.status {
+        SessionStatus::WaitingInput => "Waiting",
+        SessionStatus::Stopped => "Stopped",
+        SessionStatus::Running => "Running",
     };
+    let title = format!("Claude Code - {}", status_label);
 
-    let mut notification = Notification::new(title, message).with_sound("Glass");
+    // Subtitle: "session:window | タイトル" format
+    // Limit to ~50 characters
+    let subtitle = build_subtitle(session);
 
-    // Add subtitle with tmux session and window info
-    if let Some(tmux_info) = &session.tmux_info {
-        let subtitle = format!(
-            "[{}] {}:{}",
-            tmux_info.session_name, tmux_info.window_index, tmux_info.window_name
-        );
+    // Message: use last_message if available, otherwise fall back to event-based message
+    let message = session
+        .last_message
+        .as_ref()
+        .map(|m| truncate_string(m, 100))
+        .unwrap_or_else(|| match event {
+            HookEvent::Stop => "Session stopped".to_string(),
+            HookEvent::Notification => input
+                .message
+                .clone()
+                .unwrap_or_else(|| "Permission required".to_string()),
+            _ => "Notification".to_string(),
+        });
+
+    let mut notification = Notification::new(&title, message).with_sound("Glass");
+
+    if let Some(subtitle) = subtitle {
         notification = notification.with_subtitle(subtitle);
     }
 
@@ -309,6 +330,28 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
     }
 
     notification
+}
+
+/// Builds the subtitle for a notification.
+/// Format: "session:window | タイトル" or just "session:window" if no title.
+fn build_subtitle(session: &Session) -> Option<String> {
+    let tmux_info = session.tmux_info.as_ref()?;
+    let tmux_part = format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+
+    // Get session title from Claude Code's metadata
+    let session_title = claude_sessions::get_session_title(&session.cwd, &session.session_id);
+
+    let subtitle = match session_title {
+        Some(title) => {
+            // Calculate available space for title (50 total - tmux_part - " | ")
+            let available = 50usize.saturating_sub(tmux_part.chars().count() + 3);
+            let truncated_title = truncate_string(&title, available);
+            format!("{} | {}", tmux_part, truncated_title)
+        }
+        None => tmux_part,
+    };
+
+    Some(truncate_string(&subtitle, 50))
 }
 
 #[cfg(test)]
@@ -411,12 +454,16 @@ mod tests {
     #[test]
     fn test_build_notification_stop_event() {
         let input = create_test_input(None);
-        let session = create_test_session(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Stopped;
         let notification = build_notification(HookEvent::Stop, &input, &session);
 
-        assert_eq!(notification.title(), "Claude Code");
+        // Title includes status
+        assert_eq!(notification.title(), "Claude Code - Stopped");
+        // Message falls back to "Session stopped" when no last_message
         assert_eq!(notification.message(), "Session stopped");
         assert_eq!(notification.sound(), Some("Glass"));
+        // No subtitle without tmux_info
         assert!(notification.subtitle().is_none());
         assert!(notification.action().is_none());
     }
@@ -424,10 +471,13 @@ mod tests {
     #[test]
     fn test_build_notification_permission_with_message() {
         let input = create_test_input_with_message(Some("permission_prompt"), Some("Allow edit?"));
-        let session = create_test_session(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::WaitingInput;
         let notification = build_notification(HookEvent::Notification, &input, &session);
 
-        assert_eq!(notification.title(), "Claude Code");
+        // Title shows Waiting status
+        assert_eq!(notification.title(), "Claude Code - Waiting");
+        // Message falls back to input.message when no last_message
         assert_eq!(notification.message(), "Allow edit?");
     }
 
@@ -441,18 +491,34 @@ mod tests {
     }
 
     #[test]
+    fn test_build_notification_with_last_message() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Stopped;
+        session.last_message = Some("I've updated the code as requested.".to_string());
+        let notification = build_notification(HookEvent::Stop, &input, &session);
+
+        // Message uses last_message when available
+        assert_eq!(
+            notification.message(),
+            "I've updated the code as requested."
+        );
+    }
+
+    #[test]
     fn test_build_notification_with_tmux_info() {
         let input = create_test_input(None);
-        let session = create_test_session(Some(TmuxInfo {
+        let mut session = create_test_session(Some(TmuxInfo {
             session_name: "main".to_string(),
             window_name: "dev".to_string(),
             window_index: 1,
             pane_id: "%123".to_string(),
         }));
+        session.status = SessionStatus::Stopped;
         let notification = build_notification(HookEvent::Stop, &input, &session);
 
-        // Subtitle should contain session and window info
-        assert_eq!(notification.subtitle(), Some("[main] 1:dev"));
+        // Subtitle should contain session:window (no title since we can't mock Claude sessions)
+        assert_eq!(notification.subtitle(), Some("main:dev"));
 
         // Action should switch to the correct pane
         assert!(notification.action().is_some());
@@ -460,6 +526,21 @@ mod tests {
         assert!(action.command().contains("tmux switch-client"));
         assert!(action.command().contains("%123"));
         assert!(action.command().contains("list-clients"));
+    }
+
+    #[test]
+    fn test_truncate_string() {
+        // String within limit
+        assert_eq!(truncate_string("hello", 10), "hello");
+
+        // String at exact limit
+        assert_eq!(truncate_string("hello", 5), "hello");
+
+        // String exceeds limit
+        assert_eq!(truncate_string("hello world", 8), "hello...");
+
+        // Very short limit
+        assert_eq!(truncate_string("hello world", 5), "he...");
     }
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
