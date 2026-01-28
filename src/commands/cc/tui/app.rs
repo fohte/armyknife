@@ -291,8 +291,13 @@ fn build_searchable_text(session: &Session) -> String {
         parts.push(title);
     }
 
-    // Last message
-    if let Some(ref msg) = session.last_message {
+    // All conversation text (user messages and assistant responses, excluding tool outputs)
+    if let Some(conversation) =
+        claude_sessions::get_conversation_text(&session.cwd, &session.session_id)
+    {
+        parts.push(conversation);
+    } else if let Some(ref msg) = session.last_message {
+        // Fallback to last_message if transcript is not available
         parts.push(msg.clone());
     }
 

@@ -203,6 +203,80 @@ pub fn get_last_assistant_message(project_path: &Path, session_id: &str) -> Opti
     get_last_assistant_message_in_home(&home, project_path, session_id)
 }
 
+/// Retrieves all conversation text from a session's .jsonl file for search.
+///
+/// Returns a concatenated string of all user messages and assistant text responses.
+/// Excludes tool outputs (like Bash, Read, etc.) to focus on conversation content.
+pub fn get_conversation_text(project_path: &Path, session_id: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
+    get_conversation_text_in_home(&home, project_path, session_id)
+}
+
+/// Internal function for testing: allows overriding the home directory.
+fn get_conversation_text_in_home(
+    home: &Path,
+    project_path: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let encoded = encode_project_path(project_path);
+    let jsonl_path = home
+        .join(".claude")
+        .join("projects")
+        .join(&encoded)
+        .join(format!("{session_id}.jsonl"));
+
+    if !jsonl_path.exists() {
+        return None;
+    }
+
+    let file = File::open(&jsonl_path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut texts: Vec<String> = Vec::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line.is_empty() {
+            continue;
+        }
+
+        // Try to parse as user message
+        if let Ok(entry) = serde_json::from_str::<JsonlEntry>(&line)
+            && entry.entry_type.as_deref() == Some("user")
+            && let Some(message) = entry.message
+            && let Some(content) = message.content
+            && !content.is_empty()
+        {
+            texts.push(normalize_title(&content));
+            continue;
+        }
+
+        // Try to parse as assistant message
+        if let Ok(entry) = serde_json::from_str::<AssistantJsonlEntry>(&line)
+            && entry.entry_type.as_deref() == Some("assistant")
+            && let Some(message) = entry.message
+            && let Some(contents) = message.content
+        {
+            for content in contents {
+                if content.content_type.as_deref() == Some("text")
+                    && let Some(text) = content.text
+                    && !text.is_empty()
+                {
+                    texts.push(normalize_title(&text));
+                }
+            }
+        }
+    }
+
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join(" "))
+    }
+}
+
 /// Internal function for testing: allows overriding the home directory.
 fn get_last_assistant_message_in_home(
     home: &Path,
@@ -347,6 +421,60 @@ mod tests {
             Path::new("/nonexistent/path"),
             "test-session",
         );
+
+        assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Tests for get_conversation_text
+    // =========================================================================
+
+    #[rstest]
+    #[case::user_and_assistant(
+        indoc! {r#"
+            {"type":"user","message":{"content":"Hello"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}
+            {"type":"user","message":{"content":"How are you?"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"I'm doing well!"}]}}
+        "#},
+        Some("Hello Hi there! How are you? I'm doing well!")
+    )]
+    #[case::excludes_tool_use(
+        indoc! {r#"
+            {"type":"user","message":{"content":"Read file"}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"I've read it."}]}}
+        "#},
+        Some("Read file I've read it.")
+    )]
+    #[case::includes_text_with_tool_use(
+        indoc! {r#"
+            {"type":"user","message":{"content":"Check this"}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"Running command..."}]}}
+        "#},
+        Some("Check this Running command...")
+    )]
+    fn test_get_conversation_text(#[case] jsonl_content: &str, #[case] expected: Option<&str>) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "test-session";
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
+
+        let result = get_conversation_text_in_home(home_dir, Path::new(project_path), session_id);
+
+        assert_eq!(result, expected.map(String::from));
+    }
+
+    #[test]
+    fn test_get_conversation_text_handles_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let result =
+            get_conversation_text_in_home(home_dir, Path::new("/nonexistent/path"), "test-session");
 
         assert!(result.is_none());
     }

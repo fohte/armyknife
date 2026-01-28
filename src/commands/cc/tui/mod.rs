@@ -62,11 +62,11 @@ fn handle_search_key_event(app: &mut App, key: KeyEvent) {
             app.confirm_search();
         }
 
-        // Navigation within filtered results
-        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+        // Navigation within filtered results (Ctrl+n/p or arrow keys only)
+        (KeyCode::Char('n'), KeyModifiers::CONTROL) | (KeyCode::Down, _) => {
             app.select_next();
         }
-        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) | (KeyCode::Up, _) => {
             app.select_previous();
         }
 
@@ -94,7 +94,7 @@ fn handle_search_key_event(app: &mut App, key: KeyEvent) {
             app.update_search_query(query);
         }
 
-        // Add character to search query
+        // Add character to search query (including j/k)
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
             let mut query = app.search_query.clone();
             query.push(c);
@@ -299,6 +299,29 @@ mod tests {
         handle_key_event(&mut app, key(KeyCode::Char('/')));
         type_string(&mut app, "test");
         assert_eq!(app.search_query, "test");
+    }
+
+    #[test]
+    fn test_search_mode_jk_are_typed_not_navigation() {
+        let mut app = create_test_app_with_sessions(3);
+        handle_key_event(&mut app, key(KeyCode::Char('/')));
+        type_string(&mut app, "jk");
+        // j and k should be typed as characters, not used for navigation
+        assert_eq!(app.search_query, "jk");
+    }
+
+    #[test]
+    fn test_search_mode_ctrl_n_p_for_navigation() {
+        let mut app = create_test_app_with_sessions(3);
+        handle_key_event(&mut app, key(KeyCode::Char('/')));
+
+        // Ctrl+n should move down
+        handle_key_event(&mut app, key_ctrl('n'));
+        assert_eq!(app.list_state.selected(), Some(1));
+
+        // Ctrl+p should move up
+        handle_key_event(&mut app, key_ctrl('p'));
+        assert_eq!(app.list_state.selected(), Some(0));
     }
 
     #[test]

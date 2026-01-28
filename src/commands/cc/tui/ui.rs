@@ -33,20 +33,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Determine layout based on mode and error state
     let has_error = app.error_message.is_some();
     let is_search_mode = app.mode == AppMode::Search;
+    let show_search_bar = is_search_mode || app.has_filter();
 
-    let layouts: Vec<Constraint> = match (is_search_mode, has_error) {
+    let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
         (true, true) => vec![
             Constraint::Length(3), // Header
+            Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
             Constraint::Length(1), // Help bar
-            Constraint::Length(1), // Search input
             Constraint::Length(1), // Error
         ],
         (true, false) => vec![
             Constraint::Length(3), // Header
+            Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
             Constraint::Length(1), // Help bar
-            Constraint::Length(1), // Search input
         ],
         (false, true) => vec![
             Constraint::Length(3), // Header
@@ -64,21 +65,28 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let areas = Layout::vertical(layouts).split(area);
 
     render_header(frame, areas[0], &app.sessions);
-    render_session_list(frame, areas[1], app, now);
-    render_help(frame, areas[2], app);
 
-    match (is_search_mode, has_error) {
+    match (show_search_bar, has_error) {
         (true, true) => {
-            render_search_input(frame, areas[3], app);
+            render_search_input(frame, areas[1], app);
+            render_session_list(frame, areas[2], app, now);
+            render_help(frame, areas[3], app);
             render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
         }
         (true, false) => {
-            render_search_input(frame, areas[3], app);
+            render_search_input(frame, areas[1], app);
+            render_session_list(frame, areas[2], app, now);
+            render_help(frame, areas[3], app);
         }
         (false, true) => {
+            render_session_list(frame, areas[1], app, now);
+            render_help(frame, areas[2], app);
             render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
         }
-        (false, false) => {}
+        (false, false) => {
+            render_session_list(frame, areas[1], app, now);
+            render_help(frame, areas[2], app);
+        }
     }
 }
 
@@ -154,7 +162,7 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.mode {
         AppMode::Search => Line::from(vec![
-            Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("  C-n/C-p", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": move  "),
             Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": confirm  "),
@@ -167,7 +175,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": focus  "),
             Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": search  "),
+            Span::raw(": edit  "),
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": clear  "),
             Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
@@ -205,36 +213,57 @@ fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(error, area);
 }
 
-/// Renders the search input at the bottom.
+/// Renders the search input bar.
 fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let filtered_count = app.filtered_indices.len();
     let total_count = app.sessions.len();
     let count_str = format!("({}/{})", filtered_count, total_count);
+    let term_width = area.width as usize;
+
+    let is_search_mode = app.mode == AppMode::Search;
+
+    // Use different query based on mode
+    let query = if is_search_mode {
+        &app.search_query
+    } else {
+        &app.confirmed_query
+    };
 
     // Calculate available width for the search query
     let prefix = "  /";
-    let cursor = "_";
+    let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
-    let fixed_width = prefix.len() + cursor.len() + count_width + 2; // +2 for spacing
-    let term_width = area.width as usize;
+    let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
     let query_max_width = term_width.saturating_sub(fixed_width);
 
     // Truncate query if needed
-    let display_query = truncate(&app.search_query, query_max_width);
+    let display_query = truncate(query, query_max_width);
 
     // Calculate padding to right-align the count
-    let content_width = prefix.len() + display_query.width() + cursor.len();
+    let content_width = prefix.len() + display_query.width() + cursor_str.len();
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
-    let search_text = Line::from(vec![
+    let mut spans = vec![
         Span::styled(prefix, Style::default().fg(Color::Yellow)),
         Span::styled(display_query, Style::default()),
-        Span::styled(cursor, Style::default().add_modifier(Modifier::SLOW_BLINK)),
-        Span::raw(padding),
-        Span::styled(count_str, Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
 
+    // Only show cursor in search mode
+    if is_search_mode {
+        spans.push(Span::styled(
+            cursor_str,
+            Style::default().add_modifier(Modifier::SLOW_BLINK),
+        ));
+    }
+
+    spans.push(Span::raw(padding));
+    spans.push(Span::styled(
+        count_str,
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let search_text = Line::from(spans);
     let search = Paragraph::new(search_text);
     frame.render_widget(search, area);
 }
