@@ -134,8 +134,10 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
     let filtered_sessions: Vec<&Session> = app.filtered_sessions();
 
     if filtered_sessions.is_empty() {
-        let message = if app.has_filter() || app.mode == AppMode::Search {
+        let message = if app.mode == AppMode::Search {
             format!("  No sessions match \"{}\"", app.search_query)
+        } else if app.has_filter() {
+            format!("  No sessions match \"{}\"", app.confirmed_query)
         } else {
             "  No active Claude Code sessions.".to_string()
         };

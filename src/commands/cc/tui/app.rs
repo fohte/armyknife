@@ -273,15 +273,10 @@ impl App {
         }
     }
 
-    /// Rebuilds the searchable text cache for sessions not already cached.
+    /// Rebuilds the searchable text cache for all sessions.
+    /// Unconditionally rebuilds to pick up new conversation content in active sessions.
     fn rebuild_searchable_text_cache(&mut self) {
-        for session in &self.sessions {
-            if !self.searchable_text_cache.contains_key(&session.session_id) {
-                let searchable_text = build_searchable_text(session);
-                self.searchable_text_cache
-                    .insert(session.session_id.clone(), searchable_text);
-            }
-        }
+        self.searchable_text_cache = build_searchable_text_cache(&self.sessions);
     }
 }
 
