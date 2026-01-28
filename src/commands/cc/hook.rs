@@ -211,7 +211,7 @@ fn get_log_level() -> LogLevel {
 /// Writes a hook log with stdin content, event type, and processing result.
 fn write_hook_log(stdin_content: &str, event: &str, success: bool, error_message: Option<&str>) {
     if let Some(logs_dir) = logs_dir() {
-        write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
+        let _ = write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
     }
 }
 
