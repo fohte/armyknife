@@ -26,11 +26,29 @@ pub struct HookArgs {
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
+    // Read raw stdin first for debug logging
+    let raw_stdin = read_raw_stdin()?;
+
     // Parse event type
     let event = HookEvent::from_str(&args.event)?;
 
-    // Read JSON from stdin
-    let input = read_stdin_json()?;
+    // Parse JSON from raw stdin
+    let input = match parse_stdin_json(&raw_stdin) {
+        Ok(input) => {
+            // Log successful parse if debug is enabled
+            if is_debug_enabled() {
+                write_debug_log(&raw_stdin, &args.event, true, None);
+            }
+            input
+        }
+        Err(e) => {
+            // Log parse error if debug is enabled
+            if is_debug_enabled() {
+                write_debug_log(&raw_stdin, &args.event, false, Some(&e.to_string()));
+            }
+            return Err(e);
+        }
+    };
 
     // Handle session end by deleting the session file
     if event == HookEvent::SessionEnd {
@@ -106,19 +124,23 @@ pub fn run(args: &HookArgs) -> Result<()> {
     Ok(())
 }
 
-/// Reads and parses JSON from stdin.
-fn read_stdin_json() -> Result<HookInput> {
-    let mut json_str = String::new();
-    io::stdin().lock().read_to_string(&mut json_str)?;
+/// Reads raw content from stdin.
+fn read_raw_stdin() -> Result<String> {
+    let mut content = String::new();
+    io::stdin().lock().read_to_string(&mut content)?;
+    Ok(content)
+}
 
-    if json_str.is_empty() {
+/// Parses JSON from raw stdin content.
+fn parse_stdin_json(raw_stdin: &str) -> Result<HookInput> {
+    if raw_stdin.is_empty() {
         return Err(CcError::NoStdinInput.into());
     }
 
-    match serde_json::from_str(&json_str) {
+    match serde_json::from_str(raw_stdin) {
         Ok(input) => Ok(input),
         Err(e) => {
-            let log_path = write_error_log(&json_str);
+            let log_path = write_error_log(raw_stdin);
             Err(CcError::JsonParseError {
                 source: e,
                 log_path,
@@ -190,6 +212,63 @@ fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> 
 /// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
 fn logs_dir() -> Option<PathBuf> {
     cache::base_dir().map(|d| d.join("cc").join("logs"))
+}
+
+/// Checks if debug logging is enabled via environment variable.
+fn is_debug_enabled() -> bool {
+    is_debug_value_enabled(env::var("ARMYKNIFE_CC_HOOK_DEBUG").ok().as_deref())
+}
+
+/// Checks if the debug value indicates debug mode is enabled.
+/// Only "1" is considered enabled to require explicit opt-in.
+fn is_debug_value_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Writes a debug log with stdin content, event type, and processing result.
+fn write_debug_log(stdin_content: &str, event: &str, success: bool, error_message: Option<&str>) {
+    if let Some(logs_dir) = logs_dir() {
+        write_debug_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
+    }
+}
+
+/// Writes a debug log to the specified directory.
+fn write_debug_log_to_dir(
+    stdin_content: &str,
+    event: &str,
+    success: bool,
+    error_message: Option<&str>,
+    logs_dir: &PathBuf,
+) -> Option<PathBuf> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let filename = format!("hook_debug_{timestamp}.log");
+    let log_path = logs_dir.join(&filename);
+
+    if let Err(e) = fs::create_dir_all(logs_dir) {
+        eprintln!("Warning: Failed to create logs directory: {e}");
+        return None;
+    }
+
+    let status = if success { "success" } else { "error" };
+    let error_section = match error_message {
+        Some(msg) => format!("\n\n=== Error Message ===\n{msg}"),
+        None => String::new(),
+    };
+
+    let content = format!(
+        "=== Event ===\n{event}\n\n=== Status ===\n{status}{error_section}\n\n=== Raw Stdin ===\n{stdin_content}"
+    );
+
+    match write_file_with_permissions(&log_path, &content) {
+        Ok(()) => {
+            eprintln!("Debug log saved to: {}", log_path.display());
+            Some(log_path)
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to write debug log: {e}");
+            None
+        }
+    }
 }
 
 /// Formats the current tool display string from hook input.
@@ -536,6 +615,95 @@ mod tests {
             let mode = metadata.permissions().mode() & 0o777;
 
             assert_eq!(mode, 0o600, "log file should have 0600 permissions");
+        }
+    }
+
+    mod debug_log_tests {
+        use super::*;
+        use rstest::rstest;
+        use tempfile::TempDir;
+
+        #[rstest]
+        #[case::success_log(true, None)]
+        #[case::error_log(false, Some("parse error"))]
+        fn creates_debug_log_file(#[case] success: bool, #[case] error_message: Option<&str>) {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let stdin_content = r#"{"session_id": "test-123"}"#;
+            let event = "pre-tool-use";
+
+            let log_path =
+                write_debug_log_to_dir(stdin_content, event, success, error_message, &logs_dir)
+                    .expect("should succeed");
+
+            assert!(log_path.exists(), "debug log file should be created");
+
+            let written = fs::read_to_string(&log_path).expect("should read log file");
+            assert!(written.contains("=== Event ==="));
+            assert!(written.contains(event));
+            assert!(written.contains("=== Status ==="));
+            assert!(written.contains(if success { "success" } else { "error" }));
+            assert!(written.contains("=== Raw Stdin ==="));
+            assert!(written.contains(stdin_content));
+
+            if let Some(msg) = error_message {
+                assert!(written.contains("=== Error Message ==="));
+                assert!(written.contains(msg));
+            }
+        }
+
+        #[test]
+        fn debug_log_filename_format() {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path = write_debug_log_to_dir("content", "stop", true, None, &logs_dir)
+                .expect("should succeed");
+            let filename = log_path
+                .file_name()
+                .expect("should have filename")
+                .to_string_lossy();
+
+            assert!(
+                filename.starts_with("hook_debug_"),
+                "filename should start with hook_debug_, got: {filename}"
+            );
+            assert!(
+                filename.ends_with(".log"),
+                "filename should end with .log, got: {filename}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn debug_log_has_restrictive_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path = write_debug_log_to_dir("content", "stop", true, None, &logs_dir)
+                .expect("should succeed");
+            let metadata = fs::metadata(&log_path).expect("should get metadata");
+            let mode = metadata.permissions().mode() & 0o777;
+
+            assert_eq!(mode, 0o600, "debug log file should have 0600 permissions");
+        }
+
+        #[test]
+        fn is_debug_value_enabled_returns_true_for_one() {
+            assert!(is_debug_value_enabled(Some("1")));
+        }
+
+        #[rstest]
+        #[case::zero(Some("0"))]
+        #[case::empty(Some(""))]
+        #[case::other_value(Some("true"))]
+        #[case::yes(Some("yes"))]
+        #[case::not_set(None)]
+        fn is_debug_value_enabled_returns_false_for_other_values(#[case] value: Option<&str>) {
+            assert!(!is_debug_value_enabled(value));
         }
     }
 }
