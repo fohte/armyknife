@@ -171,6 +171,18 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 
 These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
 
+#### Environment Variables
+
+| Variable                | Values                            | Description                 |
+| ----------------------- | --------------------------------- | --------------------------- |
+| `ARMYKNIFE_CC_HOOK_LOG` | `error` (default), `debug`, `off` | Controls hook logging level |
+
+- `error`: Log only when JSON parsing fails (default)
+- `debug`: Log all hook invocations including successful ones
+- `off`: Disable all logging
+
+Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
+
 ### `a wm`
 
 Git worktree management with tmux integration.

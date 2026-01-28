@@ -26,11 +26,30 @@ pub struct HookArgs {
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
+    // Read raw stdin first for debug logging
+    let raw_stdin = read_raw_stdin()?;
+
     // Parse event type
     let event = HookEvent::from_str(&args.event)?;
 
-    // Read JSON from stdin
-    let input = read_stdin_json()?;
+    // Parse JSON from raw stdin
+    let log_level = get_log_level();
+    let input = match parse_stdin_json(&raw_stdin) {
+        Ok(input) => {
+            // Log successful parse only at debug level
+            if log_level == LogLevel::Debug {
+                write_hook_log(&raw_stdin, &args.event, true, None);
+            }
+            input
+        }
+        Err(e) => {
+            // Log parse error at error level or higher
+            if log_level.should_log_errors() {
+                write_hook_log(&raw_stdin, &args.event, false, Some(&e.to_string()));
+            }
+            return Err(e);
+        }
+    };
 
     // Handle session end by deleting the session file
     if event == HookEvent::SessionEnd {
@@ -106,57 +125,20 @@ pub fn run(args: &HookArgs) -> Result<()> {
     Ok(())
 }
 
-/// Reads and parses JSON from stdin.
-fn read_stdin_json() -> Result<HookInput> {
-    let mut json_str = String::new();
-    io::stdin().lock().read_to_string(&mut json_str)?;
+/// Reads raw content from stdin.
+fn read_raw_stdin() -> Result<String> {
+    let mut content = String::new();
+    io::stdin().lock().read_to_string(&mut content)?;
+    Ok(content)
+}
 
-    if json_str.is_empty() {
+/// Parses JSON from raw stdin content.
+fn parse_stdin_json(raw_stdin: &str) -> Result<HookInput> {
+    if raw_stdin.is_empty() {
         return Err(CcError::NoStdinInput.into());
     }
 
-    match serde_json::from_str(&json_str) {
-        Ok(input) => Ok(input),
-        Err(e) => {
-            let log_path = write_error_log(&json_str);
-            Err(CcError::JsonParseError {
-                source: e,
-                log_path,
-            }
-            .into())
-        }
-    }
-}
-
-/// Writes the raw stdin content to a log file for debugging.
-/// Returns the path to the log file if successful, None otherwise.
-fn write_error_log(content: &str) -> Option<PathBuf> {
-    let logs_dir = logs_dir()?;
-    write_error_log_to_dir(content, &logs_dir)
-}
-
-/// Writes the raw stdin content to a log file in the specified directory.
-/// Returns the path to the log file if successful, None otherwise.
-fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> {
-    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
-    let filename = format!("hook_error_{timestamp}.log");
-    let log_path = logs_dir.join(&filename);
-
-    if let Err(e) = fs::create_dir_all(logs_dir) {
-        eprintln!("Warning: Failed to create logs directory: {e}");
-        return None;
-    }
-
-    match write_file_with_permissions(&log_path, content) {
-        Ok(()) => {
-            eprintln!("Raw stdin content saved to: {}", log_path.display());
-            Some(log_path)
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to write error log: {e}");
-            None
-        }
-    }
+    Ok(serde_json::from_str(raw_stdin)?)
 }
 
 /// Writes content to a file with restrictive permissions (0600 on Unix).
@@ -190,6 +172,86 @@ fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> 
 /// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
 fn logs_dir() -> Option<PathBuf> {
     cache::base_dir().map(|d| d.join("cc").join("logs"))
+}
+
+/// Log level for hook logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogLevel {
+    /// No logging
+    Off,
+    /// Log only errors (default)
+    Error,
+    /// Log everything including successful operations
+    Debug,
+}
+
+impl LogLevel {
+    /// Parse log level from string value.
+    fn from_str(value: Option<&str>) -> Self {
+        match value {
+            Some("debug") => Self::Debug,
+            Some("error") => Self::Error,
+            Some("off") => Self::Off,
+            // Default to error level for unset or unknown values
+            _ => Self::Error,
+        }
+    }
+
+    /// Returns true if errors should be logged at this level.
+    fn should_log_errors(self) -> bool {
+        matches!(self, Self::Error | Self::Debug)
+    }
+}
+
+/// Gets the log level from environment variable.
+fn get_log_level() -> LogLevel {
+    LogLevel::from_str(env::var("ARMYKNIFE_CC_HOOK_LOG").ok().as_deref())
+}
+
+/// Writes a hook log with stdin content, event type, and processing result.
+fn write_hook_log(stdin_content: &str, event: &str, success: bool, error_message: Option<&str>) {
+    if let Some(logs_dir) = logs_dir() {
+        let _ = write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
+    }
+}
+
+/// Writes a hook log to the specified directory.
+fn write_hook_log_to_dir(
+    stdin_content: &str,
+    event: &str,
+    success: bool,
+    error_message: Option<&str>,
+    logs_dir: &PathBuf,
+) -> Option<PathBuf> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let filename = format!("hook_{timestamp}.log");
+    let log_path = logs_dir.join(&filename);
+
+    if let Err(e) = fs::create_dir_all(logs_dir) {
+        eprintln!("Warning: Failed to create logs directory: {e}");
+        return None;
+    }
+
+    let status = if success { "success" } else { "error" };
+    let error_section = match error_message {
+        Some(msg) => format!("\n\n=== Error Message ===\n{msg}"),
+        None => String::new(),
+    };
+
+    let content = format!(
+        "=== Event ===\n{event}\n\n=== Status ===\n{status}{error_section}\n\n=== Raw Stdin ===\n{stdin_content}"
+    );
+
+    match write_file_with_permissions(&log_path, &content) {
+        Ok(()) => {
+            eprintln!("Hook log saved to: {}", log_path.display());
+            Some(log_path)
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to write hook log: {e}");
+            None
+        }
+    }
 }
 
 /// Formats the current tool display string from hook input.
@@ -554,40 +616,77 @@ mod tests {
         }
     }
 
-    mod write_error_log_tests {
+    mod hook_log_tests {
         use super::*;
+        use rstest::rstest;
         use tempfile::TempDir;
 
-        #[test]
-        fn creates_log_file_with_content() {
+        #[rstest]
+        #[case::success_log(true, None)]
+        #[case::error_log(false, Some("parse error"))]
+        fn creates_hook_log_file(#[case] success: bool, #[case] error_message: Option<&str>) {
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
-            let content = r#"{"invalid": json"#;
-            let log_path = write_error_log_to_dir(content, &logs_dir).expect("should succeed");
+            let stdin_content = r#"{"session_id": "test-123"}"#;
+            let event = "pre-tool-use";
 
-            assert!(log_path.exists(), "log file should be created");
+            let log_path =
+                write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir)
+                    .expect("should succeed");
+
+            assert!(log_path.exists(), "hook log file should be created");
+
             let written = fs::read_to_string(&log_path).expect("should read log file");
-            assert_eq!(written, content);
+            assert!(written.contains("=== Event ==="));
+            assert!(written.contains(event));
+            assert!(written.contains("=== Status ==="));
+            assert!(written.contains(if success { "success" } else { "error" }));
+            assert!(written.contains("=== Raw Stdin ==="));
+            assert!(written.contains(stdin_content));
+
+            if let Some(msg) = error_message {
+                assert!(written.contains("=== Error Message ==="));
+                assert!(written.contains(msg));
+            }
         }
 
         #[test]
-        fn log_filename_contains_timestamp() {
+        fn hook_log_filename_format() {
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
-            let log_path =
-                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
+            let log_path = write_hook_log_to_dir("content", "stop", true, None, &logs_dir)
+                .expect("should succeed");
             let filename = log_path
                 .file_name()
                 .expect("should have filename")
                 .to_string_lossy();
 
             assert!(
-                filename.starts_with("hook_error_"),
-                "filename should start with hook_error_"
+                filename.starts_with("hook_"),
+                "filename should start with hook_, got: {filename}"
             );
-            assert!(filename.ends_with(".log"), "filename should end with .log");
+            assert!(
+                filename.ends_with(".log"),
+                "filename should end with .log, got: {filename}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn hook_log_has_restrictive_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let logs_dir = temp_dir.path().to_path_buf();
+
+            let log_path = write_hook_log_to_dir("content", "stop", true, None, &logs_dir)
+                .expect("should succeed");
+            let metadata = fs::metadata(&log_path).expect("should get metadata");
+            let mode = metadata.permissions().mode() & 0o777;
+
+            assert_eq!(mode, 0o600, "hook log file should have 0600 permissions");
         }
 
         #[test]
@@ -598,21 +697,29 @@ mod tests {
                 "logs dir should end with cc/logs, got: {logs:?}"
             );
         }
+    }
 
-        #[cfg(unix)]
-        #[test]
-        fn log_file_has_restrictive_permissions() {
-            use std::os::unix::fs::PermissionsExt;
+    mod log_level_tests {
+        use super::*;
+        use rstest::rstest;
 
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let logs_dir = temp_dir.path().to_path_buf();
+        #[rstest]
+        #[case::debug(Some("debug"), LogLevel::Debug)]
+        #[case::error(Some("error"), LogLevel::Error)]
+        #[case::off(Some("off"), LogLevel::Off)]
+        #[case::unknown(Some("unknown"), LogLevel::Error)]
+        #[case::empty(Some(""), LogLevel::Error)]
+        #[case::not_set(None, LogLevel::Error)]
+        fn log_level_from_str(#[case] value: Option<&str>, #[case] expected: LogLevel) {
+            assert_eq!(LogLevel::from_str(value), expected);
+        }
 
-            let log_path =
-                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
-            let metadata = fs::metadata(&log_path).expect("should get metadata");
-            let mode = metadata.permissions().mode() & 0o777;
-
-            assert_eq!(mode, 0o600, "log file should have 0600 permissions");
+        #[rstest]
+        #[case::debug(LogLevel::Debug, true)]
+        #[case::error(LogLevel::Error, true)]
+        #[case::off(LogLevel::Off, false)]
+        fn should_log_errors(#[case] level: LogLevel, #[case] expected: bool) {
+            assert_eq!(level.should_log_errors(), expected);
         }
     }
 }
