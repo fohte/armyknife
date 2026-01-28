@@ -182,6 +182,7 @@ mod tests {
     use crate::commands::cc::types::{Session, SessionStatus};
     use chrono::Utc;
     use ratatui::widgets::ListState;
+    use rstest::rstest;
     use std::path::PathBuf;
 
     fn create_test_app_with_sessions(count: usize) -> App {
@@ -233,72 +234,50 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_handle_key_quit() {
-        let mut app = create_test_app_with_sessions(1);
+    fn type_string(app: &mut App, s: &str) {
+        for c in s.chars() {
+            handle_key_event(app, key(KeyCode::Char(c)));
+        }
+    }
 
-        handle_key_event(&mut app, key(KeyCode::Char('q')));
+    #[rstest]
+    #[case::q(KeyCode::Char('q'))]
+    #[case::esc(KeyCode::Esc)]
+    fn test_handle_key_quit(#[case] code: KeyCode) {
+        let mut app = create_test_app_with_sessions(1);
+        handle_key_event(&mut app, key(code));
         assert!(app.should_quit);
     }
 
-    #[test]
-    fn test_handle_key_quit_esc() {
-        let mut app = create_test_app_with_sessions(1);
-
-        handle_key_event(&mut app, key(KeyCode::Esc));
-        assert!(app.should_quit);
-    }
-
-    #[test]
-    fn test_handle_key_navigation_j() {
+    #[rstest]
+    #[case::j(KeyCode::Char('j'), Some(0), Some(1))]
+    #[case::k(KeyCode::Char('k'), Some(2), Some(1))]
+    #[case::down(KeyCode::Down, Some(0), Some(1))]
+    #[case::up(KeyCode::Up, Some(1), Some(0))]
+    fn test_handle_key_navigation(
+        #[case] code: KeyCode,
+        #[case] initial: Option<usize>,
+        #[case] expected: Option<usize>,
+    ) {
         let mut app = create_test_app_with_sessions(3);
-        assert_eq!(app.list_state.selected(), Some(0));
-
-        handle_key_event(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.list_state.selected(), Some(1));
+        app.list_state.select(initial);
+        handle_key_event(&mut app, key(code));
+        assert_eq!(app.list_state.selected(), expected);
     }
 
-    #[test]
-    fn test_handle_key_navigation_k() {
-        let mut app = create_test_app_with_sessions(3);
-        app.list_state.select(Some(2));
-
-        handle_key_event(&mut app, key(KeyCode::Char('k')));
-        assert_eq!(app.list_state.selected(), Some(1));
-    }
-
-    #[test]
-    fn test_handle_key_navigation_arrows() {
-        let mut app = create_test_app_with_sessions(3);
-        assert_eq!(app.list_state.selected(), Some(0));
-
-        handle_key_event(&mut app, key(KeyCode::Down));
-        assert_eq!(app.list_state.selected(), Some(1));
-
-        handle_key_event(&mut app, key(KeyCode::Up));
-        assert_eq!(app.list_state.selected(), Some(0));
-    }
-
-    #[test]
-    fn test_handle_key_quick_select() {
+    #[rstest]
+    #[case::select_3('3', Some(0), Some(2))]
+    #[case::select_1('1', Some(2), Some(0))]
+    #[case::zero_ignored('0', Some(2), Some(2))]
+    fn test_handle_key_quick_select(
+        #[case] c: char,
+        #[case] initial: Option<usize>,
+        #[case] expected: Option<usize>,
+    ) {
         let mut app = create_test_app_with_sessions(5);
-        assert_eq!(app.list_state.selected(), Some(0));
-
-        handle_key_event(&mut app, key(KeyCode::Char('3')));
-        assert_eq!(app.list_state.selected(), Some(2));
-
-        handle_key_event(&mut app, key(KeyCode::Char('1')));
-        assert_eq!(app.list_state.selected(), Some(0));
-    }
-
-    #[test]
-    fn test_handle_key_quick_select_zero_ignored() {
-        let mut app = create_test_app_with_sessions(5);
-        app.list_state.select(Some(2));
-
-        handle_key_event(&mut app, key(KeyCode::Char('0')));
-        // Should remain unchanged
-        assert_eq!(app.list_state.selected(), Some(2));
+        app.list_state.select(initial);
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+        assert_eq!(app.list_state.selected(), expected);
     }
 
     // =========================================================================
@@ -318,12 +297,7 @@ mod tests {
     fn test_search_mode_typing() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
-        handle_key_event(&mut app, key(KeyCode::Char('e')));
-        handle_key_event(&mut app, key(KeyCode::Char('s')));
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
-
+        type_string(&mut app, "test");
         assert_eq!(app.search_query, "test");
     }
 
@@ -331,12 +305,8 @@ mod tests {
     fn test_search_mode_backspace() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
-        handle_key_event(&mut app, key(KeyCode::Char('e')));
-        handle_key_event(&mut app, key(KeyCode::Char('s')));
+        type_string(&mut app, "tes");
         handle_key_event(&mut app, key(KeyCode::Backspace));
-
         assert_eq!(app.search_query, "te");
     }
 
@@ -344,13 +314,8 @@ mod tests {
     fn test_search_mode_ctrl_u_clears_query() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
-        handle_key_event(&mut app, key(KeyCode::Char('e')));
-        handle_key_event(&mut app, key(KeyCode::Char('s')));
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
+        type_string(&mut app, "test");
         handle_key_event(&mut app, key_ctrl('u'));
-
         assert_eq!(app.search_query, "");
     }
 
@@ -358,12 +323,7 @@ mod tests {
     fn test_search_mode_ctrl_w_deletes_word() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-
-        // Type "hello world"
-        for c in "hello world".chars() {
-            handle_key_event(&mut app, key(KeyCode::Char(c)));
-        }
-
+        type_string(&mut app, "hello world");
         handle_key_event(&mut app, key_ctrl('w'));
         assert_eq!(app.search_query, "hello ");
     }
@@ -372,7 +332,7 @@ mod tests {
     fn test_search_mode_confirm() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-        handle_key_event(&mut app, key(KeyCode::Char('0'))); // Search for "0"
+        type_string(&mut app, "0");
         handle_key_event(&mut app, key(KeyCode::Enter));
 
         assert_eq!(app.mode, AppMode::Normal);
@@ -384,8 +344,7 @@ mod tests {
     fn test_search_mode_cancel() {
         let mut app = create_test_app_with_sessions(3);
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-        handle_key_event(&mut app, key(KeyCode::Char('t')));
-        handle_key_event(&mut app, key(KeyCode::Char('e')));
+        type_string(&mut app, "te");
         handle_key_event(&mut app, key(KeyCode::Esc));
 
         assert_eq!(app.mode, AppMode::Normal);
@@ -396,16 +355,14 @@ mod tests {
     fn test_esc_clears_filter_in_normal_mode() {
         let mut app = create_test_app_with_sessions(3);
 
-        // Enter search, confirm, then clear with Esc
         handle_key_event(&mut app, key(KeyCode::Char('/')));
-        handle_key_event(&mut app, key(KeyCode::Char('0')));
+        type_string(&mut app, "0");
         handle_key_event(&mut app, key(KeyCode::Enter));
-
         assert!(app.has_filter());
 
         handle_key_event(&mut app, key(KeyCode::Esc));
         assert!(!app.has_filter());
-        assert!(!app.should_quit); // Should not quit
+        assert!(!app.should_quit);
     }
 
     #[test]

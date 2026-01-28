@@ -310,6 +310,7 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::{SessionStatus, TmuxInfo};
     use chrono::Utc;
+    use rstest::rstest;
     use std::path::PathBuf;
 
     fn create_test_session(id: &str) -> Session {
@@ -372,25 +373,24 @@ mod tests {
         assert_eq!(app.list_state.selected(), Some(1));
     }
 
-    #[test]
-    fn test_select_by_number() {
+    #[rstest]
+    #[case::valid_number(2, Some(0), Some(1))]
+    #[case::out_of_range(10, Some(1), Some(1))]
+    #[case::zero_ignored(0, Some(1), Some(1))]
+    fn test_select_by_number(
+        #[case] num: usize,
+        #[case] initial: Option<usize>,
+        #[case] expected: Option<usize>,
+    ) {
         let mut app = create_test_app(vec![
             create_test_session("1"),
             create_test_session("2"),
             create_test_session("3"),
         ]);
-        app.list_state.select(Some(0));
+        app.list_state.select(initial);
 
-        app.select_by_number(2);
-        assert_eq!(app.list_state.selected(), Some(1));
-
-        // Out of range should not change selection
-        app.select_by_number(10);
-        assert_eq!(app.list_state.selected(), Some(1));
-
-        // Zero should not change selection
-        app.select_by_number(0);
-        assert_eq!(app.list_state.selected(), Some(1));
+        app.select_by_number(num);
+        assert_eq!(app.list_state.selected(), expected);
     }
 
     #[test]
@@ -433,26 +433,31 @@ mod tests {
     // Search functionality tests
     // =========================================================================
 
-    #[test]
-    fn test_session_matches_empty_query() {
+    #[rstest]
+    #[case::empty("", true)]
+    #[case::whitespace("   ", true)]
+    fn test_session_matches_empty_query(#[case] query: &str, #[case] expected: bool) {
         let session = create_test_session("test");
-        assert!(session_matches(&session, ""));
-        assert!(session_matches(&session, "   "));
+        assert_eq!(session_matches(&session, query), expected);
     }
 
-    #[test]
-    fn test_session_matches_cwd() {
+    #[rstest]
+    #[case::exact_match("project", true)]
+    #[case::case_insensitive("PROJECT", true)]
+    #[case::parent_dir("user", true)]
+    #[case::nonexistent("nonexistent", false)]
+    fn test_session_matches_cwd(#[case] query: &str, #[case] expected: bool) {
         let mut session = create_test_session("test");
         session.cwd = PathBuf::from("/home/user/project");
-
-        assert!(session_matches(&session, "project"));
-        assert!(session_matches(&session, "PROJECT")); // case insensitive
-        assert!(session_matches(&session, "user"));
-        assert!(!session_matches(&session, "nonexistent"));
+        assert_eq!(session_matches(&session, query), expected);
     }
 
-    #[test]
-    fn test_session_matches_tmux_info() {
+    #[rstest]
+    #[case::session_name("webapp", true)]
+    #[case::window_name("editor", true)]
+    #[case::case_insensitive("WEBAPP", true)]
+    #[case::nonexistent("nonexistent", false)]
+    fn test_session_matches_tmux_info(#[case] query: &str, #[case] expected: bool) {
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "webapp".to_string(),
@@ -460,31 +465,28 @@ mod tests {
             window_index: 0,
             pane_id: "%0".to_string(),
         });
-
-        assert!(session_matches(&session, "webapp"));
-        assert!(session_matches(&session, "editor"));
-        assert!(session_matches(&session, "WEBAPP")); // case insensitive
+        assert_eq!(session_matches(&session, query), expected);
     }
 
-    #[test]
-    fn test_session_matches_last_message() {
+    #[rstest]
+    #[case::word_in_message("updated", true)]
+    #[case::another_word("code", true)]
+    #[case::nonexistent("nonexistent", false)]
+    fn test_session_matches_last_message(#[case] query: &str, #[case] expected: bool) {
         let mut session = create_test_session("test");
         session.last_message = Some("I've updated the code".to_string());
-
-        assert!(session_matches(&session, "updated"));
-        assert!(session_matches(&session, "code"));
+        assert_eq!(session_matches(&session, query), expected);
     }
 
-    #[test]
-    fn test_session_matches_and_logic() {
+    #[rstest]
+    #[case::both_match("webapp feature", true)]
+    #[case::across_fields("user working", true)]
+    #[case::one_missing("webapp nonexistent", false)]
+    fn test_session_matches_and_logic(#[case] query: &str, #[case] expected: bool) {
         let mut session = create_test_session("test");
         session.cwd = PathBuf::from("/home/user/webapp");
         session.last_message = Some("Working on feature".to_string());
-
-        // Both words must match
-        assert!(session_matches(&session, "webapp feature"));
-        assert!(session_matches(&session, "user working"));
-        assert!(!session_matches(&session, "webapp nonexistent"));
+        assert_eq!(session_matches(&session, query), expected);
     }
 
     #[test]
@@ -512,7 +514,7 @@ mod tests {
 
         assert_eq!(app.mode, AppMode::Normal);
         assert_eq!(app.confirmed_query, "webapp");
-        assert_eq!(app.filtered_indices, vec![0]); // Only first session matches
+        assert_eq!(app.filtered_indices, vec![0]);
         assert!(app.has_filter());
     }
 
@@ -524,16 +526,14 @@ mod tests {
         session2.cwd = PathBuf::from("/home/user/api");
 
         let mut app = create_test_app(vec![session1, session2]);
-        app.list_state.select(Some(1)); // Select second session
+        app.list_state.select(Some(1));
         app.enter_search_mode();
         app.update_search_query("webapp".to_string());
 
-        // At this point, filter is applied during search
         assert_eq!(app.filtered_indices, vec![0]);
 
         app.cancel_search();
 
-        // Should restore to showing all sessions
         assert_eq!(app.mode, AppMode::Normal);
         assert_eq!(app.filtered_indices, vec![0, 1]);
         assert!(!app.has_filter());
@@ -573,27 +573,23 @@ mod tests {
         app.update_search_query("webapp".to_string());
         app.confirm_search();
 
-        // Filter shows sessions 0 and 2
         assert_eq!(app.filtered_indices, vec![0, 2]);
         assert_eq!(app.list_state.selected(), Some(0));
 
-        // Navigate within filtered list
         app.select_next();
-        assert_eq!(app.list_state.selected(), Some(1)); // Second item in filtered list
-
-        // Verify selected session is session3 (index 2 in original list)
+        assert_eq!(app.list_state.selected(), Some(1));
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("3")
         );
 
-        // Wrap around
         app.select_next();
         assert_eq!(app.list_state.selected(), Some(0));
     }
 
-    #[test]
-    fn test_select_by_number_with_filter() {
+    #[rstest]
+    #[case::select_second(2, "3")]
+    fn test_select_by_number_with_filter(#[case] num: usize, #[case] expected_id: &str) {
         let mut session1 = create_test_session("1");
         session1.cwd = PathBuf::from("/home/user/webapp1");
         let mut session2 = create_test_session("2");
@@ -606,16 +602,29 @@ mod tests {
         app.update_search_query("webapp".to_string());
         app.confirm_search();
 
-        // Press "2" to select second item in filtered list
-        app.select_by_number(2);
+        app.select_by_number(num);
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
-            Some("3")
+            Some(expected_id)
         );
+    }
 
-        // Out of range (only 2 items in filtered list)
-        app.select_by_number(3);
-        // Should remain unchanged
+    #[test]
+    fn test_select_by_number_out_of_range_with_filter() {
+        let mut session1 = create_test_session("1");
+        session1.cwd = PathBuf::from("/home/user/webapp1");
+        let mut session2 = create_test_session("2");
+        session2.cwd = PathBuf::from("/home/user/api");
+        let mut session3 = create_test_session("3");
+        session3.cwd = PathBuf::from("/home/user/webapp2");
+
+        let mut app = create_test_app(vec![session1, session2, session3]);
+        app.enter_search_mode();
+        app.update_search_query("webapp".to_string());
+        app.confirm_search();
+
+        app.select_by_number(2);
+        app.select_by_number(3); // Out of range
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("3")
