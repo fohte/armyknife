@@ -33,18 +33,19 @@ pub fn run(args: &HookArgs) -> Result<()> {
     let event = HookEvent::from_str(&args.event)?;
 
     // Parse JSON from raw stdin
+    let log_level = get_log_level();
     let input = match parse_stdin_json(&raw_stdin) {
         Ok(input) => {
-            // Log successful parse if debug is enabled
-            if is_debug_enabled() {
-                write_debug_log(&raw_stdin, &args.event, true, None);
+            // Log successful parse only at debug level
+            if log_level == LogLevel::Debug {
+                write_hook_log(&raw_stdin, &args.event, true, None);
             }
             input
         }
         Err(e) => {
-            // Log parse error if debug is enabled
-            if is_debug_enabled() {
-                write_debug_log(&raw_stdin, &args.event, false, Some(&e.to_string()));
+            // Log parse error at error level or higher
+            if log_level.should_log_errors() {
+                write_hook_log(&raw_stdin, &args.event, false, Some(&e.to_string()));
             }
             return Err(e);
         }
@@ -173,26 +174,49 @@ fn logs_dir() -> Option<PathBuf> {
     cache::base_dir().map(|d| d.join("cc").join("logs"))
 }
 
-/// Checks if debug logging is enabled via environment variable.
-fn is_debug_enabled() -> bool {
-    is_debug_value_enabled(env::var("ARMYKNIFE_CC_HOOK_DEBUG").ok().as_deref())
+/// Log level for hook logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogLevel {
+    /// No logging
+    Off,
+    /// Log only errors (default)
+    Error,
+    /// Log everything including successful operations
+    Debug,
 }
 
-/// Checks if the debug value indicates debug mode is enabled.
-/// Only "1" is considered enabled to require explicit opt-in.
-fn is_debug_value_enabled(value: Option<&str>) -> bool {
-    value == Some("1")
-}
+impl LogLevel {
+    /// Parse log level from string value.
+    fn from_str(value: Option<&str>) -> Self {
+        match value {
+            Some("debug") => Self::Debug,
+            Some("error") => Self::Error,
+            Some("off") => Self::Off,
+            // Default to error level for unset or unknown values
+            _ => Self::Error,
+        }
+    }
 
-/// Writes a debug log with stdin content, event type, and processing result.
-fn write_debug_log(stdin_content: &str, event: &str, success: bool, error_message: Option<&str>) {
-    if let Some(logs_dir) = logs_dir() {
-        write_debug_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
+    /// Returns true if errors should be logged at this level.
+    fn should_log_errors(self) -> bool {
+        matches!(self, Self::Error | Self::Debug)
     }
 }
 
-/// Writes a debug log to the specified directory.
-fn write_debug_log_to_dir(
+/// Gets the log level from environment variable.
+fn get_log_level() -> LogLevel {
+    LogLevel::from_str(env::var("ARMYKNIFE_CC_HOOK_LOG").ok().as_deref())
+}
+
+/// Writes a hook log with stdin content, event type, and processing result.
+fn write_hook_log(stdin_content: &str, event: &str, success: bool, error_message: Option<&str>) {
+    if let Some(logs_dir) = logs_dir() {
+        write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir);
+    }
+}
+
+/// Writes a hook log to the specified directory.
+fn write_hook_log_to_dir(
     stdin_content: &str,
     event: &str,
     success: bool,
@@ -200,7 +224,7 @@ fn write_debug_log_to_dir(
     logs_dir: &PathBuf,
 ) -> Option<PathBuf> {
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
-    let filename = format!("hook_debug_{timestamp}.log");
+    let filename = format!("hook_{timestamp}.log");
     let log_path = logs_dir.join(&filename);
 
     if let Err(e) = fs::create_dir_all(logs_dir) {
@@ -220,11 +244,11 @@ fn write_debug_log_to_dir(
 
     match write_file_with_permissions(&log_path, &content) {
         Ok(()) => {
-            eprintln!("Debug log saved to: {}", log_path.display());
+            eprintln!("Hook log saved to: {}", log_path.display());
             Some(log_path)
         }
         Err(e) => {
-            eprintln!("Warning: Failed to write debug log: {e}");
+            eprintln!("Warning: Failed to write hook log: {e}");
             None
         }
     }
@@ -515,7 +539,7 @@ mod tests {
         }
     }
 
-    mod debug_log_tests {
+    mod hook_log_tests {
         use super::*;
         use rstest::rstest;
         use tempfile::TempDir;
@@ -523,7 +547,7 @@ mod tests {
         #[rstest]
         #[case::success_log(true, None)]
         #[case::error_log(false, Some("parse error"))]
-        fn creates_debug_log_file(#[case] success: bool, #[case] error_message: Option<&str>) {
+        fn creates_hook_log_file(#[case] success: bool, #[case] error_message: Option<&str>) {
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
@@ -531,10 +555,10 @@ mod tests {
             let event = "pre-tool-use";
 
             let log_path =
-                write_debug_log_to_dir(stdin_content, event, success, error_message, &logs_dir)
+                write_hook_log_to_dir(stdin_content, event, success, error_message, &logs_dir)
                     .expect("should succeed");
 
-            assert!(log_path.exists(), "debug log file should be created");
+            assert!(log_path.exists(), "hook log file should be created");
 
             let written = fs::read_to_string(&log_path).expect("should read log file");
             assert!(written.contains("=== Event ==="));
@@ -551,11 +575,11 @@ mod tests {
         }
 
         #[test]
-        fn debug_log_filename_format() {
+        fn hook_log_filename_format() {
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
-            let log_path = write_debug_log_to_dir("content", "stop", true, None, &logs_dir)
+            let log_path = write_hook_log_to_dir("content", "stop", true, None, &logs_dir)
                 .expect("should succeed");
             let filename = log_path
                 .file_name()
@@ -563,8 +587,8 @@ mod tests {
                 .to_string_lossy();
 
             assert!(
-                filename.starts_with("hook_debug_"),
-                "filename should start with hook_debug_, got: {filename}"
+                filename.starts_with("hook_"),
+                "filename should start with hook_, got: {filename}"
             );
             assert!(
                 filename.ends_with(".log"),
@@ -574,18 +598,18 @@ mod tests {
 
         #[cfg(unix)]
         #[test]
-        fn debug_log_has_restrictive_permissions() {
+        fn hook_log_has_restrictive_permissions() {
             use std::os::unix::fs::PermissionsExt;
 
             let temp_dir = TempDir::new().expect("temp dir creation should succeed");
             let logs_dir = temp_dir.path().to_path_buf();
 
-            let log_path = write_debug_log_to_dir("content", "stop", true, None, &logs_dir)
+            let log_path = write_hook_log_to_dir("content", "stop", true, None, &logs_dir)
                 .expect("should succeed");
             let metadata = fs::metadata(&log_path).expect("should get metadata");
             let mode = metadata.permissions().mode() & 0o777;
 
-            assert_eq!(mode, 0o600, "debug log file should have 0600 permissions");
+            assert_eq!(mode, 0o600, "hook log file should have 0600 permissions");
         }
 
         #[test]
@@ -596,20 +620,29 @@ mod tests {
                 "logs dir should end with cc/logs, got: {logs:?}"
             );
         }
+    }
 
-        #[test]
-        fn is_debug_value_enabled_returns_true_for_one() {
-            assert!(is_debug_value_enabled(Some("1")));
+    mod log_level_tests {
+        use super::*;
+        use rstest::rstest;
+
+        #[rstest]
+        #[case::debug(Some("debug"), LogLevel::Debug)]
+        #[case::error(Some("error"), LogLevel::Error)]
+        #[case::off(Some("off"), LogLevel::Off)]
+        #[case::unknown(Some("unknown"), LogLevel::Error)]
+        #[case::empty(Some(""), LogLevel::Error)]
+        #[case::not_set(None, LogLevel::Error)]
+        fn log_level_from_str(#[case] value: Option<&str>, #[case] expected: LogLevel) {
+            assert_eq!(LogLevel::from_str(value), expected);
         }
 
         #[rstest]
-        #[case::zero(Some("0"))]
-        #[case::empty(Some(""))]
-        #[case::other_value(Some("true"))]
-        #[case::yes(Some("yes"))]
-        #[case::not_set(None)]
-        fn is_debug_value_enabled_returns_false_for_other_values(#[case] value: Option<&str>) {
-            assert!(!is_debug_value_enabled(value));
+        #[case::debug(LogLevel::Debug, true)]
+        #[case::error(LogLevel::Error, true)]
+        #[case::off(LogLevel::Off, false)]
+        fn should_log_errors(#[case] level: LogLevel, #[case] expected: bool) {
+            assert_eq!(level.should_log_errors(), expected);
         }
     }
 }
