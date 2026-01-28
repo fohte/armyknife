@@ -1,6 +1,6 @@
 use crate::commands::cc::store;
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use notify::{
     EventKind, RecommendedWatcher, RecursiveMode, Watcher,
     event::{CreateKind, ModifyKind, RemoveKind},
@@ -10,10 +10,17 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
+/// Key event with code and modifiers.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyEvent {
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
+}
+
 /// Events that can occur in the TUI.
 pub enum AppEvent {
     /// A key was pressed.
-    Key(KeyCode),
+    Key(KeyEvent),
     /// Session data changed on disk.
     SessionsChanged,
     /// Tick for periodic updates.
@@ -69,10 +76,15 @@ fn handle_keyboard_events(tx: Sender<AppEvent>) {
         if event::poll(Duration::from_millis(50)).unwrap_or(false)
             && let Ok(Event::Key(key)) = event::read()
             && key.kind == KeyEventKind::Press
-            && tx.send(AppEvent::Key(key.code)).is_err()
         {
-            // Channel closed, exit thread
-            break;
+            let key_event = KeyEvent {
+                code: key.code,
+                modifiers: key.modifiers,
+            };
+            if tx.send(AppEvent::Key(key_event)).is_err() {
+                // Channel closed, exit thread
+                break;
+            }
         }
     }
 }
@@ -129,7 +141,10 @@ mod tests {
     #[test]
     fn test_app_event_enum() {
         // Just verify the enum variants can be created
-        let _key = AppEvent::Key(KeyCode::Char('q'));
+        let _key = AppEvent::Key(KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: KeyModifiers::NONE,
+        });
         let _changed = AppEvent::SessionsChanged;
         let _tick = AppEvent::Tick;
     }

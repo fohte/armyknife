@@ -1,16 +1,18 @@
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
+#[cfg(test)]
+use ratatui::widgets::ListState;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::app::App;
+use super::app::{App, AppMode};
 
 /// Fixed width for prefix: "  [N] ● " = 8 chars
 const LINE1_PREFIX_WIDTH: usize = 8;
@@ -28,31 +30,63 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let now = Utc::now();
     let area = frame.area();
 
-    // Add error area if there's an error message
+    // Determine layout based on mode and error state
     let has_error = app.error_message.is_some();
-    let layouts: Vec<Constraint> = if has_error {
-        vec![
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ]
-    } else {
-        vec![
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ]
+    let is_search_mode = app.mode == AppMode::Search;
+    let show_search_bar = is_search_mode || app.has_filter();
+
+    let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
+        (true, true) => vec![
+            Constraint::Length(3), // Header
+            Constraint::Length(1), // Search bar (at top)
+            Constraint::Min(1),    // Session list
+            Constraint::Length(1), // Help bar
+            Constraint::Length(1), // Error
+        ],
+        (true, false) => vec![
+            Constraint::Length(3), // Header
+            Constraint::Length(1), // Search bar (at top)
+            Constraint::Min(1),    // Session list
+            Constraint::Length(1), // Help bar
+        ],
+        (false, true) => vec![
+            Constraint::Length(3), // Header
+            Constraint::Min(1),    // Session list
+            Constraint::Length(1), // Help bar
+            Constraint::Length(1), // Error
+        ],
+        (false, false) => vec![
+            Constraint::Length(3), // Header
+            Constraint::Min(1),    // Session list
+            Constraint::Length(1), // Help bar
+        ],
     };
 
     let areas = Layout::vertical(layouts).split(area);
 
     render_header(frame, areas[0], &app.sessions);
-    render_session_list(frame, areas[1], app, now);
-    render_help(frame, areas[2]);
 
-    if has_error {
-        render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
+    match (show_search_bar, has_error) {
+        (true, true) => {
+            render_search_input(frame, areas[1], app);
+            render_session_list(frame, areas[2], app, now);
+            render_help(frame, areas[3], app);
+            render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
+        }
+        (true, false) => {
+            render_search_input(frame, areas[1], app);
+            render_session_list(frame, areas[2], app, now);
+            render_help(frame, areas[3], app);
+        }
+        (false, true) => {
+            render_session_list(frame, areas[1], app, now);
+            render_help(frame, areas[2], app);
+            render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
+        }
+        (false, false) => {
+            render_session_list(frame, areas[1], app, now);
+            render_help(frame, areas[2], app);
+        }
     }
 }
 
@@ -97,21 +131,71 @@ fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
 
 /// Renders the session list.
 fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
-    render_session_list_internal(frame, area, &app.sessions, &mut app.list_state, now);
+    let filtered_sessions: Vec<&Session> = app.filtered_sessions();
+
+    if filtered_sessions.is_empty() {
+        let message = if app.mode == AppMode::Search {
+            format!("  No sessions match \"{}\"", app.search_query)
+        } else if app.has_filter() {
+            format!("  No sessions match \"{}\"", app.confirmed_query)
+        } else {
+            "  No active Claude Code sessions.".to_string()
+        };
+        let empty_message = Paragraph::new(message).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(empty_message, area);
+        return;
+    }
+
+    let term_width = area.width as usize;
+    let items: Vec<ListItem> = filtered_sessions
+        .iter()
+        .enumerate()
+        .map(|(i, session)| create_session_item(i, session, now, term_width))
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
+
+    frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
 /// Renders the help bar at the bottom.
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help_text = Line::from(vec![
-        Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": move  "),
-        Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": focus  "),
-        Span::styled("1-9", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": quick select  "),
-        Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": quit"),
-    ]);
+fn render_help(frame: &mut Frame, area: Rect, app: &App) {
+    let help_text = match app.mode {
+        AppMode::Search => Line::from(vec![
+            Span::styled("  C-n/C-p", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": move  "),
+            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": confirm  "),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": cancel"),
+        ]),
+        AppMode::Normal if app.has_filter() => Line::from(vec![
+            Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": move  "),
+            Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": focus  "),
+            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": edit  "),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": clear  "),
+            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": quit"),
+        ]),
+        AppMode::Normal => Line::from(vec![
+            Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": move  "),
+            Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": focus  "),
+            Span::styled("1-9", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": quick  "),
+            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": search  "),
+            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": quit"),
+        ]),
+    };
 
     let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, area);
@@ -129,6 +213,61 @@ fn render_error(frame: &mut Frame, area: Rect, message: &str) {
 
     let error = Paragraph::new(error_text);
     frame.render_widget(error, area);
+}
+
+/// Renders the search input bar.
+fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
+    let filtered_count = app.filtered_indices.len();
+    let total_count = app.sessions.len();
+    let count_str = format!("({}/{})", filtered_count, total_count);
+    let term_width = area.width as usize;
+
+    let is_search_mode = app.mode == AppMode::Search;
+
+    // Use different query based on mode
+    let query = if is_search_mode {
+        &app.search_query
+    } else {
+        &app.confirmed_query
+    };
+
+    // Calculate available width for the search query
+    let prefix = "  /";
+    let cursor_str = if is_search_mode { "_" } else { "" };
+    let count_width = count_str.len();
+    let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
+    let query_max_width = term_width.saturating_sub(fixed_width);
+
+    // Truncate query if needed
+    let display_query = truncate(query, query_max_width);
+
+    // Calculate padding to right-align the count
+    let content_width = prefix.len() + display_query.width() + cursor_str.len();
+    let padding_width = term_width.saturating_sub(content_width + count_width + 2);
+    let padding = " ".repeat(padding_width);
+
+    let mut spans = vec![
+        Span::styled(prefix, Style::default().fg(Color::Yellow)),
+        Span::styled(display_query, Style::default()),
+    ];
+
+    // Only show cursor in search mode
+    if is_search_mode {
+        spans.push(Span::styled(
+            cursor_str,
+            Style::default().add_modifier(Modifier::SLOW_BLINK),
+        ));
+    }
+
+    spans.push(Span::raw(padding));
+    spans.push(Span::styled(
+        count_str,
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let search_text = Line::from(spans);
+    let search = Paragraph::new(search_text);
+    frame.render_widget(search, area);
 }
 
 /// Calculates the available width for session info on line 1.
@@ -336,6 +475,9 @@ fn render_to_string(
     let mut list_state = ListState::default();
     list_state.select(selected_index);
 
+    let mut app = App::with_sessions(sessions.to_vec());
+    app.list_state = list_state.clone();
+
     terminal
         .draw(|frame| {
             let area = frame.area();
@@ -346,9 +488,9 @@ fn render_to_string(
             ])
             .split(area);
 
-            render_header(frame, areas[0], sessions);
-            render_session_list_internal(frame, areas[1], sessions, &mut list_state, now);
-            render_help(frame, areas[2]);
+            render_header(frame, areas[0], &app.sessions);
+            render_session_list_internal(frame, areas[1], sessions, &mut list_state.clone(), now);
+            render_help(frame, areas[2], &app);
         })
         .unwrap();
 
@@ -376,7 +518,8 @@ fn render_to_string(
     output
 }
 
-/// Internal render function for session list used by both main render and test render.
+/// Internal render function for session list used by test render.
+#[cfg(test)]
 fn render_session_list_internal(
     frame: &mut Frame,
     area: Rect,
@@ -609,7 +752,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -629,7 +772,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -711,7 +854,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -750,7 +893,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -816,7 +959,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick select  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
