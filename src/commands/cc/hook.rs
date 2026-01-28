@@ -137,48 +137,7 @@ fn parse_stdin_json(raw_stdin: &str) -> Result<HookInput> {
         return Err(CcError::NoStdinInput.into());
     }
 
-    match serde_json::from_str(raw_stdin) {
-        Ok(input) => Ok(input),
-        Err(e) => {
-            let log_path = write_error_log(raw_stdin);
-            Err(CcError::JsonParseError {
-                source: e,
-                log_path,
-            }
-            .into())
-        }
-    }
-}
-
-/// Writes the raw stdin content to a log file for debugging.
-/// Returns the path to the log file if successful, None otherwise.
-fn write_error_log(content: &str) -> Option<PathBuf> {
-    let logs_dir = logs_dir()?;
-    write_error_log_to_dir(content, &logs_dir)
-}
-
-/// Writes the raw stdin content to a log file in the specified directory.
-/// Returns the path to the log file if successful, None otherwise.
-fn write_error_log_to_dir(content: &str, logs_dir: &PathBuf) -> Option<PathBuf> {
-    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
-    let filename = format!("hook_error_{timestamp}.log");
-    let log_path = logs_dir.join(&filename);
-
-    if let Err(e) = fs::create_dir_all(logs_dir) {
-        eprintln!("Warning: Failed to create logs directory: {e}");
-        return None;
-    }
-
-    match write_file_with_permissions(&log_path, content) {
-        Ok(()) => {
-            eprintln!("Raw stdin content saved to: {}", log_path.display());
-            Some(log_path)
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to write error log: {e}");
-            None
-        }
-    }
+    Ok(serde_json::from_str(raw_stdin)?)
 }
 
 /// Writes content to a file with restrictive permissions (0600 on Unix).
@@ -556,68 +515,6 @@ mod tests {
         }
     }
 
-    mod write_error_log_tests {
-        use super::*;
-        use tempfile::TempDir;
-
-        #[test]
-        fn creates_log_file_with_content() {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let logs_dir = temp_dir.path().to_path_buf();
-
-            let content = r#"{"invalid": json"#;
-            let log_path = write_error_log_to_dir(content, &logs_dir).expect("should succeed");
-
-            assert!(log_path.exists(), "log file should be created");
-            let written = fs::read_to_string(&log_path).expect("should read log file");
-            assert_eq!(written, content);
-        }
-
-        #[test]
-        fn log_filename_contains_timestamp() {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let logs_dir = temp_dir.path().to_path_buf();
-
-            let log_path =
-                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
-            let filename = log_path
-                .file_name()
-                .expect("should have filename")
-                .to_string_lossy();
-
-            assert!(
-                filename.starts_with("hook_error_"),
-                "filename should start with hook_error_"
-            );
-            assert!(filename.ends_with(".log"), "filename should end with .log");
-        }
-
-        #[test]
-        fn logs_dir_uses_cache_directory() {
-            let logs = logs_dir().expect("should have cache directory");
-            assert!(
-                logs.ends_with("cc/logs"),
-                "logs dir should end with cc/logs, got: {logs:?}"
-            );
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn log_file_has_restrictive_permissions() {
-            use std::os::unix::fs::PermissionsExt;
-
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let logs_dir = temp_dir.path().to_path_buf();
-
-            let log_path =
-                write_error_log_to_dir("test content", &logs_dir).expect("should succeed");
-            let metadata = fs::metadata(&log_path).expect("should get metadata");
-            let mode = metadata.permissions().mode() & 0o777;
-
-            assert_eq!(mode, 0o600, "log file should have 0600 permissions");
-        }
-    }
-
     mod debug_log_tests {
         use super::*;
         use rstest::rstest;
@@ -689,6 +586,15 @@ mod tests {
             let mode = metadata.permissions().mode() & 0o777;
 
             assert_eq!(mode, 0o600, "debug log file should have 0600 permissions");
+        }
+
+        #[test]
+        fn logs_dir_uses_cache_directory() {
+            let logs = logs_dir().expect("should have cache directory");
+            assert!(
+                logs.ends_with("cc/logs"),
+                "logs dir should end with cc/logs, got: {logs:?}"
+            );
         }
 
         #[test]
