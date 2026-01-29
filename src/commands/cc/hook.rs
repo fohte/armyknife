@@ -444,22 +444,12 @@ mod tests {
     use rstest::rstest;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
-        create_test_input_with_message(notification_type, None)
-    }
-
-    fn create_test_input_with_message(
-        notification_type: Option<&str>,
-        message: Option<&str>,
-    ) -> HookInput {
         let mut json_parts = vec![
             r#""session_id":"test-123""#.to_string(),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
             json_parts.push(format!(r#""notification_type":"{}""#, t));
-        }
-        if let Some(m) = message {
-            json_parts.push(format!(r#""message":"{}""#, m));
         }
         let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")

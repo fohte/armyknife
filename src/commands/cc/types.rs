@@ -67,14 +67,7 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
-    // Message from notification events (e.g., permission prompt message)
-    // Currently unused since we switched to PermissionRequest hook which has tool details,
-    // but kept for potential future use with other notification types.
-    #[expect(dead_code, reason = "reserved for future notification types")]
-    #[serde(default)]
-    pub message: Option<String>,
-
-    // Pre-tool-use / Post-tool-use event fields
+    // Pre-tool-use / Post-tool-use / PermissionRequest event fields
     #[serde(default)]
     pub tool_name: Option<String>,
     #[serde(default)]
