@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.48](https://github.com/fohte/armyknife/compare/v0.1.47...v0.1.48) (2026-01-29)
+
+
+### Bug Fixes
+
+* **ai/review:** correct Devin bot login to match GitHub GraphQL API response ([#166](https://github.com/fohte/armyknife/issues/166)) ([0b3d15e](https://github.com/fohte/armyknife/commit/0b3d15ea4c4b7da2014f3e34bf7917667aa03719))
+
 ## [0.1.47](https://github.com/fohte/armyknife/compare/v0.1.46...v0.1.47) (2026-01-28)
 
 
