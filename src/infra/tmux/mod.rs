@@ -213,21 +213,18 @@ pub fn kill_window(window_id: &str) -> Result<()> {
 /// This searches all tmux sessions and returns unique window IDs where any pane
 /// has its current working directory inside `path`.
 pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
-    let output = match Command::new("tmux")
-        .args([
-            "list-panes",
-            "-a",
-            "-F",
-            "#{pane_current_path}\t#{window_id}",
-        ])
-        .output()
-    {
-        Ok(output) if output.status.success() => output,
-        _ => return Vec::new(),
+    let output = match run_tmux_output(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_current_path}\t#{window_id}",
+    ]) {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
     };
 
     let target_path = std::path::Path::new(path);
-    let mut window_ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let mut window_ids: Vec<String> = output
         .lines()
         .filter_map(|line| {
             let mut parts = line.split('\t');
