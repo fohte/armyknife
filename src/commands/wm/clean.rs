@@ -9,6 +9,7 @@ use super::worktree::{
     LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
 };
 use crate::infra::git::fetch_with_prune;
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -17,10 +18,12 @@ pub struct CleanArgs {
     pub dry_run: bool,
 }
 
-/// Worktree with merge status for clean command.
+/// Worktree with merge status and associated tmux windows for clean command.
 struct CleanWorktreeInfo {
     wt: LinkedWorktree,
     reason: String,
+    /// Tmux window IDs that are located in this worktree's path
+    window_ids: Vec<String>,
 }
 
 pub async fn run(args: &CleanArgs) -> Result<()> {
@@ -75,6 +78,10 @@ fn display_worktrees_to_delete(worktrees: &[CleanWorktreeInfo]) {
     println!("Worktrees to delete:");
     for info in worktrees {
         println!("  {} ({})", info.wt.path.display(), info.reason);
+
+        for window_id in &info.window_ids {
+            println!("    -> tmux window: {window_id}");
+        }
     }
 }
 
@@ -101,6 +108,13 @@ fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Resul
             if delete_branch_if_exists(repo, &info.wt.branch) {
                 println!("  Branch deleted: {}", info.wt.branch);
             }
+
+            // Close tmux windows that were in the deleted worktree
+            for window_id in &info.window_ids {
+                if tmux::kill_window(window_id).is_ok() {
+                    println!("  Tmux window closed: {window_id}");
+                }
+            }
         }
     }
 
@@ -123,9 +137,12 @@ async fn collect_worktrees(
         }
 
         let merge_status = get_merge_status(&wt.branch).await;
+        // Collect tmux window IDs while the worktree path still exists
+        let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
         let info = CleanWorktreeInfo {
             wt,
             reason: merge_status.reason().to_string(),
+            window_ids,
         };
 
         if merge_status.is_merged() {
@@ -153,6 +170,7 @@ mod tests {
                 commit: "abc1234".to_string(),
             },
             reason: reason.to_string(),
+            window_ids: Vec::new(),
         }
     }
 
