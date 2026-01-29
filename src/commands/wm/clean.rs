@@ -18,10 +18,12 @@ pub struct CleanArgs {
     pub dry_run: bool,
 }
 
-/// Worktree with merge status for clean command.
+/// Worktree with merge status and associated tmux windows for clean command.
 struct CleanWorktreeInfo {
     wt: LinkedWorktree,
     reason: String,
+    /// Tmux window IDs that are located in this worktree's path
+    window_ids: Vec<String>,
 }
 
 pub async fn run(args: &CleanArgs) -> Result<()> {
@@ -77,9 +79,7 @@ fn display_worktrees_to_delete(worktrees: &[CleanWorktreeInfo]) {
     for info in worktrees {
         println!("  {} ({})", info.wt.path.display(), info.reason);
 
-        // Show tmux windows that will be closed
-        let window_ids = tmux::get_window_ids_in_path(&info.wt.path.to_string_lossy());
-        for window_id in window_ids {
+        for window_id in &info.window_ids {
             println!("    -> tmux window: {window_id}");
         }
     }
@@ -101,9 +101,6 @@ fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Resul
     let mut deleted_count = 0;
 
     for info in worktrees {
-        // Collect tmux window IDs before deleting the worktree (while the path still exists)
-        let window_ids = tmux::get_window_ids_in_path(&info.wt.path.to_string_lossy());
-
         if delete_worktree(repo, &info.wt.name)? {
             println!("Deleted: {} ({})", info.wt.path.display(), info.reason);
             deleted_count += 1;
@@ -113,8 +110,8 @@ fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Resul
             }
 
             // Close tmux windows that were in the deleted worktree
-            for window_id in window_ids {
-                if tmux::kill_window(&window_id).is_ok() {
+            for window_id in &info.window_ids {
+                if tmux::kill_window(window_id).is_ok() {
                     println!("  Tmux window closed: {window_id}");
                 }
             }
@@ -140,9 +137,12 @@ async fn collect_worktrees(
         }
 
         let merge_status = get_merge_status(&wt.branch).await;
+        // Collect tmux window IDs while the worktree path still exists
+        let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
         let info = CleanWorktreeInfo {
             wt,
             reason: merge_status.reason().to_string(),
+            window_ids,
         };
 
         if merge_status.is_merged() {
@@ -170,6 +170,7 @@ mod tests {
                 commit: "abc1234".to_string(),
             },
             reason: reason.to_string(),
+            window_ids: Vec::new(),
         }
     }
 

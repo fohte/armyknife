@@ -227,9 +227,9 @@ pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
     let mut window_ids: Vec<String> = output
         .lines()
         .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let pane_path = parts.next()?;
-            let window_id = parts.next()?;
+            // Use rsplit_once to handle paths containing tabs correctly,
+            // since window_id is guaranteed not to contain tabs
+            let (pane_path, window_id) = line.rsplit_once('\t')?;
 
             if std::path::Path::new(pane_path).starts_with(target_path) {
                 Some(window_id.to_string())
