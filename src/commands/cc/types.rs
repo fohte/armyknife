@@ -68,6 +68,9 @@ pub struct HookInput {
     pub notification_type: Option<String>,
 
     // Message from notification events (e.g., permission prompt message)
+    // Currently unused since we switched to PermissionRequest hook which has tool details,
+    // but kept for potential future use with other notification types.
+    #[expect(dead_code, reason = "reserved for future notification types")]
     #[serde(default)]
     pub message: Option<String>,
 
@@ -98,6 +101,7 @@ pub enum HookEvent {
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
+    PermissionRequest,
     Notification,
     Stop,
     SessionEnd,
@@ -109,6 +113,7 @@ impl HookEvent {
             "user-prompt-submit" => Ok(Self::UserPromptSubmit),
             "pre-tool-use" => Ok(Self::PreToolUse),
             "post-tool-use" => Ok(Self::PostToolUse),
+            "permission-request" => Ok(Self::PermissionRequest),
             "notification" => Ok(Self::Notification),
             "stop" => Ok(Self::Stop),
             "session-end" => Ok(Self::SessionEnd),
