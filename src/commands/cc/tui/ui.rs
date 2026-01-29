@@ -476,7 +476,7 @@ fn render_to_string(
     list_state.select(selected_index);
 
     let mut app = App::with_sessions(sessions.to_vec());
-    app.list_state = list_state.clone();
+    app.list_state = list_state;
 
     terminal
         .draw(|frame| {
@@ -489,7 +489,7 @@ fn render_to_string(
             .split(area);
 
             render_header(frame, areas[0], &app.sessions);
-            render_session_list_internal(frame, areas[1], sessions, &mut list_state.clone(), now);
+            render_session_list_internal(frame, areas[1], sessions, &mut app.list_state, now);
             render_help(frame, areas[2], &app);
         })
         .unwrap();
