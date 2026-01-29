@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.51](https://github.com/fohte/armyknife/compare/v0.1.50...v0.1.51) (2026-01-29)
+
+
+### Bug Fixes
+
+* **cc/store:** clean up sessions without TTY info ([#174](https://github.com/fohte/armyknife/issues/174)) ([0f1a684](https://github.com/fohte/armyknife/commit/0f1a684a9ea8870a1f2a21e3dc5bc57e446a52d1))
+
 ## [0.1.50](https://github.com/fohte/armyknife/compare/v0.1.49...v0.1.50) (2026-01-29)
 
 
