@@ -16,6 +16,7 @@ use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
+use crate::shared::command::find_command_path;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
@@ -380,12 +381,15 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
 
     // Add click action to focus tmux pane if available
     // Skip action if pane_id cannot be safely quoted (e.g., contains null bytes)
+    // Use full path for tmux because terminal-notifier's -execute runs in minimal PATH environment
     if let Some(tmux_info) = &session.tmux_info
         && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
+        && let Some(tmux_path) = find_command_path("tmux")
     {
+        let tmux = tmux_path.display();
         // Use tmux switch-client with the first available client
         let command = format!(
-            r#"client_name=$(tmux list-clients -F '#{{client_name}}' | head -n1); tmux switch-client -c "$client_name" -t {}; open -a WezTerm"#,
+            r#"client_name=$({tmux} list-clients -F '#{{client_name}}' | head -n1); {tmux} switch-client -c "$client_name" -t {}; open -a WezTerm"#,
             escaped_pane_id
         );
         notification = notification.with_action(NotificationAction::new(command));
