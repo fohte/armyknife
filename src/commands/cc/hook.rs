@@ -547,48 +547,27 @@ mod tests {
         assert!(notification.action().is_none());
     }
 
-    #[test]
-    fn test_build_notification_permission_request_with_command() {
-        let input = create_test_input_with_tool("Bash", Some(r#"{"command":"cargo test --all"}"#));
+    #[rstest]
+    #[case::bash_command(
+        "Bash",
+        Some(r#"{"command":"cargo test --all"}"#),
+        "Bash: cargo test --all"
+    )]
+    #[case::edit_file_path("Edit", Some(r#"{"file_path":"src/main.rs"}"#), "Edit: src/main.rs")]
+    #[case::grep_pattern("Grep", Some(r#"{"pattern":"TODO"}"#), "Grep: TODO")]
+    #[case::task_no_input("Task", None, "Task")]
+    fn test_build_notification_permission_request_message(
+        #[case] tool_name: &str,
+        #[case] tool_input_json: Option<&str>,
+        #[case] expected_message: &str,
+    ) {
+        let input = create_test_input_with_tool(tool_name, tool_input_json);
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
         let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
 
-        // Title shows Waiting status
         assert_eq!(notification.title(), "Claude Code - Waiting");
-        // Message shows tool name and command
-        assert_eq!(notification.message(), "Bash: cargo test --all");
-    }
-
-    #[test]
-    fn test_build_notification_permission_request_with_file_path() {
-        let input = create_test_input_with_tool("Edit", Some(r#"{"file_path":"src/main.rs"}"#));
-        let mut session = create_test_session(None);
-        session.status = SessionStatus::WaitingInput;
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
-
-        assert_eq!(notification.message(), "Edit: src/main.rs");
-    }
-
-    #[test]
-    fn test_build_notification_permission_request_with_pattern() {
-        let input = create_test_input_with_tool("Grep", Some(r#"{"pattern":"TODO"}"#));
-        let mut session = create_test_session(None);
-        session.status = SessionStatus::WaitingInput;
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
-
-        assert_eq!(notification.message(), "Grep: TODO");
-    }
-
-    #[test]
-    fn test_build_notification_permission_request_without_tool_input() {
-        let input = create_test_input_with_tool("Task", None);
-        let mut session = create_test_session(None);
-        session.status = SessionStatus::WaitingInput;
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
-
-        // Message shows just tool name when no tool_input details
-        assert_eq!(notification.message(), "Task");
+        assert_eq!(notification.message(), expected_message);
     }
 
     #[test]
