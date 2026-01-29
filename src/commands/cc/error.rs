@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -22,4 +24,7 @@ pub enum CcError {
 
     #[error("Session '{0}' has no tmux information (was not started in tmux)")]
     NoTmuxInfo(String),
+
+    #[error("Failed to acquire file lock within {0:?}")]
+    LockTimeout(Duration),
 }
