@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.50](https://github.com/fohte/armyknife/compare/v0.1.49...v0.1.50) (2026-01-29)
+
+
+### Features
+
+* **wm/clean:** close tmux windows when deleting worktrees ([#171](https://github.com/fohte/armyknife/issues/171)) ([a16c933](https://github.com/fohte/armyknife/commit/a16c933dfd9fc4f5bcf398bd66dcf4b5b84a4955))
+
 ## [0.1.49](https://github.com/fohte/armyknife/compare/v0.1.48...v0.1.49) (2026-01-29)
 
 
