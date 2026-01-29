@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.53](https://github.com/fohte/armyknife/compare/v0.1.52...v0.1.53) (2026-01-29)
+
+
+### Features
+
+* **cc/hook:** show tool details in permission notifications using `PermissionRequest` hook ([#173](https://github.com/fohte/armyknife/issues/173)) ([0705451](https://github.com/fohte/armyknife/commit/0705451d7e5df0305a8d06eca4bf3f513b29c15f))
+
 ## [0.1.52](https://github.com/fohte/armyknife/compare/v0.1.51...v0.1.52) (2026-01-29)
 
 
