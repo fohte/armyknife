@@ -215,8 +215,16 @@ pub fn list_sessions() -> Result<Vec<Session>> {
     Ok(sessions)
 }
 
-/// Removes sessions whose TTY no longer exists.
-/// This cleans up stale sessions from terminated terminals.
+/// Maximum age for sessions without TTY or with TTY that may have been reused.
+/// Sessions older than this will be removed during cleanup.
+const STALE_SESSION_MAX_AGE: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+
+/// Removes stale sessions from disk.
+///
+/// A session is considered stale and removed if:
+/// 1. Its TTY is set but no longer exists (terminal was closed)
+/// 2. It hasn't been updated for more than 24 hours (handles TTY reuse and sessions
+///    without TTY that were not properly cleaned up)
 pub fn cleanup_stale_sessions() -> Result<()> {
     let dir = sessions_dir()?;
 
@@ -224,18 +232,36 @@ pub fn cleanup_stale_sessions() -> Result<()> {
         return Ok(());
     }
 
+    let now = chrono::Utc::now();
+
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().is_some_and(|ext| ext == "json")
-            && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(session) = serde_json::from_str::<Session>(&content)
-            && let Some(ref tty_path) = session.tty
-            && !tty::is_tty_alive(tty_path)
-        {
-            // Remove if TTY exists but is no longer valid
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+
+        let Ok(session) = serde_json::from_str::<Session>(&content) else {
+            continue;
+        };
+
+        let should_remove = match &session.tty {
+            // TTY is set but no longer exists -> definitely stale
+            Some(tty_path) if !tty::is_tty_alive(tty_path) => true,
+            // TTY exists or not set -> check age to handle TTY reuse and edge cases
+            _ => now.signed_duration_since(session.updated_at) > STALE_SESSION_MAX_AGE,
+        };
+
+        if should_remove {
             let _ = fs::remove_file(&path);
+            // Also clean up the lock file if it exists
+            let lock_path = path.with_extension("json.lock");
+            let _ = fs::remove_file(&lock_path);
         }
     }
 
@@ -420,6 +446,137 @@ mod tests {
                 .expect("session_file should succeed")
                 .with_extension("json.lock");
             let _ = fs::remove_file(&lock_path);
+        }
+    }
+
+    mod cleanup_stale_sessions_tests {
+        use super::*;
+        use rstest::rstest;
+
+        /// Helper to create a unique session ID and ensure cache dir exists.
+        fn setup_session(prefix: &str) -> (String, PathBuf) {
+            let cache_sessions_dir = sessions_dir().expect("sessions_dir should succeed");
+            fs::create_dir_all(&cache_sessions_dir).expect("cache dir creation should succeed");
+
+            let session_id = format!("{}-{}", prefix, std::process::id());
+            let path = session_file(&session_id).expect("session_file should succeed");
+            (session_id, path)
+        }
+
+        fn cleanup_session(session_id: &str) {
+            let _ = delete_session(session_id);
+            if let Ok(path) = session_file(session_id) {
+                let _ = fs::remove_file(path.with_extension("json.lock"));
+            }
+        }
+
+        #[rstest]
+        fn removes_session_with_nonexistent_tty() {
+            let (session_id, path) = setup_session("nonexistent-tty");
+
+            // Create session with a TTY that doesn't exist
+            let mut session = create_test_session(&session_id);
+            session.tty = Some("/dev/ttys99999".to_string());
+            save_session(&session).expect("save should succeed");
+            assert!(path.exists(), "session file should exist before cleanup");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(
+                !path.exists(),
+                "session with nonexistent TTY should be removed"
+            );
+        }
+
+        #[rstest]
+        fn keeps_recent_session_with_existing_tty() {
+            let (session_id, path) = setup_session("existing-tty");
+
+            // Create session with a TTY that exists (/dev/null always exists)
+            let mut session = create_test_session(&session_id);
+            session.tty = Some("/dev/null".to_string());
+            save_session(&session).expect("save should succeed");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(
+                path.exists(),
+                "recent session with existing TTY should be kept"
+            );
+
+            cleanup_session(&session_id);
+        }
+
+        #[rstest]
+        fn removes_old_session_without_tty() {
+            let (session_id, path) = setup_session("old-no-tty");
+
+            // Create session without TTY that is older than STALE_SESSION_MAX_AGE
+            let mut session = create_test_session(&session_id);
+            session.tty = None;
+            session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(25);
+            save_session(&session).expect("save should succeed");
+            assert!(path.exists(), "session file should exist before cleanup");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(!path.exists(), "old session without TTY should be removed");
+        }
+
+        #[rstest]
+        fn keeps_recent_session_without_tty() {
+            let (session_id, path) = setup_session("recent-no-tty");
+
+            // Create session without TTY that was updated recently
+            let mut session = create_test_session(&session_id);
+            session.tty = None;
+            session.updated_at = chrono::Utc::now();
+            save_session(&session).expect("save should succeed");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(path.exists(), "recent session without TTY should be kept");
+
+            cleanup_session(&session_id);
+        }
+
+        #[rstest]
+        fn removes_old_session_with_existing_tty() {
+            let (session_id, path) = setup_session("old-existing-tty");
+
+            // Create session with existing TTY but very old update time
+            // This handles the TTY reuse case
+            let mut session = create_test_session(&session_id);
+            session.tty = Some("/dev/null".to_string());
+            session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(25);
+            save_session(&session).expect("save should succeed");
+            assert!(path.exists(), "session file should exist before cleanup");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(
+                !path.exists(),
+                "old session with existing TTY should be removed (handles TTY reuse)"
+            );
+        }
+
+        #[rstest]
+        fn also_removes_lock_file() {
+            let (session_id, path) = setup_session("with-lock");
+
+            // Create session with nonexistent TTY
+            let mut session = create_test_session(&session_id);
+            session.tty = Some("/dev/ttys99999".to_string());
+            save_session(&session).expect("save should succeed");
+
+            let lock_path = path.with_extension("json.lock");
+            // save_session creates a lock file
+            assert!(path.exists(), "session file should exist");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(!path.exists(), "session file should be removed");
+            assert!(!lock_path.exists(), "lock file should also be removed");
         }
     }
 
