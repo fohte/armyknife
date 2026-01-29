@@ -10,14 +10,9 @@ pub fn is_command_available(cmd: &str) -> bool {
 pub fn find_command_path(cmd: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
 
-    std::env::split_paths(&path_var).find_map(|dir| {
-        let path = dir.join(cmd);
-        if is_executable(&path) {
-            Some(path)
-        } else {
-            None
-        }
-    })
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(cmd))
+        .find(|path| is_executable(path))
 }
 
 #[cfg(unix)]
@@ -52,9 +47,9 @@ mod tests {
 
     #[test]
     fn test_find_command_path_returns_path_for_existing_command() {
-        let path = find_command_path("sh");
-        assert!(path.is_some());
-        assert!(path.unwrap().to_string_lossy().contains("sh"));
+        let path =
+            find_command_path("sh").expect("'sh' command not found in PATH, required for test");
+        assert!(path.ends_with("sh"));
     }
 
     #[test]
