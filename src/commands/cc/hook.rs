@@ -118,7 +118,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     store::save_session(&session)?;
 
     // Send notification if applicable (errors are logged but don't fail the hook)
-    if should_notify(event, &input) {
+    if should_notify(event) {
         send_notification(event, &input, &session);
     }
 
@@ -330,20 +330,15 @@ fn is_notification_enabled() -> bool {
 }
 
 /// Determines if a notification should be sent for the given event.
-fn should_notify(event: HookEvent, input: &HookInput) -> bool {
-    is_notification_enabled() && is_notifiable_event(event, input)
+fn should_notify(event: HookEvent) -> bool {
+    is_notification_enabled() && is_notifiable_event(event)
 }
 
-/// Checks if the event type and input warrant a notification.
-fn is_notifiable_event(event: HookEvent, _input: &HookInput) -> bool {
-    match event {
-        HookEvent::Stop => true,
-        // Use PermissionRequest for permission notifications (has tool details).
-        // Skip Notification/permission_prompt to avoid duplicate notifications.
-        HookEvent::PermissionRequest => true,
-        HookEvent::Notification => false,
-        _ => false,
-    }
+/// Checks if the event type warrants a notification.
+/// Uses PermissionRequest for permission notifications (has tool details),
+/// skips Notification/permission_prompt to avoid duplicates.
+fn is_notifiable_event(event: HookEvent) -> bool {
+    matches!(event, HookEvent::Stop | HookEvent::PermissionRequest)
 }
 
 /// Sends a notification for the given event.
@@ -455,9 +450,9 @@ mod tests {
         serde_json::from_str(&json).expect("valid JSON")
     }
 
-    fn create_test_input_with_tool(tool_name: &str, command: Option<&str>) -> HookInput {
-        let tool_input = match command {
-            Some(cmd) => format!(r#","tool_input":{{"command":"{}"}}"#, cmd),
+    fn create_test_input_with_tool(tool_name: &str, tool_input_json: Option<&str>) -> HookInput {
+        let tool_input = match tool_input_json {
+            Some(json) => format!(r#","tool_input":{}"#, json),
             None => String::new(),
         };
         let json = format!(
@@ -525,27 +520,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stop_always_notifies(HookEvent::Stop, None, true)]
-    #[case::permission_request_notifies(HookEvent::PermissionRequest, None, true)]
-    // Notification/permission_prompt no longer triggers notification (PermissionRequest does)
-    #[case::notification_permission_no_notify(
-        HookEvent::Notification,
-        Some("permission_prompt"),
-        false
-    )]
-    #[case::idle_prompt_no_notification(HookEvent::Notification, Some("idle_prompt"), false)]
-    #[case::generic_notification_no_notify(HookEvent::Notification, Some("info"), false)]
-    #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, None, false)]
-    #[case::pre_tool_no_notification(HookEvent::PreToolUse, None, false)]
-    #[case::post_tool_no_notification(HookEvent::PostToolUse, None, false)]
-    fn test_is_notifiable_event(
-        #[case] event: HookEvent,
-        #[case] notification_type: Option<&str>,
-        #[case] expected: bool,
-    ) {
-        let input = create_test_input(notification_type);
-        let result = is_notifiable_event(event, &input);
-        assert_eq!(result, expected);
+    #[case::stop_always_notifies(HookEvent::Stop, true)]
+    #[case::permission_request_notifies(HookEvent::PermissionRequest, true)]
+    #[case::notification_no_notify(HookEvent::Notification, false)]
+    #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, false)]
+    #[case::pre_tool_no_notification(HookEvent::PreToolUse, false)]
+    #[case::post_tool_no_notification(HookEvent::PostToolUse, false)]
+    fn test_is_notifiable_event(#[case] event: HookEvent, #[case] expected: bool) {
+        assert_eq!(is_notifiable_event(event), expected);
     }
 
     #[test]
@@ -567,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_build_notification_permission_request_with_command() {
-        let input = create_test_input_with_tool("Bash", Some("cargo test --all"));
+        let input = create_test_input_with_tool("Bash", Some(r#"{"command":"cargo test --all"}"#));
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
         let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
@@ -579,19 +561,39 @@ mod tests {
     }
 
     #[test]
-    fn test_build_notification_permission_request_without_command() {
+    fn test_build_notification_permission_request_with_file_path() {
+        let input = create_test_input_with_tool("Edit", Some(r#"{"file_path":"src/main.rs"}"#));
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::WaitingInput;
+        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
+
+        assert_eq!(notification.message(), "Edit: src/main.rs");
+    }
+
+    #[test]
+    fn test_build_notification_permission_request_with_pattern() {
+        let input = create_test_input_with_tool("Grep", Some(r#"{"pattern":"TODO"}"#));
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::WaitingInput;
+        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
+
+        assert_eq!(notification.message(), "Grep: TODO");
+    }
+
+    #[test]
+    fn test_build_notification_permission_request_without_tool_input() {
         let input = create_test_input_with_tool("Task", None);
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
         let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
 
-        // Message shows just tool name when no command details
+        // Message shows just tool name when no tool_input details
         assert_eq!(notification.message(), "Task");
     }
 
     #[test]
     fn test_build_notification_permission_request_ignores_last_message() {
-        let input = create_test_input_with_tool("Bash", Some("rm -rf /tmp/test"));
+        let input = create_test_input_with_tool("Bash", Some(r#"{"command":"rm -rf /tmp/test"}"#));
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
         // Even when last_message exists, permission_request should use tool details
