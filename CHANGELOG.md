@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.54](https://github.com/fohte/armyknife/compare/v0.1.53...v0.1.54) (2026-01-29)
+
+
+### Bug Fixes
+
+* **cc/hook:** escape tmux path in notification click action ([#179](https://github.com/fohte/armyknife/issues/179)) ([a645e4b](https://github.com/fohte/armyknife/commit/a645e4bbebbc1551b72411ce52037fac21e600e9))
+
 ## [0.1.53](https://github.com/fohte/armyknife/compare/v0.1.52...v0.1.53) (2026-01-29)
 
 
