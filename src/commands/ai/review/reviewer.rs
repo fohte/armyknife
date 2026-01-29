@@ -15,7 +15,7 @@ impl Reviewer {
     pub fn bot_login(&self) -> &'static str {
         match self {
             Self::Gemini => "gemini-code-assist",
-            Self::Devin => "devin-ai-integration[bot]",
+            Self::Devin => "devin-ai-integration",
         }
     }
 
@@ -44,5 +44,19 @@ impl Reviewer {
             Self::Gemini => true,
             Self::Devin => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(Reviewer::Gemini, "gemini-code-assist")]
+    // GitHub GraphQL API returns "devin-ai-integration" without "[bot]" suffix
+    #[case(Reviewer::Devin, "devin-ai-integration")]
+    fn bot_login_matches_github_api_response(#[case] reviewer: Reviewer, #[case] expected: &str) {
+        assert_eq!(reviewer.bot_login(), expected);
     }
 }
