@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.52](https://github.com/fohte/armyknife/compare/v0.1.51...v0.1.52) (2026-01-29)
+
+
+### Bug Fixes
+
+* **cc/hook:** use full path for tmux in notification click action ([#176](https://github.com/fohte/armyknife/issues/176)) ([f7e9a14](https://github.com/fohte/armyknife/commit/f7e9a1474cd2121944c2e52586803290cedc8fa7))
+
 ## [0.1.51](https://github.com/fohte/armyknife/compare/v0.1.50...v0.1.51) (2026-01-29)
 
 
