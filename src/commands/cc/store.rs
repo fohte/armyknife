@@ -215,24 +215,17 @@ pub fn list_sessions() -> Result<Vec<Session>> {
     Ok(sessions)
 }
 
-/// Maximum age for sessions without TTY or with TTY that may have been reused.
-/// Sessions older than this will be removed during cleanup.
-const STALE_SESSION_MAX_AGE: chrono::TimeDelta = chrono::TimeDelta::hours(24);
-
 /// Removes stale sessions from disk.
 ///
 /// A session is considered stale and removed if:
 /// 1. Its TTY is set but no longer exists (terminal was closed)
-/// 2. It hasn't been updated for more than 24 hours (handles TTY reuse and sessions
-///    without TTY that were not properly cleaned up)
+/// 2. Its TTY is not set (abnormal termination - hook never received TTY info)
 pub fn cleanup_stale_sessions() -> Result<()> {
     let dir = sessions_dir()?;
 
     if !dir.exists() {
         return Ok(());
     }
-
-    let now = chrono::Utc::now();
 
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
@@ -251,10 +244,10 @@ pub fn cleanup_stale_sessions() -> Result<()> {
         };
 
         let should_remove = match &session.tty {
-            // TTY is set but no longer exists -> definitely stale
-            Some(tty_path) if !tty::is_tty_alive(tty_path) => true,
-            // TTY exists or not set -> check age to handle TTY reuse and edge cases
-            _ => now.signed_duration_since(session.updated_at) > STALE_SESSION_MAX_AGE,
+            // TTY is set but no longer exists -> terminal was closed
+            Some(tty_path) => !tty::is_tty_alive(tty_path),
+            // TTY is not set -> abnormal termination
+            None => true,
         };
 
         if should_remove {
@@ -489,7 +482,7 @@ mod tests {
         }
 
         #[rstest]
-        fn keeps_recent_session_with_existing_tty() {
+        fn keeps_session_with_existing_tty() {
             let (session_id, path) = setup_session("existing-tty");
 
             // Create session with a TTY that exists (/dev/null always exists)
@@ -499,56 +492,18 @@ mod tests {
 
             cleanup_stale_sessions().expect("cleanup should succeed");
 
-            assert!(
-                path.exists(),
-                "recent session with existing TTY should be kept"
-            );
+            assert!(path.exists(), "session with existing TTY should be kept");
 
             cleanup_session(&session_id);
         }
 
         #[rstest]
-        fn removes_old_session_without_tty() {
-            let (session_id, path) = setup_session("old-no-tty");
+        fn removes_session_without_tty() {
+            let (session_id, path) = setup_session("no-tty");
 
-            // Create session without TTY that is older than STALE_SESSION_MAX_AGE
+            // Create session without TTY (abnormal termination case)
             let mut session = create_test_session(&session_id);
             session.tty = None;
-            session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(25);
-            save_session(&session).expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
-
-            cleanup_stale_sessions().expect("cleanup should succeed");
-
-            assert!(!path.exists(), "old session without TTY should be removed");
-        }
-
-        #[rstest]
-        fn keeps_recent_session_without_tty() {
-            let (session_id, path) = setup_session("recent-no-tty");
-
-            // Create session without TTY that was updated recently
-            let mut session = create_test_session(&session_id);
-            session.tty = None;
-            session.updated_at = chrono::Utc::now();
-            save_session(&session).expect("save should succeed");
-
-            cleanup_stale_sessions().expect("cleanup should succeed");
-
-            assert!(path.exists(), "recent session without TTY should be kept");
-
-            cleanup_session(&session_id);
-        }
-
-        #[rstest]
-        fn removes_old_session_with_existing_tty() {
-            let (session_id, path) = setup_session("old-existing-tty");
-
-            // Create session with existing TTY but very old update time
-            // This handles the TTY reuse case
-            let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/null".to_string());
-            session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(25);
             save_session(&session).expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
@@ -556,7 +511,7 @@ mod tests {
 
             assert!(
                 !path.exists(),
-                "old session with existing TTY should be removed (handles TTY reuse)"
+                "session without TTY should be removed (abnormal termination)"
             );
         }
 
