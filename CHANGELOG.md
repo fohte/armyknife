@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.49](https://github.com/fohte/armyknife/compare/v0.1.48...v0.1.49) (2026-01-29)
+
+
+### Bug Fixes
+
+* **cc/hook:** prevent session file corruption from concurrent writes ([#169](https://github.com/fohte/armyknife/issues/169)) ([c1c2d05](https://github.com/fohte/armyknife/commit/c1c2d058597b79eb4b42e43389381f4905c54af0))
+
 ## [0.1.48](https://github.com/fohte/armyknife/compare/v0.1.47...v0.1.48) (2026-01-29)
 
 
