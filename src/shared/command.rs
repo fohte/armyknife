@@ -1,15 +1,22 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Check if a command is available in PATH.
 pub fn is_command_available(cmd: &str) -> bool {
-    let path_var = match std::env::var_os("PATH") {
-        Some(p) => p,
-        None => return false,
-    };
+    find_command_path(cmd).is_some()
+}
 
-    std::env::split_paths(&path_var).any(|dir| {
+/// Find the full path of a command in PATH.
+/// Returns the first matching executable path, or None if not found.
+pub fn find_command_path(cmd: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+
+    std::env::split_paths(&path_var).find_map(|dir| {
         let path = dir.join(cmd);
-        is_executable(&path)
+        if is_executable(&path) {
+            Some(path)
+        } else {
+            None
+        }
     })
 }
 
@@ -41,5 +48,18 @@ mod tests {
     #[test]
     fn test_nonexistent_command_not_available() {
         assert!(!is_command_available("definitely-not-a-real-command-12345"));
+    }
+
+    #[test]
+    fn test_find_command_path_returns_path_for_existing_command() {
+        let path = find_command_path("sh");
+        assert!(path.is_some());
+        assert!(path.unwrap().to_string_lossy().contains("sh"));
+    }
+
+    #[test]
+    fn test_find_command_path_returns_none_for_nonexistent_command() {
+        let path = find_command_path("definitely-not-a-real-command-12345");
+        assert!(path.is_none());
     }
 }
