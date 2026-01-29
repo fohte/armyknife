@@ -358,19 +358,31 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
     // Limit to ~50 characters
     let subtitle = build_subtitle(session);
 
-    // Message: use last_message if available, otherwise fall back to event-based message
-    let message = session
-        .last_message
-        .as_ref()
-        .map(|m| truncate_string(m, 100))
-        .unwrap_or_else(|| match event {
-            HookEvent::Stop => "Session stopped".to_string(),
-            HookEvent::Notification => input
+    // Message: for permission prompts, use input.message to show what permission is being requested.
+    // For other events, use last_message if available, otherwise fall back to event-based defaults.
+    let message = match event {
+        HookEvent::Notification
+            if input.notification_type.as_deref() == Some("permission_prompt") =>
+        {
+            input
                 .message
-                .clone()
-                .unwrap_or_else(|| "Permission required".to_string()),
-            _ => "Notification".to_string(),
-        });
+                .as_ref()
+                .map(|m| truncate_string(m, 100))
+                .unwrap_or_else(|| "Permission required".to_string())
+        }
+        _ => session
+            .last_message
+            .as_ref()
+            .map(|m| truncate_string(m, 100))
+            .unwrap_or_else(|| match event {
+                HookEvent::Stop => "Session stopped".to_string(),
+                HookEvent::Notification => input
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "Notification".to_string()),
+                _ => "Notification".to_string(),
+            }),
+    };
 
     let mut notification = Notification::new(&title, message).with_sound("Glass");
 
@@ -535,8 +547,27 @@ mod tests {
 
         // Title shows Waiting status
         assert_eq!(notification.title(), "Claude Code - Waiting");
-        // Message falls back to input.message when no last_message
+        // Message uses input.message (permission request) instead of last_message
         assert_eq!(notification.message(), "Allow edit?");
+    }
+
+    #[test]
+    fn test_build_notification_permission_prioritizes_input_message_over_last_message() {
+        let input = create_test_input_with_message(
+            Some("permission_prompt"),
+            Some("Claude needs your permission to use Bash"),
+        );
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::WaitingInput;
+        // Even when last_message exists, permission_prompt should use input.message
+        session.last_message = Some("I'll run the tests now.".to_string());
+        let notification = build_notification(HookEvent::Notification, &input, &session);
+
+        // Should show what permission is requested, not the last assistant message
+        assert_eq!(
+            notification.message(),
+            "Claude needs your permission to use Bash"
+        );
     }
 
     #[test]
