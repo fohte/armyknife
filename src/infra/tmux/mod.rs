@@ -208,6 +208,46 @@ pub fn kill_window(window_id: &str) -> Result<()> {
     run_tmux(&["kill-window", "-t", window_id])
 }
 
+/// Get all window IDs that have panes with working directories inside the given path.
+///
+/// This searches all tmux sessions and returns unique window IDs where any pane
+/// has its current working directory inside `path`.
+pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
+    let output = match Command::new("tmux")
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{pane_current_path}\t#{window_id}",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    let target_path = std::path::Path::new(path);
+    let mut window_ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let pane_path = parts.next()?;
+            let window_id = parts.next()?;
+
+            if std::path::Path::new(pane_path).starts_with(target_path) {
+                Some(window_id.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Remove duplicates (multiple panes can be in the same window)
+    window_ids.sort();
+    window_ids.dedup();
+    window_ids
+}
+
 /// Select a tmux window by target (e.g., "session:0" or "session:window_name").
 /// Returns an error if not running inside tmux.
 pub fn select_window(target: &str) -> Result<()> {

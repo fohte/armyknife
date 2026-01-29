@@ -9,6 +9,7 @@ use super::worktree::{
     LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
 };
 use crate::infra::git::fetch_with_prune;
+use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -75,6 +76,12 @@ fn display_worktrees_to_delete(worktrees: &[CleanWorktreeInfo]) {
     println!("Worktrees to delete:");
     for info in worktrees {
         println!("  {} ({})", info.wt.path.display(), info.reason);
+
+        // Show tmux windows that will be closed
+        let window_ids = tmux::get_window_ids_in_path(&info.wt.path.to_string_lossy());
+        for window_id in window_ids {
+            println!("    -> tmux window: {window_id}");
+        }
     }
 }
 
@@ -94,12 +101,22 @@ fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Resul
     let mut deleted_count = 0;
 
     for info in worktrees {
+        // Collect tmux window IDs before deleting the worktree (while the path still exists)
+        let window_ids = tmux::get_window_ids_in_path(&info.wt.path.to_string_lossy());
+
         if delete_worktree(repo, &info.wt.name)? {
             println!("Deleted: {} ({})", info.wt.path.display(), info.reason);
             deleted_count += 1;
 
             if delete_branch_if_exists(repo, &info.wt.branch) {
                 println!("  Branch deleted: {}", info.wt.branch);
+            }
+
+            // Close tmux windows that were in the deleted worktree
+            for window_id in window_ids {
+                if tmux::kill_window(&window_id).is_ok() {
+                    println!("  Tmux window closed: {window_id}");
+                }
             }
         }
     }
