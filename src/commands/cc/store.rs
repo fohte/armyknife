@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -66,8 +66,9 @@ fn acquire_lock(file: &File) -> Result<()> {
 /// Loads a session from disk by session ID.
 /// Returns Ok(None) if the session file doesn't exist.
 ///
-/// If the session file is corrupted (invalid JSON), it will be deleted
-/// and Ok(None) will be returned to allow recovery.
+/// If the session file is corrupted (invalid JSON), Ok(None) will be returned.
+/// The corrupted file is not deleted here to avoid race conditions; instead,
+/// the next save_session call will atomically overwrite it.
 pub fn load_session(session_id: &str) -> Result<Option<Session>> {
     let path = session_file(session_id)?;
 
@@ -75,37 +76,45 @@ pub fn load_session(session_id: &str) -> Result<Option<Session>> {
         return Ok(None);
     }
 
-    // Open file with shared lock for reading
-    let file = match File::open(&path) {
+    // Use the same lock file as save_session to coordinate readers and writers
+    let lock_path = path.with_extension("json.lock");
+
+    // Open or create lock file for shared lock
+    let lock_file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
 
-    // Acquire shared lock for reading
-    acquire_shared_lock(&file)?;
+    // Acquire shared lock (allows concurrent reads, blocks exclusive writes)
+    acquire_shared_lock(&lock_file)?;
 
-    // Read content while holding the lock
-    let mut content = String::new();
-    let mut reader = std::io::BufReader::new(&file);
-    reader.read_to_string(&mut content)?;
+    // Read the actual session file while holding the lock
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
 
-    // Lock is automatically released when file is dropped
-    drop(file);
-
-    // Parse JSON
+    // Parse JSON (lock is held until lock_file is dropped)
     match serde_json::from_str::<Session>(&content) {
         Ok(session) => Ok(Some(session)),
         Err(_) => {
-            // File is corrupted, delete it and return None for recovery
+            // File is corrupted; return None and let save_session overwrite it
             eprintln!(
-                "[armyknife] warning: session file corrupted, deleting: {}",
+                "[armyknife] warning: session file corrupted: {}",
                 path.display()
             );
-            let _ = fs::remove_file(&path);
             Ok(None)
         }
     }
+    // Lock is automatically released when lock_file is dropped
 }
 
 /// Acquires a shared lock on a file with timeout and retry.
@@ -435,17 +444,20 @@ mod tests {
         )]
         #[case::truncated_json(r#"{"session_id": "test", "cwd": "/tmp""#, "truncated")]
         #[case::empty_file("", "empty")]
-        fn load_invalid_json_returns_none_and_deletes_file(
-            #[case] content: &str,
-            #[case] prefix: &str,
-        ) {
+        fn load_invalid_json_returns_none(#[case] content: &str, #[case] prefix: &str) {
             let (session_id, path) = setup_session(prefix);
 
             fs::write(&path, content).expect("write should succeed");
 
             let result = load_session(&session_id).expect("load should not error");
             assert!(result.is_none(), "{} session should return None", prefix);
-            assert!(!path.exists(), "{} file should be deleted", prefix);
+            // File is not deleted to avoid race conditions; save_session will overwrite it
+            assert!(path.exists(), "{} file should still exist", prefix);
+
+            // Cleanup
+            let _ = fs::remove_file(&path);
+            let lock_path = path.with_extension("json.lock");
+            let _ = fs::remove_file(&lock_path);
         }
 
         #[rstest]
