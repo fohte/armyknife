@@ -105,7 +105,7 @@ fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> 
 /// - Strips ANSI escape sequences to prevent terminal injection
 /// - Trims whitespace and replaces newlines with spaces to prevent
 ///   breaking table formatting
-fn normalize_title(s: &str) -> String {
+pub fn normalize_title(s: &str) -> String {
     // Strip ANSI escape sequences (CSI sequences like \x1b[...m)
     let stripped = regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", s, |_| "");
     stripped.trim().replace('\n', " ").replace('\r', "")

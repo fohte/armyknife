@@ -1,4 +1,3 @@
-use crate::commands::cc::claude_sessions;
 use crate::commands::cc::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
 #[cfg(test)]
@@ -150,7 +149,10 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
-        .map(|(i, session)| create_session_item(i, session, now, term_width))
+        .map(|(i, session)| {
+            let cached_title = app.get_cached_title(&session.session_id);
+            create_session_item(i, session, cached_title, now, term_width)
+        })
         .collect();
 
     let list = List::new(items)
@@ -293,13 +295,16 @@ fn calculate_title_width(term_width: usize) -> usize {
 fn create_session_item(
     index: usize,
     session: &Session,
+    cached_title: Option<&str>,
     now: DateTime<Utc>,
     term_width: usize,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
     let session_info = get_session_info(session);
-    let title = get_title_display_name(session);
+    let title = cached_title
+        .map(String::from)
+        .unwrap_or_else(|| get_title_display_name_fallback(session));
     let time_ago = format_relative_time(session.updated_at, now);
 
     let session_info_width = calculate_session_info_width(term_width);
@@ -371,33 +376,40 @@ fn count_statuses(sessions: &[Session]) -> (usize, usize, usize) {
     (running, waiting, stopped)
 }
 
-/// Gets the title display name for a session.
-/// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
-fn get_title_display_name(session: &Session) -> String {
-    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
-        return title;
-    }
+/// Gets the title display name for a session without external file I/O.
+/// Used as fallback when title is not in cache.
+/// All outputs are sanitized to strip ANSI escape sequences.
+fn get_title_display_name_fallback(session: &Session) -> String {
+    use crate::commands::cc::claude_sessions;
 
     if let Some(ref tmux_info) = session.tmux_info {
-        return format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+        return claude_sessions::normalize_title(&format!(
+            "{}:{}",
+            tmux_info.session_name, tmux_info.window_name
+        ));
     }
 
     // Extract last component of cwd path
-    session
+    let raw_title = session
         .cwd
         .file_name()
         .and_then(|n| n.to_str())
         .map(String::from)
-        .unwrap_or_else(|| session.cwd.display().to_string())
+        .unwrap_or_else(|| session.cwd.display().to_string());
+    claude_sessions::normalize_title(&raw_title)
 }
 
 /// Gets the session info (tmux session:window or cwd path).
+/// All outputs are sanitized to strip ANSI escape sequences.
 fn get_session_info(session: &Session) -> String {
-    if let Some(ref tmux_info) = session.tmux_info {
+    use crate::commands::cc::claude_sessions;
+
+    let raw = if let Some(ref tmux_info) = session.tmux_info {
         format!("{}:{}", tmux_info.session_name, tmux_info.window_name)
     } else {
         session.cwd.display().to_string()
-    }
+    };
+    claude_sessions::normalize_title(&raw)
 }
 
 /// Formats a datetime as a relative time string.
@@ -538,7 +550,11 @@ fn render_session_list_internal(
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
-        .map(|(i, session)| create_session_item(i, session, now, term_width))
+        .map(|(i, session)| {
+            // Use fallback for tests (no cache available)
+            let title = get_title_display_name_fallback(session);
+            create_session_item(i, session, Some(&title), now, term_width)
+        })
         .collect();
 
     let list = List::new(items)
@@ -605,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_get_title_display_name_fallback_to_tmux() {
-        // When sessions-index.json doesn't exist, falls back to tmux info
+        // When cache is not available, falls back to tmux info
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
@@ -613,14 +629,14 @@ mod tests {
             window_index: 0,
             pane_id: "%0".to_string(),
         });
-        assert_eq!(get_title_display_name(&session), "dev:editor");
+        assert_eq!(get_title_display_name_fallback(&session), "dev:editor");
     }
 
     #[test]
     fn test_get_title_display_name_fallback_to_cwd() {
-        // When sessions-index.json doesn't exist and no tmux, falls back to cwd
+        // When cache is not available and no tmux, falls back to cwd
         let session = create_test_session("test");
-        assert_eq!(get_title_display_name(&session), "project");
+        assert_eq!(get_title_display_name_fallback(&session), "project");
     }
 
     #[test]
