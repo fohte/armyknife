@@ -378,27 +378,38 @@ fn count_statuses(sessions: &[Session]) -> (usize, usize, usize) {
 
 /// Gets the title display name for a session without external file I/O.
 /// Used as fallback when title is not in cache.
+/// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name_fallback(session: &Session) -> String {
+    use crate::commands::cc::claude_sessions;
+
     if let Some(ref tmux_info) = session.tmux_info {
-        return format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+        return claude_sessions::normalize_title(&format!(
+            "{}:{}",
+            tmux_info.session_name, tmux_info.window_name
+        ));
     }
 
     // Extract last component of cwd path
-    session
+    let raw_title = session
         .cwd
         .file_name()
         .and_then(|n| n.to_str())
         .map(String::from)
-        .unwrap_or_else(|| session.cwd.display().to_string())
+        .unwrap_or_else(|| session.cwd.display().to_string());
+    claude_sessions::normalize_title(&raw_title)
 }
 
 /// Gets the session info (tmux session:window or cwd path).
+/// All outputs are sanitized to strip ANSI escape sequences.
 fn get_session_info(session: &Session) -> String {
-    if let Some(ref tmux_info) = session.tmux_info {
+    use crate::commands::cc::claude_sessions;
+
+    let raw = if let Some(ref tmux_info) = session.tmux_info {
         format!("{}:{}", tmux_info.session_name, tmux_info.window_name)
     } else {
         session.cwd.display().to_string()
-    }
+    };
+    claude_sessions::normalize_title(&raw)
 }
 
 /// Formats a datetime as a relative time string.

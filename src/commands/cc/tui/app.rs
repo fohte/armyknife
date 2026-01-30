@@ -358,22 +358,28 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 
 /// Gets the title display name for a session.
 /// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
+/// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
     if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
+        // Already sanitized by claude_sessions::normalize_title
         return title;
     }
 
     if let Some(ref tmux_info) = session.tmux_info {
-        return format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+        return claude_sessions::normalize_title(&format!(
+            "{}:{}",
+            tmux_info.session_name, tmux_info.window_name
+        ));
     }
 
     // Extract last component of cwd path
-    session
+    let raw_title = session
         .cwd
         .file_name()
         .and_then(|n| n.to_str())
         .map(String::from)
-        .unwrap_or_else(|| session.cwd.display().to_string())
+        .unwrap_or_else(|| session.cwd.display().to_string());
+    claude_sessions::normalize_title(&raw_title)
 }
 
 /// Checks if a session matches the search query using the cache.
