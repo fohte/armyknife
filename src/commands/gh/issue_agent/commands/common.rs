@@ -3,6 +3,8 @@
 use std::io::{self, Write};
 use std::path::Path;
 
+use crossterm::style::{Color, ResetColor, SetForegroundColor};
+use crossterm::tty::IsTty;
 use similar::{ChangeTag, TextDiff};
 
 use crate::infra::git;
@@ -28,10 +30,11 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     Ok(format!("{}/{}", owner, repo))
 }
 
-/// Print unified diff between old and new text to stdout.
+/// Print unified diff between old and new text to stdout with colors.
 /// Ignores BrokenPipe errors (e.g., when piped to `head`).
 pub fn print_diff(old: &str, new: &str) -> anyhow::Result<()> {
-    if let Err(e) = write_diff(&mut io::stdout(), old, new)
+    let use_color = io::stdout().is_tty();
+    if let Err(e) = write_diff(&mut io::stdout(), old, new, use_color)
         && e.kind() != io::ErrorKind::BrokenPipe
     {
         return Err(e.into());
@@ -40,18 +43,49 @@ pub fn print_diff(old: &str, new: &str) -> anyhow::Result<()> {
 }
 
 /// Write unified diff between old and new text to a writer.
-pub fn write_diff<W: Write>(writer: &mut W, old: &str, new: &str) -> io::Result<()> {
+/// If `use_color` is true, deleted lines are red and inserted lines are green.
+pub fn write_diff<W: Write>(
+    writer: &mut W,
+    old: &str,
+    new: &str,
+    use_color: bool,
+) -> io::Result<()> {
     let diff = TextDiff::from_lines(old, new);
     for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
+        let (sign, color) = match change.tag() {
+            ChangeTag::Delete => ("-", Some(Color::Red)),
+            ChangeTag::Insert => ("+", Some(Color::Green)),
+            ChangeTag::Equal => (" ", None),
         };
+
+        if use_color && let Some(c) = color {
+            write!(writer, "{}", SetForegroundColor(c))?;
+        }
+
         // change already includes newline, so no newline here
         write!(writer, "{}{}", sign, change)?;
+
+        if use_color && color.is_some() {
+            write!(writer, "{}", ResetColor)?;
+        }
     }
     Ok(())
+}
+
+/// Print a single line with color (for simple -/+ diffs like title).
+pub fn print_colored_line(prefix: &str, text: &str, color: Color) {
+    let use_color = io::stdout().is_tty();
+    if use_color {
+        println!(
+            "{}{}{}{}",
+            SetForegroundColor(color),
+            prefix,
+            text,
+            ResetColor
+        );
+    } else {
+        println!("{}{}", prefix, text);
+    }
 }
 
 /// Print success message after fetching issue.
@@ -109,9 +143,9 @@ mod tests {
         #[case::modify("old\n", "new\n", "-old\n+new\n")]
         #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
         #[case::empty_both("", "", "")]
-        fn test_write_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
+        fn test_write_diff_no_color(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
             let mut output = Vec::new();
-            write_diff(&mut output, old, new).unwrap();
+            write_diff(&mut output, old, new, false).unwrap();
             assert_eq!(String::from_utf8(output).unwrap(), expected);
         }
     }

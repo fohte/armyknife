@@ -104,6 +104,7 @@ a gh issue-agent <command> <issue-number> [options]
 | `view`  | View issue and comments (read-only, no local cache) |
 | `pull`  | Fetch issue and save locally                        |
 | `push`  | Push local changes to GitHub                        |
+| `diff`  | Show colored diff between local changes and remote  |
 
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |

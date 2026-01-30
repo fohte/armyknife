@@ -4,58 +4,60 @@ use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
 use crate::infra::github::OctocrabClient;
 
-use super::super::common::print_diff;
+use crossterm::style::Color;
+
+use super::super::common::{print_colored_line, print_diff};
 use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_title_change,
 };
 
 /// Local state for change detection.
-pub(super) struct LocalState<'a> {
-    pub(super) metadata: &'a IssueMetadata,
-    pub(super) body: &'a str,
-    pub(super) comments: &'a [LocalComment],
+pub(crate) struct LocalState<'a> {
+    pub(crate) metadata: &'a IssueMetadata,
+    pub(crate) body: &'a str,
+    pub(crate) comments: &'a [LocalComment],
 }
 
 /// Remote state for change detection.
-pub(super) struct RemoteState<'a> {
-    pub(super) issue: &'a Issue,
-    pub(super) comments: &'a [Comment],
+pub(crate) struct RemoteState<'a> {
+    pub(crate) issue: &'a Issue,
+    pub(crate) comments: &'a [Comment],
 }
 
 /// Options for change detection.
-pub(super) struct DetectOptions<'a> {
-    pub(super) current_user: &'a str,
-    pub(super) edit_others: bool,
-    pub(super) allow_delete: bool,
+pub(crate) struct DetectOptions<'a> {
+    pub(crate) current_user: &'a str,
+    pub(crate) edit_others: bool,
+    pub(crate) allow_delete: bool,
 }
 
 /// Represents all changes detected between local and remote state.
-pub(super) struct ChangeSet<'a> {
-    pub(super) body: Option<BodyChange<'a>>,
-    pub(super) title: Option<TitleChange<'a>>,
-    pub(super) labels: Option<LabelChange>,
-    pub(super) comments: Vec<CommentChange<'a>>,
+pub(crate) struct ChangeSet<'a> {
+    pub(crate) body: Option<BodyChange<'a>>,
+    pub(crate) title: Option<TitleChange<'a>>,
+    pub(crate) labels: Option<LabelChange>,
+    pub(crate) comments: Vec<CommentChange<'a>>,
 }
 
-pub(super) struct BodyChange<'a> {
-    pub(super) local: &'a str,
-    pub(super) remote: &'a str,
+pub(crate) struct BodyChange<'a> {
+    pub(crate) local: &'a str,
+    pub(crate) remote: &'a str,
 }
 
-pub(super) struct TitleChange<'a> {
-    pub(super) local: &'a str,
-    pub(super) remote: &'a str,
+pub(crate) struct TitleChange<'a> {
+    pub(crate) local: &'a str,
+    pub(crate) remote: &'a str,
 }
 
-pub(super) struct LabelChange {
-    pub(super) to_add: Vec<String>,
-    pub(super) to_remove: Vec<String>,
-    pub(super) local_sorted: Vec<String>,
-    pub(super) remote_sorted: Vec<String>,
+pub(crate) struct LabelChange {
+    pub(crate) to_add: Vec<String>,
+    pub(crate) to_remove: Vec<String>,
+    pub(crate) local_sorted: Vec<String>,
+    pub(crate) remote_sorted: Vec<String>,
 }
 
 #[derive(Debug)]
-pub(super) enum CommentChange<'a> {
+pub(crate) enum CommentChange<'a> {
     New {
         filename: &'a str,
         body: &'a str,
@@ -76,7 +78,7 @@ pub(super) enum CommentChange<'a> {
 }
 
 impl<'a> ChangeSet<'a> {
-    pub(super) fn detect(
+    pub(crate) fn detect(
         local: &LocalState<'a>,
         remote: &RemoteState<'a>,
         options: &DetectOptions<'a>,
@@ -100,14 +102,14 @@ impl<'a> ChangeSet<'a> {
         })
     }
 
-    pub(super) fn has_changes(&self) -> bool {
+    pub(crate) fn has_changes(&self) -> bool {
         self.body.is_some()
             || self.title.is_some()
             || self.labels.is_some()
             || !self.comments.is_empty()
     }
 
-    pub(super) fn display(&self) -> anyhow::Result<()> {
+    pub(crate) fn display(&self) -> anyhow::Result<()> {
         if let Some(change) = &self.body {
             println!();
             println!("=== Issue Body ===");
@@ -117,15 +119,15 @@ impl<'a> ChangeSet<'a> {
         if let Some(change) = &self.title {
             println!();
             println!("=== Title ===");
-            println!("- {}", change.remote);
-            println!("+ {}", change.local);
+            print_colored_line("- ", change.remote, Color::Red);
+            print_colored_line("+ ", change.local, Color::Green);
         }
 
         if let Some(change) = &self.labels {
             println!();
             println!("=== Labels ===");
-            println!("- {:?}", change.remote_sorted);
-            println!("+ {:?}", change.local_sorted);
+            print_colored_line("- ", &format!("{:?}", change.remote_sorted), Color::Red);
+            print_colored_line("+ ", &format!("{:?}", change.local_sorted), Color::Green);
         }
 
         for change in &self.comments {
@@ -133,7 +135,9 @@ impl<'a> ChangeSet<'a> {
                 CommentChange::New { filename, body } => {
                     println!();
                     println!("=== New Comment: {} ===", filename);
-                    println!("{}", body);
+                    for line in body.lines() {
+                        print_colored_line("+ ", line, Color::Green);
+                    }
                 }
                 CommentChange::Updated {
                     filename,
@@ -163,7 +167,7 @@ impl<'a> ChangeSet<'a> {
                     );
                     // Show the content that will be deleted (prefixed with -)
                     for line in body.lines() {
-                        println!("- {}", line);
+                        print_colored_line("- ", line, Color::Red);
                     }
                 }
             }

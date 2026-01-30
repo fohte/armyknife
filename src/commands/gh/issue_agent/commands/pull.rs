@@ -126,7 +126,7 @@ fn write_local_changes<W: Write>(
         let remote_body = remote_issue.body.as_deref().unwrap_or("");
         writeln!(writer)?;
         writeln!(writer, "=== Issue Body ===")?;
-        write_diff(writer, &local_body, remote_body)?;
+        write_diff(writer, &local_body, remote_body, false)?;
     }
 
     // Show title diff
@@ -155,7 +155,7 @@ fn write_local_changes<W: Write>(
                 {
                     writeln!(writer)?;
                     writeln!(writer, "=== Comment: {} ===", local_comment.filename)?;
-                    write_diff(writer, &local_comment.body, &remote_comment.body)?;
+                    write_diff(writer, &local_comment.body, &remote_comment.body, false)?;
                 }
             }
         }

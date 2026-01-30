@@ -1,12 +1,15 @@
 mod common;
+mod diff;
 mod pull;
-mod push;
+pub(crate) mod push;
 #[cfg(test)]
 mod test_helpers;
 mod view;
 
 use clap::Args;
 
+pub use diff::DiffArgs;
+pub use diff::run as run_diff;
 pub use pull::PullArgs;
 pub use pull::run as run_pull;
 pub use push::PushArgs;

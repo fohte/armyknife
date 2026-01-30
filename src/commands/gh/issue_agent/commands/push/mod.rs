@@ -1,7 +1,7 @@
 //! Push command for gh-issue-agent.
 
-mod changeset;
-mod detect;
+pub(crate) mod changeset;
+pub(crate) mod detect;
 #[cfg(test)]
 mod integration_tests;
 
