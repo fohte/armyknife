@@ -7,7 +7,11 @@ use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use crossterm::tty::IsTty;
 use similar::{ChangeTag, TextDiff};
 
+use super::IssueArgs;
+use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
+use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
 use crate::infra::git;
+use crate::infra::github::OctocrabClient;
 
 // Re-export git::parse_repo for convenience.
 // Note: This returns git::Result, callers using Box<dyn Error> can use `?` directly.
@@ -85,6 +89,88 @@ pub fn print_colored_line(prefix: &str, text: &str, color: Color) {
         );
     } else {
         println!("{}{}", prefix, text);
+    }
+}
+
+/// Context for issue operations containing all necessary state.
+pub struct IssueContext {
+    pub owner: String,
+    pub repo_name: String,
+    pub issue_number: u64,
+    pub storage: IssueStorage,
+    pub current_user: String,
+}
+
+/// Remote state fetched from GitHub.
+pub struct RemoteData {
+    pub issue: Issue,
+    pub comments: Vec<Comment>,
+}
+
+/// Local state loaded from storage.
+pub struct LocalData {
+    pub metadata: IssueMetadata,
+    pub body: String,
+    pub comments: Vec<LocalComment>,
+}
+
+impl IssueContext {
+    /// Initialize context from IssueArgs, validating inputs and fetching current user.
+    pub async fn from_args(args: &IssueArgs) -> anyhow::Result<(Self, &'static OctocrabClient)> {
+        let repo = get_repo_from_arg_or_git(&args.repo)?;
+        let issue_number = args.issue_number;
+
+        // Validate repo format before making any API calls
+        let (owner, repo_name) = parse_repo(&repo)?;
+
+        let storage = IssueStorage::new(&repo, issue_number as i64);
+
+        // Check if local cache exists
+        if !storage.dir().exists() {
+            anyhow::bail!(
+                "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
+                issue_number,
+                issue_number
+            );
+        }
+
+        println!("Fetching latest from GitHub...");
+
+        let client = OctocrabClient::get()?;
+        let current_user = client.get_current_user().await?;
+
+        let ctx = Self {
+            owner: owner.to_string(),
+            repo_name: repo_name.to_string(),
+            issue_number,
+            storage,
+            current_user,
+        };
+
+        Ok((ctx, client))
+    }
+
+    /// Fetch remote state from GitHub.
+    pub async fn fetch_remote(&self, client: &OctocrabClient) -> anyhow::Result<RemoteData> {
+        let issue = client
+            .get_issue(&self.owner, &self.repo_name, self.issue_number)
+            .await?;
+        let comments = client
+            .get_comments(&self.owner, &self.repo_name, self.issue_number)
+            .await?;
+        Ok(RemoteData { issue, comments })
+    }
+
+    /// Load local state from storage.
+    pub fn load_local(&self) -> anyhow::Result<LocalData> {
+        let metadata = self.storage.read_metadata()?;
+        let body = self.storage.read_body()?;
+        let comments = self.storage.read_comments()?;
+        Ok(LocalData {
+            metadata,
+            body,
+            comments,
+        })
     }
 }
 
