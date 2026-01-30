@@ -2,6 +2,7 @@ use crate::commands::cc::claude_sessions;
 use crate::commands::cc::store;
 use crate::commands::cc::types::Session;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
 
@@ -34,8 +35,12 @@ pub struct App {
     /// Selection index before entering search mode (for restoration on cancel).
     pub pre_search_selection: Option<usize>,
     /// Cache of searchable text for each session (keyed by session_id).
-    /// Built once on load/reload for fast search.
-    searchable_text_cache: HashMap<String, String>,
+    /// Lazily built when search mode is first entered.
+    /// Stores (searchable_text, updated_at) for incremental updates.
+    searchable_text_cache: Option<HashMap<String, (String, DateTime<Utc>)>>,
+    /// Cache of session titles for display (keyed by session_id).
+    /// Built on load/reload for fast UI rendering.
+    title_cache: HashMap<String, String>,
 }
 
 impl App {
@@ -53,8 +58,8 @@ impl App {
         // Build initial filtered indices (all sessions)
         let filtered_indices: Vec<usize> = (0..sessions.len()).collect();
 
-        // Build searchable text cache for all sessions
-        let searchable_text_cache = build_searchable_text_cache(&sessions);
+        // Build title cache for fast UI rendering
+        let title_cache = build_title_cache(&sessions);
 
         // Select first item if there are any sessions
         if !sessions.is_empty() {
@@ -71,7 +76,9 @@ impl App {
             confirmed_query: String::new(),
             filtered_indices,
             pre_search_selection: None,
-            searchable_text_cache,
+            // Searchable text cache is lazily built on first search
+            searchable_text_cache: None,
+            title_cache,
         }
     }
 
@@ -83,8 +90,13 @@ impl App {
 
         self.sessions = load_sessions()?;
 
-        // Rebuild searchable text cache for new/changed sessions
-        self.rebuild_searchable_text_cache();
+        // Rebuild title cache for new/changed sessions
+        self.rebuild_title_cache();
+
+        // Incrementally update searchable text cache if it exists
+        if self.searchable_text_cache.is_some() {
+            self.update_searchable_text_cache();
+        }
 
         // Re-apply filter with current query
         self.apply_filter();
@@ -197,10 +209,21 @@ impl App {
     }
 
     /// Enters search mode.
+    /// Lazily builds the searchable text cache on first use.
     pub fn enter_search_mode(&mut self) {
+        // Build searchable text cache on first search
+        if self.searchable_text_cache.is_none() {
+            self.searchable_text_cache = Some(build_searchable_text_cache(&self.sessions));
+        }
+
         self.pre_search_selection = self.list_state.selected();
         self.search_query = self.confirmed_query.clone();
         self.mode = AppMode::Search;
+    }
+
+    /// Returns the cached title for a session, if available.
+    pub fn get_cached_title(&self, session_id: &str) -> Option<&str> {
+        self.title_cache.get(session_id).map(String::as_str)
     }
 
     /// Exits search mode, confirming the search.
@@ -253,16 +276,17 @@ impl App {
 
         if query.is_empty() {
             self.filtered_indices = (0..self.sessions.len()).collect();
-        } else {
+        } else if let Some(ref cache) = self.searchable_text_cache {
             self.filtered_indices = self
                 .sessions
                 .iter()
                 .enumerate()
-                .filter(|(_, session)| {
-                    session_matches_cached(session, query, &self.searchable_text_cache)
-                })
+                .filter(|(_, session)| session_matches_cached(session, query, cache))
                 .map(|(i, _)| i)
                 .collect();
+        } else {
+            // Cache not built yet, show all sessions
+            self.filtered_indices = (0..self.sessions.len()).collect();
         }
 
         // Reset selection to first item or none
@@ -273,27 +297,92 @@ impl App {
         }
     }
 
-    /// Rebuilds the searchable text cache for all sessions.
-    /// Unconditionally rebuilds to pick up new conversation content in active sessions.
-    fn rebuild_searchable_text_cache(&mut self) {
-        self.searchable_text_cache = build_searchable_text_cache(&self.sessions);
+    /// Incrementally updates the searchable text cache.
+    /// Only rebuilds entries for sessions that have been modified since last cache.
+    fn update_searchable_text_cache(&mut self) {
+        let Some(ref mut cache) = self.searchable_text_cache else {
+            return;
+        };
+
+        // Remove entries for sessions that no longer exist
+        let session_ids: std::collections::HashSet<&str> = self
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        cache.retain(|id, _| session_ids.contains(id.as_str()));
+
+        // Update entries for new or modified sessions
+        for session in &self.sessions {
+            let needs_update = cache
+                .get(&session.session_id)
+                .is_none_or(|(_, cached_at)| *cached_at < session.updated_at);
+
+            if needs_update {
+                let text = build_searchable_text(session);
+                cache.insert(session.session_id.clone(), (text, session.updated_at));
+            }
+        }
+    }
+
+    /// Rebuilds the title cache for all sessions.
+    fn rebuild_title_cache(&mut self) {
+        self.title_cache = build_title_cache(&self.sessions);
     }
 }
 
 /// Builds the searchable text cache for all sessions.
-fn build_searchable_text_cache(sessions: &[Session]) -> HashMap<String, String> {
+fn build_searchable_text_cache(sessions: &[Session]) -> HashMap<String, (String, DateTime<Utc>)> {
     sessions
         .iter()
         .map(|session| {
             let searchable_text = build_searchable_text(session);
-            (session.session_id.clone(), searchable_text)
+            (
+                session.session_id.clone(),
+                (searchable_text, session.updated_at),
+            )
         })
         .collect()
 }
 
+/// Builds the title cache for all sessions.
+fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
+    sessions
+        .iter()
+        .map(|session| {
+            let title = get_title_display_name(session);
+            (session.session_id.clone(), title)
+        })
+        .collect()
+}
+
+/// Gets the title display name for a session.
+/// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
+fn get_title_display_name(session: &Session) -> String {
+    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
+        return title;
+    }
+
+    if let Some(ref tmux_info) = session.tmux_info {
+        return format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
+    }
+
+    // Extract last component of cwd path
+    session
+        .cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(String::from)
+        .unwrap_or_else(|| session.cwd.display().to_string())
+}
+
 /// Checks if a session matches the search query using the cache.
 /// Uses case-insensitive partial matching with AND logic for multiple words.
-fn session_matches_cached(session: &Session, query: &str, cache: &HashMap<String, String>) -> bool {
+fn session_matches_cached(
+    session: &Session,
+    query: &str,
+    cache: &HashMap<String, (String, DateTime<Utc>)>,
+) -> bool {
     let words: Vec<&str> = query.split_whitespace().collect();
     if words.is_empty() {
         return true;
@@ -302,7 +391,7 @@ fn session_matches_cached(session: &Session, query: &str, cache: &HashMap<String
     // Get searchable text from cache, or build it on the fly as fallback
     let searchable = cache
         .get(&session.session_id)
-        .map(String::as_str)
+        .map(|(text, _)| text.as_str())
         .unwrap_or("");
     let searchable_lower = searchable.to_lowercase();
 
