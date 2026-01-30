@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.55](https://github.com/fohte/armyknife/compare/v0.1.54...v0.1.55) (2026-01-30)
+
+
+### Bug Fixes
+
+* **cc/watch:** optimize idle performance ([#181](https://github.com/fohte/armyknife/issues/181)) ([73f4a02](https://github.com/fohte/armyknife/commit/73f4a02f49d7b5e33ecb659931638cfbd51a0d00))
+
 ## [0.1.54](https://github.com/fohte/armyknife/compare/v0.1.53...v0.1.54) (2026-01-29)
 
 
