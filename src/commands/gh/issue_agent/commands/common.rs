@@ -1,11 +1,6 @@
 //! Common utilities shared across issue-agent commands.
 
-use std::io::{self, Write};
 use std::path::Path;
-
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
-use crossterm::tty::IsTty;
-use similar::{ChangeTag, TextDiff};
 
 use super::IssueArgs;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
@@ -16,6 +11,9 @@ use crate::infra::github::OctocrabClient;
 // Re-export git::parse_repo for convenience.
 // Note: This returns git::Result, callers using Box<dyn Error> can use `?` directly.
 pub use git::parse_repo;
+
+// Re-export diff utilities from shared module
+pub use crate::shared::diff::{print_colored_line, print_diff, write_diff};
 
 /// Get repository from argument or git remote origin.
 ///
@@ -32,64 +30,6 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     })?;
 
     Ok(format!("{}/{}", owner, repo))
-}
-
-/// Print unified diff between old and new text to stdout with colors.
-/// Ignores BrokenPipe errors (e.g., when piped to `head`).
-pub fn print_diff(old: &str, new: &str) -> anyhow::Result<()> {
-    let use_color = io::stdout().is_tty();
-    if let Err(e) = write_diff(&mut io::stdout(), old, new, use_color)
-        && e.kind() != io::ErrorKind::BrokenPipe
-    {
-        return Err(e.into());
-    }
-    Ok(())
-}
-
-/// Write unified diff between old and new text to a writer.
-/// If `use_color` is true, deleted lines are red and inserted lines are green.
-pub fn write_diff<W: Write>(
-    writer: &mut W,
-    old: &str,
-    new: &str,
-    use_color: bool,
-) -> io::Result<()> {
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let (sign, color) = match change.tag() {
-            ChangeTag::Delete => ("-", Some(Color::Red)),
-            ChangeTag::Insert => ("+", Some(Color::Green)),
-            ChangeTag::Equal => (" ", None),
-        };
-
-        if use_color && let Some(c) = color {
-            write!(writer, "{}", SetForegroundColor(c))?;
-        }
-
-        // change already includes newline, so no newline here
-        write!(writer, "{}{}", sign, change)?;
-
-        if use_color && color.is_some() {
-            write!(writer, "{}", ResetColor)?;
-        }
-    }
-    Ok(())
-}
-
-/// Print a single line with color (for simple -/+ diffs like title).
-pub fn print_colored_line(prefix: &str, text: &str, color: Color) {
-    let use_color = io::stdout().is_tty();
-    if use_color {
-        println!(
-            "{}{}{}{}",
-            SetForegroundColor(color),
-            prefix,
-            text,
-            ResetColor
-        );
-    } else {
-        println!("{}{}", prefix, text);
-    }
 }
 
 /// Context for issue operations containing all necessary state.
@@ -219,20 +159,5 @@ mod tests {
         }
     }
 
-    mod diff_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::no_changes("a\n", "a\n", " a\n")]
-        #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
-        #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
-        #[case::modify("old\n", "new\n", "-old\n+new\n")]
-        #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
-        #[case::empty_both("", "", "")]
-        fn test_write_diff_no_color(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
-            let mut output = Vec::new();
-            write_diff(&mut output, old, new, false).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), expected);
-        }
-    }
+    // diff tests are now in src/shared/diff.rs
 }

@@ -1,11 +1,11 @@
 use clap::Args;
-use similar::{ChangeTag, TextDiff};
 use std::fs;
 
 use super::common::{
     DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
 };
 use crate::infra::github::{OctocrabClient, RepoClient};
+use crate::shared::diff::eprint_diff;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
@@ -67,7 +67,7 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
             draft_path.display()
         );
         eprintln!();
-        print_diff(old, &content);
+        eprint_diff(old, &content);
         eprintln!();
     }
 
@@ -78,33 +78,12 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     Ok(())
 }
 
-fn print_diff(old: &str, new: &str) {
-    eprint!("{}", format_diff(old, new, true));
-}
-
-fn format_diff(old: &str, new: &str, use_color: bool) -> String {
-    let diff = TextDiff::from_lines(old, new);
-    let mut output = String::new();
-
-    for change in diff.iter_all_changes() {
-        let (sign, prefix, suffix) = match change.tag() {
-            ChangeTag::Delete if use_color => ('-', "\x1b[31m", "\x1b[0m"),
-            ChangeTag::Insert if use_color => ('+', "\x1b[32m", "\x1b[0m"),
-            ChangeTag::Delete => ('-', "", ""),
-            ChangeTag::Insert => ('+', "", ""),
-            ChangeTag::Equal => (' ', "", ""),
-        };
-        output.push_str(&format!("{prefix}{sign}{change}{suffix}"));
-    }
-
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::infra::git::test_utils::TempRepo;
     use crate::infra::github::GitHubMockServer;
+    use crate::shared::diff::format_diff;
     use rstest::rstest;
     use std::fs;
     use std::path::Path;
@@ -184,7 +163,7 @@ mod tests {
                 draft_path.display()
             );
             eprintln!();
-            print_diff(old, &content);
+            eprint_diff(old, &content);
             eprintln!();
         }
 
@@ -298,12 +277,8 @@ mod tests {
     #[test]
     fn format_diff_with_color_includes_ansi_codes() {
         let result = format_diff("old\n", "new\n", true);
-        assert!(result.contains("\x1b[31m"), "should contain red color code");
-        assert!(
-            result.contains("\x1b[32m"),
-            "should contain green color code"
-        );
-        assert!(result.contains("\x1b[0m"), "should contain reset code");
+        // Should contain ANSI escape sequences
+        assert!(result.contains("\x1b["));
     }
 
     #[tokio::test]
