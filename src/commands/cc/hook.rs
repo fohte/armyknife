@@ -51,8 +51,11 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
-    // Handle session end by deleting the session file
+    // Handle session end by clearing pane title and deleting the session file
     if event == HookEvent::SessionEnd {
+        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+            let _ = tmux::set_pane_title(&pane_info.pane_id, "");
+        }
         return store::delete_session(&input.session_id);
     }
 
