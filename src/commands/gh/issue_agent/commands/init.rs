@@ -64,10 +64,8 @@ fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
 
     eprintln!("Created: {}", path.display());
     eprintln!();
-    eprintln!(
-        "Edit the file and run: a gh issue-agent push {}",
-        storage.dir().display()
-    );
+    eprintln!("Edit the file, then create the issue on GitHub.");
+    eprintln!("Note: Pushing new issues is not yet supported.");
 
     Ok(())
 }
@@ -146,5 +144,34 @@ mod tests {
         let path = result.unwrap();
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("new_test.md"));
+    }
+
+    mod validate_comment_name_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid_simple("my_comment")]
+        #[case::valid_with_dash("my-comment")]
+        #[case::valid_with_numbers("comment123")]
+        fn test_valid_names(#[case] name: &str) {
+            assert!(validate_comment_name(name).is_ok());
+        }
+
+        #[rstest]
+        #[case::forward_slash("../escape")]
+        #[case::forward_slash_middle("foo/bar")]
+        #[case::backslash("foo\\bar")]
+        #[case::double_dot("..")]
+        #[case::double_dot_prefix("..hidden")]
+        fn test_invalid_names(#[case] name: &str) {
+            let result = validate_comment_name(name);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid comment name")
+            );
+        }
     }
 }
