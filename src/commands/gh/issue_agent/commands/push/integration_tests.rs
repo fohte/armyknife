@@ -102,6 +102,23 @@ async fn test_no_changes(test_dir: TempDir) {
 
 #[rstest]
 #[tokio::test]
+async fn test_no_changes_dry_run(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    // No API calls should be made in dry run with no changes
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args(true, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_updates_title(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_title("Old Title")
@@ -455,5 +472,31 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
     assert_eq!(
         result.unwrap_err().to_string(),
         "Cannot delete other user's comment (database_id: 12345, author: otheruser). Use --allow-delete to allow."
+    );
+}
+
+// Test run_with_client_and_storage rejects NewIssuePath
+#[rstest]
+#[tokio::test]
+async fn test_rejects_new_issue_path(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    let args = PushArgs {
+        target: test_dir.path().to_string_lossy().to_string(),
+        repo: Some("owner/repo".to_string()),
+        dry_run: false,
+        force: false,
+        edit_others: false,
+        allow_delete: false,
+    };
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support new issue creation")
     );
 }
