@@ -12,6 +12,9 @@ pub enum StorageError {
     #[error("Failed to parse comment metadata in {path}: {message}")]
     CommentMetadataParseError { path: PathBuf, message: String },
 
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

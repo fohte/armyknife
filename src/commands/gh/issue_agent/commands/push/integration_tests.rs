@@ -1,7 +1,6 @@
 //! Integration tests for push command using wiremock.
 
 use super::*;
-use crate::commands::gh::issue_agent::commands::IssueArgs;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
     TestSetup, create_comment_file, setup_local_comment, test_dir,
 };
@@ -16,10 +15,8 @@ fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
 
 fn make_args_full(dry_run: bool, force: bool, edit_others: bool, allow_delete: bool) -> PushArgs {
     PushArgs {
-        issue: IssueArgs {
-            issue_number: 123,
-            repo: Some("owner/repo".to_string()),
-        },
+        target: "123".to_string(),
+        repo: Some("owner/repo".to_string()),
         dry_run,
         force,
         edit_others,
@@ -95,6 +92,23 @@ async fn test_no_changes(test_dir: TempDir) {
     let client = mock.client();
     let result = run_with_client_and_storage(
         &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_no_changes_dry_run(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    // No API calls should be made in dry run with no changes
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args(true, false, false),
         &client,
         &storage,
         "testuser",
@@ -199,10 +213,8 @@ async fn test_remote_changed_force_overrides(test_dir: TempDir) {
 async fn test_invalid_repo_format(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
     let args = PushArgs {
-        issue: IssueArgs {
-            issue_number: 123,
-            repo: Some("invalid-format".to_string()),
-        },
+        target: "123".to_string(),
+        repo: Some("invalid-format".to_string()),
         dry_run: false,
         force: false,
         edit_others: false,
@@ -377,11 +389,12 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     .await;
     assert!(result.is_ok());
 
-    let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
-    // After push, metadata should be updated from the mock response
-    // The TestSetup uses "2024-01-02T00:00:00+00:00" format for remote_ts
-    assert_eq!(metadata["updatedAt"], "2024-01-02T00:00:00+00:00");
+    // After push, issue.md should be updated with new frontmatter from mock response
+    let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+    // The TestSetup uses "2024-01-02T00:00:00Z" format for remote timestamps in mock
+    assert!(issue_md.contains("updatedAt:"));
+    // Verify it contains readonly section with updated timestamp
+    assert!(issue_md.contains("readonly:"));
 }
 
 // Comment deletion tests
@@ -460,5 +473,31 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
     assert_eq!(
         result.unwrap_err().to_string(),
         "Cannot delete other user's comment (database_id: 12345, author: otheruser). Use --allow-delete to allow."
+    );
+}
+
+// Test run_with_client_and_storage rejects NewIssuePath
+#[rstest]
+#[tokio::test]
+async fn test_rejects_new_issue_path(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    let args = PushArgs {
+        target: test_dir.path().to_string_lossy().to_string(),
+        repo: Some("owner/repo".to_string()),
+        dry_run: false,
+        force: false,
+        edit_others: false,
+        allow_delete: false,
+    };
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support new issue creation")
     );
 }

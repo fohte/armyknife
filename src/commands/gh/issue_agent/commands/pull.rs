@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use clap::Args;
 
 use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success, write_diff};
-use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
+use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueFrontmatter};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
 use crate::infra::github::OctocrabClient;
 
@@ -187,13 +187,10 @@ pub(super) fn save_issue_to_storage(
     issue: &crate::commands::gh::issue_agent::models::Issue,
     comments: &[crate::commands::gh::issue_agent::models::Comment],
 ) -> anyhow::Result<()> {
-    // Save issue body
+    // Save issue with frontmatter
     let body = issue.body.as_deref().unwrap_or("");
-    storage.save_body(body)?;
-
-    // Save metadata
-    let metadata = IssueMetadata::from_issue(issue);
-    storage.save_metadata(&metadata)?;
+    let frontmatter = IssueFrontmatter::from_issue(issue);
+    storage.save_issue(&frontmatter, body)?;
 
     // Save comments
     storage.save_comments(comments)?;
@@ -244,8 +241,10 @@ mod tests {
             let storage = IssueStorage::from_dir(test_dir.path());
             save_issue_to_storage(&storage, &test_issue(), &[]).unwrap();
 
-            let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert_eq!(body, "Test body content\n");
+            let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            // Should contain frontmatter and body
+            assert!(content.contains("---"));
+            assert!(content.contains("Test body content"));
         }
 
         #[rstest]
@@ -255,8 +254,10 @@ mod tests {
             let storage = IssueStorage::from_dir(test_dir.path());
             save_issue_to_storage(&storage, &issue, &[]).unwrap();
 
-            let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert_eq!(body, "\n");
+            let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            // Should contain frontmatter with empty body
+            assert!(content.contains("---"));
+            assert!(content.contains("title: Test Issue"));
         }
 
         #[rstest]
@@ -264,14 +265,12 @@ mod tests {
             let storage = IssueStorage::from_dir(test_dir.path());
             save_issue_to_storage(&storage, &test_issue(), &[]).unwrap();
 
-            let metadata_path = test_dir.path().join("metadata.json");
-            assert!(metadata_path.exists());
-
-            let content = fs::read_to_string(&metadata_path).unwrap();
-            let metadata: IssueMetadata = serde_json::from_str(&content).unwrap();
-            assert_eq!(metadata.number, 123);
-            assert_eq!(metadata.title, "Test Issue");
-            assert_eq!(metadata.state, "OPEN");
+            // Metadata should now be in frontmatter of issue.md
+            let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            assert!(content.contains("title: Test Issue"));
+            assert!(content.contains("readonly:"));
+            assert!(content.contains("number: 123"));
+            assert!(content.contains("state: OPEN"));
         }
 
         #[rstest]
@@ -333,6 +332,7 @@ mod tests {
 
     mod run_with_client_and_storage_tests {
         use super::*;
+        use indoc::indoc;
 
         #[rstest]
         #[tokio::test]
@@ -358,8 +358,30 @@ mod tests {
 
             // Verify files were created
             assert!(test_dir.path().join("issue.md").exists());
-            assert!(test_dir.path().join("metadata.json").exists());
             assert!(test_dir.path().join("comments").exists());
+
+            // Verify issue.md with frontmatter
+            let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            assert_eq!(
+                issue_md,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees: []
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    Test body
+                "}
+            );
         }
 
         #[rstest]
@@ -527,9 +549,28 @@ mod tests {
             let result = run_with_client_and_storage(&args, &client, &storage).await;
             assert!(result.is_ok());
 
-            // Verify content was overwritten
-            let body = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert_eq!(body, "Test body\n");
+            // Verify content was overwritten with frontmatter
+            let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            assert_eq!(
+                issue_md,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees: []
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    Test body
+                "}
+            );
         }
 
         #[rstest]
@@ -562,8 +603,30 @@ mod tests {
 
             // Verify files were created
             assert!(test_dir.path().join("issue.md").exists());
-            assert!(test_dir.path().join("metadata.json").exists());
             assert!(test_dir.path().join("comments").exists());
+
+            // Verify issue.md with frontmatter
+            let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+            assert_eq!(
+                issue_md,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees: []
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    Test body
+                "}
+            );
         }
 
         #[rstest]
@@ -644,6 +707,7 @@ mod tests {
 
     mod write_local_changes_tests {
         use super::*;
+        use crate::commands::gh::issue_agent::models::IssueMetadata;
         use crate::commands::gh::issue_agent::storage::LocalChanges;
 
         fn to_string<F>(f: F) -> String

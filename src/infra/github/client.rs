@@ -106,38 +106,7 @@ impl OctocrabClient {
         issue_number: u64,
     ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
         let issue = self.client.issues(owner, repo).get(issue_number).await?;
-
-        // Convert octocrab::models::issues::Issue to our Issue model
-        let state = match issue.state {
-            octocrab::models::IssueState::Open => "OPEN".to_string(),
-            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
-            // IssueState is #[non_exhaustive], so handle future variants
-            _ => format!("{:?}", issue.state).to_uppercase(),
-        };
-        Ok(crate::commands::gh::issue_agent::models::Issue {
-            number: issue.number as i64,
-            title: issue.title,
-            body: issue.body,
-            state,
-            labels: issue
-                .labels
-                .into_iter()
-                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
-                .collect(),
-            assignees: issue
-                .assignees
-                .into_iter()
-                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
-                .collect(),
-            milestone: issue
-                .milestone
-                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
-            author: Some(crate::commands::gh::issue_agent::models::Author {
-                login: issue.user.login,
-            }),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-        })
+        Ok(issue.into())
     }
 
     /// Update an issue's body.
@@ -202,6 +171,31 @@ impl OctocrabClient {
             .remove_label(issue_number, label)
             .await?;
         Ok(())
+    }
+
+    /// Create a new issue.
+    pub async fn create_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        title: &str,
+        body: &str,
+        labels: &[String],
+        assignees: &[String],
+    ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
+        let issues = self.client.issues(owner, repo);
+        let mut builder = issues.create(title).body(body);
+
+        if !labels.is_empty() {
+            builder = builder.labels(labels.to_vec());
+        }
+
+        if !assignees.is_empty() {
+            builder = builder.assignees(assignees.to_vec());
+        }
+
+        let issue = builder.send().await?;
+        Ok(issue.into())
     }
 
     // ============ Comment Operations ============
@@ -552,5 +546,91 @@ fn get_gh_token() -> Result<String> {
         }
 
         Ok(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::infra::github::mock::GitHubMockServer;
+    use rstest::rstest;
+
+    mod create_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(42)
+                .title("New Issue")
+                .body("Issue body")
+                .labels(vec!["bug", "urgent"])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue(
+                    "owner",
+                    "repo",
+                    "New Issue",
+                    "Issue body",
+                    &["bug".to_string(), "urgent".to_string()],
+                    &[],
+                )
+                .await;
+
+            assert!(result.is_ok());
+            let issue = result.unwrap();
+            assert_eq!(issue.number, 42);
+            assert_eq!(issue.title, "New Issue");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_with_assignees() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .title("Task")
+                .body("Description")
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue(
+                    "owner",
+                    "repo",
+                    "Task",
+                    "Description",
+                    &[],
+                    &["user1".to_string()],
+                )
+                .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_minimal() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(1)
+                .title("Minimal")
+                .body("")
+                .labels(vec![])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue("owner", "repo", "Minimal", "", &[], &[])
+                .await;
+
+            assert!(result.is_ok());
+        }
     }
 }

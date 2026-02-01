@@ -1,23 +1,37 @@
 //! Push command for gh-issue-agent.
 
 pub(crate) mod changeset;
+mod create;
 pub(crate) mod detect;
 #[cfg(test)]
 mod integration_tests;
 
+use std::path::PathBuf;
+
 use clap::Args;
 
 use super::common::IssueContext;
-use crate::commands::gh::issue_agent::models::IssueMetadata;
+use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::infra::github::OctocrabClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::check_remote_unchanged;
 
+/// Target for push command: either an issue number or a path to new issue directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushTarget {
+    IssueNumber(u64),
+    NewIssuePath(PathBuf),
+}
+
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct PushArgs {
-    #[command(flatten)]
-    pub issue: super::IssueArgs,
+    /// Issue number or path to new issue directory
+    pub target: String,
+
+    /// Target repository (owner/repo)
+    #[arg(short = 'R', long)]
+    pub repo: Option<String>,
 
     /// Show what would be changed without applying
     #[arg(long)]
@@ -36,8 +50,41 @@ pub struct PushArgs {
     pub allow_delete: bool,
 }
 
+/// Parse target string into PushTarget.
+fn parse_target(target: &str) -> anyhow::Result<PushTarget> {
+    // Try to parse as issue number first
+    if let Ok(n) = target.parse::<u64>() {
+        return Ok(PushTarget::IssueNumber(n));
+    }
+
+    // Try as a path
+    let path = PathBuf::from(target);
+    if path.exists() && path.is_dir() {
+        return Ok(PushTarget::NewIssuePath(path));
+    }
+
+    anyhow::bail!(
+        "Invalid target: '{}' is neither a valid issue number nor an existing directory",
+        target
+    )
+}
+
 pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
-    let (ctx, client) = IssueContext::from_args(&args.issue).await?;
+    let target = parse_target(&args.target)?;
+
+    match target {
+        PushTarget::IssueNumber(issue_number) => run_update(args, issue_number).await,
+        PushTarget::NewIssuePath(path) => create::run_create(args, path).await,
+    }
+}
+
+/// Run update for existing issue (original behavior).
+async fn run_update(args: &PushArgs, issue_number: u64) -> anyhow::Result<()> {
+    let issue_args = super::IssueArgs {
+        issue_number,
+        repo: args.repo.clone(),
+    };
+    let (ctx, client) = IssueContext::from_args(&issue_args).await?;
     run_with_context(args, &ctx, client).await
 }
 
@@ -51,13 +98,21 @@ pub(super) async fn run_with_client_and_storage(
 ) -> anyhow::Result<()> {
     use super::common::{get_repo_from_arg_or_git, parse_repo};
 
-    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
+    // Parse target to get issue number (for backward compatibility in tests)
+    let issue_number = match parse_target(&args.target)? {
+        PushTarget::IssueNumber(n) => n,
+        PushTarget::NewIssuePath(_) => {
+            anyhow::bail!("run_with_client_and_storage does not support new issue creation")
+        }
+    };
+
+    let repo = get_repo_from_arg_or_git(&args.repo)?;
     let (owner, repo_name) = parse_repo(&repo)?;
 
     let ctx = IssueContext {
         owner: owner.to_string(),
         repo_name: repo_name.to_string(),
-        issue_number: args.issue.issue_number,
+        issue_number,
         storage: storage.clone(),
         current_user: current_user.to_string(),
     };
@@ -117,12 +172,13 @@ async fn run_with_context(
             )
             .await?;
 
-        // Update local metadata to match remote after successful push
+        // Update local issue.md with new frontmatter from remote after successful push
         let new_remote_issue = client
             .get_issue(&ctx.owner, &ctx.repo_name, ctx.issue_number)
             .await?;
-        let new_metadata = IssueMetadata::from_issue(&new_remote_issue);
-        ctx.storage.save_metadata(&new_metadata)?;
+        let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
+        let body = new_remote_issue.body.as_deref().unwrap_or("");
+        ctx.storage.save_issue(&new_frontmatter, body)?;
     }
 
     // Show result
@@ -143,5 +199,48 @@ fn print_result(dry_run: bool, has_changes: bool) {
         println!("Done! Changes have been pushed to GitHub.");
     } else {
         println!("No changes to push.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use tempfile::TempDir;
+
+    mod parse_target_tests {
+        use super::*;
+
+        #[rstest]
+        #[case("123", PushTarget::IssueNumber(123))]
+        #[case("1", PushTarget::IssueNumber(1))]
+        #[case("999999", PushTarget::IssueNumber(999999))]
+        fn test_parse_issue_number(#[case] input: &str, #[case] expected: PushTarget) {
+            let result = parse_target(input).unwrap();
+            assert_eq!(result, expected);
+        }
+
+        #[rstest]
+        fn test_parse_path() {
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().to_string_lossy().to_string();
+
+            let result = parse_target(&path).unwrap();
+            assert!(matches!(result, PushTarget::NewIssuePath(_)));
+        }
+
+        #[rstest]
+        fn test_parse_invalid() {
+            let result = parse_target("/nonexistent/path/to/nowhere");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid target"));
+        }
+
+        #[rstest]
+        fn test_parse_negative_number() {
+            // Negative numbers are not valid issue numbers
+            let result = parse_target("-1");
+            assert!(result.is_err());
+        }
     }
 }
