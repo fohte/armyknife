@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.60](https://github.com/fohte/armyknife/compare/v0.1.59...v0.1.60) (2026-02-01)
+
+
+### Features
+
+* **cc:** support session restoration after tmux resurrect ([#191](https://github.com/fohte/armyknife/issues/191)) ([6d4c76e](https://github.com/fohte/armyknife/commit/6d4c76e70959d47432208eb5abc113f731947147))
+
 ## [0.1.59](https://github.com/fohte/armyknife/compare/v0.1.58...v0.1.59) (2026-02-01)
 
 
