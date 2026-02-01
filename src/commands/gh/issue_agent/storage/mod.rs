@@ -1,6 +1,7 @@
 mod error;
 mod issue_storage;
 mod issue_storage_diff;
+mod issue_storage_init;
 mod issue_storage_read;
 mod issue_storage_write;
 mod paths;

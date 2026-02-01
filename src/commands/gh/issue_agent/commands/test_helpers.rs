@@ -3,7 +3,7 @@
 use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 // Re-export for tests that import from test_helpers
-pub use crate::infra::github::{GitHubMockServer, RemoteComment};
+pub use crate::infra::github::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
 use rstest::fixture;
 use std::fs;
 use std::path::Path;

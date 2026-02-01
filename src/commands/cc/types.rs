@@ -10,6 +10,8 @@ pub struct Session {
     pub session_id: String,
     pub cwd: PathBuf,
     pub transcript_path: Option<PathBuf>,
+    /// TTY device path (legacy field, not used for session lifecycle detection).
+    #[serde(default)]
     pub tty: Option<String>,
     pub tmux_info: Option<TmuxInfo>,
     pub status: SessionStatus,

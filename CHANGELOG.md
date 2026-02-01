@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.59](https://github.com/fohte/armyknife/compare/v0.1.58...v0.1.59) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** display timeline events in view command ([#189](https://github.com/fohte/armyknife/issues/189)) ([fd8a75d](https://github.com/fohte/armyknife/commit/fd8a75d59acda77b838c5cd4a28bcc42ee59022c))
+
+## [0.1.58](https://github.com/fohte/armyknife/compare/v0.1.57...v0.1.58) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** add init subcommand for boilerplate generation ([#188](https://github.com/fohte/armyknife/issues/188)) ([f9489e7](https://github.com/fohte/armyknife/commit/f9489e77087eab60386a5de6d6752172ce32ab8c))
+
+## [0.1.57](https://github.com/fohte/armyknife/compare/v0.1.56...v0.1.57) (2026-02-01)
+
+
+### Bug Fixes
+
+* **cc/watch:** use tmux pane existence check for session lifecycle detection ([#187](https://github.com/fohte/armyknife/issues/187)) ([c481e73](https://github.com/fohte/armyknife/commit/c481e73dc3d9acc4f259b7144fe7195c80accad3))
+
 ## [0.1.56](https://github.com/fohte/armyknife/compare/v0.1.55...v0.1.56) (2026-02-01)
 
 

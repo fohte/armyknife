@@ -5,7 +5,6 @@ mod hook;
 mod list;
 mod restore;
 mod store;
-mod tty;
 mod tui;
 mod types;
 mod watch;

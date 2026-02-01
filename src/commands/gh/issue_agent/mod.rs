@@ -20,6 +20,9 @@ pub enum IssueAgentCommands {
 
     /// Show diff between local changes and remote
     Diff(commands::DiffArgs),
+
+    /// Initialize boilerplate for new issue or comment
+    Init(commands::InitArgs),
 }
 
 impl IssueAgentCommands {
@@ -29,6 +32,7 @@ impl IssueAgentCommands {
             Self::Pull(args) => commands::run_pull(args).await,
             Self::Push(args) => commands::run_push(args).await,
             Self::Diff(args) => commands::run_diff(args).await,
+            Self::Init(args) => commands::run_init(args),
         }
     }
 }

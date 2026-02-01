@@ -6,8 +6,8 @@ use std::time::Duration;
 use anyhow::Result;
 
 use super::error::CcError;
-use super::tty;
 use super::types::Session;
+use crate::infra::tmux;
 use crate::shared::cache;
 
 /// Lock timeout for file operations.
@@ -217,10 +217,23 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 
 /// Removes stale sessions from disk.
 ///
-/// A session is considered stale and removed if:
-/// 1. Its TTY is set but no longer exists (terminal was closed)
-/// 2. Its TTY is not set (abnormal termination - hook never received TTY info)
+/// A session is considered stale and removed if its tmux pane no longer exists.
+/// Sessions without tmux_info are kept (they may be running outside tmux).
+/// If tmux server is not available, cleanup is skipped to avoid incorrectly
+/// deleting sessions (is_pane_alive returns false when server is down).
 pub fn cleanup_stale_sessions() -> Result<()> {
+    // Skip cleanup if tmux server is not available to avoid false negatives
+    if !tmux::is_server_available() {
+        return Ok(());
+    }
+
+    cleanup_stale_sessions_impl(tmux::is_pane_alive)
+}
+
+fn cleanup_stale_sessions_impl<F>(is_pane_alive: F) -> Result<()>
+where
+    F: Fn(&str) -> bool,
+{
     let dir = sessions_dir()?;
 
     if !dir.exists() {
@@ -243,12 +256,10 @@ pub fn cleanup_stale_sessions() -> Result<()> {
             continue;
         };
 
-        let should_remove = match &session.tty {
-            // TTY is set but no longer exists -> terminal was closed
-            Some(tty_path) => !tty::is_tty_alive(tty_path),
-            // TTY is not set -> abnormal termination
-            None => true,
-        };
+        let should_remove = session
+            .tmux_info
+            .as_ref()
+            .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
         if should_remove {
             let _ = fs::remove_file(&path);
@@ -273,7 +284,7 @@ mod tests {
             session_id: id.to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
-            tty: Some("/dev/ttys001".to_string()),
+            tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
@@ -444,6 +455,7 @@ mod tests {
 
     mod cleanup_stale_sessions_tests {
         use super::*;
+        use crate::commands::cc::types::TmuxInfo;
         use rstest::rstest;
 
         /// Helper to create a unique session ID and ensure cache dir exists.
@@ -463,72 +475,125 @@ mod tests {
             }
         }
 
-        #[rstest]
-        fn removes_session_with_nonexistent_tty() {
-            let (session_id, path) = setup_session("nonexistent-tty");
+        /// Mock that treats all panes as dead
+        fn mock_pane_always_dead(_pane_id: &str) -> bool {
+            false
+        }
 
-            // Create session with a TTY that doesn't exist
+        /// Mock that treats all panes as alive
+        fn mock_pane_always_alive(_pane_id: &str) -> bool {
+            true
+        }
+
+        /// Test helper that processes only a single session file.
+        /// This ensures test isolation without affecting other parallel tests.
+        fn cleanup_single_session<F>(session_id: &str, is_pane_alive: F) -> Result<()>
+        where
+            F: Fn(&str) -> bool,
+        {
+            let path = session_file(session_id)?;
+
+            if !path.exists() {
+                return Ok(());
+            }
+
+            let content = fs::read_to_string(&path)?;
+            let session: Session = serde_json::from_str(&content)?;
+
+            let should_remove = session
+                .tmux_info
+                .as_ref()
+                .is_some_and(|info| !is_pane_alive(&info.pane_id));
+
+            if should_remove {
+                let _ = fs::remove_file(&path);
+                let lock_path = path.with_extension("json.lock");
+                let _ = fs::remove_file(&lock_path);
+            }
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn removes_session_with_nonexistent_pane() {
+            let (session_id, path) = setup_session("dead-pane");
+
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/ttys99999".to_string());
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "test".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%99999".to_string(),
+            });
             save_session(&session).expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_stale_sessions().expect("cleanup should succeed");
+            cleanup_single_session(&session_id, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
             assert!(
                 !path.exists(),
-                "session with nonexistent TTY should be removed"
+                "session with nonexistent pane should be removed"
             );
         }
 
         #[rstest]
-        fn keeps_session_with_existing_tty() {
-            let (session_id, path) = setup_session("existing-tty");
+        fn keeps_session_with_alive_pane() {
+            let (session_id, path) = setup_session("alive-pane");
 
-            // Create session with a TTY that exists (/dev/null always exists)
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/null".to_string());
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "test".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%1".to_string(),
+            });
             save_session(&session).expect("save should succeed");
 
-            cleanup_stale_sessions().expect("cleanup should succeed");
+            cleanup_single_session(&session_id, mock_pane_always_alive)
+                .expect("cleanup should succeed");
 
-            assert!(path.exists(), "session with existing TTY should be kept");
+            assert!(path.exists(), "session with alive pane should be kept");
 
             cleanup_session(&session_id);
         }
 
         #[rstest]
-        fn removes_session_without_tty() {
-            let (session_id, path) = setup_session("no-tty");
+        fn keeps_session_without_tmux_info() {
+            let (session_id, path) = setup_session("no-tmux");
 
-            // Create session without TTY (abnormal termination case)
             let mut session = create_test_session(&session_id);
-            session.tty = None;
+            session.tmux_info = None;
             save_session(&session).expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_stale_sessions().expect("cleanup should succeed");
+            // Even with mock that treats all panes as dead, sessions without
+            // tmux_info should be kept.
+            cleanup_single_session(&session_id, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
-            assert!(
-                !path.exists(),
-                "session without TTY should be removed (abnormal termination)"
-            );
+            assert!(path.exists(), "session without tmux_info should be kept");
+
+            cleanup_session(&session_id);
         }
 
         #[rstest]
         fn also_removes_lock_file() {
             let (session_id, path) = setup_session("with-lock");
 
-            // Create session with nonexistent TTY
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/ttys99999".to_string());
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "test".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%99999".to_string(),
+            });
             save_session(&session).expect("save should succeed");
 
             let lock_path = path.with_extension("json.lock");
-            // save_session creates a lock file
             assert!(path.exists(), "session file should exist");
 
-            cleanup_stale_sessions().expect("cleanup should succeed");
+            cleanup_single_session(&session_id, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
             assert!(!path.exists(), "session file should be removed");
             assert!(!lock_path.exists(), "lock file should also be removed");
