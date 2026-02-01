@@ -257,7 +257,14 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
+/// Check if the tmux server is available (running and responsive).
+pub fn is_server_available() -> bool {
+    run_tmux_output(&["list-sessions"]).is_ok()
+}
+
 /// Checks if a tmux pane with the given pane_id exists.
+/// Returns false if pane doesn't exist OR if tmux server is not available.
+/// Caller should check is_server_available() first if distinction matters.
 pub fn is_pane_alive(pane_id: &str) -> bool {
     // Use list-panes to check if pane exists (returns error if pane not found)
     run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()

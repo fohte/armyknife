@@ -219,10 +219,17 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 ///
 /// A session is considered stale and removed if its tmux pane no longer exists.
 /// Sessions without tmux_info are kept (they may be running outside tmux).
+/// If tmux server is not available, cleanup is skipped to avoid incorrectly
+/// deleting sessions (is_pane_alive returns false when server is down).
 pub fn cleanup_stale_sessions() -> Result<()> {
     let dir = sessions_dir()?;
 
     if !dir.exists() {
+        return Ok(());
+    }
+
+    // Skip cleanup if tmux server is not available to avoid false negatives
+    if !tmux::is_server_available() {
         return Ok(());
     }
 
@@ -242,12 +249,10 @@ pub fn cleanup_stale_sessions() -> Result<()> {
             continue;
         };
 
-        let should_remove = match &session.tmux_info {
-            // tmux pane is set but no longer exists -> session ended
-            Some(info) => !tmux::is_pane_alive(&info.pane_id),
-            // No tmux info -> keep session (may be running outside tmux)
-            None => false,
-        };
+        let should_remove = session
+            .tmux_info
+            .as_ref()
+            .is_some_and(|info| !tmux::is_pane_alive(&info.pane_id));
 
         if should_remove {
             let _ = fs::remove_file(&path);
