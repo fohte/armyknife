@@ -11,3 +11,5 @@ pub use issue::Issue;
 pub use issue::Label;
 pub use metadata::IssueMetadata;
 pub use new_issue::NewIssue;
+#[cfg(test)]
+pub use new_issue::NewIssueFrontmatter;

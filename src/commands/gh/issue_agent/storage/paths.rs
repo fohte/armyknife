@@ -26,7 +26,11 @@ pub fn get_issue_dir(repo: &str, issue_number: i64) -> PathBuf {
 
 /// Returns the directory path for creating a new issue.
 /// Format: <cache_dir>/<owner>/<repo>/new
-#[expect(dead_code, reason = "Reserved for future use")]
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "reserved for future use in new issue initialization"
+)]
 pub fn get_new_issue_dir(repo: &str) -> PathBuf {
     get_cache_dir().join(repo).join("new")
 }
@@ -35,6 +39,11 @@ pub fn get_new_issue_dir(repo: &str) -> PathBuf {
 /// Internal function for testability.
 fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i64) -> PathBuf {
     cache_dir.join(repo).join(issue_number.to_string())
+}
+
+#[cfg(test)]
+fn get_new_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str) -> PathBuf {
+    cache_dir.join(repo).join("new")
 }
 
 #[cfg(test)]
@@ -75,6 +84,22 @@ mod tests {
         #[case] expected: &str,
     ) {
         let dir = get_issue_dir_with_cache_dir(PathBuf::from(cache_dir), repo, issue_number);
+        assert_eq!(dir, PathBuf::from(expected));
+    }
+
+    #[rstest]
+    #[case("/cache", "owner/repo", "/cache/owner/repo/new")]
+    #[case(
+        "/home/user/.cache/gh-issue-agent",
+        "fohte/armyknife",
+        "/home/user/.cache/gh-issue-agent/fohte/armyknife/new"
+    )]
+    fn test_get_new_issue_dir_with_cache_dir(
+        #[case] cache_dir: &str,
+        #[case] repo: &str,
+        #[case] expected: &str,
+    ) {
+        let dir = get_new_issue_dir_with_cache_dir(PathBuf::from(cache_dir), repo);
         assert_eq!(dir, PathBuf::from(expected));
     }
 }

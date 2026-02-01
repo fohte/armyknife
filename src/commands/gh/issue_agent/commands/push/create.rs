@@ -184,4 +184,48 @@ mod tests {
             assert!(result.is_err());
         }
     }
+
+    mod display_new_issue_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::NewIssueFrontmatter;
+
+        #[rstest]
+        fn test_display_with_labels_and_assignees() {
+            let issue = NewIssue {
+                frontmatter: NewIssueFrontmatter {
+                    labels: vec!["bug".to_string(), "urgent".to_string()],
+                    assignees: vec!["user1".to_string()],
+                },
+                title: "Test Title".to_string(),
+                body: "Test body content.".to_string(),
+            };
+
+            // Just verify it doesn't panic
+            display_new_issue(&issue);
+        }
+
+        #[rstest]
+        fn test_display_with_empty_body() {
+            let issue = NewIssue {
+                frontmatter: NewIssueFrontmatter::default(),
+                title: "Title Only".to_string(),
+                body: String::new(),
+            };
+
+            // Just verify it doesn't panic
+            display_new_issue(&issue);
+        }
+
+        #[rstest]
+        fn test_display_minimal() {
+            let issue = NewIssue {
+                frontmatter: NewIssueFrontmatter::default(),
+                title: "Minimal".to_string(),
+                body: "Body".to_string(),
+            };
+
+            // Just verify it doesn't panic
+            display_new_issue(&issue);
+        }
+    }
 }
