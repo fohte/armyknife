@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.61](https://github.com/fohte/armyknife/compare/v0.1.60...v0.1.61) (2026-02-01)
+
+
+### Features
+
+* **wm:** improve wm clean output with table format ([#194](https://github.com/fohte/armyknife/issues/194)) ([437da86](https://github.com/fohte/armyknife/commit/437da86fae3911f0f108176050f8c13e5771ce7c))
+
 ## [0.1.60](https://github.com/fohte/armyknife/compare/v0.1.59...v0.1.60) (2026-02-01)
 
 
