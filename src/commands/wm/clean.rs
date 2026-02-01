@@ -11,15 +11,7 @@ use super::worktree::{
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
-use crate::shared::table::pad_or_truncate;
-
-// ANSI color codes (GitHub-style)
-mod color {
-    pub const RESET: &str = "\x1b[0m";
-    pub const GREEN: &str = "\x1b[32m";
-    pub const RED: &str = "\x1b[31m";
-    pub const MAGENTA: &str = "\x1b[35m"; // Purple/Magenta for merged
-}
+use crate::shared::table::{color, pad_or_truncate};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -79,10 +71,10 @@ fn status_color(status: &MergeStatus) -> &'static str {
     match status {
         MergeStatus::Merged { .. } => color::MAGENTA, // Purple for merged
         MergeStatus::NotMerged { reason } => {
-            if reason.contains("open") {
-                color::GREEN // Green for open PR
+            if reason.contains("closed") {
+                color::RED // Red for closed PR (not merged)
             } else {
-                color::RED // Red for closed (not merged)
+                color::GREEN // Green for open PR or not merged
             }
         }
     }
@@ -300,7 +292,8 @@ mod tests {
 
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, color::MAGENTA)]
-    #[case::open_pr(MergeStatus::NotMerged { reason: "PR is open".to_string() }, color::GREEN)]
+    #[case::open_pr(MergeStatus::NotMerged { reason: "open".to_string() }, color::GREEN)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "Not merged".to_string() }, color::GREEN)]
     #[case::closed_pr(MergeStatus::NotMerged { reason: "closed".to_string() }, color::RED)]
     fn test_status_color(#[case] status: MergeStatus, #[case] expected: &str) {
         assert_eq!(status_color(&status), expected);
@@ -421,7 +414,7 @@ mod tests {
                 ──────────────────────────────────────────────────────────────────────────────────────────
                 \x1b[35m✓\x1b[0m merged-feature                  fohte/merged-feature            \x1b[35mMerged (git)\x1b[0m
                   open-pr                         fohte/open-pr                   \x1b[32m#789 open\x1b[0m
-                  no-pr                           fohte/no-pr                     \x1b[31mNot merged\x1b[0m
+                  no-pr                           fohte/no-pr                     \x1b[32mNot merged\x1b[0m
             "}
         );
     }

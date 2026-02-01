@@ -5,6 +5,16 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// ANSI color codes for terminal output.
+pub mod color {
+    pub const RESET: &str = "\x1b[0m";
+    pub const GREEN: &str = "\x1b[32m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const RED: &str = "\x1b[31m";
+    pub const MAGENTA: &str = "\x1b[35m";
+    pub const GRAY: &str = "\x1b[90m";
+}
+
 /// Truncates a string to fit within the specified display width.
 /// Uses Unicode width for proper handling of wide characters (e.g., CJK).
 ///
