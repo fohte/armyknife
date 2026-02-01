@@ -57,10 +57,7 @@ pub fn write_diff<W: Write>(
 
 /// Format unified diff as a string.
 /// If `use_color` is true, deleted lines are red and inserted lines are green.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept as public API for future use")
-)]
+#[cfg(test)]
 pub fn format_diff(old: &str, new: &str, use_color: bool) -> String {
     let mut output = Vec::new();
     // write_diff only fails on I/O errors, Vec<u8> won't fail
