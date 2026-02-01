@@ -91,6 +91,7 @@ fn check_is_ancestor_in_repo(repo: &Repository, branch: &str, base: &str) -> Opt
 #[derive(Debug, Clone)]
 pub enum MergeStatus {
     Merged { reason: String },
+    Closed { reason: String },
     NotMerged { reason: String },
 }
 
@@ -101,7 +102,9 @@ impl MergeStatus {
 
     pub fn reason(&self) -> &str {
         match self {
-            MergeStatus::Merged { reason } | MergeStatus::NotMerged { reason } => reason,
+            MergeStatus::Merged { reason }
+            | MergeStatus::Closed { reason }
+            | MergeStatus::NotMerged { reason } => reason,
         }
     }
 }
@@ -117,20 +120,30 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
         && let Ok(client) = OctocrabClient::get()
         && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
     {
+        // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "#123")
+        // Fall back to pr_info.number if URL is empty or malformed
+        let pr_number = pr_info
+            .url
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(|n| format!("#{n}"))
+            .unwrap_or_else(|| format!("#{}", pr_info.number));
+
         match pr_info.state {
             PrState::Merged => {
                 return MergeStatus::Merged {
-                    reason: format!("PR {} merged", pr_info.url),
+                    reason: format!("{pr_number} merged"),
                 };
             }
             PrState::Open => {
                 return MergeStatus::NotMerged {
-                    reason: format!("PR {} is open", pr_info.url),
+                    reason: format!("{pr_number} open"),
                 };
             }
             PrState::Closed => {
-                return MergeStatus::NotMerged {
-                    reason: format!("PR {} is closed (not merged)", pr_info.url),
+                return MergeStatus::Closed {
+                    reason: format!("{pr_number} closed"),
                 };
             }
         }
@@ -142,12 +155,12 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
 
     if let Some(true) = check_is_ancestor(branch_name, &base_branch) {
         return MergeStatus::Merged {
-            reason: format!("ancestor of {base_branch}"),
+            reason: "Merged (git)".to_string(),
         };
     }
 
     MergeStatus::NotMerged {
-        reason: "not merged (no PR found, not ancestor of base branch)".to_string(),
+        reason: "Not merged".to_string(),
     }
 }
 
@@ -201,11 +214,15 @@ mod tests {
         let merged = MergeStatus::Merged {
             reason: "test".to_string(),
         };
+        let closed = MergeStatus::Closed {
+            reason: "test".to_string(),
+        };
         let not_merged = MergeStatus::NotMerged {
             reason: "test".to_string(),
         };
 
         assert!(merged.is_merged());
+        assert!(!closed.is_merged());
         assert!(!not_merged.is_merged());
     }
 
@@ -214,11 +231,15 @@ mod tests {
         let merged = MergeStatus::Merged {
             reason: "PR merged".to_string(),
         };
+        let closed = MergeStatus::Closed {
+            reason: "PR closed".to_string(),
+        };
         let not_merged = MergeStatus::NotMerged {
             reason: "PR is open".to_string(),
         };
 
         assert_eq!(merged.reason(), "PR merged");
+        assert_eq!(closed.reason(), "PR closed");
         assert_eq!(not_merged.reason(), "PR is open");
     }
 

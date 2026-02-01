@@ -8,8 +8,10 @@ use super::git::get_merge_status;
 use super::worktree::{
     LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
 };
+use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
+use crate::shared::table::{color, pad_or_truncate};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -21,7 +23,7 @@ pub struct CleanArgs {
 /// Worktree with merge status and associated tmux windows for clean command.
 struct CleanWorktreeInfo {
     wt: LinkedWorktree,
-    reason: String,
+    status: MergeStatus,
     /// Tmux window IDs that are located in this worktree's path
     window_ids: Vec<String>,
 }
@@ -32,16 +34,20 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 
     fetch_with_prune(&main_repo).context("Failed to fetch from remote")?;
 
-    let (to_delete, to_skip) = collect_worktrees(&main_repo).await?;
+    let (to_delete, to_keep) = collect_worktrees(&main_repo).await?;
 
-    display_worktrees_to_keep(&to_skip);
-
-    if to_delete.is_empty() {
-        println!("No merged worktrees to delete.");
+    if to_delete.is_empty() && to_keep.is_empty() {
+        println!("No worktrees found.");
         return Ok(());
     }
 
-    display_worktrees_to_delete(&to_delete);
+    display_worktrees_table(&to_delete, &to_keep);
+
+    if to_delete.is_empty() {
+        println!();
+        println!("No merged worktrees to delete.");
+        return Ok(());
+    }
 
     if args.dry_run {
         println!();
@@ -60,29 +66,66 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     Ok(())
 }
 
-/// Display worktrees that will be kept
-fn display_worktrees_to_keep(worktrees: &[CleanWorktreeInfo]) {
-    if worktrees.is_empty() {
-        return;
+/// Get the display color for a merge status (GitHub-style)
+fn status_color(status: &MergeStatus) -> &'static str {
+    match status {
+        MergeStatus::Merged { .. } => color::MAGENTA, // Purple for merged
+        MergeStatus::Closed { .. } => color::RED,     // Red for closed PR (not merged)
+        MergeStatus::NotMerged { .. } => color::GREEN, // Green for open PR or not merged
     }
-
-    println!("Worktrees to keep:");
-    for info in worktrees {
-        println!("  {} ({})", info.wt.path.display(), info.reason);
-    }
-    println!();
 }
 
-/// Display worktrees that will be deleted
-fn display_worktrees_to_delete(worktrees: &[CleanWorktreeInfo]) {
-    println!("Worktrees to delete:");
-    for info in worktrees {
-        println!("  {} ({})", info.wt.path.display(), info.reason);
+/// Get the icon for merge status
+fn status_icon(status: &MergeStatus) -> &'static str {
+    if status.is_merged() { "✓" } else { " " }
+}
 
-        for window_id in &info.window_ids {
-            println!("    -> tmux window: {window_id}");
-        }
+/// Column widths for table display
+const NAME_WIDTH: usize = 28;
+const BRANCH_WIDTH: usize = 28;
+
+/// Display all worktrees in a table format (prints to stdout)
+fn display_worktrees_table(to_delete: &[CleanWorktreeInfo], to_keep: &[CleanWorktreeInfo]) {
+    let mut stdout = io::stdout().lock();
+    // Ignore write errors to stdout
+    let _ = render_worktrees_table(&mut stdout, to_delete, to_keep);
+}
+
+/// Render all worktrees in a table format to the given writer.
+/// Separated from display function to enable testing.
+fn render_worktrees_table<W: Write>(
+    writer: &mut W,
+    to_delete: &[CleanWorktreeInfo],
+    to_keep: &[CleanWorktreeInfo],
+) -> io::Result<()> {
+    // Print header (matching cc list format)
+    writeln!(
+        writer,
+        "{} {} STATUS",
+        pad_or_truncate("NAME", NAME_WIDTH),
+        pad_or_truncate("BRANCH", BRANCH_WIDTH)
+    )?;
+
+    // Combine: to_delete first, then to_keep
+    for info in to_delete.iter().chain(to_keep.iter()) {
+        let name_cell = pad_or_truncate(&info.wt.name, NAME_WIDTH);
+        let branch_cell = pad_or_truncate(&info.wt.branch, BRANCH_WIDTH);
+
+        let icon = status_icon(&info.status);
+        let status_text = info.status.reason();
+        let status_col = status_color(&info.status);
+        // Format: icon + colored status (matching cc list format)
+        let icon_part = if icon.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{icon} ")
+        };
+        let colored_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
+
+        writeln!(writer, "{name_cell} {branch_cell} {colored_status}")?;
     }
+
+    Ok(())
 }
 
 /// Prompt user for confirmation
@@ -102,7 +145,7 @@ fn delete_worktrees(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Resul
 
     for info in worktrees {
         if delete_worktree(repo, &info.wt.name)? {
-            println!("Deleted: {} ({})", info.wt.path.display(), info.reason);
+            println!("Deleted: {}", info.wt.name);
             deleted_count += 1;
 
             if delete_branch_if_exists(repo, &info.wt.branch) {
@@ -129,39 +172,47 @@ async fn collect_worktrees(
     repo: &Repository,
 ) -> Result<(Vec<CleanWorktreeInfo>, Vec<CleanWorktreeInfo>)> {
     let mut to_delete = Vec::new();
-    let mut to_skip = Vec::new();
+    let mut to_keep = Vec::new();
 
     for wt in list_linked_worktrees(repo)? {
         if wt.branch.is_empty() || wt.branch == "(unknown)" {
             continue;
         }
 
-        let merge_status = get_merge_status(&wt.branch).await;
+        let status = get_merge_status(&wt.branch).await;
         // Collect tmux window IDs while the worktree path still exists
         let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
+        let is_merged = status.is_merged();
         let info = CleanWorktreeInfo {
             wt,
-            reason: merge_status.reason().to_string(),
+            status,
             window_ids,
         };
 
-        if merge_status.is_merged() {
+        if is_merged {
             to_delete.push(info);
         } else {
-            to_skip.push(info);
+            to_keep.push(info);
         }
     }
 
-    Ok((to_delete, to_skip))
+    Ok((to_delete, to_keep))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
+    use indoc::indoc;
+    use rstest::rstest;
     use std::path::PathBuf;
 
-    fn make_clean_info(name: &str, path: PathBuf, branch: &str, reason: &str) -> CleanWorktreeInfo {
+    fn make_clean_info(
+        name: &str,
+        path: PathBuf,
+        branch: &str,
+        status: MergeStatus,
+    ) -> CleanWorktreeInfo {
         CleanWorktreeInfo {
             wt: LinkedWorktree {
                 name: name.to_string(),
@@ -169,7 +220,7 @@ mod tests {
                 branch: branch.to_string(),
                 commit: "abc1234".to_string(),
             },
-            reason: reason.to_string(),
+            status,
             window_ids: Vec::new(),
         }
     }
@@ -187,13 +238,17 @@ mod tests {
                 "feature-a",
                 test_repo.worktree_path("feature-a"),
                 "feature-a",
-                "merged",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
             ),
             make_clean_info(
                 "feature-b",
                 test_repo.worktree_path("feature-b"),
                 "feature-b",
-                "merged",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
             ),
         ];
 
@@ -213,23 +268,203 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[rstest]
+    #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, "✓")]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, " ")]
+    fn test_status_icon(#[case] status: MergeStatus, #[case] expected: &str) {
+        assert_eq!(status_icon(&status), expected);
+    }
+
+    #[rstest]
+    #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, color::MAGENTA)]
+    #[case::open_pr(MergeStatus::NotMerged { reason: "open".to_string() }, color::GREEN)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "Not merged".to_string() }, color::GREEN)]
+    #[case::closed_pr(MergeStatus::Closed { reason: "closed".to_string() }, color::RED)]
+    fn test_status_color(#[case] status: MergeStatus, #[case] expected: &str) {
+        assert_eq!(status_color(&status), expected);
+    }
+
+    // =========================================================================
+    // Integration tests for table rendering
+    // =========================================================================
+
     #[test]
-    fn display_worktrees_to_keep_does_nothing_for_empty() {
-        // Just ensure it doesn't panic
-        display_worktrees_to_keep(&[]);
+    fn test_render_worktrees_table_empty() {
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &[]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // Header only, no data rows
+        assert_eq!(
+            result,
+            "NAME                         BRANCH                       STATUS\n"
+        );
     }
 
     #[test]
-    fn display_worktrees_to_delete_does_not_panic() {
+    fn test_render_worktrees_table_merged_only() {
         let test_repo = TestRepo::new();
-        let worktrees = vec![make_clean_info(
-            "feature",
-            test_repo.path().join(".worktrees/feature"),
-            "feature",
-            "merged",
+        let to_delete = vec![make_clean_info(
+            "feature-branch",
+            test_repo.path().join(".worktrees/feature-branch"),
+            "fohte/feature-branch",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
         )];
 
-        // Just ensure it doesn't panic
-        display_worktrees_to_delete(&worktrees);
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &to_delete, &[]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_worktrees_table_not_merged_only() {
+        let test_repo = TestRepo::new();
+        let to_keep = vec![make_clean_info(
+            "wip-feature",
+            test_repo.path().join(".worktrees/wip-feature"),
+            "fohte/wip-feature",
+            MergeStatus::NotMerged {
+                reason: "open".to_string(),
+            },
+        )];
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &to_keep).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // Space instead of checkmark, green color for open PR
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_worktrees_table_mixed() {
+        let test_repo = TestRepo::new();
+        let to_delete = vec![make_clean_info(
+            "merged-feature",
+            test_repo.path().join(".worktrees/merged-feature"),
+            "fohte/merged-feature",
+            MergeStatus::Merged {
+                reason: "Merged (git)".to_string(),
+            },
+        )];
+        let to_keep = vec![
+            make_clean_info(
+                "open-pr",
+                test_repo.path().join(".worktrees/open-pr"),
+                "fohte/open-pr",
+                MergeStatus::NotMerged {
+                    reason: "open".to_string(),
+                },
+            ),
+            make_clean_info(
+                "no-pr",
+                test_repo.path().join(".worktrees/no-pr"),
+                "fohte/no-pr",
+                MergeStatus::NotMerged {
+                    reason: "Not merged".to_string(),
+                },
+            ),
+        ];
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &to_delete, &to_keep).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        // to_delete comes first, then to_keep
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_worktrees_table_truncates_long_names() {
+        let test_repo = TestRepo::new();
+        let to_delete = vec![make_clean_info(
+            "this-is-a-very-long-worktree-name-that-should-be-truncated",
+            test_repo.path().join(".worktrees/long"),
+            "fohte/this-is-a-very-long-branch-name-that-should-be-truncated",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        )];
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &to_delete, &[]).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
+            "}
+        );
+    }
+
+    #[test]
+    fn test_render_worktrees_table_all_status_colors() {
+        let test_repo = TestRepo::new();
+        let to_delete = vec![make_clean_info(
+            "pr-merged",
+            test_repo.path().join(".worktrees/pr-merged"),
+            "fohte/pr-merged",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        )];
+        let to_keep = vec![
+            make_clean_info(
+                "pr-open",
+                test_repo.path().join(".worktrees/pr-open"),
+                "fohte/pr-open",
+                MergeStatus::NotMerged {
+                    reason: "open".to_string(),
+                },
+            ),
+            make_clean_info(
+                "pr-closed",
+                test_repo.path().join(".worktrees/pr-closed"),
+                "fohte/pr-closed",
+                MergeStatus::Closed {
+                    reason: "closed".to_string(),
+                },
+            ),
+        ];
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &to_delete, &to_keep).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
+                pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
+                pr-closed                    fohte/pr-closed              \x1b[31mclosed\x1b[0m
+            "}
+        );
     }
 }
