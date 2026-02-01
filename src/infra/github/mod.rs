@@ -13,6 +13,6 @@ mod repo;
 pub use client::OctocrabClient;
 pub use error::GitHubError;
 #[cfg(test)]
-pub use mock::{GitHubMockServer, RemoteComment};
+pub use mock::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
 pub use pr::{CreatePrParams, PrClient, PrState, UpdatePrParams};
 pub use repo::RepoClient;

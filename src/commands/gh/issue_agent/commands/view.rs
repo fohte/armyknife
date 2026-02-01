@@ -1,8 +1,9 @@
+use chrono::{DateTime, Utc};
 use clap::Args;
 
 use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::format::{format_relative_time, indent_text};
-use crate::commands::gh::issue_agent::models::{Comment, Issue};
+use crate::commands::gh::issue_agent::models::{Comment, Issue, TimelineItem};
 use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -39,17 +40,34 @@ where
     let (owner, repo) = parse_repo(&repo_str)?;
     let issue_number = args.issue.issue_number;
 
-    let (issue, comments) = tokio::try_join!(
+    let (issue, comments, timeline_events) = tokio::try_join!(
         client.get_issue(&owner, &repo, issue_number),
-        client.get_comments(&owner, &repo, issue_number)
+        client.get_comments(&owner, &repo, issue_number),
+        client.get_timeline_events(&owner, &repo, issue_number)
     )?;
 
     Ok(format_issue_view_with(
         &issue,
         issue_number,
         &comments,
+        &timeline_events,
         time_formatter,
     ))
+}
+
+/// Entry that can be displayed in the timeline (comment or event).
+enum DisplayEntry<'a> {
+    Comment(&'a Comment),
+    Event(&'a TimelineItem),
+}
+
+impl DisplayEntry<'_> {
+    fn created_at(&self) -> DateTime<Utc> {
+        match self {
+            DisplayEntry::Comment(c) => c.created_at,
+            DisplayEntry::Event(e) => e.created_at().unwrap_or_else(Utc::now),
+        }
+    }
 }
 
 /// Testable version that accepts a custom time formatter.
@@ -57,14 +75,155 @@ fn format_issue_view_with<F>(
     issue: &Issue,
     issue_number: u64,
     comments: &[Comment],
+    timeline_events: &[TimelineItem],
     time_formatter: F,
 ) -> String
 where
     F: Fn(&str) -> String,
 {
     let mut output = format_issue_with(issue, issue_number, comments.len(), &time_formatter);
-    output.push_str(&format_comments_with(comments, &time_formatter));
+
+    // Merge comments and events chronologically
+    let mut entries: Vec<DisplayEntry> = Vec::new();
+    entries.extend(comments.iter().map(DisplayEntry::Comment));
+    entries.extend(timeline_events.iter().map(DisplayEntry::Event));
+    entries.sort_by_key(|e| e.created_at());
+
+    output.push_str(&format_timeline_entries(&entries, &time_formatter));
     output
+}
+
+/// Format timeline entries (comments and events) in chronological order.
+fn format_timeline_entries<F>(entries: &[DisplayEntry], time_formatter: &F) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let mut output = String::new();
+
+    for entry in entries {
+        match entry {
+            DisplayEntry::Comment(comment) => {
+                output.push('\n');
+                output.push_str("──────────────────────────────────────────────────────\n");
+                output.push('\n');
+
+                let author = comment
+                    .author
+                    .as_ref()
+                    .map(|a| a.login.as_str())
+                    .unwrap_or("unknown");
+                let relative_time = time_formatter(&comment.created_at.to_rfc3339());
+                output.push_str(&format!("{} • {}\n", author, relative_time));
+
+                output.push('\n');
+                output.push_str(&format!("{}\n", indent_text(&comment.body, "  ")));
+            }
+            DisplayEntry::Event(event) => {
+                if let Some(formatted) = format_timeline_event(event, time_formatter) {
+                    output.push('\n');
+                    output.push_str(&format!("{}\n", formatted));
+                }
+            }
+        }
+    }
+
+    output
+}
+
+/// Format a single timeline event for display.
+/// Returns None for events that should not be displayed.
+fn format_timeline_event<F>(event: &TimelineItem, time_formatter: &F) -> Option<String>
+where
+    F: Fn(&str) -> String,
+{
+    let (prefix, actor, description, created_at) = match event {
+        TimelineItem::LabeledEvent(e) => (
+            "+",
+            e.actor.as_ref().map(|a| a.login.as_str()),
+            format!("added label '{}'", e.label.name),
+            e.created_at,
+        ),
+        TimelineItem::UnlabeledEvent(e) => (
+            "-",
+            e.actor.as_ref().map(|a| a.login.as_str()),
+            format!("removed label '{}'", e.label.name),
+            e.created_at,
+        ),
+        TimelineItem::AssignedEvent(e) => {
+            let assignee = e
+                .assignee
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or("someone");
+            (
+                "+",
+                e.actor.as_ref().map(|a| a.login.as_str()),
+                format!("assigned {}", assignee),
+                e.created_at,
+            )
+        }
+        TimelineItem::UnassignedEvent(e) => {
+            let assignee = e
+                .assignee
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or("someone");
+            (
+                "-",
+                e.actor.as_ref().map(|a| a.login.as_str()),
+                format!("unassigned {}", assignee),
+                e.created_at,
+            )
+        }
+        TimelineItem::ClosedEvent(e) => (
+            "x",
+            e.actor.as_ref().map(|a| a.login.as_str()),
+            "closed this".to_string(),
+            e.created_at,
+        ),
+        TimelineItem::ReopenedEvent(e) => (
+            "o",
+            e.actor.as_ref().map(|a| a.login.as_str()),
+            "reopened this".to_string(),
+            e.created_at,
+        ),
+        TimelineItem::CrossReferencedEvent(e) => {
+            let source = &e.source;
+            let source_type = if source.is_pull_request() {
+                "PR"
+            } else {
+                "issue"
+            };
+            let will_close = if e.will_close_target {
+                " (will close)"
+            } else {
+                ""
+            };
+            let description = format!(
+                "referenced this from {} {}#{} \"{}\"{}",
+                source_type,
+                source.repository(),
+                source.number(),
+                source.title(),
+                will_close
+            );
+            (
+                "->",
+                e.actor.as_ref().map(|a| a.login.as_str()),
+                description,
+                e.created_at,
+            )
+        }
+        TimelineItem::Unknown => return None,
+    };
+
+    let actor_str = actor.unwrap_or("someone");
+    let relative_time = time_formatter(&created_at.to_rfc3339());
+
+    Some(format!(
+        "  {} {} {} • {}",
+        prefix, actor_str, description, relative_time
+    ))
 }
 
 fn format_state(state: &str) -> &str {
@@ -125,32 +284,6 @@ where
         output.push_str(&format!("{}\n", indent_text(body, "  ")));
     } else {
         output.push_str("  No description provided.\n");
-    }
-
-    output
-}
-
-fn format_comments_with<F>(comments: &[Comment], time_formatter: F) -> String
-where
-    F: Fn(&str) -> String,
-{
-    let mut output = String::new();
-
-    for comment in comments {
-        output.push('\n');
-        output.push_str("──────────────────────────────────────────────────────\n");
-        output.push('\n');
-
-        let author = comment
-            .author
-            .as_ref()
-            .map(|a| a.login.as_str())
-            .unwrap_or("unknown");
-        let relative_time = time_formatter(&comment.created_at.to_rfc3339());
-        output.push_str(&format!("{} • {}\n", author, relative_time));
-
-        output.push('\n');
-        output.push_str(&format!("{}\n", indent_text(&comment.body, "  ")));
     }
 
     output
@@ -298,19 +431,21 @@ mod tests {
     }
 
     #[test]
-    fn test_format_comments_empty() {
-        let output = format_comments_with(&[], fixed_time);
+    fn test_format_timeline_entries_empty() {
+        let entries: Vec<DisplayEntry> = vec![];
+        let output = format_timeline_entries(&entries, &fixed_time);
         assert_eq!(output, "");
     }
 
     #[test]
-    fn test_format_comments_single() {
-        let comments = vec![factories::comment_with(|c| {
+    fn test_format_timeline_entries_single_comment() {
+        let comment = factories::comment_with(|c| {
             c.author = Some(factories::author("commenter"));
             c.body = "This is a comment.".to_string();
-        })];
+        });
+        let entries = vec![DisplayEntry::Comment(&comment)];
 
-        let output = format_comments_with(&comments, fixed_time);
+        let output = format_timeline_entries(&entries, &fixed_time);
 
         assert_eq!(
             output,
@@ -326,19 +461,21 @@ mod tests {
     }
 
     #[test]
-    fn test_format_comments_multiple() {
-        let comments = vec![
-            factories::comment_with(|c| {
-                c.author = Some(factories::author("user1"));
-                c.body = "First comment.".to_string();
-            }),
-            factories::comment_with(|c| {
-                c.author = Some(factories::author("user2"));
-                c.body = "Second comment.".to_string();
-            }),
+    fn test_format_timeline_entries_multiple_comments() {
+        let comment1 = factories::comment_with(|c| {
+            c.author = Some(factories::author("user1"));
+            c.body = "First comment.".to_string();
+        });
+        let comment2 = factories::comment_with(|c| {
+            c.author = Some(factories::author("user2"));
+            c.body = "Second comment.".to_string();
+        });
+        let entries = vec![
+            DisplayEntry::Comment(&comment1),
+            DisplayEntry::Comment(&comment2),
         ];
 
-        let output = format_comments_with(&comments, fixed_time);
+        let output = format_timeline_entries(&entries, &fixed_time);
 
         assert_eq!(
             output,
@@ -362,12 +499,16 @@ mod tests {
     #[rstest]
     #[case::with_author(Some("commenter"), "commenter")]
     #[case::no_author(None, "unknown")]
-    fn test_format_comments_author(#[case] author: Option<&str>, #[case] expected_author: &str) {
-        let comments = vec![factories::comment_with(|c| {
+    fn test_format_timeline_entries_comment_author(
+        #[case] author: Option<&str>,
+        #[case] expected_author: &str,
+    ) {
+        let comment = factories::comment_with(|c| {
             c.author = author.map(factories::author);
             c.body = "Comment body.".to_string();
-        })];
-        let output = format_comments_with(&comments, fixed_time);
+        });
+        let entries = vec![DisplayEntry::Comment(&comment)];
+        let output = format_timeline_entries(&entries, &fixed_time);
         assert_eq!(
             output,
             formatdoc! {"
@@ -394,7 +535,7 @@ mod tests {
             c.body = "Looks good!".to_string();
         })];
 
-        let output = format_issue_view_with(&issue, 99, &comments, fixed_time);
+        let output = format_issue_view_with(&issue, 99, &comments, &[], fixed_time);
 
         assert_eq!(
             output,
@@ -415,16 +556,107 @@ mod tests {
         );
     }
 
+    mod timeline_event_tests {
+        use super::*;
+
+        #[test]
+        fn test_format_labeled_event() {
+            let event = factories::labeled_event("admin", "bug");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  + admin added label 'bug' • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_unlabeled_event() {
+            let event = factories::unlabeled_event("admin", "bug");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  - admin removed label 'bug' • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_assigned_event() {
+            let event = factories::assigned_event("admin", "dev1");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  + admin assigned dev1 • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_unassigned_event() {
+            let event = factories::unassigned_event("admin", "dev1");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  - admin unassigned dev1 • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_closed_event() {
+            let event = factories::closed_event("admin");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  x admin closed this • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_reopened_event() {
+            let event = factories::reopened_event("admin");
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(output, "  o admin reopened this • 2 hours ago");
+        }
+
+        #[test]
+        fn test_format_cross_referenced_pr() {
+            let event =
+                factories::cross_referenced_pr("dev1", 123, "Add feature", "owner", "repo", false);
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(
+                output,
+                "  -> dev1 referenced this from PR owner/repo#123 \"Add feature\" • 2 hours ago"
+            );
+        }
+
+        #[test]
+        fn test_format_cross_referenced_pr_will_close() {
+            let event =
+                factories::cross_referenced_pr("dev1", 123, "Fix bug", "owner", "repo", true);
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(
+                output,
+                "  -> dev1 referenced this from PR owner/repo#123 \"Fix bug\" (will close) • 2 hours ago"
+            );
+        }
+
+        #[test]
+        fn test_format_cross_referenced_issue() {
+            let event = factories::cross_referenced_issue(
+                "user1",
+                456,
+                "Related issue",
+                "other",
+                "project",
+            );
+            let output = format_timeline_event(&event, &fixed_time).unwrap();
+            assert_eq!(
+                output,
+                "  -> user1 referenced this from issue other/project#456 \"Related issue\" • 2 hours ago"
+            );
+        }
+
+        #[test]
+        fn test_format_unknown_event_returns_none() {
+            let event = TimelineItem::Unknown;
+            let output = format_timeline_event(&event, &fixed_time);
+            assert!(output.is_none());
+        }
+    }
+
     mod run_with_client_tests {
         use super::*;
         use crate::commands::gh::issue_agent::commands::IssueArgs;
-        use crate::commands::gh::issue_agent::commands::test_helpers::GitHubMockServer;
+        use crate::commands::gh::issue_agent::commands::test_helpers::{
+            GitHubMockServer, RemoteComment, RemoteTimelineEvent,
+        };
         use indoc::indoc;
 
         #[tokio::test]
         async fn test_fetches_and_displays_issue_with_comments() {
-            use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
-
             let mock = GitHubMockServer::start().await;
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123)
@@ -447,6 +679,7 @@ mod tests {
                 },
             ])
             .await;
+            ctx.graphql_timeline_events(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -495,6 +728,7 @@ mod tests {
                 .get()
                 .await;
             ctx.graphql_comments(&[]).await;
+            ctx.graphql_timeline_events(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -564,6 +798,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(10).title("Empty Body Issue").body("").get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.graphql_timeline_events(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -601,6 +836,7 @@ mod tests {
                 .get()
                 .await;
             ctx.graphql_comments(&[]).await;
+            ctx.graphql_timeline_events(&[]).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -623,6 +859,156 @@ mod tests {
                     Labels: bug, enhancement, help wanted
 
                       Body
+                "}
+            );
+        }
+
+        #[tokio::test]
+        async fn test_displays_issue_with_timeline_events() {
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123)
+                .title("Issue with Events")
+                .body("Test body")
+                .get()
+                .await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_1",
+                database_id: 1001,
+                author: "commenter",
+                body: "A comment",
+            }])
+            .await;
+            ctx.graphql_timeline_events(&[
+                RemoteTimelineEvent::Labeled {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:00:00Z",
+                    label: "enhancement",
+                },
+                RemoteTimelineEvent::CrossReferenced {
+                    actor: "dev1",
+                    created_at: "2024-01-01T11:00:00Z",
+                    source_type: "PullRequest",
+                    source_number: 456,
+                    source_title: "Add feature",
+                    source_repo_owner: "owner",
+                    source_repo_name: "repo",
+                    will_close_target: true,
+                },
+            ])
+            .await;
+
+            let client = mock.client();
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
+
+            // Events are sorted by created_at, so labeled event comes first
+            assert_eq!(
+                output,
+                indoc! {"
+                    Issue with Events #123
+
+                    Open • testuser opened 2 hours ago • 1 comment
+                    Labels: bug
+
+                      Test body
+
+                      + admin added label 'enhancement' • 2 hours ago
+
+                      -> dev1 referenced this from PR owner/repo#456 \"Add feature\" (will close) • 2 hours ago
+
+                    ──────────────────────────────────────────────────────
+
+                    commenter • 2 hours ago
+
+                      A comment
+                "}
+            );
+        }
+
+        #[tokio::test]
+        async fn test_displays_issue_with_all_event_types() {
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123)
+                .title("All Events Issue")
+                .body("Body")
+                .get()
+                .await;
+            ctx.graphql_comments(&[]).await;
+            ctx.graphql_timeline_events(&[
+                RemoteTimelineEvent::Labeled {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:00:00Z",
+                    label: "bug",
+                },
+                RemoteTimelineEvent::Assigned {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:01:00Z",
+                    assignee: "dev1",
+                },
+                RemoteTimelineEvent::Closed {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:02:00Z",
+                },
+                RemoteTimelineEvent::Reopened {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:03:00Z",
+                },
+                RemoteTimelineEvent::Unlabeled {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:04:00Z",
+                    label: "bug",
+                },
+                RemoteTimelineEvent::Unassigned {
+                    actor: "admin",
+                    created_at: "2024-01-01T10:05:00Z",
+                    assignee: "dev1",
+                },
+            ])
+            .await;
+
+            let client = mock.client();
+            let args = ViewArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+            };
+
+            let output = run_with_client_and_output_with(&args, &client, fixed_time)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                output,
+                indoc! {"
+                    All Events Issue #123
+
+                    Open • testuser opened 2 hours ago • 0 comments
+                    Labels: bug
+
+                      Body
+
+                      + admin added label 'bug' • 2 hours ago
+
+                      + admin assigned dev1 • 2 hours ago
+
+                      x admin closed this • 2 hours ago
+
+                      o admin reopened this • 2 hours ago
+
+                      - admin removed label 'bug' • 2 hours ago
+
+                      - admin unassigned dev1 • 2 hours ago
                 "}
             );
         }

@@ -366,6 +366,156 @@ impl OctocrabClient {
         let user = self.client.current().user().await?;
         Ok(user.login)
     }
+
+    // ============ Timeline Operations ============
+
+    /// Get timeline events for an issue using GraphQL.
+    ///
+    /// Fetches events like cross-references, label changes, assignments, etc.
+    /// Unknown event types are automatically filtered out.
+    pub async fn get_timeline_events(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+    ) -> Result<Vec<crate::commands::gh::issue_agent::models::TimelineItem>> {
+        #[derive(Debug, Deserialize)]
+        struct GetTimelineData {
+            repository: TimelineRepositoryData,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct TimelineRepositoryData {
+            issue: TimelineIssueData,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TimelineIssueData {
+            timeline_items: TimelineConnection,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TimelineConnection {
+            nodes: Vec<crate::commands::gh::issue_agent::models::TimelineItem>,
+            page_info: PageInfo,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PageInfo {
+            has_next_page: bool,
+            end_cursor: Option<String>,
+        }
+
+        const GET_TIMELINE_QUERY: &str = indoc! {"
+            query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                        timelineItems(first: 100, after: $cursor, itemTypes: [
+                            CROSS_REFERENCED_EVENT,
+                            LABELED_EVENT,
+                            UNLABELED_EVENT,
+                            ASSIGNED_EVENT,
+                            UNASSIGNED_EVENT,
+                            CLOSED_EVENT,
+                            REOPENED_EVENT
+                        ]) {
+                            nodes {
+                                __typename
+                                ... on CrossReferencedEvent {
+                                    createdAt
+                                    actor { login }
+                                    willCloseTarget
+                                    source {
+                                        __typename
+                                        ... on Issue {
+                                            number
+                                            title
+                                            repository {
+                                                name
+                                                owner { login }
+                                            }
+                                        }
+                                        ... on PullRequest {
+                                            number
+                                            title
+                                            repository {
+                                                name
+                                                owner { login }
+                                            }
+                                        }
+                                    }
+                                }
+                                ... on LabeledEvent {
+                                    createdAt
+                                    actor { login }
+                                    label { name }
+                                }
+                                ... on UnlabeledEvent {
+                                    createdAt
+                                    actor { login }
+                                    label { name }
+                                }
+                                ... on AssignedEvent {
+                                    createdAt
+                                    actor { login }
+                                    assignee {
+                                        ... on User { login }
+                                    }
+                                }
+                                ... on UnassignedEvent {
+                                    createdAt
+                                    actor { login }
+                                    assignee {
+                                        ... on User { login }
+                                    }
+                                }
+                                ... on ClosedEvent {
+                                    createdAt
+                                    actor { login }
+                                }
+                                ... on ReopenedEvent {
+                                    createdAt
+                                    actor { login }
+                                }
+                            }
+                            pageInfo {
+                                hasNextPage
+                                endCursor
+                            }
+                        }
+                    }
+                }
+            }
+        "};
+
+        let mut all_events = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "owner": owner,
+                "repo": repo,
+                "number": issue_number as i64,
+                "cursor": cursor,
+            });
+
+            let response: GetTimelineData = self.graphql(GET_TIMELINE_QUERY, variables).await?;
+            let connection = response.repository.issue.timeline_items;
+
+            // Filter out Unknown events
+            all_events.extend(connection.nodes.into_iter().filter(|e| !e.is_unknown()));
+
+            if !connection.page_info.has_next_page {
+                break;
+            }
+            cursor = connection.page_info.end_cursor;
+        }
+
+        Ok(all_events)
+    }
 }
 
 /// Get GitHub token from `gh auth token` command.

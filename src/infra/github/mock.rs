@@ -37,7 +37,7 @@
 //! ```
 
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex, query_param};
+use wiremock::matchers::{body_string_contains, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::client::OctocrabClient;
@@ -224,6 +224,135 @@ pub struct RemoteComment<'a> {
     pub body: &'a str,
 }
 
+/// Remote timeline event definition for test setup.
+///
+/// Represents various timeline events that can occur on a GitHub issue.
+#[derive(Clone)]
+pub enum RemoteTimelineEvent<'a> {
+    /// Reference from another issue or PR.
+    CrossReferenced {
+        actor: &'a str,
+        created_at: &'a str,
+        /// "Issue" or "PullRequest"
+        source_type: &'a str,
+        source_number: i64,
+        source_title: &'a str,
+        source_repo_owner: &'a str,
+        source_repo_name: &'a str,
+        will_close_target: bool,
+    },
+    /// Label added to the issue.
+    Labeled {
+        actor: &'a str,
+        created_at: &'a str,
+        label: &'a str,
+    },
+    /// Label removed from the issue.
+    Unlabeled {
+        actor: &'a str,
+        created_at: &'a str,
+        label: &'a str,
+    },
+    /// User assigned to the issue.
+    Assigned {
+        actor: &'a str,
+        created_at: &'a str,
+        assignee: &'a str,
+    },
+    /// User unassigned from the issue.
+    Unassigned {
+        actor: &'a str,
+        created_at: &'a str,
+        assignee: &'a str,
+    },
+    /// Issue was closed.
+    Closed { actor: &'a str, created_at: &'a str },
+    /// Issue was reopened.
+    Reopened { actor: &'a str, created_at: &'a str },
+}
+
+impl<'a> RemoteTimelineEvent<'a> {
+    /// Convert to GraphQL JSON response format.
+    fn to_graphql_json(&self) -> serde_json::Value {
+        match self {
+            RemoteTimelineEvent::CrossReferenced {
+                actor,
+                created_at,
+                source_type,
+                source_number,
+                source_title,
+                source_repo_owner,
+                source_repo_name,
+                will_close_target,
+            } => json!({
+                "__typename": "CrossReferencedEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor},
+                "willCloseTarget": will_close_target,
+                "source": {
+                    "__typename": source_type,
+                    "number": source_number,
+                    "title": source_title,
+                    "repository": {
+                        "name": source_repo_name,
+                        "owner": {"login": source_repo_owner}
+                    }
+                }
+            }),
+            RemoteTimelineEvent::Labeled {
+                actor,
+                created_at,
+                label,
+            } => json!({
+                "__typename": "LabeledEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor},
+                "label": {"name": label}
+            }),
+            RemoteTimelineEvent::Unlabeled {
+                actor,
+                created_at,
+                label,
+            } => json!({
+                "__typename": "UnlabeledEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor},
+                "label": {"name": label}
+            }),
+            RemoteTimelineEvent::Assigned {
+                actor,
+                created_at,
+                assignee,
+            } => json!({
+                "__typename": "AssignedEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor},
+                "assignee": {"login": assignee}
+            }),
+            RemoteTimelineEvent::Unassigned {
+                actor,
+                created_at,
+                assignee,
+            } => json!({
+                "__typename": "UnassignedEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor},
+                "assignee": {"login": assignee}
+            }),
+            RemoteTimelineEvent::Closed { actor, created_at } => json!({
+                "__typename": "ClosedEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor}
+            }),
+            RemoteTimelineEvent::Reopened { actor, created_at } => json!({
+                "__typename": "ReopenedEvent",
+                "createdAt": created_at,
+                "actor": {"login": actor}
+            }),
+        }
+    }
+}
+
 /// wiremock-based GitHub mock server for testing.
 ///
 /// This provides HTTP-level mocking for GitHub API endpoints, allowing tests
@@ -307,6 +436,8 @@ impl<'a> MockRepoContext<'a> {
     }
 
     /// Mock GraphQL endpoint for fetching comments.
+    ///
+    /// Uses `body_string_contains` to distinguish from timeline events query.
     pub async fn graphql_comments(&self, comments: &[RemoteComment<'_>]) {
         let nodes: Vec<serde_json::Value> = comments
             .iter()
@@ -323,12 +454,41 @@ impl<'a> MockRepoContext<'a> {
 
         Mock::given(method("POST"))
             .and(path("/graphql"))
+            .and(body_string_contains("comments(first:"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {
                     "repository": {
                         "issue": {
                             "comments": {
                                 "nodes": nodes
+                            }
+                        }
+                    }
+                }
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GraphQL endpoint for fetching timeline events.
+    ///
+    /// Uses `body_string_contains` to distinguish from comments query.
+    pub async fn graphql_timeline_events(&self, events: &[RemoteTimelineEvent<'_>]) {
+        let nodes: Vec<serde_json::Value> = events.iter().map(|e| e.to_graphql_json()).collect();
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("timelineItems(first:"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "timelineItems": {
+                                "nodes": nodes,
+                                "pageInfo": {
+                                    "hasNextPage": false,
+                                    "endCursor": null
+                                }
                             }
                         }
                     }
