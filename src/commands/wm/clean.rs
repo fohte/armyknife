@@ -122,7 +122,12 @@ fn render_worktrees_table<W: Write>(
         let status_text = info.status.reason();
         let status_col = status_color(&info.status);
         // Format: icon + colored status (matching cc list format)
-        let colored_status = format!("{status_col}{icon} {status_text}{}", color::RESET);
+        let icon_part = if icon.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{icon} ")
+        };
+        let colored_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
 
         writeln!(writer, "{name_cell} {branch_cell} {colored_status}")?;
     }
@@ -349,7 +354,7 @@ mod tests {
             result,
             indoc! {"
                 NAME                         BRANCH                       STATUS
-                wip-feature                  fohte/wip-feature            \x1b[32m  open\x1b[0m
+                wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -394,8 +399,8 @@ mod tests {
             indoc! {"
                 NAME                         BRANCH                       STATUS
                 merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
-                open-pr                      fohte/open-pr                \x1b[32m  open\x1b[0m
-                no-pr                        fohte/no-pr                  \x1b[32m  Not merged\x1b[0m
+                open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
             "}
         );
     }
@@ -458,7 +463,7 @@ mod tests {
 
         // Verify colors: merged=magenta, open=green, closed=red
         assert!(result.contains("\x1b[35m✓ merged\x1b[0m")); // Magenta
-        assert!(result.contains("\x1b[32m  open\x1b[0m")); // Green
-        assert!(result.contains("\x1b[31m  closed\x1b[0m")); // Red
+        assert!(result.contains("\x1b[32mopen\x1b[0m")); // Green
+        assert!(result.contains("\x1b[31mclosed\x1b[0m")); // Red
     }
 }
