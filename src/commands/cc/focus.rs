@@ -55,7 +55,7 @@ mod tests {
             session_id: "test-123".to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
-            tty: Some("/dev/ttys001".to_string()),
+            tty: None,
             tmux_info,
             status: SessionStatus::Running,
             created_at: Utc::now(),

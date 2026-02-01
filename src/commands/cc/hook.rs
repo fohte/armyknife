@@ -11,7 +11,6 @@ use lazy_regex::regex_replace_all;
 use super::claude_sessions;
 use super::error::CcError;
 use super::store;
-use super::tty;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -57,17 +56,12 @@ pub fn run(args: &HookArgs) -> Result<()> {
         return store::delete_session(&input.session_id);
     }
 
-    // Get TTY from ancestor processes
-    let tty = tty::get_tty_from_ancestors();
-
-    // Get tmux info if TTY is available
-    let tmux_info = tty.as_ref().and_then(|t| {
-        tmux::get_pane_info_by_tty(t).map(|info| TmuxInfo {
-            session_name: info.session_name,
-            window_name: info.window_name,
-            window_index: info.window_index,
-            pane_id: info.pane_id,
-        })
+    // Get tmux info by finding the pane that contains this process
+    let tmux_info = tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
+        session_name: info.session_name,
+        window_name: info.window_name,
+        window_index: info.window_index,
+        pane_id: info.pane_id,
     });
 
     // Determine status based on event
@@ -79,7 +73,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         session_id: input.session_id.clone(),
         cwd: input.cwd.clone(),
         transcript_path: input.transcript_path.clone(),
-        tty: tty.clone(),
+        tty: None,
         tmux_info: tmux_info.clone(),
         status,
         created_at: now,
@@ -93,10 +87,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     session.updated_at = now;
     session.status = status;
 
-    // Update TTY and tmux info if available
-    if tty.is_some() {
-        session.tty = tty;
-    }
+    // Update tmux info if available
     if tmux_info.is_some() {
         session.tmux_info = tmux_info;
     }

@@ -240,7 +240,7 @@ mod tests {
             session_id: "test-123".to_string(),
             cwd: PathBuf::from("/home/user/projects/myproject"),
             transcript_path: None,
-            tty: Some("/dev/ttys001".to_string()),
+            tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
@@ -583,7 +583,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: PathBuf::from("/home/user/webapp"),
                 transcript_path: None,
-                tty: Some("/dev/ttys001".to_string()),
+                tty: None,
                 tmux_info: Some(TmuxInfo {
                     session_name: "webapp".to_string(),
                     window_name: "dev".to_string(),
@@ -600,7 +600,7 @@ mod tests {
                 session_id: "s2".to_string(),
                 cwd: PathBuf::from("/home/user/api"),
                 transcript_path: None,
-                tty: Some("/dev/ttys002".to_string()),
+                tty: None,
                 tmux_info: Some(TmuxInfo {
                     session_name: "api".to_string(),
                     window_name: "test".to_string(),

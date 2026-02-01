@@ -4,7 +4,6 @@ mod focus;
 mod hook;
 mod list;
 mod store;
-mod tty;
 mod tui;
 mod types;
 mod watch;
