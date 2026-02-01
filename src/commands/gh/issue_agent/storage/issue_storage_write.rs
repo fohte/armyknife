@@ -3,10 +3,23 @@ use std::fs;
 use super::error::Result;
 use super::issue_storage::IssueStorage;
 use super::read::LocalComment;
-use crate::commands::gh::issue_agent::models::{Comment, IssueMetadata};
+#[cfg(test)]
+use crate::commands::gh::issue_agent::models::IssueMetadata;
+use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter};
 
 impl IssueStorage {
-    /// Save the issue body to issue.md.
+    /// Save issue with frontmatter to issue.md.
+    pub fn save_issue(&self, frontmatter: &IssueFrontmatter, body: &str) -> Result<()> {
+        fs::create_dir_all(&self.dir)?;
+        let path = self.dir.join("issue.md");
+        let content = format_issue_md(frontmatter, body);
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Save the issue body to issue.md (legacy format without frontmatter).
+    /// Use `save_issue` for the new frontmatter format.
+    #[cfg(test)]
     pub fn save_body(&self, body: &str) -> Result<()> {
         fs::create_dir_all(&self.dir)?;
         let path = self.dir.join("issue.md");
@@ -14,7 +27,9 @@ impl IssueStorage {
         Ok(())
     }
 
-    /// Save metadata to metadata.json.
+    /// Save metadata to metadata.json (legacy format).
+    /// Use `save_issue` for the new frontmatter format.
+    #[cfg(test)]
     pub fn save_metadata(&self, metadata: &IssueMetadata) -> Result<()> {
         fs::create_dir_all(&self.dir)?;
         let path = self.dir.join("metadata.json");
@@ -108,9 +123,17 @@ impl IssueStorage {
     }
 }
 
+/// Format issue.md content with YAML frontmatter.
+fn format_issue_md(frontmatter: &IssueFrontmatter, body: &str) -> String {
+    let yaml = serde_yaml::to_string(frontmatter).unwrap_or_default();
+    // serde_yaml adds a trailing newline, so we just need the delimiters
+    format!("---\n{}---\n\n{}\n", yaml, body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::gh::issue_agent::models::ReadonlyMetadata;
     use crate::commands::gh::issue_agent::testing::factories;
     use rstest::rstest;
     use std::fs;
@@ -124,8 +147,40 @@ mod tests {
         })
     }
 
+    fn make_frontmatter() -> IssueFrontmatter {
+        IssueFrontmatter {
+            title: "Test Issue".to_string(),
+            labels: vec!["bug".to_string()],
+            assignees: vec!["user1".to_string()],
+            milestone: None,
+            readonly: ReadonlyMetadata {
+                number: 123,
+                state: "OPEN".to_string(),
+                author: "author1".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            },
+        }
+    }
+
     #[rstest]
-    fn test_save_body() {
+    fn test_save_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+        let frontmatter = make_frontmatter();
+
+        storage
+            .save_issue(&frontmatter, "Test body content")
+            .unwrap();
+
+        let content = fs::read_to_string(dir.path().join("issue.md")).unwrap();
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("title: Test Issue"));
+        assert!(content.contains("Test body content"));
+    }
+
+    #[rstest]
+    fn test_save_body_legacy() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
         storage.save_body("Test body content").unwrap();
@@ -135,7 +190,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_save_metadata() {
+    fn test_save_metadata_legacy() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
         let metadata = IssueMetadata {
@@ -260,5 +315,17 @@ mod tests {
             IssueStorage::parse_database_id_from_filename(filename),
             expected
         );
+    }
+
+    #[rstest]
+    fn test_format_issue_md() {
+        let frontmatter = make_frontmatter();
+        let content = format_issue_md(&frontmatter, "Body text");
+
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("title: Test Issue"));
+        assert!(content.contains("readonly:"));
+        assert!(content.contains("number: 123"));
+        assert!(content.ends_with("Body text\n"));
     }
 }

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::PushArgs;
-use crate::commands::gh::issue_agent::models::{IssueMetadata, NewIssue};
+use crate::commands::gh::issue_agent::models::{IssueFrontmatter, NewIssue};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
 use crate::infra::github::OctocrabClient;
@@ -72,13 +72,10 @@ pub async fn run_create_with_client(
 
     std::fs::rename(&path, &new_dir)?;
 
-    // Update issue.md to remove frontmatter (keep only body like existing issues)
+    // Save issue.md with frontmatter (same format as pull)
     let storage = IssueStorage::from_dir(&new_dir);
-    storage.save_body(&new_issue.body)?;
-
-    // Save metadata
-    let metadata = IssueMetadata::from_issue(&created);
-    storage.save_metadata(&metadata)?;
+    let frontmatter = IssueFrontmatter::from_issue(&created);
+    storage.save_issue(&frontmatter, &new_issue.body)?;
 
     // Success message
     println!();
@@ -220,8 +217,11 @@ mod tests {
             assert!(renamed_dir.exists());
             assert!(!new_dir.exists());
 
-            // Verify metadata was saved
-            assert!(renamed_dir.join("metadata.json").exists());
+            // Verify issue.md with frontmatter was saved
+            let issue_md = std::fs::read_to_string(renamed_dir.join("issue.md")).unwrap();
+            assert!(issue_md.contains("title: Test Issue"));
+            assert!(issue_md.contains("readonly:"));
+            assert!(issue_md.contains("number: 42"));
         }
 
         #[rstest]

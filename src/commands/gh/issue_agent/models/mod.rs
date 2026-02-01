@@ -9,7 +9,9 @@ pub use comment::Comment;
 pub use issue::Issue;
 #[cfg(test)]
 pub use issue::Label;
-pub use metadata::IssueMetadata;
+#[cfg(test)]
+pub use metadata::ReadonlyMetadata;
+pub use metadata::{IssueFrontmatter, IssueMetadata};
 pub use new_issue::NewIssue;
 #[cfg(test)]
 pub use new_issue::NewIssueFrontmatter;

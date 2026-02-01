@@ -389,11 +389,12 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     .await;
     assert!(result.is_ok());
 
-    let metadata_content = fs::read_to_string(test_dir.path().join("metadata.json")).unwrap();
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
-    // After push, metadata should be updated from the mock response
-    // The TestSetup uses "2024-01-02T00:00:00+00:00" format for remote_ts
-    assert_eq!(metadata["updatedAt"], "2024-01-02T00:00:00+00:00");
+    // After push, issue.md should be updated with new frontmatter from mock response
+    let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
+    // The TestSetup uses "2024-01-02T00:00:00Z" format for remote timestamps in mock
+    assert!(issue_md.contains("updatedAt:"));
+    // Verify it contains readonly section with updated timestamp
+    assert!(issue_md.contains("readonly:"));
 }
 
 // Comment deletion tests

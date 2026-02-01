@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use super::common::IssueContext;
-use crate::commands::gh::issue_agent::models::IssueMetadata;
+use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::infra::github::OctocrabClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
@@ -172,12 +172,13 @@ async fn run_with_context(
             )
             .await?;
 
-        // Update local metadata to match remote after successful push
+        // Update local issue.md with new frontmatter from remote after successful push
         let new_remote_issue = client
             .get_issue(&ctx.owner, &ctx.repo_name, ctx.issue_number)
             .await?;
-        let new_metadata = IssueMetadata::from_issue(&new_remote_issue);
-        ctx.storage.save_metadata(&new_metadata)?;
+        let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
+        let body = new_remote_issue.body.as_deref().unwrap_or("");
+        ctx.storage.save_issue(&new_frontmatter, body)?;
     }
 
     // Show result
