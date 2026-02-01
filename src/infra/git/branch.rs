@@ -117,20 +117,28 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
         && let Ok(client) = OctocrabClient::get()
         && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
     {
+        // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "#123")
+        let pr_number = pr_info
+            .url
+            .rsplit('/')
+            .next()
+            .map(|n| format!("#{n}"))
+            .unwrap_or_else(|| pr_info.url.clone());
+
         match pr_info.state {
             PrState::Merged => {
                 return MergeStatus::Merged {
-                    reason: format!("PR {} merged", pr_info.url),
+                    reason: format!("{pr_number} merged"),
                 };
             }
             PrState::Open => {
                 return MergeStatus::NotMerged {
-                    reason: format!("PR {} is open", pr_info.url),
+                    reason: format!("{pr_number} open"),
                 };
             }
             PrState::Closed => {
                 return MergeStatus::NotMerged {
-                    reason: format!("PR {} is closed (not merged)", pr_info.url),
+                    reason: format!("{pr_number} closed"),
                 };
             }
         }
@@ -142,12 +150,12 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
 
     if let Some(true) = check_is_ancestor(branch_name, &base_branch) {
         return MergeStatus::Merged {
-            reason: format!("ancestor of {base_branch}"),
+            reason: "Merged (git)".to_string(),
         };
     }
 
     MergeStatus::NotMerged {
-        reason: "not merged (no PR found, not ancestor of base branch)".to_string(),
+        reason: "Not merged".to_string(),
     }
 }
 
