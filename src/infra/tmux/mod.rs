@@ -259,11 +259,8 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
 
 /// Checks if a tmux pane with the given pane_id exists.
 pub fn is_pane_alive(pane_id: &str) -> bool {
-    Command::new("tmux")
-        .args(["has-session", "-t", pane_id])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    // Use list-panes to check if pane exists (returns error if pane not found)
+    run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()
 }
 
 /// Information about a tmux pane.
@@ -279,22 +276,16 @@ pub struct PaneInfo {
 /// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
 /// Returns None if not running in tmux or if no matching pane is found.
 pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
-    let output = Command::new("tmux")
-        .args([
-            "list-panes",
-            "-a",
-            "-F",
-            "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
+    let output = run_tmux_output(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
+    ])
+    .ok()?;
 
     // Collect all pane PIDs for ancestor matching
-    let pane_pids: std::collections::HashSet<u32> = String::from_utf8_lossy(&output.stdout)
+    let pane_pids: std::collections::HashSet<u32> = output
         .lines()
         .filter_map(|line| line.split('\t').next()?.parse::<u32>().ok())
         .collect();
@@ -306,7 +297,7 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     for _ in 0..MAX_DEPTH {
         if pane_pids.contains(&current_pid) {
             // Found a matching pane, parse the full info
-            return String::from_utf8_lossy(&output.stdout)
+            return output
                 .lines()
                 .find_map(|line| parse_pane_line_by_pid(line, current_pid));
         }
