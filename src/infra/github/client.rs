@@ -398,3 +398,89 @@ fn get_gh_token() -> Result<String> {
         Ok(token)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::infra::github::mock::GitHubMockServer;
+    use rstest::rstest;
+
+    mod create_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(42)
+                .title("New Issue")
+                .body("Issue body")
+                .labels(vec!["bug", "urgent"])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue(
+                    "owner",
+                    "repo",
+                    "New Issue",
+                    "Issue body",
+                    &["bug".to_string(), "urgent".to_string()],
+                    &[],
+                )
+                .await;
+
+            assert!(result.is_ok());
+            let issue = result.unwrap();
+            assert_eq!(issue.number, 42);
+            assert_eq!(issue.title, "New Issue");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_with_assignees() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .title("Task")
+                .body("Description")
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue(
+                    "owner",
+                    "repo",
+                    "Task",
+                    "Description",
+                    &[],
+                    &["user1".to_string()],
+                )
+                .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_minimal() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(1)
+                .title("Minimal")
+                .body("")
+                .labels(vec![])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let result = client
+                .create_issue("owner", "repo", "Minimal", "", &[], &[])
+                .await;
+
+            assert!(result.is_ok());
+        }
+    }
+}

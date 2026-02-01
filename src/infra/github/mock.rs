@@ -528,6 +528,28 @@ impl<'a> MockIssueBuilder<'a> {
             .await;
     }
 
+    /// Mount mock for POST /repos/{owner}/{repo}/issues (create new issue).
+    pub async fn create(self) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("POST"))
+            .and(path(format!("/repos/{owner}/{repo}/issues")))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(mock_issue_with_labels(
+                    owner,
+                    repo,
+                    number,
+                    self.title,
+                    self.body,
+                    self.updated_at,
+                    &self.labels,
+                )),
+            )
+            .mount(self.server)
+            .await;
+    }
+
     /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/comments.
     pub async fn create_comment(self) {
         let owner = self.owner;
