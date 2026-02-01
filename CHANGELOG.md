@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.56](https://github.com/fohte/armyknife/compare/v0.1.55...v0.1.56) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** add diff command and colored diff output ([#184](https://github.com/fohte/armyknife/issues/184)) ([dd5a6cf](https://github.com/fohte/armyknife/commit/dd5a6cf7a9b7238fffa7f4962c9c0a99d24ca96e))
+
 ## [0.1.55](https://github.com/fohte/armyknife/compare/v0.1.54...v0.1.55) (2026-01-30)
 
 
