@@ -287,6 +287,7 @@ pub fn is_pane_alive(pane_id: &str) -> bool {
     // Use list-panes to check if pane exists (returns error if pane not found)
     run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()
 }
+
 /// Information about a tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
