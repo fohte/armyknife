@@ -119,6 +119,7 @@ fn parse_title_and_body(content: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     mod parse_tests {
@@ -126,20 +127,21 @@ mod tests {
 
         #[rstest]
         fn test_parse_full_format() {
-            let content = r#"---
-labels:
-  - bug
-  - urgent
-assignees:
-  - fohte
----
+            let content = indoc! {"
+                ---
+                labels:
+                  - bug
+                  - urgent
+                assignees:
+                  - fohte
+                ---
 
-# Fix critical bug
+                # Fix critical bug
 
-This is the issue body.
+                This is the issue body.
 
-Multiple paragraphs are supported.
-"#;
+                Multiple paragraphs are supported.
+            "};
 
             let result = NewIssue::parse(content).unwrap();
 
@@ -157,13 +159,14 @@ Multiple paragraphs are supported.
 
         #[rstest]
         fn test_parse_empty_frontmatter() {
-            let content = r#"---
----
+            let content = indoc! {"
+                ---
+                ---
 
-# Simple Issue
+                # Simple Issue
 
-Body text.
-"#;
+                Body text.
+            "};
 
             let result = NewIssue::parse(content).unwrap();
 
@@ -175,10 +178,11 @@ Body text.
 
         #[rstest]
         fn test_parse_no_frontmatter() {
-            let content = r#"# Issue Without Frontmatter
+            let content = indoc! {"
+                # Issue Without Frontmatter
 
-Just the body.
-"#;
+                Just the body.
+            "};
 
             let result = NewIssue::parse(content).unwrap();
 
@@ -190,12 +194,13 @@ Just the body.
 
         #[rstest]
         fn test_parse_empty_body() {
-            let content = r#"---
-labels: []
----
+            let content = indoc! {"
+                ---
+                labels: []
+                ---
 
-# Title Only
-"#;
+                # Title Only
+            "};
 
             let result = NewIssue::parse(content).unwrap();
 
@@ -205,12 +210,13 @@ labels: []
 
         #[rstest]
         fn test_parse_missing_title() {
-            let content = r#"---
-labels: []
----
+            let content = indoc! {"
+                ---
+                labels: []
+                ---
 
-Just body without title.
-"#;
+                Just body without title.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
@@ -219,13 +225,14 @@ Just body without title.
 
         #[rstest]
         fn test_parse_empty_title() {
-            let content = r#"---
----
+            let content = indoc! {"
+                ---
+                ---
 
-#
+                #
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
@@ -234,13 +241,14 @@ Body.
 
         #[rstest]
         fn test_parse_unclosed_frontmatter() {
-            let content = r#"---
-labels: []
+            let content = indoc! {"
+                ---
+                labels: []
 
-# Title
+                # Title
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
@@ -249,14 +257,15 @@ Body.
 
         #[rstest]
         fn test_parse_invalid_yaml() {
-            let content = r#"---
-labels: [unclosed
----
+            let content = indoc! {"
+                ---
+                labels: [unclosed
+                ---
 
-# Title
+                # Title
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
@@ -265,15 +274,16 @@ Body.
 
         #[rstest]
         fn test_parse_inline_labels() {
-            let content = r#"---
-labels: [bug, enhancement]
-assignees: [user1, user2]
----
+            let content = indoc! {"
+                ---
+                labels: [bug, enhancement]
+                assignees: [user1, user2]
+                ---
 
-# Inline Style
+                # Inline Style
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content).unwrap();
 
@@ -289,13 +299,14 @@ Body.
 
         #[rstest]
         fn test_parse_rejects_h2_heading() {
-            let content = r#"---
----
+            let content = indoc! {"
+                ---
+                ---
 
-## This is H2 not H1
+                ## This is H2 not H1
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
@@ -304,13 +315,14 @@ Body.
 
         #[rstest]
         fn test_parse_rejects_h3_heading() {
-            let content = r#"---
----
+            let content = indoc! {"
+                ---
+                ---
 
-### This is H3 not H1
+                ### This is H3 not H1
 
-Body.
-"#;
+                Body.
+            "};
 
             let result = NewIssue::parse(content);
             assert!(result.is_err());
