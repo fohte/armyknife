@@ -143,10 +143,10 @@ mod tests {
             assert!(path.exists());
 
             let content = fs::read_to_string(&path).unwrap();
-            assert!(content.contains("labels: []"));
-            assert!(content.contains("assignees: []"));
-            assert!(content.contains("# Title"));
-            assert!(content.contains("Body"));
+            assert_eq!(
+                content,
+                "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+            );
         }
 
         #[rstest]
@@ -160,7 +160,12 @@ mod tests {
             // Second call should fail
             let result = run_init_issue_with_storage(&storage);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("already exists"));
+            let err = result.unwrap_err();
+            let expected = format!(
+                "File already exists: {}",
+                dir.path().join("issue.md").display()
+            );
+            assert_eq!(err.to_string(), expected);
         }
     }
 
@@ -218,11 +223,9 @@ mod tests {
 
             let result = run_init_comment_with_storage(&storage, 123, Some("test"));
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("not found locally")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Issue #123 not found locally. Run 'a gh issue-agent pull 123' first."
             );
         }
 
@@ -241,7 +244,12 @@ mod tests {
             // Second call with same name should fail
             let result = run_init_comment_with_storage(&storage, 123, Some("duplicate"));
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("already exists"));
+            let err = result.unwrap_err();
+            let expected = format!(
+                "File already exists: {}",
+                dir.path().join("comments/new_duplicate.md").display()
+            );
+            assert_eq!(err.to_string(), expected);
         }
     }
 
@@ -265,11 +273,9 @@ mod tests {
         fn test_invalid_names(#[case] name: &str) {
             let result = validate_comment_name(name);
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid comment name")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Invalid comment name: must not contain '/', '\\', or '..'"
             );
         }
     }
@@ -314,11 +320,9 @@ mod tests {
 
             let result = run_init_comment(&args);
             assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid comment name")
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Invalid comment name: must not contain '/', '\\', or '..'"
             );
         }
     }
