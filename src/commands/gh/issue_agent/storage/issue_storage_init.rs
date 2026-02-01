@@ -88,10 +88,10 @@ mod tests {
         assert!(path.exists());
 
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("labels: []"));
-        assert!(content.contains("assignees: []"));
-        assert!(content.contains("# Title"));
-        assert!(content.contains("Body"));
+        assert_eq!(
+            content,
+            "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+        );
     }
 
     #[rstest]
