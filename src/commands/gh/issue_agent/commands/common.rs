@@ -1,15 +1,19 @@
 //! Common utilities shared across issue-agent commands.
 
-use std::io::{self, Write};
 use std::path::Path;
 
-use similar::{ChangeTag, TextDiff};
-
+use super::IssueArgs;
+use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
+use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
 use crate::infra::git;
+use crate::infra::github::OctocrabClient;
 
 // Re-export git::parse_repo for convenience.
 // Note: This returns git::Result, callers using Box<dyn Error> can use `?` directly.
 pub use git::parse_repo;
+
+// Re-export diff utilities from shared module
+pub use crate::shared::diff::{print_colored_line, print_diff, write_diff};
 
 /// Get repository from argument or git remote origin.
 ///
@@ -28,30 +32,86 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     Ok(format!("{}/{}", owner, repo))
 }
 
-/// Print unified diff between old and new text to stdout.
-/// Ignores BrokenPipe errors (e.g., when piped to `head`).
-pub fn print_diff(old: &str, new: &str) -> anyhow::Result<()> {
-    if let Err(e) = write_diff(&mut io::stdout(), old, new)
-        && e.kind() != io::ErrorKind::BrokenPipe
-    {
-        return Err(e.into());
-    }
-    Ok(())
+/// Context for issue operations containing all necessary state.
+pub struct IssueContext {
+    pub owner: String,
+    pub repo_name: String,
+    pub issue_number: u64,
+    pub storage: IssueStorage,
+    pub current_user: String,
 }
 
-/// Write unified diff between old and new text to a writer.
-pub fn write_diff<W: Write>(writer: &mut W, old: &str, new: &str) -> io::Result<()> {
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
+/// Remote state fetched from GitHub.
+pub struct RemoteData {
+    pub issue: Issue,
+    pub comments: Vec<Comment>,
+}
+
+/// Local state loaded from storage.
+pub struct LocalData {
+    pub metadata: IssueMetadata,
+    pub body: String,
+    pub comments: Vec<LocalComment>,
+}
+
+impl IssueContext {
+    /// Initialize context from IssueArgs, validating inputs and fetching current user.
+    pub async fn from_args(args: &IssueArgs) -> anyhow::Result<(Self, &'static OctocrabClient)> {
+        let repo = get_repo_from_arg_or_git(&args.repo)?;
+        let issue_number = args.issue_number;
+
+        // Validate repo format before making any API calls
+        let (owner, repo_name) = parse_repo(&repo)?;
+
+        let storage = IssueStorage::new(&repo, issue_number as i64);
+
+        // Check if local cache exists
+        if !storage.dir().exists() {
+            anyhow::bail!(
+                "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
+                issue_number,
+                issue_number
+            );
+        }
+
+        println!("Fetching latest from GitHub...");
+
+        let client = OctocrabClient::get()?;
+        let current_user = client.get_current_user().await?;
+
+        let ctx = Self {
+            owner: owner.to_string(),
+            repo_name: repo_name.to_string(),
+            issue_number,
+            storage,
+            current_user,
         };
-        // change already includes newline, so no newline here
-        write!(writer, "{}{}", sign, change)?;
+
+        Ok((ctx, client))
     }
-    Ok(())
+
+    /// Fetch remote state from GitHub.
+    pub async fn fetch_remote(&self, client: &OctocrabClient) -> anyhow::Result<RemoteData> {
+        let issue = client
+            .get_issue(&self.owner, &self.repo_name, self.issue_number)
+            .await?;
+        let comments = client
+            .get_comments(&self.owner, &self.repo_name, self.issue_number)
+            .await?;
+        Ok(RemoteData { issue, comments })
+    }
+
+    /// Load local state from storage.
+    pub fn load_local(&self) -> anyhow::Result<LocalData> {
+        let metadata = self.storage.read_metadata()?;
+        let body = self.storage.read_body()?;
+        let comments = self.storage.read_comments()?;
+        Ok(LocalData {
+            metadata,
+            body,
+            comments,
+        })
+    }
 }
 
 /// Print success message after fetching issue.
@@ -99,20 +159,5 @@ mod tests {
         }
     }
 
-    mod diff_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::no_changes("a\n", "a\n", " a\n")]
-        #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
-        #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
-        #[case::modify("old\n", "new\n", "-old\n+new\n")]
-        #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
-        #[case::empty_both("", "", "")]
-        fn test_write_diff(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
-            let mut output = Vec::new();
-            write_diff(&mut output, old, new).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), expected);
-        }
-    }
+    // diff tests are now in src/shared/diff.rs
 }

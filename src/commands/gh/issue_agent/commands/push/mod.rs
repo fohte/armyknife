@@ -1,15 +1,14 @@
 //! Push command for gh-issue-agent.
 
-mod changeset;
-mod detect;
+pub(crate) mod changeset;
+pub(crate) mod detect;
 #[cfg(test)]
 mod integration_tests;
 
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo};
+use super::common::IssueContext;
 use crate::commands::gh::issue_agent::models::IssueMetadata;
-use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::github::OctocrabClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
@@ -38,68 +37,45 @@ pub struct PushArgs {
 }
 
 pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
-    let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
-    let issue_number = args.issue.issue_number;
-
-    // Validate repo format before making any API calls
-    parse_repo(&repo)?;
-
-    let storage = IssueStorage::new(&repo, issue_number as i64);
-
-    // 1. Check if local cache exists
-    if !storage.dir().exists() {
-        anyhow::bail!(
-            "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
-            issue_number,
-            issue_number
-        );
-    }
-
-    println!("Fetching latest from GitHub...");
-
-    // 2. Fetch latest from GitHub
-    let client = OctocrabClient::get()?;
-    let current_user = client.get_current_user().await?;
-
-    run_with_client_and_user(args, client, &storage, &current_user).await
+    let (ctx, client) = IssueContext::from_args(&args.issue).await?;
+    run_with_context(args, &ctx, client).await
 }
 
-/// Internal implementation that accepts a client and user for testability.
+/// Internal implementation that accepts a client and storage for testability.
 #[cfg(test)]
 pub(super) async fn run_with_client_and_storage(
     args: &PushArgs,
     client: &OctocrabClient,
-    storage: &IssueStorage,
+    storage: &crate::commands::gh::issue_agent::storage::IssueStorage,
     current_user: &str,
 ) -> anyhow::Result<()> {
-    run_with_client_and_user(args, client, storage, current_user).await
-}
+    use super::common::{get_repo_from_arg_or_git, parse_repo};
 
-async fn run_with_client_and_user(
-    args: &PushArgs,
-    client: &OctocrabClient,
-    storage: &IssueStorage,
-    current_user: &str,
-) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
-    let issue_number = args.issue.issue_number;
     let (owner, repo_name) = parse_repo(&repo)?;
 
-    // Fetch remote state
-    let remote_issue = client.get_issue(&owner, &repo_name, issue_number).await?;
-    let remote_comments = client
-        .get_comments(&owner, &repo_name, issue_number)
-        .await?;
+    let ctx = IssueContext {
+        owner: owner.to_string(),
+        repo_name: repo_name.to_string(),
+        issue_number: args.issue.issue_number,
+        storage: storage.clone(),
+        current_user: current_user.to_string(),
+    };
+    run_with_context(args, &ctx, client).await
+}
 
-    // Load local state
-    let local_metadata = storage.read_metadata()?;
-    let local_body = storage.read_body()?;
-    let local_comments = storage.read_comments()?;
+async fn run_with_context(
+    args: &PushArgs,
+    ctx: &IssueContext,
+    client: &OctocrabClient,
+) -> anyhow::Result<()> {
+    let remote = ctx.fetch_remote(client).await?;
+    let local = ctx.load_local()?;
 
     // Check if remote has changed since pull
-    let remote_updated_at = remote_issue.updated_at.to_rfc3339();
+    let remote_updated_at = remote.issue.updated_at.to_rfc3339();
     if let Err(msg) =
-        check_remote_unchanged(&local_metadata.updated_at, &remote_updated_at, args.force)
+        check_remote_unchanged(&local.metadata.updated_at, &remote_updated_at, args.force)
     {
         eprintln!();
         eprintln!("{}", msg);
@@ -110,21 +86,21 @@ async fn run_with_client_and_user(
     }
 
     // Detect all changes
-    let local = LocalState {
-        metadata: &local_metadata,
-        body: &local_body,
-        comments: &local_comments,
+    let local_state = LocalState {
+        metadata: &local.metadata,
+        body: &local.body,
+        comments: &local.comments,
     };
-    let remote = RemoteState {
-        issue: &remote_issue,
-        comments: &remote_comments,
+    let remote_state = RemoteState {
+        issue: &remote.issue,
+        comments: &remote.comments,
     };
     let options = DetectOptions {
-        current_user,
+        current_user: &ctx.current_user,
         edit_others: args.edit_others,
         allow_delete: args.allow_delete,
     };
-    let changeset = ChangeSet::detect(&local, &remote, &options)?;
+    let changeset = ChangeSet::detect(&local_state, &remote_state, &options)?;
 
     // Display and apply changes
     let has_changes = changeset.has_changes();
@@ -132,13 +108,21 @@ async fn run_with_client_and_user(
 
     if !args.dry_run && has_changes {
         changeset
-            .apply(client, &owner, &repo_name, issue_number, storage)
+            .apply(
+                client,
+                &ctx.owner,
+                &ctx.repo_name,
+                ctx.issue_number,
+                &ctx.storage,
+            )
             .await?;
 
         // Update local metadata to match remote after successful push
-        let new_remote_issue = client.get_issue(&owner, &repo_name, issue_number).await?;
+        let new_remote_issue = client
+            .get_issue(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+            .await?;
         let new_metadata = IssueMetadata::from_issue(&new_remote_issue);
-        storage.save_metadata(&new_metadata)?;
+        ctx.storage.save_metadata(&new_metadata)?;
     }
 
     // Show result

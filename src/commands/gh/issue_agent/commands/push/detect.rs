@@ -211,7 +211,7 @@ pub(super) fn check_can_edit_comment(
 
 /// Check if remote has changed since the last pull.
 /// Returns Ok(()) if no conflict, Err with message if changed.
-pub(super) fn check_remote_unchanged(
+pub(crate) fn check_remote_unchanged(
     local_updated_at: &str,
     remote_updated_at: &str,
     force: bool,

@@ -17,6 +17,9 @@ pub enum IssueAgentCommands {
 
     /// Push local changes to GitHub
     Push(commands::PushArgs),
+
+    /// Show diff between local changes and remote
+    Diff(commands::DiffArgs),
 }
 
 impl IssueAgentCommands {
@@ -25,6 +28,7 @@ impl IssueAgentCommands {
             Self::View(args) => commands::run_view(args).await,
             Self::Pull(args) => commands::run_pull(args).await,
             Self::Push(args) => commands::run_push(args).await,
+            Self::Diff(args) => commands::run_diff(args).await,
         }
     }
 }
