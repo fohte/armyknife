@@ -59,7 +59,10 @@ fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
     // Validate repo format to prevent path traversal
     let _ = parse_repo(&repo)?;
     let storage = IssueStorage::new_for_new_issue(&repo);
+    run_init_issue_with_storage(&storage)
+}
 
+fn run_init_issue_with_storage(storage: &IssueStorage) -> anyhow::Result<()> {
     let path = storage.init_new_issue()?;
 
     eprintln!("Created: {}", path.display());
@@ -90,23 +93,30 @@ fn run_init_comment(args: &InitCommentArgs) -> anyhow::Result<()> {
     }
 
     let storage = IssueStorage::new(&repo, args.issue_number as i64);
+    run_init_comment_with_storage(&storage, args.issue_number, args.name.as_deref())
+}
 
+fn run_init_comment_with_storage(
+    storage: &IssueStorage,
+    issue_number: u64,
+    name: Option<&str>,
+) -> anyhow::Result<()> {
     // Check if issue exists locally
     if !storage.dir().exists() {
         anyhow::bail!(
             "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
-            args.issue_number,
-            args.issue_number
+            issue_number,
+            issue_number
         );
     }
 
-    let path = storage.init_new_comment(args.name.as_deref())?;
+    let path = storage.init_new_comment(name)?;
 
     eprintln!("Created: {}", path.display());
     eprintln!();
     eprintln!(
         "Edit the file and run: a gh issue-agent push {}",
-        args.issue_number
+        issue_number
     );
 
     Ok(())
@@ -118,32 +128,121 @@ mod tests {
     use rstest::rstest;
     use std::fs;
 
-    #[rstest]
-    fn test_run_init_issue() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = IssueStorage::from_dir(dir.path());
+    mod run_init_issue_with_storage_tests {
+        use super::*;
 
-        let result = storage.init_new_issue();
-        assert!(result.is_ok());
+        #[rstest]
+        fn test_creates_issue_file_with_template() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(dir.path());
 
-        let path = result.unwrap();
-        assert!(path.exists());
+            let result = run_init_issue_with_storage(&storage);
+            assert!(result.is_ok());
 
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("labels: []"));
+            let path = dir.path().join("issue.md");
+            assert!(path.exists());
+
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("labels: []"));
+            assert!(content.contains("assignees: []"));
+            assert!(content.contains("# Title"));
+            assert!(content.contains("Body"));
+        }
+
+        #[rstest]
+        fn test_returns_error_if_file_exists() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(dir.path());
+
+            // Create file first
+            run_init_issue_with_storage(&storage).unwrap();
+
+            // Second call should fail
+            let result = run_init_issue_with_storage(&storage);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already exists"));
+        }
     }
 
-    #[rstest]
-    fn test_run_init_comment() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = IssueStorage::from_dir(dir.path());
+    mod run_init_comment_with_storage_tests {
+        use super::*;
 
-        let result = storage.init_new_comment(Some("test"));
-        assert!(result.is_ok());
+        #[rstest]
+        fn test_creates_comment_file_with_name() {
+            let dir = tempfile::tempdir().unwrap();
+            // Create issue directory to simulate pulled issue
+            fs::create_dir_all(dir.path()).unwrap();
+            fs::write(dir.path().join("issue.md"), "test").unwrap();
 
-        let path = result.unwrap();
-        assert!(path.exists());
-        assert!(path.to_string_lossy().contains("new_test.md"));
+            let storage = IssueStorage::from_dir(dir.path());
+
+            let result = run_init_comment_with_storage(&storage, 123, Some("test"));
+            assert!(result.is_ok());
+
+            let path = dir.path().join("comments/new_test.md");
+            assert!(path.exists());
+
+            let content = fs::read_to_string(&path).unwrap();
+            assert_eq!(content, "Comment body\n");
+        }
+
+        #[rstest]
+        fn test_creates_comment_file_with_timestamp() {
+            let dir = tempfile::tempdir().unwrap();
+            // Create issue directory to simulate pulled issue
+            fs::create_dir_all(dir.path()).unwrap();
+            fs::write(dir.path().join("issue.md"), "test").unwrap();
+
+            let storage = IssueStorage::from_dir(dir.path());
+
+            let result = run_init_comment_with_storage(&storage, 123, None);
+            assert!(result.is_ok());
+
+            // Check that a file was created in comments directory
+            let comments_dir = dir.path().join("comments");
+            assert!(comments_dir.exists());
+            let entries: Vec<_> = fs::read_dir(&comments_dir).unwrap().collect();
+            assert_eq!(entries.len(), 1);
+
+            let filename = entries[0].as_ref().unwrap().file_name();
+            let filename_str = filename.to_string_lossy();
+            assert!(filename_str.starts_with("new_"));
+            assert!(filename_str.ends_with(".md"));
+        }
+
+        #[rstest]
+        fn test_returns_error_if_issue_not_pulled() {
+            let dir = tempfile::tempdir().unwrap();
+            // Don't create any files - issue not pulled
+            let storage = IssueStorage::from_dir(dir.path().join("nonexistent"));
+
+            let result = run_init_comment_with_storage(&storage, 123, Some("test"));
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not found locally")
+            );
+        }
+
+        #[rstest]
+        fn test_returns_error_if_file_exists() {
+            let dir = tempfile::tempdir().unwrap();
+            // Create issue directory to simulate pulled issue
+            fs::create_dir_all(dir.path()).unwrap();
+            fs::write(dir.path().join("issue.md"), "test").unwrap();
+
+            let storage = IssueStorage::from_dir(dir.path());
+
+            // Create file first
+            run_init_comment_with_storage(&storage, 123, Some("duplicate")).unwrap();
+
+            // Second call with same name should fail
+            let result = run_init_comment_with_storage(&storage, 123, Some("duplicate"));
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already exists"));
+        }
     }
 
     mod validate_comment_name_tests {
