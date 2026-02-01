@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.58](https://github.com/fohte/armyknife/compare/v0.1.57...v0.1.58) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** add init subcommand for boilerplate generation ([#188](https://github.com/fohte/armyknife/issues/188)) ([f9489e7](https://github.com/fohte/armyknife/commit/f9489e77087eab60386a5de6d6752172ce32ab8c))
+
 ## [0.1.57](https://github.com/fohte/armyknife/compare/v0.1.56...v0.1.57) (2026-02-01)
 
 
