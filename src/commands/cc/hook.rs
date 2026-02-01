@@ -51,9 +51,21 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
-    // Handle session end by deleting the session file
+    // Handle session end by clearing pane title and deleting the session file
     if event == HookEvent::SessionEnd {
+        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+            let _ = tmux::set_pane_title(&pane_info.pane_id, "");
+        }
         return store::delete_session(&input.session_id);
+    }
+
+    // Handle session start by setting pane title for tmux resurrect restoration
+    if event == HookEvent::SessionStart
+        && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
+    {
+        let title = format!("claude:{}", input.session_id);
+        // Ignore errors; pane title is nice-to-have, not critical
+        let _ = tmux::set_pane_title(&pane_info.pane_id, &title);
     }
 
     // Get tmux info by finding the pane that contains this process
@@ -306,7 +318,8 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
             Some("idle_prompt") => SessionStatus::Stopped,
             _ => SessionStatus::Running,
         },
-        HookEvent::UserPromptSubmit
+        HookEvent::SessionStart
+        | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
         | HookEvent::SessionEnd => SessionStatus::Running,
@@ -458,6 +471,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case::session_start(HookEvent::SessionStart, None, SessionStatus::Running)]
     #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
     #[case::pre_tool_use(HookEvent::PreToolUse, None, SessionStatus::Running)]
     #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Running)]
@@ -482,6 +496,10 @@ mod tests {
 
     #[test]
     fn test_hook_event_parsing() {
+        assert_eq!(
+            HookEvent::from_str("session-start").expect("valid event"),
+            HookEvent::SessionStart
+        );
         assert_eq!(
             HookEvent::from_str("user-prompt-submit").expect("valid event"),
             HookEvent::UserPromptSubmit
