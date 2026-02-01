@@ -70,12 +70,32 @@ pub async fn run_create_with_client(
         .ok_or_else(|| anyhow::anyhow!("Cannot determine parent directory"))?
         .join(issue_number.to_string());
 
-    std::fs::rename(&path, &new_dir)?;
+    // Check if destination already exists before rename
+    if new_dir.exists() {
+        anyhow::bail!(
+            "Issue #{issue_number} created on GitHub, but directory '{}' already exists locally. \
+             Remove or rename it, then run 'pull {issue_number}' to fetch the issue.",
+            new_dir.display()
+        );
+    }
+
+    if let Err(e) = std::fs::rename(&path, &new_dir) {
+        anyhow::bail!(
+            "Issue #{issue_number} created on GitHub, but failed to rename local directory: {e}. \
+             Run 'pull {issue_number}' to fetch it locally."
+        );
+    }
 
     // Save issue.md with frontmatter (same format as pull)
     let storage = IssueStorage::from_dir(&new_dir);
     let frontmatter = IssueFrontmatter::from_issue(&created);
-    storage.save_issue(&frontmatter, &new_issue.body)?;
+    if let Err(e) = storage.save_issue(&frontmatter, &new_issue.body) {
+        // Directory was renamed successfully, so inform user about partial state
+        anyhow::bail!(
+            "Issue #{issue_number} created and directory renamed, but failed to save metadata: {e}. \
+             Run 'pull --force {issue_number}' to refresh local state."
+        );
+    }
 
     // Success message
     println!();
