@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.62](https://github.com/fohte/armyknife/compare/v0.1.61...v0.1.62) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** support new issue creation in push command ([#186](https://github.com/fohte/armyknife/issues/186)) ([1ceb85d](https://github.com/fohte/armyknife/commit/1ceb85d3627269daf1c5c5531b7d9677bd3d2ac8))
+
 ## [0.1.61](https://github.com/fohte/armyknife/compare/v0.1.60...v0.1.61) (2026-02-01)
 
 
