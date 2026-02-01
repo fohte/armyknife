@@ -137,6 +137,9 @@ pub fn print_fetch_success(issue_number: u64, title: &str, dir: &Path) {
         "  {}/comments/         - Comments (only your own comments are editable)",
         dir.display()
     );
+    eprintln!();
+    eprintln!("To add a new comment:");
+    eprintln!("  a gh issue-agent init comment {issue_number}");
 }
 
 #[cfg(test)]
