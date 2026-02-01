@@ -10,6 +10,17 @@ use crate::infra::github::OctocrabClient;
 
 /// Run create for new issue.
 pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
+    let client = OctocrabClient::get()?;
+    run_create_with_client(args, path, client).await
+}
+
+/// Run create with an injected client (for testing).
+pub async fn run_create_with_client(
+    args: &PushArgs,
+    path: PathBuf,
+    client: impl std::ops::Deref<Target = OctocrabClient>,
+) -> anyhow::Result<()> {
+    let client = &*client;
     // Get repo from path or -R option
     let repo = get_repo_from_path_or_arg(&path, &args.repo)?;
     let (owner, repo_name) = parse_repo(&repo)?;
@@ -40,7 +51,6 @@ pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
     println!();
     println!("Creating issue on GitHub...");
 
-    let client = OctocrabClient::get()?;
     let created = client
         .create_issue(
             &owner,
@@ -142,7 +152,222 @@ fn display_new_issue(issue: &NewIssue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
+    use tempfile::TempDir;
+
+    mod run_create_tests {
+        use super::*;
+        use crate::infra::github::GitHubMockServer;
+
+        fn make_args(repo: Option<String>, dry_run: bool) -> PushArgs {
+            PushArgs {
+                target: String::new(), // not used in run_create_with_client
+                repo,
+                dry_run,
+                force: false,
+                edit_others: false,
+                allow_delete: false,
+            }
+        }
+
+        fn setup_new_issue_dir(base: &Path) -> PathBuf {
+            let new_dir = base.join("owner").join("repo").join("new");
+            std::fs::create_dir_all(&new_dir).unwrap();
+            new_dir
+        }
+
+        fn write_issue_md(dir: &Path, content: &str) {
+            std::fs::write(dir.join("issue.md"), content).unwrap();
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_success() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    labels: [bug]
+                    assignees: [testuser]
+                    ---
+
+                    # Test Issue
+
+                    This is the body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(42)
+                .title("Test Issue")
+                .body("This is the body.\n")
+                .labels(vec!["bug"])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert!(result.is_ok());
+
+            // Verify directory was renamed
+            let renamed_dir = temp.path().join("owner").join("repo").join("42");
+            assert!(renamed_dir.exists());
+            assert!(!new_dir.exists());
+
+            // Verify metadata was saved
+            assert!(renamed_dir.join("metadata.json").exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_dry_run() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    ---
+
+                    # Dry Run Test
+
+                    Body content.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            // No mock setup needed - API should not be called in dry run
+
+            let client = mock.client();
+            let args = make_args(None, true);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert!(result.is_ok());
+
+            // Verify directory was NOT renamed
+            assert!(new_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_missing_issue_md() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            // Don't create issue.md
+
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir, &client).await;
+
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("issue.md not found")
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_invalid_format() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(&new_dir, "No title here, just body text.");
+
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir, &client).await;
+
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to parse issue.md")
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_with_repo_arg() {
+            let temp = TempDir::new().unwrap();
+            // Create dir without owner/repo structure
+            let new_dir = temp.path().join("new");
+            std::fs::create_dir_all(&new_dir).unwrap();
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    ---
+
+                    # With Repo Arg
+
+                    Body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            mock.repo("custom", "repo")
+                .issue(99)
+                .title("With Repo Arg")
+                .body("Body.\n")
+                .labels(vec![])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let args = make_args(Some("custom/repo".to_string()), false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert!(result.is_ok());
+
+            // Verify directory was renamed
+            let renamed_dir = temp.path().join("99");
+            assert!(renamed_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_cannot_determine_repo() {
+            let temp = TempDir::new().unwrap();
+            // Create dir without owner/repo/new structure and no -R arg
+            let some_dir = temp.path().join("random");
+            std::fs::create_dir_all(&some_dir).unwrap();
+            write_issue_md(
+                &some_dir,
+                indoc! {"
+                    ---
+                    ---
+
+                    # Test
+
+                    Body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, some_dir, &client).await;
+
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Cannot determine repository")
+            );
+        }
+    }
 
     mod get_repo_from_path_tests {
         use super::*;
