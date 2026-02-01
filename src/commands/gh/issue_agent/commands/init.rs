@@ -273,4 +273,53 @@ mod tests {
             );
         }
     }
+
+    mod run_init_issue_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_rejects_invalid_repo_format() {
+            let args = InitIssueArgs {
+                repo: Some("invalid-repo-format".to_string()),
+            };
+
+            let result = run_init_issue(&args);
+            assert!(result.is_err());
+            // parse_repo should reject repo without '/'
+        }
+    }
+
+    mod run_init_comment_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_rejects_invalid_repo_format() {
+            let args = InitCommentArgs {
+                issue_number: 123,
+                repo: Some("invalid-repo-format".to_string()),
+                name: None,
+            };
+
+            let result = run_init_comment(&args);
+            assert!(result.is_err());
+        }
+
+        #[rstest]
+        fn test_rejects_path_traversal_in_name() {
+            let args = InitCommentArgs {
+                issue_number: 123,
+                repo: Some("owner/repo".to_string()),
+                name: Some("../escape".to_string()),
+            };
+
+            let result = run_init_comment(&args);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid comment name")
+            );
+        }
+    }
 }
