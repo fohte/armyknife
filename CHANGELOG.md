@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.57](https://github.com/fohte/armyknife/compare/v0.1.56...v0.1.57) (2026-02-01)
+
+
+### Bug Fixes
+
+* **cc/watch:** use tmux pane existence check for session lifecycle detection ([#187](https://github.com/fohte/armyknife/issues/187)) ([c481e73](https://github.com/fohte/armyknife/commit/c481e73dc3d9acc4f259b7144fe7195c80accad3))
+
 ## [0.1.56](https://github.com/fohte/armyknife/compare/v0.1.55...v0.1.56) (2026-02-01)
 
 
