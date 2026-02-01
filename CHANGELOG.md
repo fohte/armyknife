@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.59](https://github.com/fohte/armyknife/compare/v0.1.58...v0.1.59) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** display timeline events in view command ([#189](https://github.com/fohte/armyknife/issues/189)) ([fd8a75d](https://github.com/fohte/armyknife/commit/fd8a75d59acda77b838c5cd4a28bcc42ee59022c))
+
 ## [0.1.58](https://github.com/fohte/armyknife/compare/v0.1.57...v0.1.58) (2026-02-01)
 
 
