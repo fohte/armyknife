@@ -4,9 +4,26 @@
 //! cross-references, assignments, etc.) as returned by the GitHub GraphQL API.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::Author;
+
+/// Deserialize an optional Author, treating empty objects as None.
+///
+/// This handles cases where GitHub returns an empty object `{}` for non-User
+/// assignees (Bot, Mannequin, Organization) in the GraphQL API.
+fn deserialize_optional_author<'de, D>(deserializer: D) -> Result<Option<Author>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct MaybeAuthor {
+        login: Option<String>,
+    }
+
+    let maybe = Option::<MaybeAuthor>::deserialize(deserializer)?;
+    Ok(maybe.and_then(|m| m.login.map(|login| Author { login })))
+}
 
 /// Union of all supported timeline event types.
 ///
@@ -188,6 +205,9 @@ pub struct LabelInfo {
 pub struct AssignedEvent {
     pub created_at: DateTime<Utc>,
     pub actor: Option<Author>,
+    // Use serde(default) to handle non-User assignees (Bot, Mannequin, Organization)
+    // which return empty objects from GraphQL
+    #[serde(default, deserialize_with = "deserialize_optional_author")]
     pub assignee: Option<Author>,
 }
 
@@ -197,6 +217,9 @@ pub struct AssignedEvent {
 pub struct UnassignedEvent {
     pub created_at: DateTime<Utc>,
     pub actor: Option<Author>,
+    // Use serde(default) to handle non-User assignees (Bot, Mannequin, Organization)
+    // which return empty objects from GraphQL
+    #[serde(default, deserialize_with = "deserialize_optional_author")]
     pub assignee: Option<Author>,
 }
 
@@ -367,5 +390,45 @@ mod tests {
 
         let item: TimelineItem = serde_json::from_str(json).unwrap();
         assert!(item.is_unknown());
+    }
+
+    #[test]
+    fn test_deserialize_assigned_event_with_empty_assignee() {
+        // When assignee is not a User (e.g., Bot, Mannequin, Organization),
+        // GitHub returns an empty object {} for the assignee field
+        let json = r#"{
+            "__typename": "AssignedEvent",
+            "createdAt": "2024-01-15T10:00:00Z",
+            "actor": {"login": "admin"},
+            "assignee": {}
+        }"#;
+
+        let item: TimelineItem = serde_json::from_str(json).unwrap();
+
+        if let TimelineItem::AssignedEvent(e) = item {
+            assert_eq!(e.actor.unwrap().login, "admin");
+            assert!(e.assignee.is_none());
+        } else {
+            panic!("Expected AssignedEvent");
+        }
+    }
+
+    #[test]
+    fn test_deserialize_assigned_event_with_user_assignee() {
+        let json = r#"{
+            "__typename": "AssignedEvent",
+            "createdAt": "2024-01-15T10:00:00Z",
+            "actor": {"login": "admin"},
+            "assignee": {"login": "developer"}
+        }"#;
+
+        let item: TimelineItem = serde_json::from_str(json).unwrap();
+
+        if let TimelineItem::AssignedEvent(e) = item {
+            assert_eq!(e.actor.unwrap().login, "admin");
+            assert_eq!(e.assignee.unwrap().login, "developer");
+        } else {
+            panic!("Expected AssignedEvent");
+        }
     }
 }

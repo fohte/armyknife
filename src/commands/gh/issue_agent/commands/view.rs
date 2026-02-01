@@ -65,6 +65,8 @@ impl DisplayEntry<'_> {
     fn created_at(&self) -> DateTime<Utc> {
         match self {
             DisplayEntry::Comment(c) => c.created_at,
+            // Unknown events are filtered out by get_timeline_events(),
+            // so created_at() should always return Some. Fallback to now() as defensive coding.
             DisplayEntry::Event(e) => e.created_at().unwrap_or_else(Utc::now),
         }
     }
