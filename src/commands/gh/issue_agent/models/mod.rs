@@ -6,6 +6,8 @@ mod new_issue;
 
 pub use author::Author;
 pub use comment::Comment;
-pub use issue::{Issue, Label, Milestone};
+pub use issue::Issue;
+#[cfg(test)]
+pub use issue::Label;
 pub use metadata::IssueMetadata;
 pub use new_issue::NewIssue;

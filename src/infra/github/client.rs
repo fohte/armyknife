@@ -106,38 +106,7 @@ impl OctocrabClient {
         issue_number: u64,
     ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
         let issue = self.client.issues(owner, repo).get(issue_number).await?;
-
-        // Convert octocrab::models::issues::Issue to our Issue model
-        let state = match issue.state {
-            octocrab::models::IssueState::Open => "OPEN".to_string(),
-            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
-            // IssueState is #[non_exhaustive], so handle future variants
-            _ => format!("{:?}", issue.state).to_uppercase(),
-        };
-        Ok(crate::commands::gh::issue_agent::models::Issue {
-            number: issue.number as i64,
-            title: issue.title,
-            body: issue.body,
-            state,
-            labels: issue
-                .labels
-                .into_iter()
-                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
-                .collect(),
-            assignees: issue
-                .assignees
-                .into_iter()
-                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
-                .collect(),
-            milestone: issue
-                .milestone
-                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
-            author: Some(crate::commands::gh::issue_agent::models::Author {
-                login: issue.user.login,
-            }),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-        })
+        Ok(issue.into())
     }
 
     /// Update an issue's body.
@@ -226,38 +195,7 @@ impl OctocrabClient {
         }
 
         let issue = builder.send().await?;
-
-        // Convert octocrab::models::issues::Issue to our Issue model
-        let state = match issue.state {
-            octocrab::models::IssueState::Open => "OPEN".to_string(),
-            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
-            _ => format!("{:?}", issue.state).to_uppercase(),
-        };
-
-        Ok(crate::commands::gh::issue_agent::models::Issue {
-            number: issue.number as i64,
-            title: issue.title,
-            body: issue.body,
-            state,
-            labels: issue
-                .labels
-                .into_iter()
-                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
-                .collect(),
-            assignees: issue
-                .assignees
-                .into_iter()
-                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
-                .collect(),
-            milestone: issue
-                .milestone
-                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
-            author: Some(crate::commands::gh::issue_agent::models::Author {
-                login: issue.user.login,
-            }),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-        })
+        Ok(issue.into())
     }
 
     // ============ Comment Operations ============
