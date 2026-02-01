@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use super::error::CcError;
-use super::tty;
+use super::process;
 use super::types::Session;
 use crate::shared::cache;
 
@@ -218,8 +218,8 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 /// Removes stale sessions from disk.
 ///
 /// A session is considered stale and removed if:
-/// 1. Its TTY is set but no longer exists (terminal was closed)
-/// 2. Its TTY is not set (abnormal termination - hook never received TTY info)
+/// 1. Its PID is set but the process is no longer alive
+/// 2. Its PID is not set (abnormal termination - hook never received PID info)
 pub fn cleanup_stale_sessions() -> Result<()> {
     let dir = sessions_dir()?;
 
@@ -243,10 +243,10 @@ pub fn cleanup_stale_sessions() -> Result<()> {
             continue;
         };
 
-        let should_remove = match &session.tty {
-            // TTY is set but no longer exists -> terminal was closed
-            Some(tty_path) => !tty::is_tty_alive(tty_path),
-            // TTY is not set -> abnormal termination
+        let should_remove = match session.pid {
+            // PID is set but process is no longer alive -> session ended
+            Some(pid) => !process::is_process_alive(pid),
+            // PID is not set -> abnormal termination or legacy session
             None => true,
         };
 
@@ -273,7 +273,7 @@ mod tests {
             session_id: id.to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
-            tty: Some("/dev/ttys001".to_string()),
+            pid: Some(std::process::id()),
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
@@ -464,46 +464,43 @@ mod tests {
         }
 
         #[rstest]
-        fn removes_session_with_nonexistent_tty() {
-            let (session_id, path) = setup_session("nonexistent-tty");
+        fn removes_session_with_dead_pid() {
+            let (session_id, path) = setup_session("dead-pid");
 
-            // Create session with a TTY that doesn't exist
+            // Create session with a PID that doesn't exist (99999999 is unlikely to exist)
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/ttys99999".to_string());
+            session.pid = Some(99999999);
             save_session(&session).expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
             cleanup_stale_sessions().expect("cleanup should succeed");
 
-            assert!(
-                !path.exists(),
-                "session with nonexistent TTY should be removed"
-            );
+            assert!(!path.exists(), "session with dead PID should be removed");
         }
 
         #[rstest]
-        fn keeps_session_with_existing_tty() {
-            let (session_id, path) = setup_session("existing-tty");
+        fn keeps_session_with_alive_pid() {
+            let (session_id, path) = setup_session("alive-pid");
 
-            // Create session with a TTY that exists (/dev/null always exists)
+            // Create session with current process PID (always alive)
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/null".to_string());
+            session.pid = Some(std::process::id());
             save_session(&session).expect("save should succeed");
 
             cleanup_stale_sessions().expect("cleanup should succeed");
 
-            assert!(path.exists(), "session with existing TTY should be kept");
+            assert!(path.exists(), "session with alive PID should be kept");
 
             cleanup_session(&session_id);
         }
 
         #[rstest]
-        fn removes_session_without_tty() {
-            let (session_id, path) = setup_session("no-tty");
+        fn removes_session_without_pid() {
+            let (session_id, path) = setup_session("no-pid");
 
-            // Create session without TTY (abnormal termination case)
+            // Create session without PID (abnormal termination or legacy session)
             let mut session = create_test_session(&session_id);
-            session.tty = None;
+            session.pid = None;
             save_session(&session).expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
@@ -511,7 +508,7 @@ mod tests {
 
             assert!(
                 !path.exists(),
-                "session without TTY should be removed (abnormal termination)"
+                "session without PID should be removed (abnormal termination)"
             );
         }
 
@@ -519,9 +516,9 @@ mod tests {
         fn also_removes_lock_file() {
             let (session_id, path) = setup_session("with-lock");
 
-            // Create session with nonexistent TTY
+            // Create session with dead PID
             let mut session = create_test_session(&session_id);
-            session.tty = Some("/dev/ttys99999".to_string());
+            session.pid = Some(99999999);
             save_session(&session).expect("save should succeed");
 
             let lock_path = path.with_extension("json.lock");

@@ -190,7 +190,7 @@ mod tests {
                 session_id: format!("session-{}", i),
                 cwd: PathBuf::from(format!("/project/{}", i)),
                 transcript_path: None,
-                tty: None,
+                pid: None,
                 tmux_info: None,
                 status: SessionStatus::Running,
                 created_at: Utc::now(),

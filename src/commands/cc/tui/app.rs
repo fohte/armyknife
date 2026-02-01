@@ -474,7 +474,7 @@ mod tests {
             session_id: id.to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
-            tty: None,
+            pid: None,
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
