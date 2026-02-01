@@ -468,8 +468,15 @@ mod tests {
             }
         }
 
+        /// These tests require tmux server to be running.
+        /// When tmux is not available, cleanup_stale_sessions skips processing
+        /// to avoid incorrectly deleting sessions.
         #[rstest]
         fn removes_session_with_nonexistent_pane() {
+            if !tmux::is_server_available() {
+                // Skip test if tmux is not running (e.g., CI environment)
+                return;
+            }
             let (session_id, path) = setup_session("dead-pane");
 
             // Create session with a pane_id that doesn't exist
@@ -493,6 +500,10 @@ mod tests {
 
         #[rstest]
         fn keeps_session_without_tmux_info() {
+            if !tmux::is_server_available() {
+                return;
+            }
+
             let (session_id, path) = setup_session("no-tmux");
 
             // Create session without tmux_info (may be running outside tmux)
@@ -509,6 +520,10 @@ mod tests {
 
         #[rstest]
         fn also_removes_lock_file() {
+            if !tmux::is_server_available() {
+                return;
+            }
+
             let (session_id, path) = setup_session("with-lock");
 
             // Create session with nonexistent pane
