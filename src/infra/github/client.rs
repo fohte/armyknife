@@ -204,6 +204,62 @@ impl OctocrabClient {
         Ok(())
     }
 
+    /// Create a new issue.
+    pub async fn create_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        title: &str,
+        body: &str,
+        labels: &[String],
+        assignees: &[String],
+    ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
+        let issues = self.client.issues(owner, repo);
+        let mut builder = issues.create(title).body(body);
+
+        if !labels.is_empty() {
+            builder = builder.labels(labels.to_vec());
+        }
+
+        if !assignees.is_empty() {
+            builder = builder.assignees(assignees.to_vec());
+        }
+
+        let issue = builder.send().await?;
+
+        // Convert octocrab::models::issues::Issue to our Issue model
+        let state = match issue.state {
+            octocrab::models::IssueState::Open => "OPEN".to_string(),
+            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
+            _ => format!("{:?}", issue.state).to_uppercase(),
+        };
+
+        Ok(crate::commands::gh::issue_agent::models::Issue {
+            number: issue.number as i64,
+            title: issue.title,
+            body: issue.body,
+            state,
+            labels: issue
+                .labels
+                .into_iter()
+                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
+                .collect(),
+            assignees: issue
+                .assignees
+                .into_iter()
+                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
+                .collect(),
+            milestone: issue
+                .milestone
+                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
+            author: Some(crate::commands::gh::issue_agent::models::Author {
+                login: issue.user.login,
+            }),
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+        })
+    }
+
     // ============ Comment Operations ============
 
     /// GraphQL data for fetching comments.

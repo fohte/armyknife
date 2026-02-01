@@ -1,7 +1,6 @@
 //! Integration tests for push command using wiremock.
 
 use super::*;
-use crate::commands::gh::issue_agent::commands::IssueArgs;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
     TestSetup, create_comment_file, setup_local_comment, test_dir,
 };
@@ -16,10 +15,8 @@ fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
 
 fn make_args_full(dry_run: bool, force: bool, edit_others: bool, allow_delete: bool) -> PushArgs {
     PushArgs {
-        issue: IssueArgs {
-            issue_number: 123,
-            repo: Some("owner/repo".to_string()),
-        },
+        target: "123".to_string(),
+        repo: Some("owner/repo".to_string()),
         dry_run,
         force,
         edit_others,
@@ -199,10 +196,8 @@ async fn test_remote_changed_force_overrides(test_dir: TempDir) {
 async fn test_invalid_repo_format(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
     let args = PushArgs {
-        issue: IssueArgs {
-            issue_number: 123,
-            repo: Some("invalid-format".to_string()),
-        },
+        target: "123".to_string(),
+        repo: Some("invalid-format".to_string()),
         dry_run: false,
         force: false,
         edit_others: false,
