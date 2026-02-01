@@ -86,8 +86,8 @@ fn status_icon(status: &MergeStatus) -> &'static str {
 }
 
 /// Column widths for table display
-const NAME_WIDTH: usize = 30;
-const BRANCH_WIDTH: usize = 30;
+const NAME_WIDTH: usize = 28;
+const BRANCH_WIDTH: usize = 28;
 
 /// Display all worktrees in a table format (prints to stdout)
 fn display_worktrees_table(to_delete: &[CleanWorktreeInfo], to_keep: &[CleanWorktreeInfo]) {
@@ -103,41 +103,28 @@ fn render_worktrees_table<W: Write>(
     to_delete: &[CleanWorktreeInfo],
     to_keep: &[CleanWorktreeInfo],
 ) -> io::Result<()> {
-    // Print header
+    // Print header (matching cc list format)
     writeln!(
         writer,
-        "  {}  {}  Status",
-        pad_or_truncate("Name", NAME_WIDTH),
-        pad_or_truncate("Branch", BRANCH_WIDTH)
+        "{} {} STATUS",
+        pad_or_truncate("NAME", NAME_WIDTH),
+        pad_or_truncate("BRANCH", BRANCH_WIDTH)
     )?;
-    writeln!(writer, "{}", "─".repeat(NAME_WIDTH + BRANCH_WIDTH + 30))?;
 
     // Combine: to_delete first, then to_keep
     let all_worktrees: Vec<&CleanWorktreeInfo> = to_delete.iter().chain(to_keep.iter()).collect();
 
     for info in all_worktrees {
-        let icon = status_icon(&info.status);
-        let icon_color = if info.status.is_merged() {
-            Some(color::MAGENTA)
-        } else {
-            None
-        };
-        let colored_icon = match icon_color {
-            Some(c) => format!("{c}{icon}{}", color::RESET),
-            None => icon.to_string(),
-        };
-
         let name_cell = pad_or_truncate(&info.wt.name, NAME_WIDTH);
         let branch_cell = pad_or_truncate(&info.wt.branch, BRANCH_WIDTH);
 
+        let icon = status_icon(&info.status);
         let status_text = info.status.reason();
         let status_col = status_color(&info.status);
-        let colored_status = format!("{status_col}{status_text}{}", color::RESET);
+        // Format: icon + colored status (matching cc list format)
+        let colored_status = format!("{status_col}{icon} {status_text}{}", color::RESET);
 
-        writeln!(
-            writer,
-            "{colored_icon} {name_cell}  {branch_cell}  {colored_status}"
-        )?;
+        writeln!(writer, "{name_cell} {branch_cell} {colored_status}")?;
     }
 
     Ok(())
@@ -312,10 +299,7 @@ mod tests {
         // Header only, no data rows
         assert_eq!(
             result,
-            indoc! {"
-                  Name                            Branch                          Status
-                ──────────────────────────────────────────────────────────────────────────────────────────
-            "}
+            "NAME                         BRANCH                       STATUS\n"
         );
     }
 
@@ -327,7 +311,7 @@ mod tests {
             test_repo.path().join(".worktrees/feature-branch"),
             "fohte/feature-branch",
             MergeStatus::Merged {
-                reason: "#123 merged".to_string(),
+                reason: "merged".to_string(),
             },
         )];
 
@@ -338,9 +322,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                  Name                            Branch                          Status
-                ──────────────────────────────────────────────────────────────────────────────────────────
-                \x1b[35m✓\x1b[0m feature-branch                  fohte/feature-branch            \x1b[35m#123 merged\x1b[0m
+                NAME                         BRANCH                       STATUS
+                feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
@@ -353,7 +336,7 @@ mod tests {
             test_repo.path().join(".worktrees/wip-feature"),
             "fohte/wip-feature",
             MergeStatus::NotMerged {
-                reason: "#456 open".to_string(),
+                reason: "open".to_string(),
             },
         )];
 
@@ -361,13 +344,12 @@ mod tests {
         render_worktrees_table(&mut output, &[], &to_keep).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // No checkmark, green color for open PR
+        // Space instead of checkmark, green color for open PR
         assert_eq!(
             result,
             indoc! {"
-                  Name                            Branch                          Status
-                ──────────────────────────────────────────────────────────────────────────────────────────
-                  wip-feature                     fohte/wip-feature               \x1b[32m#456 open\x1b[0m
+                NAME                         BRANCH                       STATUS
+                wip-feature                  fohte/wip-feature            \x1b[32m  open\x1b[0m
             "}
         );
     }
@@ -389,7 +371,7 @@ mod tests {
                 test_repo.path().join(".worktrees/open-pr"),
                 "fohte/open-pr",
                 MergeStatus::NotMerged {
-                    reason: "#789 open".to_string(),
+                    reason: "open".to_string(),
                 },
             ),
             make_clean_info(
@@ -410,11 +392,10 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                  Name                            Branch                          Status
-                ──────────────────────────────────────────────────────────────────────────────────────────
-                \x1b[35m✓\x1b[0m merged-feature                  fohte/merged-feature            \x1b[35mMerged (git)\x1b[0m
-                  open-pr                         fohte/open-pr                   \x1b[32m#789 open\x1b[0m
-                  no-pr                           fohte/no-pr                     \x1b[32mNot merged\x1b[0m
+                NAME                         BRANCH                       STATUS
+                merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                open-pr                      fohte/open-pr                \x1b[32m  open\x1b[0m
+                no-pr                        fohte/no-pr                  \x1b[32m  Not merged\x1b[0m
             "}
         );
     }
@@ -427,7 +408,7 @@ mod tests {
             test_repo.path().join(".worktrees/long"),
             "fohte/this-is-a-very-long-branch-name-that-should-be-truncated",
             MergeStatus::Merged {
-                reason: "#999 merged".to_string(),
+                reason: "merged".to_string(),
             },
         )];
 
@@ -436,14 +417,8 @@ mod tests {
 
         let result = String::from_utf8(output).expect("valid utf8");
         // Names should be truncated with "..."
-        assert_eq!(
-            result,
-            indoc! {"
-                  Name                            Branch                          Status
-                ──────────────────────────────────────────────────────────────────────────────────────────
-                \x1b[35m✓\x1b[0m this-is-a-very-long-worktre...  fohte/this-is-a-very-long-b...  \x1b[35m#999 merged\x1b[0m
-            "}
-        );
+        assert!(result.contains("this-is-a-very-long-workt..."));
+        assert!(result.contains("fohte/this-is-a-very-long..."));
     }
 
     #[test]
@@ -454,7 +429,7 @@ mod tests {
             test_repo.path().join(".worktrees/pr-merged"),
             "fohte/pr-merged",
             MergeStatus::Merged {
-                reason: "#100 merged".to_string(),
+                reason: "merged".to_string(),
             },
         )];
         let to_keep = vec![
@@ -463,7 +438,7 @@ mod tests {
                 test_repo.path().join(".worktrees/pr-open"),
                 "fohte/pr-open",
                 MergeStatus::NotMerged {
-                    reason: "#200 open".to_string(),
+                    reason: "open".to_string(),
                 },
             ),
             make_clean_info(
@@ -471,7 +446,7 @@ mod tests {
                 test_repo.path().join(".worktrees/pr-closed"),
                 "fohte/pr-closed",
                 MergeStatus::NotMerged {
-                    reason: "#300 closed".to_string(),
+                    reason: "closed".to_string(),
                 },
             ),
         ];
@@ -482,8 +457,8 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
 
         // Verify colors: merged=magenta, open=green, closed=red
-        assert!(result.contains("\x1b[35m#100 merged\x1b[0m")); // Magenta
-        assert!(result.contains("\x1b[32m#200 open\x1b[0m")); // Green
-        assert!(result.contains("\x1b[31m#300 closed\x1b[0m")); // Red
+        assert!(result.contains("\x1b[35m✓ merged\x1b[0m")); // Magenta
+        assert!(result.contains("\x1b[32m  open\x1b[0m")); // Green
+        assert!(result.contains("\x1b[31m  closed\x1b[0m")); // Red
     }
 }
