@@ -421,9 +421,13 @@ mod tests {
         render_worktrees_table(&mut output, &to_delete, &[]).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // Names should be truncated with "..."
-        assert!(result.contains("this-is-a-very-long-workt..."));
-        assert!(result.contains("fohte/this-is-a-very-long..."));
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
+            "}
+        );
     }
 
     #[test]
@@ -460,10 +464,14 @@ mod tests {
         render_worktrees_table(&mut output, &to_delete, &to_keep).expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-
-        // Verify colors: merged=magenta, open=green, closed=red
-        assert!(result.contains("\x1b[35m✓ merged\x1b[0m")); // Magenta
-        assert!(result.contains("\x1b[32mopen\x1b[0m")); // Green
-        assert!(result.contains("\x1b[31mclosed\x1b[0m")); // Red
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
+                pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
+                pr-closed                    fohte/pr-closed              \x1b[31mclosed\x1b[0m
+            "}
+        );
     }
 }
