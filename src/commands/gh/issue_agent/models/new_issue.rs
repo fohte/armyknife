@@ -209,70 +209,6 @@ mod tests {
         }
 
         #[rstest]
-        fn test_parse_missing_title() {
-            let content = indoc! {"
-                ---
-                labels: []
-                ---
-
-                Just body without title.
-            "};
-
-            let result = NewIssue::parse(content);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Expected title line"));
-        }
-
-        #[rstest]
-        fn test_parse_empty_title() {
-            let content = indoc! {"
-                ---
-                ---
-
-                #
-
-                Body.
-            "};
-
-            let result = NewIssue::parse(content);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Title cannot be empty"));
-        }
-
-        #[rstest]
-        fn test_parse_unclosed_frontmatter() {
-            let content = indoc! {"
-                ---
-                labels: []
-
-                # Title
-
-                Body.
-            "};
-
-            let result = NewIssue::parse(content);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Unclosed frontmatter"));
-        }
-
-        #[rstest]
-        fn test_parse_invalid_yaml() {
-            let content = indoc! {"
-                ---
-                labels: [unclosed
-                ---
-
-                # Title
-
-                Body.
-            "};
-
-            let result = NewIssue::parse(content);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Failed to parse frontmatter"));
-        }
-
-        #[rstest]
         fn test_parse_inline_labels() {
             let content = indoc! {"
                 ---
@@ -298,35 +234,79 @@ mod tests {
         }
 
         #[rstest]
-        fn test_parse_rejects_h2_heading() {
-            let content = indoc! {"
+        #[case::missing_title(
+            indoc! {"
+                ---
+                labels: []
+                ---
+
+                Just body without title.
+            "},
+            "Expected title line"
+        )]
+        #[case::empty_title(
+            indoc! {"
+                ---
+                ---
+
+                #
+
+                Body.
+            "},
+            "Title cannot be empty"
+        )]
+        #[case::unclosed_frontmatter(
+            indoc! {"
+                ---
+                labels: []
+
+                # Title
+
+                Body.
+            "},
+            "Unclosed frontmatter"
+        )]
+        #[case::invalid_yaml(
+            indoc! {"
+                ---
+                labels: [unclosed
+                ---
+
+                # Title
+
+                Body.
+            "},
+            "Failed to parse frontmatter"
+        )]
+        #[case::h2_heading(
+            indoc! {"
                 ---
                 ---
 
                 ## This is H2 not H1
 
                 Body.
-            "};
-
-            let result = NewIssue::parse(content);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Expected title line"));
-        }
-
-        #[rstest]
-        fn test_parse_rejects_h3_heading() {
-            let content = indoc! {"
+            "},
+            "Expected title line"
+        )]
+        #[case::h3_heading(
+            indoc! {"
                 ---
                 ---
 
                 ### This is H3 not H1
 
                 Body.
-            "};
-
+            "},
+            "Expected title line"
+        )]
+        fn test_parse_errors(#[case] content: &str, #[case] expected_error: &str) {
             let result = NewIssue::parse(content);
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Expected title line"));
+            assert!(
+                result.unwrap_err().contains(expected_error),
+                "Expected error containing '{expected_error}'"
+            );
         }
     }
 }
