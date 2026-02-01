@@ -60,6 +60,16 @@ pub fn run(args: &HookArgs) -> Result<()> {
     // Get TTY from ancestor processes
     let tty = tty::get_tty_from_ancestors();
 
+    // Handle session start by setting pane title for tmux resurrect restoration
+    if event == HookEvent::SessionStart
+        && let Some(ref t) = tty
+        && let Some(pane_info) = tmux::get_pane_info_by_tty(t)
+    {
+        let title = format!("claude:{}", input.session_id);
+        // Ignore errors; pane title is nice-to-have, not critical
+        let _ = tmux::set_pane_title(&pane_info.pane_id, &title);
+    }
+
     // Get tmux info if TTY is available
     let tmux_info = tty.as_ref().and_then(|t| {
         tmux::get_pane_info_by_tty(t).map(|info| TmuxInfo {
@@ -315,7 +325,8 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
             Some("idle_prompt") => SessionStatus::Stopped,
             _ => SessionStatus::Running,
         },
-        HookEvent::UserPromptSubmit
+        HookEvent::SessionStart
+        | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
         | HookEvent::SessionEnd => SessionStatus::Running,
@@ -467,6 +478,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case::session_start(HookEvent::SessionStart, None, SessionStatus::Running)]
     #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
     #[case::pre_tool_use(HookEvent::PreToolUse, None, SessionStatus::Running)]
     #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Running)]
@@ -491,6 +503,10 @@ mod tests {
 
     #[test]
     fn test_hook_event_parsing() {
+        assert_eq!(
+            HookEvent::from_str("session-start").expect("valid event"),
+            HookEvent::SessionStart
+        );
         assert_eq!(
             HookEvent::from_str("user-prompt-submit").expect("valid event"),
             HookEvent::UserPromptSubmit

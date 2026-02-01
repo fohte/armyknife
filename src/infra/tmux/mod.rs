@@ -257,6 +257,24 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
+/// Set the title of a tmux pane.
+/// This does not require being inside tmux, as it targets a specific pane ID.
+pub fn set_pane_title(pane_id: &str, title: &str) -> Result<()> {
+    run_tmux(&["select-pane", "-t", pane_id, "-T", title])
+}
+
+/// Get the current pane's title.
+/// Returns None if not in tmux or if the command fails.
+pub fn get_current_pane_title() -> Option<String> {
+    query_tmux_value("#{pane_title}")
+}
+
+/// Get the current pane's ID (e.g., "%0").
+/// Returns None if not in tmux or if the command fails.
+pub fn current_pane_id() -> Option<String> {
+    query_tmux_value("#{pane_id}")
+}
+
 /// Information about a tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
