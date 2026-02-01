@@ -86,13 +86,11 @@ fn parse_title_and_body(content: &str) -> Result<(String, String), String> {
     let mut body_start_idx = 0;
 
     for line in lines.by_ref() {
-        // Support both "# Title" and "#" (empty title, which will be rejected later)
-        if line.starts_with('#') {
-            let t = line
-                .strip_prefix("# ")
-                .or_else(|| line.strip_prefix("#"))
-                .unwrap_or("");
-            title = Some(t.trim().to_string());
+        // Only accept H1 headers: "# Title" or "#" (empty title, rejected later)
+        // Reject H2/H3 headers like "## Heading" or "### Heading"
+        if line.starts_with("# ") || line == "#" {
+            let t = line.strip_prefix("# ").unwrap_or("").trim().to_string();
+            title = Some(t);
             body_start_idx = content.find(line).unwrap_or(0) + line.len();
             break;
         }
@@ -287,6 +285,36 @@ Body.
                 result.frontmatter.assignees,
                 vec!["user1".to_string(), "user2".to_string()]
             );
+        }
+
+        #[rstest]
+        fn test_parse_rejects_h2_heading() {
+            let content = r#"---
+---
+
+## This is H2 not H1
+
+Body.
+"#;
+
+            let result = NewIssue::parse(content);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Expected title line"));
+        }
+
+        #[rstest]
+        fn test_parse_rejects_h3_heading() {
+            let content = r#"---
+---
+
+### This is H3 not H1
+
+Body.
+"#;
+
+            let result = NewIssue::parse(content);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Expected title line"));
         }
     }
 }

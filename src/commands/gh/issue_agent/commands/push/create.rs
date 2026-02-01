@@ -93,20 +93,16 @@ fn get_repo_from_path_or_arg(path: &Path, repo_arg: &Option<String>) -> anyhow::
 
     // Try to extract owner/repo from path structure:
     // Expected: .../{owner}/{repo}/new/
-    let components: Vec<_> = path.components().collect();
-    if components.len() >= 3 {
-        let last = components[components.len() - 1]
-            .as_os_str()
-            .to_string_lossy();
-        if last == "new" {
-            let repo = components[components.len() - 2]
-                .as_os_str()
-                .to_string_lossy();
-            let owner = components[components.len() - 3]
-                .as_os_str()
-                .to_string_lossy();
-            return Ok(format!("{}/{}", owner, repo));
-        }
+    if path.file_name().is_some_and(|name| name == "new")
+        && let Some(repo_dir) = path.parent()
+        && let (Some(repo_name), Some(owner_name)) = (
+            repo_dir.file_name(),
+            repo_dir.parent().and_then(|p| p.file_name()),
+        )
+    {
+        let repo = repo_name.to_string_lossy();
+        let owner = owner_name.to_string_lossy();
+        return Ok(format!("{}/{}", owner, repo));
     }
 
     anyhow::bail!(
