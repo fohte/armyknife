@@ -11,12 +11,12 @@ use crate::shared::command::find_command_path;
 const PANE_TITLE_PREFIX: &str = "claude:";
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct RestoreArgs {}
+pub struct ResumeArgs {}
 
-/// Runs the restore command.
+/// Runs the resume command.
 /// Reads the current tmux pane title and, if it contains a session ID,
-/// restores that Claude Code session.
-pub fn run(_args: &RestoreArgs) -> Result<()> {
+/// resumes that Claude Code session.
+pub fn run(_args: &ResumeArgs) -> Result<()> {
     let pane_title = tmux::get_current_pane_title()
         .ok_or_else(|| anyhow::anyhow!("Not running inside tmux or could not get pane title"))?;
 

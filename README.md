@@ -138,6 +138,7 @@ Claude Code session monitoring with tmux integration.
 | `hook <event>`       | Record session events (called from Claude Code hooks) |
 | `list`               | List all Claude Code sessions with status             |
 | `focus <session_id>` | Focus on a session's tmux pane                        |
+| `resume`             | Resume a session from tmux pane title after restart   |
 
 #### Setup
 
@@ -146,6 +147,11 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook session-start" }]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -154,23 +160,37 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
       }
     ],
     "PreToolUse": [
-      { "hooks": [{ "type": "command", "command": "a cc hook pre-tool-use" }] }
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook pre-tool-use" }]
+      }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "a cc hook post-tool-use" }] }
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook post-tool-use" }]
+      }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "a cc hook notification" }] }
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook notification" }]
+      }
     ],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "a cc hook stop" }] }],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook stop" }]
+      }
+    ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "a cc hook session-end" }] }
+      {
+        "hooks": [{ "type": "command", "command": "a cc hook session-end" }]
+      }
     ]
   }
 }
 ```
 
 These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
+
+The `SessionStart` hook stores the session ID in the tmux pane title, allowing `a cc resume` to restore the session after a tmux resurrect.
 
 #### Environment Variables
 
