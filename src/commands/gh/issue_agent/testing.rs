@@ -14,9 +14,13 @@
 //! ```
 
 pub mod factories {
-    use chrono::{Duration, Utc};
+    use chrono::{DateTime, Duration, Utc};
 
-    use crate::commands::gh::issue_agent::models::{Author, Comment, Issue, Label};
+    use crate::commands::gh::issue_agent::models::{
+        AssignedEvent, Author, ClosedEvent, Comment, CrossReferenceSource, CrossReferencedEvent,
+        Issue, IssueReference, Label, LabelInfo, LabeledEvent, PullRequestReference, ReopenedEvent,
+        RepositoryOwner, RepositoryReference, TimelineItem, UnassignedEvent, UnlabeledEvent,
+    };
     use crate::commands::gh::issue_agent::storage::{CommentFileMetadata, LocalComment};
 
     // =========================================================================
@@ -124,5 +128,121 @@ pub mod factories {
     /// Create multiple authors (assignees) from a slice of logins.
     pub fn assignees(logins: &[&str]) -> Vec<Author> {
         logins.iter().map(|l| author(l)).collect()
+    }
+
+    // =========================================================================
+    // Timeline Event factories
+    // =========================================================================
+
+    /// Create a default timestamp for timeline events.
+    fn default_event_time() -> DateTime<Utc> {
+        Utc::now() - Duration::minutes(30)
+    }
+
+    /// Create a LabeledEvent with the given parameters.
+    pub fn labeled_event(actor_login: &str, label_name: &str) -> TimelineItem {
+        TimelineItem::LabeledEvent(LabeledEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            label: LabelInfo {
+                name: label_name.to_string(),
+            },
+        })
+    }
+
+    /// Create an UnlabeledEvent with the given parameters.
+    pub fn unlabeled_event(actor_login: &str, label_name: &str) -> TimelineItem {
+        TimelineItem::UnlabeledEvent(UnlabeledEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            label: LabelInfo {
+                name: label_name.to_string(),
+            },
+        })
+    }
+
+    /// Create an AssignedEvent with the given parameters.
+    pub fn assigned_event(actor_login: &str, assignee_login: &str) -> TimelineItem {
+        TimelineItem::AssignedEvent(AssignedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            assignee: Some(author(assignee_login)),
+        })
+    }
+
+    /// Create an UnassignedEvent with the given parameters.
+    pub fn unassigned_event(actor_login: &str, assignee_login: &str) -> TimelineItem {
+        TimelineItem::UnassignedEvent(UnassignedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            assignee: Some(author(assignee_login)),
+        })
+    }
+
+    /// Create a ClosedEvent with the given actor.
+    pub fn closed_event(actor_login: &str) -> TimelineItem {
+        TimelineItem::ClosedEvent(ClosedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+        })
+    }
+
+    /// Create a ReopenedEvent with the given actor.
+    pub fn reopened_event(actor_login: &str) -> TimelineItem {
+        TimelineItem::ReopenedEvent(ReopenedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+        })
+    }
+
+    /// Create a CrossReferencedEvent from a PR.
+    pub fn cross_referenced_pr(
+        actor_login: &str,
+        pr_number: i64,
+        pr_title: &str,
+        repo_owner: &str,
+        repo_name: &str,
+        will_close_target: bool,
+    ) -> TimelineItem {
+        TimelineItem::CrossReferencedEvent(CrossReferencedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            source: CrossReferenceSource::PullRequest(PullRequestReference {
+                number: pr_number,
+                title: pr_title.to_string(),
+                repository: RepositoryReference {
+                    name: repo_name.to_string(),
+                    owner: RepositoryOwner {
+                        login: repo_owner.to_string(),
+                    },
+                },
+            }),
+            will_close_target,
+        })
+    }
+
+    /// Create a CrossReferencedEvent from an Issue.
+    pub fn cross_referenced_issue(
+        actor_login: &str,
+        issue_number: i64,
+        issue_title: &str,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> TimelineItem {
+        TimelineItem::CrossReferencedEvent(CrossReferencedEvent {
+            created_at: default_event_time(),
+            actor: Some(author(actor_login)),
+            source: CrossReferenceSource::Issue(IssueReference {
+                number: issue_number,
+                title: issue_title.to_string(),
+                repository: RepositoryReference {
+                    name: repo_name.to_string(),
+                    owner: RepositoryOwner {
+                        login: repo_owner.to_string(),
+                    },
+                },
+            }),
+            will_close_target: false,
+        })
     }
 }

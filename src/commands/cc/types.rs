@@ -10,6 +10,8 @@ pub struct Session {
     pub session_id: String,
     pub cwd: PathBuf,
     pub transcript_path: Option<PathBuf>,
+    /// TTY device path (legacy field, not used for session lifecycle detection).
+    #[serde(default)]
     pub tty: Option<String>,
     pub tmux_info: Option<TmuxInfo>,
     pub status: SessionStatus,
@@ -91,6 +93,7 @@ pub struct ToolInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
+    SessionStart,
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
@@ -103,6 +106,7 @@ pub enum HookEvent {
 impl HookEvent {
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
+            "session-start" => Ok(Self::SessionStart),
             "user-prompt-submit" => Ok(Self::UserPromptSubmit),
             "pre-tool-use" => Ok(Self::PreToolUse),
             "post-tool-use" => Ok(Self::PostToolUse),

@@ -3,8 +3,8 @@ mod error;
 mod focus;
 mod hook;
 mod list;
+mod resume;
 mod store;
-mod tty;
 mod tui;
 mod types;
 mod watch;
@@ -14,6 +14,7 @@ use clap::Subcommand;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
+pub use resume::ResumeArgs;
 pub use watch::WatchArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -29,6 +30,9 @@ pub enum CcCommands {
 
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
+
+    /// Resume a Claude Code session from tmux pane title
+    Resume(ResumeArgs),
 }
 
 impl CcCommands {
@@ -38,6 +42,7 @@ impl CcCommands {
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,
             Self::Focus(args) => focus::run(args)?,
+            Self::Resume(args) => resume::run(args)?,
         }
         Ok(())
     }

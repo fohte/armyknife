@@ -257,6 +257,37 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
+/// Set the title of a tmux pane.
+/// This does not require being inside tmux, as it targets a specific pane ID.
+pub fn set_pane_title(pane_id: &str, title: &str) -> Result<()> {
+    run_tmux(&["select-pane", "-t", pane_id, "-T", title])
+}
+
+/// Get the current pane's title.
+/// Returns None if not in tmux or if the command fails.
+pub fn get_current_pane_title() -> Option<String> {
+    query_tmux_value("#{pane_title}")
+}
+
+/// Get the current pane's ID (e.g., "%0").
+/// Returns None if not in tmux or if the command fails.
+pub fn current_pane_id() -> Option<String> {
+    query_tmux_value("#{pane_id}")
+}
+
+/// Check if the tmux server is available (running and responsive).
+pub fn is_server_available() -> bool {
+    run_tmux_output(&["list-sessions"]).is_ok()
+}
+
+/// Checks if a tmux pane with the given pane_id exists.
+/// Returns false if pane doesn't exist OR if tmux server is not available.
+/// Caller should check is_server_available() first if distinction matters.
+pub fn is_pane_alive(pane_id: &str) -> bool {
+    // Use list-panes to check if pane exists (returns error if pane not found)
+    run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()
+}
+
 /// Information about a tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
@@ -266,16 +297,50 @@ pub struct PaneInfo {
     pub pane_id: String,
 }
 
-/// Gets tmux pane information for a given TTY device.
-/// Returns None if not running in tmux or if the TTY is not found.
-pub fn get_pane_info_by_tty(tty: &str) -> Option<PaneInfo> {
-    let output = Command::new("tmux")
-        .args([
-            "list-panes",
-            "-a",
-            "-F",
-            "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
-        ])
+/// Gets tmux pane information for a given process ID.
+/// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
+/// Returns None if not running in tmux or if no matching pane is found.
+pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
+    let output = run_tmux_output(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
+    ])
+    .ok()?;
+
+    // Collect all pane PIDs for ancestor matching
+    let pane_pids: std::collections::HashSet<u32> = output
+        .lines()
+        .filter_map(|line| line.split('\t').next()?.parse::<u32>().ok())
+        .collect();
+
+    // Traverse ancestor processes to find one that matches a pane PID
+    let mut current_pid = pid;
+    const MAX_DEPTH: usize = 20;
+
+    for _ in 0..MAX_DEPTH {
+        if pane_pids.contains(&current_pid) {
+            // Found a matching pane, parse the full info
+            return output
+                .lines()
+                .find_map(|line| parse_pane_line_by_pid(line, current_pid));
+        }
+
+        // Get parent PID
+        match get_parent_pid(current_pid) {
+            Some(ppid) if ppid != current_pid && ppid != 0 => current_pid = ppid,
+            _ => break,
+        }
+    }
+
+    None
+}
+
+/// Gets the parent process ID for a given process.
+fn get_parent_pid(pid: u32) -> Option<u32> {
+    let output = Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
         .output()
         .ok()?;
 
@@ -284,17 +349,18 @@ pub fn get_pane_info_by_tty(tty: &str) -> Option<PaneInfo> {
     }
 
     String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| parse_pane_line(line, tty))
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
-/// Parses a single line from tmux list-panes output.
-/// Format: "#{pane_tty}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
-fn parse_pane_line(line: &str, target_tty: &str) -> Option<PaneInfo> {
+/// Parses a single line from tmux list-panes output for PID matching.
+/// Format: "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
+fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
     let mut parts = line.split('\t');
 
-    let pane_tty = parts.next()?;
-    if pane_tty != target_tty {
+    let pane_pid: u32 = parts.next()?.parse().ok()?;
+    if pane_pid != target_pid {
         return None;
     }
 
@@ -403,29 +469,29 @@ mod tests {
 
     #[rstest]
     #[case::standard_line(
-        "/dev/ttys001\tmain\teditor\t0\t%0",
-        "/dev/ttys001",
+        "12345\tmain\teditor\t0\t%0",
+        12345,
         Some(("main", "editor", 0, "%0"))
     )]
-    #[case::different_tty("/dev/ttys002\twork\tterminal\t1\t%5", "/dev/ttys001", None)]
+    #[case::different_pid("12345\twork\tterminal\t1\t%5", 99999, None)]
     #[case::high_window_index(
-        "/dev/pts/0\tsession\twindow\t99\t%123",
-        "/dev/pts/0",
+        "54321\tsession\twindow\t99\t%123",
+        54321,
         Some(("session", "window", 99, "%123"))
     )]
     #[case::session_with_spaces(
-        "/dev/ttys001\tmy session\tmy window\t0\t%0",
-        "/dev/ttys001",
+        "12345\tmy session\tmy window\t0\t%0",
+        12345,
         Some(("my session", "my window", 0, "%0"))
     )]
-    #[case::insufficient_parts("/dev/ttys001\tmain", "/dev/ttys001", None)]
-    #[case::empty_line("", "/dev/ttys001", None)]
-    fn test_parse_pane_line(
+    #[case::insufficient_parts("12345\tmain", 12345, None)]
+    #[case::empty_line("", 12345, None)]
+    fn test_parse_pane_line_by_pid(
         #[case] line: &str,
-        #[case] target_tty: &str,
+        #[case] target_pid: u32,
         #[case] expected: Option<(&str, &str, u32, &str)>,
     ) {
-        let result = parse_pane_line(line, target_tty);
+        let result = parse_pane_line_by_pid(line, target_pid);
 
         match expected {
             Some((session, window, index, pane)) => {

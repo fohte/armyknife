@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.61](https://github.com/fohte/armyknife/compare/v0.1.60...v0.1.61) (2026-02-01)
+
+
+### Features
+
+* **wm:** improve wm clean output with table format ([#194](https://github.com/fohte/armyknife/issues/194)) ([437da86](https://github.com/fohte/armyknife/commit/437da86fae3911f0f108176050f8c13e5771ce7c))
+
+## [0.1.60](https://github.com/fohte/armyknife/compare/v0.1.59...v0.1.60) (2026-02-01)
+
+
+### Features
+
+* **cc:** support session restoration after tmux resurrect ([#191](https://github.com/fohte/armyknife/issues/191)) ([6d4c76e](https://github.com/fohte/armyknife/commit/6d4c76e70959d47432208eb5abc113f731947147))
+
+## [0.1.59](https://github.com/fohte/armyknife/compare/v0.1.58...v0.1.59) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** display timeline events in view command ([#189](https://github.com/fohte/armyknife/issues/189)) ([fd8a75d](https://github.com/fohte/armyknife/commit/fd8a75d59acda77b838c5cd4a28bcc42ee59022c))
+
+## [0.1.58](https://github.com/fohte/armyknife/compare/v0.1.57...v0.1.58) (2026-02-01)
+
+
+### Features
+
+* **gh/issue-agent:** add init subcommand for boilerplate generation ([#188](https://github.com/fohte/armyknife/issues/188)) ([f9489e7](https://github.com/fohte/armyknife/commit/f9489e77087eab60386a5de6d6752172ce32ab8c))
+
+## [0.1.57](https://github.com/fohte/armyknife/compare/v0.1.56...v0.1.57) (2026-02-01)
+
+
+### Bug Fixes
+
+* **cc/watch:** use tmux pane existence check for session lifecycle detection ([#187](https://github.com/fohte/armyknife/issues/187)) ([c481e73](https://github.com/fohte/armyknife/commit/c481e73dc3d9acc4f259b7144fe7195c80accad3))
+
 ## [0.1.56](https://github.com/fohte/armyknife/compare/v0.1.55...v0.1.56) (2026-02-01)
 
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::paths::get_issue_dir;
+use super::paths::{get_issue_dir, get_new_issue_dir};
 
 /// Storage handler for a single GitHub issue.
 ///
@@ -25,6 +25,14 @@ impl IssueStorage {
     pub fn new(repo: &str, issue_number: i64) -> Self {
         Self {
             dir: get_issue_dir(repo, issue_number),
+        }
+    }
+
+    /// Create a new IssueStorage for a new issue (not yet created on GitHub).
+    /// Uses the "new" directory under the repository cache.
+    pub fn new_for_new_issue(repo: &str) -> Self {
+        Self {
+            dir: get_new_issue_dir(repo),
         }
     }
 

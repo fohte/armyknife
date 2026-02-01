@@ -3,11 +3,11 @@ use std::io::{self, Write};
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::claude_sessions;
 use super::store;
 use super::types::{Session, SessionStatus};
+use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
 const SESSION_WIDTH: usize = 16;
@@ -156,11 +156,12 @@ fn format_status(status: SessionStatus) -> String {
     let name = status.display_name();
 
     // Apply padding inside ANSI codes to avoid column misalignment
-    match status {
-        SessionStatus::Running => format!("\x1b[32m{name:<8}\x1b[0m"), // Green
-        SessionStatus::WaitingInput => format!("\x1b[33m{name:<8}\x1b[0m"), // Yellow
-        SessionStatus::Stopped => format!("\x1b[90m{name:<8}\x1b[0m"), // Gray
-    }
+    let (col, reset) = match status {
+        SessionStatus::Running => (color::GREEN, color::RESET),
+        SessionStatus::WaitingInput => (color::YELLOW, color::RESET),
+        SessionStatus::Stopped => (color::GRAY, color::RESET),
+    };
+    format!("{col}{name:<8}{reset}")
 }
 
 /// Formats a datetime as a relative time string from a given reference time.
@@ -187,45 +188,6 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
     }
 }
 
-/// Pads or truncates a string to exactly the specified display width.
-/// Uses unicode display width for proper alignment with CJK characters.
-fn pad_or_truncate(s: &str, width: usize) -> String {
-    let display_width = s.width();
-
-    if display_width <= width {
-        // Pad with spaces to reach target width
-        let padding = width - display_width;
-        format!("{}{}", s, " ".repeat(padding))
-    } else if width < 3 {
-        // Too short for ellipsis, just truncate
-        truncate_to_width(s, width)
-    } else {
-        // Truncate and add ellipsis
-        let truncated = truncate_to_width(s, width - 3);
-        let truncated_width = truncated.width();
-        // Use saturating_sub to avoid underflow when CJK chars cause width mismatch
-        let padding = width.saturating_sub(truncated_width).saturating_sub(3);
-        format!("{}...{}", truncated, " ".repeat(padding))
-    }
-}
-
-/// Truncates a string to fit within the specified display width.
-fn truncate_to_width(s: &str, max_width: usize) -> String {
-    let mut result = String::new();
-    let mut current_width = 0;
-
-    for c in s.chars() {
-        let char_width = c.width().unwrap_or(0);
-        if current_width + char_width > max_width {
-            break;
-        }
-        result.push(c);
-        current_width += char_width;
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,7 +202,7 @@ mod tests {
             session_id: "test-123".to_string(),
             cwd: PathBuf::from("/home/user/projects/myproject"),
             transcript_path: None,
-            tty: Some("/dev/ttys001".to_string()),
+            tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
@@ -299,22 +261,6 @@ mod tests {
         let now = Utc::now();
         let dt = now - Duration::seconds(seconds_ago);
         assert_eq!(format_relative_time(dt, now), expected);
-    }
-
-    #[rstest]
-    #[case::short("hello", 10, "hello     ")]
-    #[case::exact("hello", 5, "hello")]
-    #[case::truncate("hello world", 8, "hello...")]
-    #[case::truncate_short("hello", 4, "h...")]
-    #[case::max_len_3("hello", 3, "...")]
-    #[case::max_len_2("hello", 2, "he")]
-    #[case::max_len_1("hello", 1, "h")]
-    #[case::max_len_0("hello", 0, "")]
-    #[case::cjk_short("日本語", 10, "日本語    ")]
-    #[case::cjk_exact("日本語", 6, "日本語")]
-    #[case::cjk_truncate("日本語テスト", 8, "日本... ")]
-    fn test_pad_or_truncate(#[case] input: &str, #[case] width: usize, #[case] expected: &str) {
-        assert_eq!(pad_or_truncate(input, width), expected);
     }
 
     #[test]
@@ -583,7 +529,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: PathBuf::from("/home/user/webapp"),
                 transcript_path: None,
-                tty: Some("/dev/ttys001".to_string()),
+                tty: None,
                 tmux_info: Some(TmuxInfo {
                     session_name: "webapp".to_string(),
                     window_name: "dev".to_string(),
@@ -600,7 +546,7 @@ mod tests {
                 session_id: "s2".to_string(),
                 cwd: PathBuf::from("/home/user/api"),
                 transcript_path: None,
-                tty: Some("/dev/ttys002".to_string()),
+                tty: None,
                 tmux_info: Some(TmuxInfo {
                     session_name: "api".to_string(),
                     window_name: "test".to_string(),

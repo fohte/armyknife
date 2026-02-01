@@ -24,6 +24,12 @@ pub fn get_issue_dir(repo: &str, issue_number: i64) -> PathBuf {
     get_cache_dir().join(repo).join(issue_number.to_string())
 }
 
+/// Returns the directory path for a new issue (not yet created on GitHub).
+/// Format: <cache_dir>/<owner>/<repo>/new
+pub fn get_new_issue_dir(repo: &str) -> PathBuf {
+    get_cache_dir().join(repo).join("new")
+}
+
 #[cfg(test)]
 /// Internal function for testability.
 fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i64) -> PathBuf {
@@ -31,6 +37,7 @@ fn get_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str, issue_number: i6
 }
 
 #[cfg(test)]
+/// Internal function for testability.
 fn get_new_issue_dir_with_cache_dir(cache_dir: PathBuf, repo: &str) -> PathBuf {
     cache_dir.join(repo).join("new")
 }
