@@ -70,13 +70,8 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 fn status_color(status: &MergeStatus) -> &'static str {
     match status {
         MergeStatus::Merged { .. } => color::MAGENTA, // Purple for merged
-        MergeStatus::NotMerged { reason } => {
-            if reason.contains("closed") {
-                color::RED // Red for closed PR (not merged)
-            } else {
-                color::GREEN // Green for open PR or not merged
-            }
-        }
+        MergeStatus::Closed { .. } => color::RED,     // Red for closed PR (not merged)
+        MergeStatus::NotMerged { .. } => color::GREEN, // Green for open PR or not merged
     }
 }
 
@@ -112,9 +107,7 @@ fn render_worktrees_table<W: Write>(
     )?;
 
     // Combine: to_delete first, then to_keep
-    let all_worktrees: Vec<&CleanWorktreeInfo> = to_delete.iter().chain(to_keep.iter()).collect();
-
-    for info in all_worktrees {
+    for info in to_delete.iter().chain(to_keep.iter()) {
         let name_cell = pad_or_truncate(&info.wt.name, NAME_WIDTH);
         let branch_cell = pad_or_truncate(&info.wt.branch, BRANCH_WIDTH);
 
@@ -286,7 +279,7 @@ mod tests {
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, color::MAGENTA)]
     #[case::open_pr(MergeStatus::NotMerged { reason: "open".to_string() }, color::GREEN)]
     #[case::not_merged(MergeStatus::NotMerged { reason: "Not merged".to_string() }, color::GREEN)]
-    #[case::closed_pr(MergeStatus::NotMerged { reason: "closed".to_string() }, color::RED)]
+    #[case::closed_pr(MergeStatus::Closed { reason: "closed".to_string() }, color::RED)]
     fn test_status_color(#[case] status: MergeStatus, #[case] expected: &str) {
         assert_eq!(status_color(&status), expected);
     }
@@ -454,7 +447,7 @@ mod tests {
                 "pr-closed",
                 test_repo.path().join(".worktrees/pr-closed"),
                 "fohte/pr-closed",
-                MergeStatus::NotMerged {
+                MergeStatus::Closed {
                     reason: "closed".to_string(),
                 },
             ),
