@@ -10,7 +10,6 @@ use lazy_regex::regex_replace_all;
 
 use super::claude_sessions;
 use super::error::CcError;
-use super::process;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
@@ -57,17 +56,12 @@ pub fn run(args: &HookArgs) -> Result<()> {
         return store::delete_session(&input.session_id);
     }
 
-    // Get Claude Code process PID from ancestor processes
-    let pid = process::get_claude_pid_from_ancestors();
-
-    // Get tmux info from PID
-    let tmux_info = pid.and_then(|p| {
-        tmux::get_pane_info_by_pid(p).map(|info| TmuxInfo {
-            session_name: info.session_name,
-            window_name: info.window_name,
-            window_index: info.window_index,
-            pane_id: info.pane_id,
-        })
+    // Get tmux info by finding the pane that contains this process
+    let tmux_info = tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
+        session_name: info.session_name,
+        window_name: info.window_name,
+        window_index: info.window_index,
+        pane_id: info.pane_id,
     });
 
     // Determine status based on event
@@ -79,7 +73,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         session_id: input.session_id.clone(),
         cwd: input.cwd.clone(),
         transcript_path: input.transcript_path.clone(),
-        pid,
+        tty: None,
         tmux_info: tmux_info.clone(),
         status,
         created_at: now,
@@ -93,10 +87,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     session.updated_at = now;
     session.status = status;
 
-    // Update PID and tmux info if available
-    if pid.is_some() {
-        session.pid = pid;
-    }
+    // Update tmux info if available
     if tmux_info.is_some() {
         session.tmux_info = tmux_info;
     }
@@ -657,7 +648,7 @@ mod tests {
             session_id: "test-123".to_string(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
-            pid: None,
+            tty: None,
             tmux_info,
             status: SessionStatus::Running,
             created_at: Utc::now(),

@@ -3,7 +3,6 @@ mod error;
 mod focus;
 mod hook;
 mod list;
-mod process;
 mod store;
 mod tui;
 mod types;

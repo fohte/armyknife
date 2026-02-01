@@ -257,6 +257,15 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
+/// Checks if a tmux pane with the given pane_id exists.
+pub fn is_pane_alive(pane_id: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", pane_id])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 /// Information about a tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {

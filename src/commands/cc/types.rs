@@ -10,9 +10,9 @@ pub struct Session {
     pub session_id: String,
     pub cwd: PathBuf,
     pub transcript_path: Option<PathBuf>,
-    /// Process ID of the Claude Code process for session lifecycle management.
+    /// TTY device path (legacy field, not used for session lifecycle detection).
     #[serde(default)]
-    pub pid: Option<u32>,
+    pub tty: Option<String>,
     pub tmux_info: Option<TmuxInfo>,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,

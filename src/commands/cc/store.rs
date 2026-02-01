@@ -6,8 +6,8 @@ use std::time::Duration;
 use anyhow::Result;
 
 use super::error::CcError;
-use super::process;
 use super::types::Session;
+use crate::infra::tmux;
 use crate::shared::cache;
 
 /// Lock timeout for file operations.
@@ -217,9 +217,8 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 
 /// Removes stale sessions from disk.
 ///
-/// A session is considered stale and removed if:
-/// 1. Its PID is set but the process is no longer alive
-/// 2. Its PID is not set (abnormal termination - hook never received PID info)
+/// A session is considered stale and removed if its tmux pane no longer exists.
+/// Sessions without tmux_info are kept (they may be running outside tmux).
 pub fn cleanup_stale_sessions() -> Result<()> {
     let dir = sessions_dir()?;
 
@@ -243,11 +242,11 @@ pub fn cleanup_stale_sessions() -> Result<()> {
             continue;
         };
 
-        let should_remove = match session.pid {
-            // PID is set but process is no longer alive -> session ended
-            Some(pid) => !process::is_process_alive(pid),
-            // PID is not set -> abnormal termination or legacy session
-            None => true,
+        let should_remove = match &session.tmux_info {
+            // tmux pane is set but no longer exists -> session ended
+            Some(info) => !tmux::is_pane_alive(&info.pane_id),
+            // No tmux info -> keep session (may be running outside tmux)
+            None => false,
         };
 
         if should_remove {
@@ -273,7 +272,7 @@ mod tests {
             session_id: id.to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
-            pid: Some(std::process::id()),
+            tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
             created_at: Utc::now(),
@@ -444,6 +443,7 @@ mod tests {
 
     mod cleanup_stale_sessions_tests {
         use super::*;
+        use crate::commands::cc::types::TmuxInfo;
         use rstest::rstest;
 
         /// Helper to create a unique session ID and ensure cache dir exists.
@@ -464,43 +464,17 @@ mod tests {
         }
 
         #[rstest]
-        fn removes_session_with_dead_pid() {
-            let (session_id, path) = setup_session("dead-pid");
+        fn removes_session_with_nonexistent_pane() {
+            let (session_id, path) = setup_session("dead-pane");
 
-            // Create session with a PID that doesn't exist (99999999 is unlikely to exist)
+            // Create session with a pane_id that doesn't exist
             let mut session = create_test_session(&session_id);
-            session.pid = Some(99999999);
-            save_session(&session).expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
-
-            cleanup_stale_sessions().expect("cleanup should succeed");
-
-            assert!(!path.exists(), "session with dead PID should be removed");
-        }
-
-        #[rstest]
-        fn keeps_session_with_alive_pid() {
-            let (session_id, path) = setup_session("alive-pid");
-
-            // Create session with current process PID (always alive)
-            let mut session = create_test_session(&session_id);
-            session.pid = Some(std::process::id());
-            save_session(&session).expect("save should succeed");
-
-            cleanup_stale_sessions().expect("cleanup should succeed");
-
-            assert!(path.exists(), "session with alive PID should be kept");
-
-            cleanup_session(&session_id);
-        }
-
-        #[rstest]
-        fn removes_session_without_pid() {
-            let (session_id, path) = setup_session("no-pid");
-
-            // Create session without PID (abnormal termination or legacy session)
-            let mut session = create_test_session(&session_id);
-            session.pid = None;
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "nonexistent".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%99999".to_string(),
+            });
             save_session(&session).expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
@@ -508,17 +482,38 @@ mod tests {
 
             assert!(
                 !path.exists(),
-                "session without PID should be removed (abnormal termination)"
+                "session with nonexistent pane should be removed"
             );
+        }
+
+        #[rstest]
+        fn keeps_session_without_tmux_info() {
+            let (session_id, path) = setup_session("no-tmux");
+
+            // Create session without tmux_info (may be running outside tmux)
+            let mut session = create_test_session(&session_id);
+            session.tmux_info = None;
+            save_session(&session).expect("save should succeed");
+
+            cleanup_stale_sessions().expect("cleanup should succeed");
+
+            assert!(path.exists(), "session without tmux_info should be kept");
+
+            cleanup_session(&session_id);
         }
 
         #[rstest]
         fn also_removes_lock_file() {
             let (session_id, path) = setup_session("with-lock");
 
-            // Create session with dead PID
+            // Create session with nonexistent pane
             let mut session = create_test_session(&session_id);
-            session.pid = Some(99999999);
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "nonexistent".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%99999".to_string(),
+            });
             save_session(&session).expect("save should succeed");
 
             let lock_path = path.with_extension("json.lock");
