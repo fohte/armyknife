@@ -2,7 +2,7 @@
 
 use clap::{Args, Subcommand};
 
-use super::common::get_repo_from_arg_or_git;
+use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 
 /// Arguments for the init command.
@@ -56,6 +56,8 @@ pub fn run(args: &InitArgs) -> anyhow::Result<()> {
 /// Initialize a new issue boilerplate file.
 fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
+    // Validate repo format to prevent path traversal
+    let _ = parse_repo(&repo)?;
     let storage = IssueStorage::new_for_new_issue(&repo);
 
     let path = storage.init_new_issue()?;
@@ -70,10 +72,35 @@ fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validate comment name to prevent path traversal.
+fn validate_comment_name(name: &str) -> anyhow::Result<()> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        anyhow::bail!("Invalid comment name: must not contain '/', '\\', or '..'");
+    }
+    Ok(())
+}
+
 /// Initialize a new comment boilerplate file.
 fn run_init_comment(args: &InitCommentArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
+    // Validate repo format to prevent path traversal
+    let _ = parse_repo(&repo)?;
+
+    // Validate comment name if provided
+    if let Some(name) = &args.name {
+        validate_comment_name(name)?;
+    }
+
     let storage = IssueStorage::new(&repo, args.issue_number as i64);
+
+    // Check if issue exists locally
+    if !storage.dir().exists() {
+        anyhow::bail!(
+            "Issue #{} not found locally. Run 'a gh issue-agent pull {}' first.",
+            args.issue_number,
+            args.issue_number
+        );
+    }
 
     let path = storage.init_new_comment(args.name.as_deref())?;
 
