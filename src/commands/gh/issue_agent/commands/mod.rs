@@ -1,5 +1,6 @@
 mod common;
 mod diff;
+mod init;
 mod pull;
 pub(crate) mod push;
 #[cfg(test)]
@@ -10,6 +11,8 @@ use clap::Args;
 
 pub use diff::DiffArgs;
 pub use diff::run as run_diff;
+pub use init::InitArgs;
+pub use init::run as run_init;
 pub use pull::PullArgs;
 pub use pull::run as run_pull;
 pub use push::PushArgs;
