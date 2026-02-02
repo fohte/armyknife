@@ -5,6 +5,10 @@ use std::path::PathBuf;
 
 use super::error::CcError;
 
+/// Tmux user option name for storing Claude Code session ID.
+/// User options in tmux are prefixed with '@' and persist until explicitly unset.
+pub const TMUX_SESSION_OPTION: &str = "@armyknife-session-id";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,

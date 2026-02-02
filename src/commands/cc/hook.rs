@@ -11,7 +11,7 @@ use lazy_regex::regex_replace_all;
 use super::claude_sessions;
 use super::error::CcError;
 use super::store;
-use super::types::{HookEvent, HookInput, Session, SessionStatus, TmuxInfo};
+use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -51,21 +51,20 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
-    // Handle session end by clearing pane title and deleting the session file
+    // Handle session end by clearing pane option and deleting the session file
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
-            let _ = tmux::set_pane_title(&pane_info.pane_id, "");
+            let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
         return store::delete_session(&input.session_id);
     }
 
-    // Handle session start by setting pane title for tmux resurrect restoration
+    // Handle session start by setting pane option for session tracking
     if event == HookEvent::SessionStart
         && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
     {
-        let title = format!("claude:{}", input.session_id);
-        // Ignore errors; pane title is nice-to-have, not critical
-        let _ = tmux::set_pane_title(&pane_info.pane_id, &title);
+        // Ignore errors; pane option is nice-to-have, not critical
+        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
     }
 
     // Get tmux info by finding the pane that contains this process
