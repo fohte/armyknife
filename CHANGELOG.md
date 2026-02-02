@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.67](https://github.com/fohte/armyknife/compare/v0.1.66...v0.1.67) (2026-02-02)
+
+
+### Performance Improvements
+
+* **cc/watch:** improve performance during hook invocations ([#207](https://github.com/fohte/armyknife/issues/207)) ([bfcfbb4](https://github.com/fohte/armyknife/commit/bfcfbb47e3ff65336d5b0b7e60fccfaf34700792))
+
 ## [0.1.66](https://github.com/fohte/armyknife/compare/v0.1.65...v0.1.66) (2026-02-02)
 
 
