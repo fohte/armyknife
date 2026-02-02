@@ -3,7 +3,9 @@
 use clap::{Args, Subcommand};
 
 use super::common::{get_repo_from_arg_or_git, parse_repo};
+use crate::commands::gh::issue_agent::models::IssueTemplate;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
+use crate::infra::github::OctocrabClient;
 
 /// Arguments for the init command.
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -28,6 +30,18 @@ pub struct InitIssueArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long)]
     pub repo: Option<String>,
+
+    /// Use a specific issue template by name
+    #[arg(long)]
+    pub template: Option<String>,
+
+    /// Do not use any issue template (use default boilerplate)
+    #[arg(long, conflicts_with = "template")]
+    pub no_template: bool,
+
+    /// List available issue templates and exit
+    #[arg(long)]
+    pub list_templates: bool,
 }
 
 /// Arguments for `init comment`.
@@ -46,29 +60,146 @@ pub struct InitCommentArgs {
 }
 
 /// Run the init command.
-pub fn run(args: &InitArgs) -> anyhow::Result<()> {
+pub async fn run(args: &InitArgs) -> anyhow::Result<()> {
     match &args.command {
-        InitCommands::Issue(issue_args) => run_init_issue(issue_args),
+        InitCommands::Issue(issue_args) => run_init_issue(issue_args).await,
         InitCommands::Comment(comment_args) => run_init_comment(comment_args),
     }
 }
 
 /// Initialize a new issue boilerplate file.
-fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
+async fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
-    let _ = parse_repo(&repo)?;
+    let (owner, repo_name) = parse_repo(&repo)?;
+
+    // Handle --list-templates
+    if args.list_templates {
+        return list_templates(&owner, &repo_name).await;
+    }
+
+    // Determine which template to use
+    let template = if args.no_template {
+        None
+    } else {
+        fetch_and_select_template(&owner, &repo_name, args.template.as_deref()).await?
+    };
+
     let storage = IssueStorage::new_for_new_issue(&repo);
-    run_init_issue_with_storage(&storage)
+    run_init_issue_with_storage(&storage, template.as_ref())
 }
 
-fn run_init_issue_with_storage(storage: &IssueStorage) -> anyhow::Result<()> {
-    let path = storage.init_new_issue()?;
+/// List available issue templates and exit.
+async fn list_templates(owner: &str, repo: &str) -> anyhow::Result<()> {
+    let templates = fetch_templates_with_fallback(owner, repo).await;
+
+    if templates.is_empty() {
+        eprintln!("No issue templates found for {}/{}", owner, repo);
+    } else {
+        eprintln!("Available issue templates for {}/{}:", owner, repo);
+        for t in &templates {
+            let about = t.about.as_deref().unwrap_or("");
+            if about.is_empty() {
+                eprintln!("  - {}", t.name);
+            } else {
+                eprintln!("  - {} - {}", t.name, about);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fetch templates from GitHub API, with graceful fallback on error.
+async fn fetch_templates_with_fallback(owner: &str, repo: &str) -> Vec<IssueTemplate> {
+    let client = match OctocrabClient::get() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: Failed to initialize GitHub client: {}", e);
+            return vec![];
+        }
+    };
+
+    match client.get_issue_templates(owner, repo).await {
+        Ok(templates) => templates,
+        Err(e) => {
+            eprintln!("Warning: Failed to fetch issue templates: {}", e);
+            vec![]
+        }
+    }
+}
+
+/// Fetch and select a template based on the provided options.
+///
+/// Returns:
+/// - `Ok(Some(template))` if a template should be used
+/// - `Ok(None)` if no template should be used (fallback to default)
+/// - `Err(...)` if the user needs to make a choice or template not found
+async fn fetch_and_select_template(
+    owner: &str,
+    repo: &str,
+    requested_name: Option<&str>,
+) -> anyhow::Result<Option<IssueTemplate>> {
+    let templates = fetch_templates_with_fallback(owner, repo).await;
+
+    match (templates.len(), requested_name) {
+        // No templates available - use default
+        (0, _) => Ok(None),
+
+        // Specific template requested
+        (_, Some(name)) => {
+            let available: Vec<String> = templates.iter().map(|t| t.name.clone()).collect();
+            templates
+                .into_iter()
+                .find(|t| t.name == name)
+                .map(Some)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Template '{}' not found. Available templates: {}",
+                        name,
+                        available.join(", ")
+                    )
+                })
+        }
+
+        // Single template - auto-select
+        (1, None) => {
+            // SAFETY: We know templates.len() == 1 from the match arm
+            if let Some(template) = templates.into_iter().next() {
+                eprintln!("Using template: {}", template.name);
+                Ok(Some(template))
+            } else {
+                // This branch is unreachable due to the match guard, but required for exhaustiveness
+                Ok(None)
+            }
+        }
+
+        // Multiple templates - require explicit choice
+        (n, None) => {
+            eprintln!("Multiple issue templates found ({}):", n);
+            for t in &templates {
+                let about = t.about.as_deref().unwrap_or("");
+                if about.is_empty() {
+                    eprintln!("  - {}", t.name);
+                } else {
+                    eprintln!("  - {} - {}", t.name, about);
+                }
+            }
+            anyhow::bail!(
+                "Use --template <NAME> to select a template, or --no-template to use the default boilerplate."
+            )
+        }
+    }
+}
+
+fn run_init_issue_with_storage(
+    storage: &IssueStorage,
+    template: Option<&IssueTemplate>,
+) -> anyhow::Result<()> {
+    let path = storage.init_new_issue(template)?;
 
     eprintln!("Created: {}", path.display());
     eprintln!();
-    eprintln!("Edit the file, then create the issue on GitHub.");
-    eprintln!("Note: Pushing new issues is not yet supported.");
+    eprintln!("Edit the file, then run: a gh issue-agent push new");
 
     Ok(())
 }
@@ -132,11 +263,11 @@ mod tests {
         use super::*;
 
         #[rstest]
-        fn test_creates_issue_file_with_template() {
+        fn test_creates_issue_file_with_default_template() {
             let dir = tempfile::tempdir().unwrap();
             let storage = IssueStorage::from_dir(dir.path());
 
-            let result = run_init_issue_with_storage(&storage);
+            let result = run_init_issue_with_storage(&storage, None);
             assert!(result.is_ok());
 
             let path = dir.path().join("issue.md");
@@ -150,15 +281,42 @@ mod tests {
         }
 
         #[rstest]
+        fn test_creates_issue_file_with_custom_template() {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(dir.path());
+
+            let template = IssueTemplate {
+                name: "Bug Report".to_string(),
+                title: Some("Bug: ".to_string()),
+                body: Some("Describe the bug".to_string()),
+                about: None,
+                filename: None,
+                labels: vec!["bug".to_string()],
+                assignees: vec![],
+            };
+
+            let result = run_init_issue_with_storage(&storage, Some(&template));
+            assert!(result.is_ok());
+
+            let path = dir.path().join("issue.md");
+            assert!(path.exists());
+
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("labels: [bug]"));
+            assert!(content.contains("# Bug: "));
+            assert!(content.contains("Describe the bug"));
+        }
+
+        #[rstest]
         fn test_returns_error_if_file_exists() {
             let dir = tempfile::tempdir().unwrap();
             let storage = IssueStorage::from_dir(dir.path());
 
             // Create file first
-            run_init_issue_with_storage(&storage).unwrap();
+            run_init_issue_with_storage(&storage, None).unwrap();
 
             // Second call should fail
-            let result = run_init_issue_with_storage(&storage);
+            let result = run_init_issue_with_storage(&storage, None);
             assert!(result.is_err());
             let err = result.unwrap_err();
             let expected = format!(
@@ -284,12 +442,16 @@ mod tests {
         use super::*;
 
         #[rstest]
-        fn test_rejects_invalid_repo_format() {
+        #[tokio::test]
+        async fn test_rejects_invalid_repo_format() {
             let args = InitIssueArgs {
                 repo: Some("invalid-repo-format".to_string()),
+                template: None,
+                no_template: false,
+                list_templates: false,
             };
 
-            let result = run_init_issue(&args);
+            let result = run_init_issue(&args).await;
             assert!(result.is_err());
             // parse_repo should reject repo without '/'
         }

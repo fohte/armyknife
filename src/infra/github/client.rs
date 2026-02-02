@@ -510,6 +510,120 @@ impl OctocrabClient {
 
         Ok(all_events)
     }
+
+    // ============ Issue Template Operations ============
+
+    /// Get issue templates for a repository using GraphQL.
+    ///
+    /// Returns all issue templates configured in the repository's
+    /// `.github/ISSUE_TEMPLATE/` directory.
+    pub async fn get_issue_templates(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<crate::commands::gh::issue_agent::models::IssueTemplate>> {
+        #[derive(Debug, Deserialize)]
+        struct GetIssueTemplatesData {
+            repository: Option<RepositoryData>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RepositoryData {
+            issue_templates: Option<Vec<GraphQLIssueTemplate>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLIssueTemplate {
+            name: String,
+            title: Option<String>,
+            body: Option<String>,
+            about: Option<String>,
+            filename: Option<String>,
+            labels: Option<LabelsConnection>,
+            assignees: Option<AssigneesConnection>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelsConnection {
+            nodes: Option<Vec<LabelNode>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelNode {
+            name: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneesConnection {
+            nodes: Option<Vec<AssigneeNode>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneeNode {
+            login: String,
+        }
+
+        const GET_ISSUE_TEMPLATES_QUERY: &str = indoc! {"
+            query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) {
+                    issueTemplates {
+                        name
+                        title
+                        body
+                        about
+                        filename
+                        labels(first: 10) {
+                            nodes { name }
+                        }
+                        assignees(first: 10) {
+                            nodes { login }
+                        }
+                    }
+                }
+            }
+        "};
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo,
+        });
+
+        let response: GetIssueTemplatesData =
+            self.graphql(GET_ISSUE_TEMPLATES_QUERY, variables).await?;
+
+        let templates = response
+            .repository
+            .and_then(|r| r.issue_templates)
+            .unwrap_or_default()
+            .into_iter()
+            .map(
+                |t| crate::commands::gh::issue_agent::models::IssueTemplate {
+                    name: t.name,
+                    title: t.title,
+                    body: t.body,
+                    about: t.about,
+                    filename: t.filename,
+                    labels: t
+                        .labels
+                        .and_then(|l| l.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|n| n.name)
+                        .collect(),
+                    assignees: t
+                        .assignees
+                        .and_then(|a| a.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|n| n.login)
+                        .collect(),
+                },
+            )
+            .collect();
+
+        Ok(templates)
+    }
 }
 
 /// Get GitHub token from `gh auth token` command.

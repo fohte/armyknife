@@ -7,6 +7,7 @@ use chrono::Local;
 
 use super::error::{Result, StorageError};
 use super::issue_storage::IssueStorage;
+use crate::commands::gh::issue_agent::models::IssueTemplate;
 
 /// Default content for a new issue file.
 const NEW_ISSUE_TEMPLATE: &str = r#"---
@@ -26,16 +27,22 @@ impl IssueStorage {
     /// Initialize a new issue boilerplate file.
     ///
     /// Creates the issue.md file with frontmatter template in the "new" directory.
+    /// If a template is provided, uses its content; otherwise uses the default template.
     /// Returns an error if the file already exists.
-    pub fn init_new_issue(&self) -> Result<PathBuf> {
+    pub fn init_new_issue(&self, template: Option<&IssueTemplate>) -> Result<PathBuf> {
         let issue_path = self.dir.join("issue.md");
 
         if issue_path.exists() {
             return Err(StorageError::FileAlreadyExists(issue_path));
         }
 
+        let content = match template {
+            Some(t) => t.to_issue_content(),
+            None => NEW_ISSUE_TEMPLATE.to_string(),
+        };
+
         fs::create_dir_all(&self.dir)?;
-        fs::write(&issue_path, NEW_ISSUE_TEMPLATE)?;
+        fs::write(&issue_path, content)?;
 
         Ok(issue_path)
     }
@@ -76,11 +83,11 @@ mod tests {
     use std::fs;
 
     #[rstest]
-    fn test_init_new_issue_creates_file() {
+    fn test_init_new_issue_creates_file_with_default_template() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
 
-        let result = storage.init_new_issue();
+        let result = storage.init_new_issue(None);
         assert!(result.is_ok());
 
         let path = result.unwrap();
@@ -95,6 +102,34 @@ mod tests {
     }
 
     #[rstest]
+    fn test_init_new_issue_creates_file_with_custom_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+
+        let template = IssueTemplate {
+            name: "Bug Report".to_string(),
+            title: Some("Bug: ".to_string()),
+            body: Some("Describe the bug here".to_string()),
+            about: None,
+            filename: None,
+            labels: vec!["bug".to_string(), "needs-triage".to_string()],
+            assignees: vec!["alice".to_string()],
+        };
+
+        let result = storage.init_new_issue(Some(&template));
+        assert!(result.is_ok());
+
+        let path = result.unwrap();
+        assert!(path.exists());
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("labels: [bug, needs-triage]"));
+        assert!(content.contains("assignees: [alice]"));
+        assert!(content.contains("# Bug: "));
+        assert!(content.contains("Describe the bug here"));
+    }
+
+    #[rstest]
     fn test_init_new_issue_returns_error_if_exists() {
         let dir = tempfile::tempdir().unwrap();
         let storage = IssueStorage::from_dir(dir.path());
@@ -103,7 +138,7 @@ mod tests {
         fs::create_dir_all(dir.path()).unwrap();
         fs::write(dir.path().join("issue.md"), "existing content").unwrap();
 
-        let result = storage.init_new_issue();
+        let result = storage.init_new_issue(None);
         assert!(result.is_err());
 
         let err = result.unwrap_err();

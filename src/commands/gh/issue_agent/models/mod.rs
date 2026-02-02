@@ -1,6 +1,7 @@
 mod author;
 mod comment;
 mod issue;
+mod issue_template;
 mod metadata;
 mod new_issue;
 mod timeline_event;
@@ -10,6 +11,7 @@ pub use comment::Comment;
 pub use issue::Issue;
 #[cfg(test)]
 pub use issue::Label;
+pub use issue_template::IssueTemplate;
 #[cfg(test)]
 pub use metadata::ReadonlyMetadata;
 pub use metadata::{IssueFrontmatter, IssueMetadata};
