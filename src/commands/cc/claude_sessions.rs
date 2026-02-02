@@ -332,7 +332,7 @@ fn read_last_assistant_message_reverse(file: &File) -> Option<String> {
     while read_size <= MAX_READ_SIZE {
         let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
 
-        if let Some(text) = try_read_last_lines(file, actual_read) {
+        if let Some(text) = try_read_last_lines(file, actual_read, file_size) {
             return Some(text);
         }
 
@@ -344,7 +344,7 @@ fn read_last_assistant_message_reverse(file: &File) -> Option<String> {
 }
 
 /// Attempts to read the last lines from a file and find an assistant text message.
-fn try_read_last_lines(file: &File, read_size: usize) -> Option<String> {
+fn try_read_last_lines(file: &File, read_size: usize, file_size: u64) -> Option<String> {
     let mut reader = BufReader::new(file);
 
     // Seek to near the end
@@ -356,9 +356,14 @@ fn try_read_last_lines(file: &File, read_size: usize) -> Option<String> {
     // Find the last complete lines by locating newlines
     let content = String::from_utf8_lossy(&buffer);
 
-    // Skip the first line as it might be partial (cut at arbitrary byte boundary)
-    let first_newline = content.find('\n')?;
-    let complete_content = &content[first_newline + 1..];
+    // Skip the first line only when reading from middle of file (might be partial).
+    // When read_size >= file_size, we're reading from the start, so all lines are complete.
+    let complete_content = if read_size as u64 >= file_size {
+        &content[..]
+    } else {
+        let first_newline = content.find('\n')?;
+        &content[first_newline + 1..]
+    };
 
     // Collect lines and scan from the end
     let lines: Vec<&str> = complete_content.lines().collect();
