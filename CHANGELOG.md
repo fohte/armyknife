@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.66](https://github.com/fohte/armyknife/compare/v0.1.65...v0.1.66) (2026-02-02)
+
+
+### Features
+
+* **gh/issue-agent:** support repository issue templates in `init issue` ([#205](https://github.com/fohte/armyknife/issues/205)) ([ce5b146](https://github.com/fohte/armyknife/commit/ce5b146443a7fdd3a394f3c77f8a8cdfb7af9465))
+
 ## [0.1.65](https://github.com/fohte/armyknife/compare/v0.1.64...v0.1.65) (2026-02-02)
 
 
