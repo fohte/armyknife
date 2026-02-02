@@ -180,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn new_generates_correct_frontmatter(
         #[case] is_private: bool,
-        #[case] expect_ready_for_translation: bool,
+        #[case] expect_ready_for_translation_field: bool,
     ) {
         // Use unique repo name to avoid conflicts in parallel tests
         let repo = format!("repo_frontmatter_{}", is_private);
@@ -202,10 +202,14 @@ mod tests {
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
 
+        // Check if ready-for-translation field exists in the raw content
+        // (private repos don't have this field, public repos do)
+        let has_ready_for_translation_field = content
+            .lines()
+            .any(|line| line.trim().starts_with("ready-for-translation:"));
         assert_eq!(
-            content.contains("ready-for-translation"),
-            expect_ready_for_translation,
-            "expected ready-for-translation={expect_ready_for_translation}, got:\n{content}"
+            has_ready_for_translation_field,
+            expect_ready_for_translation_field
         );
     }
 
@@ -243,21 +247,14 @@ mod tests {
         .await;
         assert!(result.is_err(), "second run without --force should fail");
 
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("already exists"),
-            "error message should mention 'already exists': {err_msg}"
-        );
-        assert!(
-            err_msg.contains("--force"),
-            "error message should mention '--force': {err_msg}"
-        );
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PrDraftError>(),
+            Some(PrDraftError::FileAlreadyExists(_))
+        ));
 
-        let content = fs::read_to_string(&draft_path).expect("read draft");
-        assert!(
-            content.contains("First Title"),
-            "original content should be preserved: {content}"
-        );
+        let draft = DraftFile::from_path(draft_path).expect("read draft");
+        assert_eq!(draft.frontmatter.title, "First Title");
     }
 
     #[rstest]
@@ -277,8 +274,12 @@ mod tests {
     #[test]
     fn format_diff_with_color_includes_ansi_codes() {
         let result = format_diff("old\n", "new\n", true);
-        // Should contain ANSI escape sequences
-        assert!(result.contains("\x1b["));
+        // With color enabled, the diff should include ANSI codes for red (deletion) and green (addition)
+        // Uses 256-color mode (38;5;9 for red, 38;5;10 for green)
+        assert_eq!(
+            result,
+            "\x1b[38;5;9m-old\n\x1b[0m\x1b[38;5;10m+new\n\x1b[0m"
+        );
     }
 
     #[tokio::test]
@@ -310,10 +311,7 @@ mod tests {
 
         let repo_info = RepoInfo::from_path(&env.temp_repo.path()).unwrap();
         let draft_path = DraftFile::path_for(&repo_info);
-        let content = fs::read_to_string(&draft_path).expect("read draft");
-        assert!(
-            content.contains("Second Title"),
-            "content should be overwritten: {content}"
-        );
+        let draft = DraftFile::from_path(draft_path).expect("read draft");
+        assert_eq!(draft.frontmatter.title, "Second Title");
     }
 }

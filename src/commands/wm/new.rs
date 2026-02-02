@@ -452,10 +452,29 @@ mod tests {
     fn build_claude_command_with_prompt_creates_temp_file() {
         let cmd = build_claude_command(Some("test prompt")).unwrap();
 
-        // Should contain cat and rm commands
-        assert!(cmd.contains("cat"));
-        assert!(cmd.contains("rm"));
-        assert!(cmd.contains("claude-prompt-"));
+        // Command format: claude "$(cat /path/to/claude-prompt-XXX.txt)" ; rm /path/to/claude-prompt-XXX.txt
+        // Extract the temp file path from the command
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+
+        // Verify command structure: ["claude", "\"$(cat", "<path>)\"", ";", "rm", "<path>"]
+        assert_eq!(parts.len(), 6);
+        assert_eq!(parts[0], "claude");
+        assert_eq!(parts[1], "\"$(cat");
+        assert_eq!(parts[3], ";");
+        assert_eq!(parts[4], "rm");
+
+        // Verify the temp file paths match and have expected structure
+        let cat_path = parts[2].trim_end_matches(")\"");
+        let rm_path = parts[5];
+        assert_eq!(cat_path, rm_path);
+
+        // Extract filename from path: /tmp/.tmpXXXXXX/claude-prompt-XXXXXX.txt
+        let filename = std::path::Path::new(cat_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap();
+        assert!(filename.starts_with("claude-prompt-"));
+        assert!(filename.ends_with(".txt"));
     }
 
     #[test]

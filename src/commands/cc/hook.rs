@@ -697,17 +697,17 @@ mod tests {
             assert!(log_path.exists(), "hook log file should be created");
 
             let written = fs::read_to_string(&log_path).expect("should read log file");
-            assert!(written.contains("=== Event ==="));
-            assert!(written.contains(event));
-            assert!(written.contains("=== Status ==="));
-            assert!(written.contains(if success { "success" } else { "error" }));
-            assert!(written.contains("=== Raw Stdin ==="));
-            assert!(written.contains(stdin_content));
 
-            if let Some(msg) = error_message {
-                assert!(written.contains("=== Error Message ==="));
-                assert!(written.contains(msg));
-            }
+            let expected = if let Some(msg) = error_message {
+                format!(
+                    "=== Event ===\n{event}\n\n=== Status ===\nerror\n\n=== Error Message ===\n{msg}\n\n=== Raw Stdin ===\n{stdin_content}"
+                )
+            } else {
+                format!(
+                    "=== Event ===\n{event}\n\n=== Status ===\nsuccess\n\n=== Raw Stdin ===\n{stdin_content}"
+                )
+            };
+            assert_eq!(written, expected);
         }
 
         #[test]
@@ -724,11 +724,11 @@ mod tests {
 
             assert!(
                 filename.starts_with("hook_"),
-                "filename should start with hook_, got: {filename}"
+                "expected to start with 'hook_', got: {filename}"
             );
             assert!(
                 filename.ends_with(".log"),
-                "filename should end with .log, got: {filename}"
+                "expected to end with '.log', got: {filename}"
             );
         }
 
@@ -753,7 +753,7 @@ mod tests {
             let logs = logs_dir().expect("should have cache directory");
             assert!(
                 logs.ends_with("cc/logs"),
-                "logs dir should end with cc/logs, got: {logs:?}"
+                "expected to end with 'cc/logs', got: {logs:?}"
             );
         }
     }

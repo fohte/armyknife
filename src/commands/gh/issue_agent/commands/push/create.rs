@@ -238,9 +238,26 @@ mod tests {
 
             // Verify issue.md with frontmatter was saved
             let issue_md = std::fs::read_to_string(renamed_dir.join("issue.md")).unwrap();
-            assert!(issue_md.contains("title: Test Issue"));
-            assert!(issue_md.contains("readonly:"));
-            assert!(issue_md.contains("number: 42"));
+            assert_eq!(
+                issue_md,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees: []
+                    milestone: null
+                    readonly:
+                      number: 42
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    This is the body.
+                "}
+            );
         }
 
         #[rstest]
@@ -284,12 +301,12 @@ mod tests {
             let args = make_args(None, false);
             let result = run_create_with_client(&args, new_dir, &client).await;
 
-            assert!(result.is_err());
+            let err = result.unwrap_err();
+            let err_msg = err.to_string();
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("issue.md not found")
+                err_msg.starts_with("issue.md not found in "),
+                "expected error to start with 'issue.md not found in ', got: {}",
+                err_msg
             );
         }
 
@@ -305,12 +322,12 @@ mod tests {
             let args = make_args(None, false);
             let result = run_create_with_client(&args, new_dir, &client).await;
 
-            assert!(result.is_err());
+            let err = result.unwrap_err();
+            let err_msg = err.to_string();
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Failed to parse issue.md")
+                err_msg.starts_with("Failed to parse issue.md: "),
+                "expected error to start with 'Failed to parse issue.md: ', got: {}",
+                err_msg
             );
         }
 
@@ -375,12 +392,12 @@ mod tests {
             let args = make_args(None, false);
             let result = run_create_with_client(&args, some_dir, &client).await;
 
-            assert!(result.is_err());
+            let err = result.unwrap_err();
+            let err_msg = err.to_string();
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Cannot determine repository")
+                err_msg.starts_with("Cannot determine repository from path '"),
+                "expected error to start with 'Cannot determine repository from path ', got: {}",
+                err_msg
             );
         }
     }
