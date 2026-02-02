@@ -172,6 +172,7 @@ fn extract_session_changes(event: &notify::Event) -> Vec<SessionChange> {
 mod tests {
     use super::*;
     use notify::event::{DataChange, ModifyKind};
+    use rstest::rstest;
     use std::path::PathBuf;
 
     #[test]
@@ -185,70 +186,55 @@ mod tests {
         let _tick = AppEvent::Tick;
     }
 
-    #[test]
-    fn test_extract_session_changes_from_json_file() {
+    #[rstest]
+    #[case::json_file(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json",
+        Some(("test-123", SessionChangeType::Modified))
+    )]
+    #[case::lock_file_ignored(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json.lock",
+        None
+    )]
+    #[case::tmp_file_ignored(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json.tmp",
+        None
+    )]
+    #[case::create_event(
+        EventKind::Create(CreateKind::File),
+        "/sessions/new-session.json",
+        Some(("new-session", SessionChangeType::Created))
+    )]
+    #[case::delete_event(
+        EventKind::Remove(RemoveKind::File),
+        "/sessions/deleted-session.json",
+        Some(("deleted-session", SessionChangeType::Deleted))
+    )]
+    fn test_extract_session_changes(
+        #[case] kind: EventKind,
+        #[case] path: &str,
+        #[case] expected: Option<(&str, SessionChangeType)>,
+    ) {
         let event = notify::Event {
-            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-            paths: vec![PathBuf::from("/sessions/test-123.json")],
+            kind,
+            paths: vec![PathBuf::from(path)],
             attrs: Default::default(),
         };
 
         let changes = extract_session_changes(&event);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].session_id, "test-123");
-        assert_eq!(changes[0].change_type, SessionChangeType::Modified);
-    }
 
-    #[test]
-    fn test_extract_session_changes_ignores_lock_files() {
-        let event = notify::Event {
-            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-            paths: vec![PathBuf::from("/sessions/test-123.json.lock")],
-            attrs: Default::default(),
-        };
-
-        let changes = extract_session_changes(&event);
-        assert!(changes.is_empty());
-    }
-
-    #[test]
-    fn test_extract_session_changes_ignores_tmp_files() {
-        let event = notify::Event {
-            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-            paths: vec![PathBuf::from("/sessions/test-123.json.tmp")],
-            attrs: Default::default(),
-        };
-
-        let changes = extract_session_changes(&event);
-        assert!(changes.is_empty());
-    }
-
-    #[test]
-    fn test_extract_session_changes_create_event() {
-        let event = notify::Event {
-            kind: EventKind::Create(CreateKind::File),
-            paths: vec![PathBuf::from("/sessions/new-session.json")],
-            attrs: Default::default(),
-        };
-
-        let changes = extract_session_changes(&event);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].session_id, "new-session");
-        assert_eq!(changes[0].change_type, SessionChangeType::Created);
-    }
-
-    #[test]
-    fn test_extract_session_changes_delete_event() {
-        let event = notify::Event {
-            kind: EventKind::Remove(RemoveKind::File),
-            paths: vec![PathBuf::from("/sessions/deleted-session.json")],
-            attrs: Default::default(),
-        };
-
-        let changes = extract_session_changes(&event);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].session_id, "deleted-session");
-        assert_eq!(changes[0].change_type, SessionChangeType::Deleted);
+        match expected {
+            Some((session_id, change_type)) => {
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].session_id, session_id);
+                assert_eq!(changes[0].change_type, change_type);
+            }
+            None => {
+                assert!(changes.is_empty());
+            }
+        }
     }
 
     #[test]
