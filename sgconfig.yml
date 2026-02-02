@@ -1,0 +1,8 @@
+# ast-grep configuration
+# https://ast-grep.github.io/guide/project/project-config.html
+
+ruleDirs:
+  - rules
+
+testConfigs:
+  - testDir: rule-tests

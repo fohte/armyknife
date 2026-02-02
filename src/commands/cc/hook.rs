@@ -698,16 +698,40 @@ mod tests {
             assert!(log_path.exists(), "hook log file should be created");
 
             let written = fs::read_to_string(&log_path).expect("should read log file");
-            assert!(written.contains("=== Event ==="));
-            assert!(written.contains(event));
-            assert!(written.contains("=== Status ==="));
-            assert!(written.contains(if success { "success" } else { "error" }));
-            assert!(written.contains("=== Raw Stdin ==="));
-            assert!(written.contains(stdin_content));
+            assert!(
+                written.contains("=== Event ==="),
+                "expected to contain '=== Event ===', got: {written}"
+            );
+            assert!(
+                written.contains(event),
+                "expected to contain '{event}', got: {written}"
+            );
+            assert!(
+                written.contains("=== Status ==="),
+                "expected to contain '=== Status ===', got: {written}"
+            );
+            assert!(
+                written.contains(if success { "success" } else { "error" }),
+                "expected to contain status, got: {written}"
+            );
+            assert!(
+                written.contains("=== Raw Stdin ==="),
+                "expected to contain '=== Raw Stdin ===', got: {written}"
+            );
+            assert!(
+                written.contains(stdin_content),
+                "expected to contain stdin content, got: {written}"
+            );
 
             if let Some(msg) = error_message {
-                assert!(written.contains("=== Error Message ==="));
-                assert!(written.contains(msg));
+                assert!(
+                    written.contains("=== Error Message ==="),
+                    "expected to contain '=== Error Message ===', got: {written}"
+                );
+                assert!(
+                    written.contains(msg),
+                    "expected to contain '{msg}', got: {written}"
+                );
             }
         }
 
@@ -725,11 +749,11 @@ mod tests {
 
             assert!(
                 filename.starts_with("hook_"),
-                "filename should start with hook_, got: {filename}"
+                "expected to start with 'hook_', got: {filename}"
             );
             assert!(
                 filename.ends_with(".log"),
-                "filename should end with .log, got: {filename}"
+                "expected to end with '.log', got: {filename}"
             );
         }
 
@@ -754,7 +778,7 @@ mod tests {
             let logs = logs_dir().expect("should have cache directory");
             assert!(
                 logs.ends_with("cc/logs"),
-                "logs dir should end with cc/logs, got: {logs:?}"
+                "expected to end with 'cc/logs', got: {logs:?}"
             );
         }
     }

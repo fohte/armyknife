@@ -307,7 +307,11 @@ mod tests {
     fn test_format_datetime_valid(#[case] input: &str) {
         let result = format_datetime(input);
         assert_eq!(result.len(), 16); // "YYYY-MM-DD HH:MM"
-        assert!(result.contains("2024-06-1")); // day may shift due to timezone
+        assert!(
+            result.contains("2024-06-1"),
+            "expected to contain '2024-06-1', got: {}",
+            result
+        ); // day may shift due to timezone
     }
 
     #[rstest]
@@ -325,14 +329,26 @@ mod tests {
     #[rstest]
     fn test_render_markdown_simple() {
         let result = render_markdown("Hello **world**");
-        assert!(result.contains("Hello"));
-        assert!(result.contains("world"));
+        assert!(
+            result.contains("Hello"),
+            "expected to contain 'Hello', got: {}",
+            result
+        );
+        assert!(
+            result.contains("world"),
+            "expected to contain 'world', got: {}",
+            result
+        );
     }
 
     #[rstest]
     fn test_render_markdown_code_block() {
         let result = render_markdown("```rust\nlet x = 1;\n```");
-        assert!(result.contains("let x = 1"));
+        assert!(
+            result.contains("let x = 1"),
+            "expected to contain 'let x = 1', got: {}",
+            result
+        );
     }
 
     #[rstest]
@@ -346,9 +362,17 @@ mod tests {
         let body = "<details><summary>Sum</summary>Content</details>";
         let result = process_body(body, &options);
         if open_details {
-            assert!(result.contains("Content") || result.contains("Sum"));
+            assert!(
+                result.contains("Content") || result.contains("Sum"),
+                "expected to contain 'Content' or 'Sum', got: {}",
+                result
+            );
         } else {
-            assert!(result.contains("▶"));
+            assert!(
+                result.contains("▶"),
+                "expected to contain '▶', got: {}",
+                result
+            );
         }
     }
 
@@ -364,8 +388,18 @@ mod tests {
         #[case] color_code: &str,
     ) {
         let result = state_indicator(state);
-        assert!(result.contains(label));
-        assert!(result.contains(color_code));
+        assert!(
+            result.contains(label),
+            "expected to contain '{}', got: {}",
+            label,
+            result
+        );
+        assert!(
+            result.contains(color_code),
+            "expected to contain '{}', got: {}",
+            color_code,
+            result
+        );
     }
 
     #[rstest]

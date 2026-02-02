@@ -4,3 +4,12 @@ remotes:
     configs:
       - base.yml
       - rust.yml
+
+pre-commit:
+  commands:
+    ast-grep-test:
+      glob: 'rules/*.yml'
+      run: sg test
+    ast-grep-scan:
+      glob: '*.rs'
+      run: sg scan

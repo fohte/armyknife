@@ -238,9 +238,21 @@ mod tests {
 
             // Verify issue.md with frontmatter was saved
             let issue_md = std::fs::read_to_string(renamed_dir.join("issue.md")).unwrap();
-            assert!(issue_md.contains("title: Test Issue"));
-            assert!(issue_md.contains("readonly:"));
-            assert!(issue_md.contains("number: 42"));
+            assert!(
+                issue_md.contains("title: Test Issue"),
+                "expected to contain 'title: Test Issue', got: {}",
+                issue_md
+            );
+            assert!(
+                issue_md.contains("readonly:"),
+                "expected to contain 'readonly:', got: {}",
+                issue_md
+            );
+            assert!(
+                issue_md.contains("number: 42"),
+                "expected to contain 'number: 42', got: {}",
+                issue_md
+            );
         }
 
         #[rstest]

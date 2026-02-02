@@ -453,9 +453,17 @@ mod tests {
         let cmd = build_claude_command(Some("test prompt")).unwrap();
 
         // Should contain cat and rm commands
-        assert!(cmd.contains("cat"));
-        assert!(cmd.contains("rm"));
-        assert!(cmd.contains("claude-prompt-"));
+        assert!(
+            cmd.contains("cat"),
+            "expected to contain 'cat', got: {}",
+            cmd
+        );
+        assert!(cmd.contains("rm"), "expected to contain 'rm', got: {}", cmd);
+        assert!(
+            cmd.contains("claude-prompt-"),
+            "expected to contain 'claude-prompt-', got: {}",
+            cmd
+        );
     }
 
     #[test]

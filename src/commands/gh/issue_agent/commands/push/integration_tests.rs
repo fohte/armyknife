@@ -392,9 +392,15 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     // After push, issue.md should be updated with new frontmatter from mock response
     let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
     // The TestSetup uses "2024-01-02T00:00:00Z" format for remote timestamps in mock
-    assert!(issue_md.contains("updatedAt:"));
+    assert!(
+        issue_md.contains("updatedAt:"),
+        "expected to contain 'updatedAt:', got: {issue_md}"
+    );
     // Verify it contains readonly section with updated timestamp
-    assert!(issue_md.contains("readonly:"));
+    assert!(
+        issue_md.contains("readonly:"),
+        "expected to contain 'readonly:', got: {issue_md}"
+    );
 }
 
 // Comment deletion tests
@@ -494,10 +500,10 @@ async fn test_rejects_new_issue_path(test_dir: TempDir) {
     let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
 
     assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support new issue creation")
+        err_msg.contains("does not support new issue creation"),
+        "expected to contain 'does not support new issue creation', got: {}",
+        err_msg
     );
 }

@@ -174,9 +174,21 @@ mod tests {
             .unwrap();
 
         let content = fs::read_to_string(dir.path().join("issue.md")).unwrap();
-        assert!(content.starts_with("---\n"));
-        assert!(content.contains("title: Test Issue"));
-        assert!(content.contains("Test body content"));
+        assert!(
+            content.starts_with("---\n"),
+            "expected to start with '---\\n', got: {}",
+            content
+        );
+        assert!(
+            content.contains("title: Test Issue"),
+            "expected to contain 'title: Test Issue', got: {}",
+            content
+        );
+        assert!(
+            content.contains("Test body content"),
+            "expected to contain 'Test body content', got: {}",
+            content
+        );
     }
 
     #[rstest]
@@ -233,13 +245,33 @@ mod tests {
         assert!(comments_dir.exists());
 
         let first_comment = fs::read_to_string(comments_dir.join("001_comment_12345.md")).unwrap();
-        assert!(first_comment.contains("<!-- author: testuser -->"));
-        assert!(first_comment.contains("<!-- databaseId: 12345 -->"));
-        assert!(first_comment.contains("First comment"));
+        assert!(
+            first_comment.contains("<!-- author: testuser -->"),
+            "expected to contain '<!-- author: testuser -->', got: {}",
+            first_comment
+        );
+        assert!(
+            first_comment.contains("<!-- databaseId: 12345 -->"),
+            "expected to contain '<!-- databaseId: 12345 -->', got: {}",
+            first_comment
+        );
+        assert!(
+            first_comment.contains("First comment"),
+            "expected to contain 'First comment', got: {}",
+            first_comment
+        );
 
         let second_comment = fs::read_to_string(comments_dir.join("002_comment_67890.md")).unwrap();
-        assert!(second_comment.contains("<!-- author: unknown -->"));
-        assert!(second_comment.contains("Second comment"));
+        assert!(
+            second_comment.contains("<!-- author: unknown -->"),
+            "expected to contain '<!-- author: unknown -->', got: {}",
+            second_comment
+        );
+        assert!(
+            second_comment.contains("Second comment"),
+            "expected to contain 'Second comment', got: {}",
+            second_comment
+        );
     }
 
     #[rstest]
@@ -322,10 +354,30 @@ mod tests {
         let frontmatter = make_frontmatter();
         let content = format_issue_md(&frontmatter, "Body text");
 
-        assert!(content.starts_with("---\n"));
-        assert!(content.contains("title: Test Issue"));
-        assert!(content.contains("readonly:"));
-        assert!(content.contains("number: 123"));
-        assert!(content.ends_with("Body text\n"));
+        assert!(
+            content.starts_with("---\n"),
+            "expected to start with '---\\n', got: {}",
+            content
+        );
+        assert!(
+            content.contains("title: Test Issue"),
+            "expected to contain 'title: Test Issue', got: {}",
+            content
+        );
+        assert!(
+            content.contains("readonly:"),
+            "expected to contain 'readonly:', got: {}",
+            content
+        );
+        assert!(
+            content.contains("number: 123"),
+            "expected to contain 'number: 123', got: {}",
+            content
+        );
+        assert!(
+            content.ends_with("Body text\n"),
+            "expected to end with 'Body text\\n', got: {}",
+            content
+        );
     }
 }

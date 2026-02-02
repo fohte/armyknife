@@ -112,6 +112,10 @@ mod tests {
     fn test_format_diff_with_color_includes_ansi_codes() {
         let result = format_diff("old\n", "new\n", true);
         // Should contain ANSI escape sequences
-        assert!(result.contains("\x1b["));
+        assert!(
+            result.contains("\x1b["),
+            "expected to contain ANSI escape sequence '\\x1b[', got: {}",
+            result
+        );
     }
 }

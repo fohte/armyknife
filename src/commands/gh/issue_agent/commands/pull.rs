@@ -243,8 +243,16 @@ mod tests {
 
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
             // Should contain frontmatter and body
-            assert!(content.contains("---"));
-            assert!(content.contains("Test body content"));
+            assert!(
+                content.contains("---"),
+                "expected to contain '---', got: {}",
+                content
+            );
+            assert!(
+                content.contains("Test body content"),
+                "expected to contain 'Test body content', got: {}",
+                content
+            );
         }
 
         #[rstest]
@@ -256,8 +264,16 @@ mod tests {
 
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
             // Should contain frontmatter with empty body
-            assert!(content.contains("---"));
-            assert!(content.contains("title: Test Issue"));
+            assert!(
+                content.contains("---"),
+                "expected to contain '---', got: {}",
+                content
+            );
+            assert!(
+                content.contains("title: Test Issue"),
+                "expected to contain 'title: Test Issue', got: {}",
+                content
+            );
         }
 
         #[rstest]
@@ -267,10 +283,26 @@ mod tests {
 
             // Metadata should now be in frontmatter of issue.md
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert!(content.contains("title: Test Issue"));
-            assert!(content.contains("readonly:"));
-            assert!(content.contains("number: 123"));
-            assert!(content.contains("state: OPEN"));
+            assert!(
+                content.contains("title: Test Issue"),
+                "expected to contain 'title: Test Issue', got: {}",
+                content
+            );
+            assert!(
+                content.contains("readonly:"),
+                "expected to contain 'readonly:', got: {}",
+                content
+            );
+            assert!(
+                content.contains("number: 123"),
+                "expected to contain 'number: 123', got: {}",
+                content
+            );
+            assert!(
+                content.contains("state: OPEN"),
+                "expected to contain 'state: OPEN', got: {}",
+                content
+            );
         }
 
         #[rstest]

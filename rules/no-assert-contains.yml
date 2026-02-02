@@ -1,0 +1,12 @@
+id: no-assert-contains
+language: rust
+severity: error
+message: |
+  Avoid using `assert!(x.contains(...))` in tests.
+  When this assertion fails, the error message only shows `false`, not the actual values.
+note: |
+  Consider using:
+  - `assert!(x.contains(...), "expected {} to contain ...", x)` with a custom message
+  - A dedicated assertion library like `pretty_assertions`
+rule:
+  pattern: assert!($X.contains($$$ARGS))

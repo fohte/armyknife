@@ -406,7 +406,10 @@ mod tests {
         let result = generate_frontmatter("Test Title", is_private);
         // serde_yaml may quote the title differently, just check the title value is present
         assert!(result.contains("Test Title"), "result was: {result}");
-        assert!(result.contains("submit: false"));
+        assert!(
+            result.contains("submit: false"),
+            "expected to contain 'submit: false', got: {result}"
+        );
         assert_eq!(
             result.contains("ready-for-translation"),
             should_contain_ready_for_translation

@@ -1,0 +1,22 @@
+id: no-assert-contains
+valid:
+  # Using assert_eq! is preferred
+  - assert_eq!(result, expected);
+  # Using assert! with custom message is acceptable
+  - |
+    assert!(
+        result.contains("expected"),
+        "result should contain 'expected', got: {}",
+        result
+    );
+  # Non-contains methods are fine
+  - assert!(result.is_empty());
+  - assert!(result.starts_with("prefix"));
+  - assert!(condition);
+  # assert_eq! with contains result is acceptable
+  - assert_eq!(result.contains("test"), true);
+invalid:
+  # Simple assert with contains
+  - assert!(result.contains("test"));
+  # With reference argument
+  - assert!(names.contains(&"feature-a"));
