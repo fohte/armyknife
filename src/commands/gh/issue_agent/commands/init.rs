@@ -147,7 +147,7 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert_eq!(
                 content,
-                "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+                "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
             );
         }
 

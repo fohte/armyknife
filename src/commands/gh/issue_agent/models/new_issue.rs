@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NewIssueFrontmatter {
     #[serde(default)]
+    pub title: String,
+    #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
     pub assignees: Vec<String>,
@@ -15,7 +17,6 @@ pub struct NewIssueFrontmatter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewIssue {
     pub frontmatter: NewIssueFrontmatter,
-    pub title: String,
     pub body: String,
 }
 
@@ -25,23 +26,28 @@ impl NewIssue {
     /// Expected format:
     /// ```markdown
     /// ---
+    /// title: "Issue Title"
     /// labels: []
     /// assignees: []
     /// ---
     ///
-    /// # Issue Title
-    ///
     /// Issue body content...
     /// ```
     pub fn parse(content: &str) -> Result<Self, String> {
-        let (frontmatter, rest) = parse_frontmatter(content)?;
-        let (title, body) = parse_title_and_body(rest)?;
+        let (frontmatter, body) = parse_frontmatter(content)?;
 
-        Ok(Self {
-            frontmatter,
-            title,
-            body,
-        })
+        if frontmatter.title.trim().is_empty() {
+            return Err("Title cannot be empty".to_string());
+        }
+
+        let body = body.trim().to_string();
+
+        Ok(Self { frontmatter, body })
+    }
+
+    /// Get the title from frontmatter.
+    pub fn title(&self) -> &str {
+        &self.frontmatter.title
     }
 }
 
@@ -76,46 +82,6 @@ fn parse_frontmatter(content: &str) -> Result<(NewIssueFrontmatter, &str), Strin
     Ok((frontmatter, rest))
 }
 
-/// Parse title (first H1 heading) and body from content.
-fn parse_title_and_body(content: &str) -> Result<(String, String), String> {
-    let content = content.trim_start_matches('\n');
-
-    // Find title line (first line starting with "# ")
-    let mut lines = content.lines();
-    let mut title = None;
-    let mut body_start_idx = 0;
-
-    for line in lines.by_ref() {
-        // Only accept H1 headers: "# Title" or "#" (empty title, rejected later)
-        // Reject H2/H3 headers like "## Heading" or "### Heading"
-        if line.starts_with("# ") || line == "#" {
-            let t = line.strip_prefix("# ").unwrap_or("").trim().to_string();
-            title = Some(t);
-            body_start_idx = content.find(line).unwrap_or(0) + line.len();
-            break;
-        }
-        // Skip empty lines before title
-        if !line.trim().is_empty() {
-            return Err(format!(
-                "Expected title line starting with '# ', found: '{line}'"
-            ));
-        }
-    }
-
-    let title = title.ok_or("Missing title: expected a line starting with '# '")?;
-
-    if title.is_empty() {
-        return Err("Title cannot be empty".to_string());
-    }
-
-    // Rest is body (skip leading newlines)
-    let body = content[body_start_idx..]
-        .trim_start_matches('\n')
-        .to_string();
-
-    Ok((title, body))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,14 +95,13 @@ mod tests {
         fn test_parse_full_format() {
             let content = indoc! {"
                 ---
+                title: Fix critical bug
                 labels:
                   - bug
                   - urgent
                 assignees:
                   - fohte
                 ---
-
-                # Fix critical bug
 
                 This is the issue body.
 
@@ -145,10 +110,10 @@ mod tests {
 
             let result = NewIssue::parse(content).unwrap();
 
-            assert_eq!(result.title, "Fix critical bug");
+            assert_eq!(result.title(), "Fix critical bug");
             assert_eq!(
                 result.body,
-                "This is the issue body.\n\nMultiple paragraphs are supported.\n"
+                "This is the issue body.\n\nMultiple paragraphs are supported."
             );
             assert_eq!(
                 result.frontmatter.labels,
@@ -158,36 +123,19 @@ mod tests {
         }
 
         #[rstest]
-        fn test_parse_empty_frontmatter() {
+        fn test_parse_with_title_only() {
             let content = indoc! {"
                 ---
+                title: Simple Issue
                 ---
-
-                # Simple Issue
 
                 Body text.
             "};
 
             let result = NewIssue::parse(content).unwrap();
 
-            assert_eq!(result.title, "Simple Issue");
-            assert_eq!(result.body, "Body text.\n");
-            assert!(result.frontmatter.labels.is_empty());
-            assert!(result.frontmatter.assignees.is_empty());
-        }
-
-        #[rstest]
-        fn test_parse_no_frontmatter() {
-            let content = indoc! {"
-                # Issue Without Frontmatter
-
-                Just the body.
-            "};
-
-            let result = NewIssue::parse(content).unwrap();
-
-            assert_eq!(result.title, "Issue Without Frontmatter");
-            assert_eq!(result.body, "Just the body.\n");
+            assert_eq!(result.title(), "Simple Issue");
+            assert_eq!(result.body, "Body text.");
             assert!(result.frontmatter.labels.is_empty());
             assert!(result.frontmatter.assignees.is_empty());
         }
@@ -196,15 +144,14 @@ mod tests {
         fn test_parse_empty_body() {
             let content = indoc! {"
                 ---
+                title: Title Only
                 labels: []
                 ---
-
-                # Title Only
             "};
 
             let result = NewIssue::parse(content).unwrap();
 
-            assert_eq!(result.title, "Title Only");
+            assert_eq!(result.title(), "Title Only");
             assert_eq!(result.body, "");
         }
 
@@ -212,11 +159,10 @@ mod tests {
         fn test_parse_inline_labels() {
             let content = indoc! {"
                 ---
+                title: Inline Style
                 labels: [bug, enhancement]
                 assignees: [user1, user2]
                 ---
-
-                # Inline Style
 
                 Body.
             "};
@@ -234,6 +180,27 @@ mod tests {
         }
 
         #[rstest]
+        fn test_parse_body_with_h1_heading() {
+            let content = indoc! {"
+                ---
+                title: Issue Title
+                ---
+
+                # Section Heading
+
+                This is the body with an H1 heading.
+            "};
+
+            let result = NewIssue::parse(content).unwrap();
+
+            assert_eq!(result.title(), "Issue Title");
+            assert_eq!(
+                result.body,
+                "# Section Heading\n\nThis is the body with an H1 heading."
+            );
+        }
+
+        #[rstest]
         #[case::missing_title(
             indoc! {"
                 ---
@@ -242,25 +209,33 @@ mod tests {
 
                 Just body without title.
             "},
-            "Expected title line"
+            "Title cannot be empty"
         )]
         #[case::empty_title(
-            indoc! {"
+            indoc! {r#"
                 ---
+                title: ""
                 ---
-
-                #
 
                 Body.
-            "},
+            "#},
+            "Title cannot be empty"
+        )]
+        #[case::whitespace_only_title(
+            indoc! {r#"
+                ---
+                title: "   "
+                ---
+
+                Body.
+            "#},
             "Title cannot be empty"
         )]
         #[case::unclosed_frontmatter(
             indoc! {"
                 ---
+                title: Test
                 labels: []
-
-                # Title
 
                 Body.
             "},
@@ -269,36 +244,19 @@ mod tests {
         #[case::invalid_yaml(
             indoc! {"
                 ---
+                title: Test
                 labels: [unclosed
                 ---
-
-                # Title
 
                 Body.
             "},
             "Failed to parse frontmatter"
         )]
-        #[case::h2_heading(
+        #[case::no_frontmatter(
             indoc! {"
-                ---
-                ---
-
-                ## This is H2 not H1
-
-                Body.
+                Just body without frontmatter.
             "},
-            "Expected title line"
-        )]
-        #[case::h3_heading(
-            indoc! {"
-                ---
-                ---
-
-                ### This is H3 not H1
-
-                Body.
-            "},
-            "Expected title line"
+            "Title cannot be empty"
         )]
         fn test_parse_errors(#[case] content: &str, #[case] expected_error: &str) {
             let result = NewIssue::parse(content);
