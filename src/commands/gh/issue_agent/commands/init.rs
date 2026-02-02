@@ -91,14 +91,14 @@ async fn run_init_issue(args: &InitIssueArgs, client: &OctocrabClient) -> anyhow
 
     // Handle --list-templates
     if args.list_templates {
-        return list_templates(&owner, &repo_name).await;
+        return list_templates(client, &owner, &repo_name).await;
     }
 
     // Determine which template to use
     let template = if args.no_template {
         None
     } else {
-        fetch_and_select_template(&owner, &repo_name, args.template.as_deref()).await?
+        fetch_and_select_template(client, &owner, &repo_name, args.template.as_deref()).await?
     };
 
     let storage = IssueStorage::new_for_new_issue(&repo);
@@ -106,14 +106,19 @@ async fn run_init_issue(args: &InitIssueArgs, client: &OctocrabClient) -> anyhow
 }
 
 /// List available issue templates and exit.
-async fn list_templates(owner: &str, repo: &str) -> anyhow::Result<()> {
-    let templates = fetch_templates_with_fallback(owner, repo).await;
+async fn list_templates(client: &OctocrabClient, owner: &str, repo: &str) -> anyhow::Result<()> {
+    let templates = fetch_templates_with_fallback(client, owner, repo).await;
+    print_template_list(owner, repo, &templates);
+    Ok(())
+}
 
+/// Print the list of available templates to stderr.
+fn print_template_list(owner: &str, repo: &str, templates: &[IssueTemplate]) {
     if templates.is_empty() {
         eprintln!("No issue templates found for {}/{}", owner, repo);
     } else {
         eprintln!("Available issue templates for {}/{}:", owner, repo);
-        for t in &templates {
+        for t in templates {
             let about = t.about.as_deref().unwrap_or("");
             if about.is_empty() {
                 eprintln!("  - {}", t.name);
@@ -122,19 +127,14 @@ async fn list_templates(owner: &str, repo: &str) -> anyhow::Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 /// Fetch templates from GitHub API, with graceful fallback on error.
-async fn fetch_templates_with_fallback(owner: &str, repo: &str) -> Vec<IssueTemplate> {
-    let client = match OctocrabClient::get() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: Failed to initialize GitHub client: {}", e);
-            return vec![];
-        }
-    };
-
+async fn fetch_templates_with_fallback(
+    client: &OctocrabClient,
+    owner: &str,
+    repo: &str,
+) -> Vec<IssueTemplate> {
     match client.get_issue_templates(owner, repo).await {
         Ok(templates) => templates,
         Err(e) => {
@@ -151,47 +151,93 @@ async fn fetch_templates_with_fallback(owner: &str, repo: &str) -> Vec<IssueTemp
 /// - `Ok(None)` if no template should be used (fallback to default)
 /// - `Err(...)` if the user needs to make a choice or template not found
 async fn fetch_and_select_template(
+    client: &OctocrabClient,
     owner: &str,
     repo: &str,
     requested_name: Option<&str>,
 ) -> anyhow::Result<Option<IssueTemplate>> {
-    let templates = fetch_templates_with_fallback(owner, repo).await;
+    let templates = fetch_templates_with_fallback(client, owner, repo).await;
+    select_template(templates, requested_name)
+}
 
+/// Result of template selection logic.
+#[derive(Debug, PartialEq, Eq)]
+enum TemplateSelectionResult {
+    /// Use the selected template
+    Selected(IssueTemplate),
+    /// No template available or requested - use default
+    UseDefault,
+    /// Template not found
+    NotFound {
+        requested: String,
+        available: Vec<String>,
+    },
+    /// Multiple templates available - user must choose
+    MultipleAvailable(Vec<IssueTemplate>),
+}
+
+/// Pure template selection logic, separated from I/O for testability.
+fn select_template_pure(
+    templates: Vec<IssueTemplate>,
+    requested_name: Option<&str>,
+) -> TemplateSelectionResult {
     match (templates.len(), requested_name) {
         // No templates available - use default
-        (0, _) => Ok(None),
+        (0, _) => TemplateSelectionResult::UseDefault,
 
         // Specific template requested
         (_, Some(name)) => {
             let available: Vec<String> = templates.iter().map(|t| t.name.clone()).collect();
-            templates
-                .into_iter()
-                .find(|t| t.name == name)
-                .map(Some)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Template '{}' not found. Available templates: {}",
-                        name,
-                        available.join(", ")
-                    )
-                })
+            match templates.into_iter().find(|t| t.name == name) {
+                Some(template) => TemplateSelectionResult::Selected(template),
+                None => TemplateSelectionResult::NotFound {
+                    requested: name.to_string(),
+                    available,
+                },
+            }
         }
 
         // Single template - auto-select
         (1, None) => {
             // SAFETY: We know templates.len() == 1 from the match arm
-            if let Some(template) = templates.into_iter().next() {
-                eprintln!("Using template: {}", template.name);
-                Ok(Some(template))
-            } else {
-                // This branch is unreachable due to the match guard, but required for exhaustiveness
-                Ok(None)
+            match templates.into_iter().next() {
+                Some(template) => TemplateSelectionResult::Selected(template),
+                None => TemplateSelectionResult::UseDefault,
             }
         }
 
         // Multiple templates - require explicit choice
-        (n, None) => {
-            eprintln!("Multiple issue templates found ({}):", n);
+        (_, None) => TemplateSelectionResult::MultipleAvailable(templates),
+    }
+}
+
+/// Select a template from the available templates.
+///
+/// Handles I/O (stderr messages) and converts selection result to anyhow::Result.
+fn select_template(
+    templates: Vec<IssueTemplate>,
+    requested_name: Option<&str>,
+) -> anyhow::Result<Option<IssueTemplate>> {
+    match select_template_pure(templates, requested_name) {
+        TemplateSelectionResult::Selected(template) => {
+            if requested_name.is_none() {
+                eprintln!("Using template: {}", template.name);
+            }
+            Ok(Some(template))
+        }
+        TemplateSelectionResult::UseDefault => Ok(None),
+        TemplateSelectionResult::NotFound {
+            requested,
+            available,
+        } => {
+            anyhow::bail!(
+                "Template '{}' not found. Available templates: {}",
+                requested,
+                available.join(", ")
+            )
+        }
+        TemplateSelectionResult::MultipleAvailable(templates) => {
+            eprintln!("Multiple issue templates found ({}):", templates.len());
             for t in &templates {
                 let about = t.about.as_deref().unwrap_or("");
                 if about.is_empty() {
@@ -457,6 +503,207 @@ mod tests {
                 result.unwrap_err().to_string(),
                 "Invalid comment name: must not contain '/', '\\', or '..'"
             );
+        }
+    }
+
+    mod select_template_pure_tests {
+        use super::*;
+
+        fn template(name: &str) -> IssueTemplate {
+            IssueTemplate {
+                name: name.to_string(),
+                title: None,
+                body: None,
+                about: None,
+                filename: None,
+                labels: vec![],
+                assignees: vec![],
+            }
+        }
+
+        #[rstest]
+        #[case::no_templates_no_request(vec![], None, TemplateSelectionResult::UseDefault)]
+        #[case::no_templates_with_request(vec![], Some("Bug"), TemplateSelectionResult::UseDefault)]
+        #[case::single_template_auto_selects(
+            vec![template("Bug")],
+            None,
+            TemplateSelectionResult::Selected(template("Bug"))
+        )]
+        #[case::single_template_matching_name(
+            vec![template("Bug")],
+            Some("Bug"),
+            TemplateSelectionResult::Selected(template("Bug"))
+        )]
+        #[case::single_template_non_matching(
+            vec![template("Bug")],
+            Some("Feature"),
+            TemplateSelectionResult::NotFound {
+                requested: "Feature".to_string(),
+                available: vec!["Bug".to_string()],
+            }
+        )]
+        #[case::multiple_templates_no_request(
+            vec![template("Bug"), template("Feature")],
+            None,
+            TemplateSelectionResult::MultipleAvailable(vec![template("Bug"), template("Feature")])
+        )]
+        #[case::multiple_templates_matching_name(
+            vec![template("Bug"), template("Feature")],
+            Some("Bug"),
+            TemplateSelectionResult::Selected(template("Bug"))
+        )]
+        #[case::multiple_templates_non_matching(
+            vec![template("Bug"), template("Feature")],
+            Some("Docs"),
+            TemplateSelectionResult::NotFound {
+                requested: "Docs".to_string(),
+                available: vec!["Bug".to_string(), "Feature".to_string()],
+            }
+        )]
+        fn test_select_template_pure(
+            #[case] templates: Vec<IssueTemplate>,
+            #[case] requested_name: Option<&str>,
+            #[case] expected: TemplateSelectionResult,
+        ) {
+            let result = select_template_pure(templates, requested_name);
+            assert_eq!(result, expected);
+        }
+    }
+
+    mod select_template_tests {
+        use super::*;
+
+        fn template(name: &str) -> IssueTemplate {
+            IssueTemplate {
+                name: name.to_string(),
+                title: None,
+                body: None,
+                about: None,
+                filename: None,
+                labels: vec![],
+                assignees: vec![],
+            }
+        }
+
+        #[rstest]
+        #[case::no_templates(vec![], None, Ok(None))]
+        #[case::single_auto_selects(vec![template("Bug")], None, Ok(Some(template("Bug"))))]
+        #[case::selects_by_name(
+            vec![template("Bug"), template("Feature")],
+            Some("Bug"),
+            Ok(Some(template("Bug")))
+        )]
+        fn test_select_template_ok(
+            #[case] templates: Vec<IssueTemplate>,
+            #[case] requested_name: Option<&str>,
+            #[case] expected: anyhow::Result<Option<IssueTemplate>>,
+        ) {
+            let result = select_template(templates, requested_name);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), expected.unwrap());
+        }
+
+        #[rstest]
+        #[case::not_found(vec![template("Bug")], Some("NonExistent"), "not found")]
+        #[case::multiple_without_selection(
+            vec![template("Bug"), template("Feature")],
+            None,
+            "Use --template"
+        )]
+        fn test_select_template_err(
+            #[case] templates: Vec<IssueTemplate>,
+            #[case] requested_name: Option<&str>,
+            #[case] expected_msg: &str,
+        ) {
+            let result = select_template(templates, requested_name);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains(expected_msg));
+        }
+    }
+
+    mod print_template_list_tests {
+        use super::*;
+
+        fn template_with_about(name: &str, about: Option<&str>) -> IssueTemplate {
+            IssueTemplate {
+                name: name.to_string(),
+                title: None,
+                body: None,
+                about: about.map(|s| s.to_string()),
+                filename: None,
+                labels: vec![],
+                assignees: vec![],
+            }
+        }
+
+        #[rstest]
+        #[case::empty(&[])]
+        #[case::single_with_about(&[template_with_about("Bug", Some("Report a bug"))])]
+        #[case::single_without_about(&[template_with_about("Feature", None)])]
+        #[case::multiple(&[
+            template_with_about("Bug", Some("Report a bug")),
+            template_with_about("Feature", None),
+        ])]
+        fn test_print_template_list_does_not_panic(#[case] templates: &[IssueTemplate]) {
+            print_template_list("owner", "repo", templates);
+        }
+    }
+
+    mod fetch_templates_with_fallback_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::commands::test_helpers::GitHubMockServer;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_templates_from_api() {
+            let mock = GitHubMockServer::start().await;
+            let template = IssueTemplate {
+                name: "Bug Report".to_string(),
+                title: Some("[Bug]: ".to_string()),
+                body: Some("Describe the bug".to_string()),
+                about: Some("Report a bug".to_string()),
+                filename: None,
+                labels: vec!["bug".to_string()],
+                assignees: vec![],
+            };
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(std::slice::from_ref(&template))
+                .await;
+
+            let client = mock.client();
+            let templates = fetch_templates_with_fallback(&client, "owner", "repo").await;
+
+            assert_eq!(templates.len(), 1);
+            assert_eq!(templates[0].name, "Bug Report");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_empty_on_api_error() {
+            let mock = GitHubMockServer::start().await;
+            // No mock set up, so API call will fail
+
+            let client = mock.client();
+            let templates = fetch_templates_with_fallback(&client, "owner", "repo").await;
+
+            assert!(templates.is_empty());
+        }
+    }
+
+    mod validate_repo_exists_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::commands::test_helpers::GitHubMockServer;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_ok_when_repo_exists() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").repo_info().get().await;
+
+            let client = mock.client();
+            let result = validate_repo_exists(&client, "owner", "repo").await;
+
+            assert!(result.is_ok());
         }
     }
 }

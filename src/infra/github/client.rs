@@ -665,8 +665,95 @@ fn get_gh_token() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::commands::gh::issue_agent::models::IssueTemplate;
     use crate::infra::github::mock::GitHubMockServer;
     use rstest::rstest;
+
+    mod get_issue_templates_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_empty_when_no_templates() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(&[])
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_single_template() {
+            let mock = GitHubMockServer::start().await;
+            let template = IssueTemplate {
+                name: "Bug Report".to_string(),
+                title: Some("[Bug]: ".to_string()),
+                body: Some("## Description\n\nDescribe the bug".to_string()),
+                about: Some("File a bug report".to_string()),
+                filename: Some("bug_report.yml".to_string()),
+                labels: vec!["bug".to_string()],
+                assignees: vec![],
+            };
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(std::slice::from_ref(&template))
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            let templates = result.unwrap();
+            assert_eq!(templates.len(), 1);
+            assert_eq!(templates[0].name, "Bug Report");
+            assert_eq!(templates[0].title, Some("[Bug]: ".to_string()));
+            assert_eq!(templates[0].labels, vec!["bug".to_string()]);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_multiple_templates() {
+            let mock = GitHubMockServer::start().await;
+            let templates = vec![
+                IssueTemplate {
+                    name: "Bug Report".to_string(),
+                    title: None,
+                    body: None,
+                    about: None,
+                    filename: None,
+                    labels: vec!["bug".to_string()],
+                    assignees: vec![],
+                },
+                IssueTemplate {
+                    name: "Feature Request".to_string(),
+                    title: Some("[Feature]: ".to_string()),
+                    body: Some("Describe the feature".to_string()),
+                    about: Some("Suggest an idea".to_string()),
+                    filename: None,
+                    labels: vec!["enhancement".to_string()],
+                    assignees: vec!["maintainer".to_string()],
+                },
+            ];
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(&templates)
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            let fetched = result.unwrap();
+            assert_eq!(fetched.len(), 2);
+            assert_eq!(fetched[0].name, "Bug Report");
+            assert_eq!(fetched[1].name, "Feature Request");
+            assert_eq!(fetched[1].assignees, vec!["maintainer".to_string()]);
+        }
+    }
 
     mod create_issue_tests {
         use super::*;
