@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.70](https://github.com/fohte/armyknife/compare/v0.1.69...v0.1.70) (2026-02-02)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** correct misleading message for new comments in `pull --force` ([#216](https://github.com/fohte/armyknife/issues/216)) ([54675e6](https://github.com/fohte/armyknife/commit/54675e6e4870c654b99d72c518580ce7823d968c))
+
 ## [0.1.69](https://github.com/fohte/armyknife/compare/v0.1.68...v0.1.69) (2026-02-02)
 
 
