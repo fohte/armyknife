@@ -67,8 +67,7 @@ fn run_init_issue_with_storage(storage: &IssueStorage) -> anyhow::Result<()> {
 
     eprintln!("Created: {}", path.display());
     eprintln!();
-    eprintln!("Edit the file, then create the issue on GitHub.");
-    eprintln!("Note: Pushing new issues is not yet supported.");
+    eprintln!("Edit the file, then run: a gh issue-agent push");
 
     Ok(())
 }
