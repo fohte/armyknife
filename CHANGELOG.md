@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.65](https://github.com/fohte/armyknife/compare/v0.1.64...v0.1.65) (2026-02-02)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** validate repository existence in init command ([#202](https://github.com/fohte/armyknife/issues/202)) ([83ccb44](https://github.com/fohte/armyknife/commit/83ccb448342ec746d04ebb38cb79befbf79c2ce3))
+
 ## [0.1.64](https://github.com/fohte/armyknife/compare/v0.1.63...v0.1.64) (2026-02-02)
 
 
