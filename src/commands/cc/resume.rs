@@ -46,9 +46,3 @@ pub fn run(_args: &ResumeArgs) -> Result<()> {
     // exec() only returns if there was an error
     bail!("Failed to exec claude: {}", err)
 }
-
-#[cfg(test)]
-mod tests {
-    // Tests for this module require tmux environment which cannot be easily mocked.
-    // Integration tests should be done manually in a tmux session.
-}
