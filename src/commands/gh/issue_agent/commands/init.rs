@@ -370,9 +370,10 @@ mod tests {
             assert!(path.exists());
 
             let content = fs::read_to_string(&path).unwrap();
-            assert!(content.contains("title: 'Bug: '"));
-            assert!(content.contains("- bug"));
-            assert!(content.contains("Describe the bug"));
+            assert_eq!(
+                content,
+                "---\ntitle: 'Bug: '\nlabels:\n- bug\nassignees: []\n---\n\nDescribe the bug\n"
+            );
         }
 
         #[rstest]
@@ -604,11 +605,15 @@ mod tests {
         }
 
         #[rstest]
-        #[case::not_found(vec![template("Bug")], Some("NonExistent"), "not found")]
+        #[case::not_found(
+            vec![template("Bug")],
+            Some("NonExistent"),
+            "Template 'NonExistent' not found. Available templates: Bug"
+        )]
         #[case::multiple_without_selection(
             vec![template("Bug"), template("Feature")],
             None,
-            "Use --template"
+            "Use --template <NAME> to select a template, or --no-template to use the default boilerplate."
         )]
         fn test_select_template_err(
             #[case] templates: Vec<IssueTemplate>,
@@ -617,7 +622,7 @@ mod tests {
         ) {
             let result = select_template(templates, requested_name);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains(expected_msg));
+            assert_eq!(result.unwrap_err().to_string(), expected_msg);
         }
     }
 

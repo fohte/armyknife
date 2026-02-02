@@ -122,11 +122,10 @@ mod tests {
         assert!(path.exists());
 
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("title: 'Bug: '"));
-        assert!(content.contains("- bug"));
-        assert!(content.contains("- needs-triage"));
-        assert!(content.contains("- alice"));
-        assert!(content.contains("Describe the bug here"));
+        assert_eq!(
+            content,
+            "---\ntitle: 'Bug: '\nlabels:\n- bug\n- needs-triage\nassignees:\n- alice\n---\n\nDescribe the bug here\n"
+        );
     }
 
     #[rstest]

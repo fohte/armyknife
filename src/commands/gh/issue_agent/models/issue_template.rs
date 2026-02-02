@@ -93,13 +93,10 @@ mod tests {
         );
 
         let content = template.to_issue_content();
-        // serde_yaml uses single quotes for strings and multi-line format for arrays
-        assert!(content.contains("title: 'Bug: '"));
-        assert!(content.contains("- bug"));
-        assert!(content.contains("- needs-triage"));
-        assert!(content.contains("- alice"));
-        assert!(content.contains("- bob"));
-        assert!(content.contains("Describe the bug here"));
+        assert_eq!(
+            content,
+            "---\ntitle: 'Bug: '\nlabels:\n- bug\n- needs-triage\nassignees:\n- alice\n- bob\n---\n\nDescribe the bug here\n"
+        );
     }
 
     #[rstest]
@@ -107,11 +104,10 @@ mod tests {
         let template = create_template("Empty", None, None, vec![], vec![]);
 
         let content = template.to_issue_content();
-        assert!(content.starts_with("---\n"));
-        assert!(content.contains("title:"));
-        assert!(content.contains("labels: []"));
-        assert!(content.contains("assignees: []"));
-        assert!(content.ends_with("---\n\nBody\n"));
+        assert_eq!(
+            content,
+            "---\ntitle: ''\nlabels: []\nassignees: []\n---\n\nBody\n"
+        );
     }
 
     #[rstest]
@@ -125,9 +121,10 @@ mod tests {
         );
 
         let content = template.to_issue_content();
-        assert!(content.contains("title: 'Feature: '"));
-        assert!(content.contains("- enhancement"));
-        assert!(content.contains("assignees: []"));
+        assert_eq!(
+            content,
+            "---\ntitle: 'Feature: '\nlabels:\n- enhancement\nassignees: []\n---\n\nBody\n"
+        );
     }
 
     #[rstest]
@@ -136,6 +133,9 @@ mod tests {
         let template = create_template("Bug", None, Some(body), vec![], vec![]);
 
         let content = template.to_issue_content();
-        assert!(content.contains(body));
+        assert_eq!(
+            content,
+            "---\ntitle: ''\nlabels: []\nassignees: []\n---\n\n## Steps to reproduce\n\n1. First step\n2. Second step\n\n## Expected behavior\n"
+        );
     }
 }
