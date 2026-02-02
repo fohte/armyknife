@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.72](https://github.com/fohte/armyknife/compare/v0.1.71...v0.1.72) (2026-02-02)
+
+
+### Features
+
+* **gh/issue-agent:** implement field-level conflict detection for push ([#218](https://github.com/fohte/armyknife/issues/218)) ([27dbe17](https://github.com/fohte/armyknife/commit/27dbe172e9e084760ad9b3e1eb73699e0e457499))
+
 ## [0.1.71](https://github.com/fohte/armyknife/compare/v0.1.70...v0.1.71) (2026-02-02)
 
 
