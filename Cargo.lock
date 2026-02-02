@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "armyknife"
-version = "0.1.62"
+version = "0.1.64"
 dependencies = [
  "anyhow",
  "async-trait",

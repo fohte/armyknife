@@ -55,7 +55,7 @@ pub async fn run_create_with_client(
         .create_issue(
             &owner,
             &repo_name,
-            &new_issue.title,
+            new_issue.title(),
             &new_issue.body,
             &new_issue.frontmatter.labels,
             &new_issue.frontmatter.assignees,
@@ -142,7 +142,7 @@ fn get_repo_from_path_or_arg(path: &Path, repo_arg: &Option<String>) -> anyhow::
 fn display_new_issue(issue: &NewIssue) {
     println!("=== New Issue ===");
     println!();
-    println!("Title: {}", issue.title);
+    println!("Title: {}", issue.title());
     println!();
 
     if !issue.frontmatter.labels.is_empty() {
@@ -207,11 +207,10 @@ mod tests {
                 &new_dir,
                 indoc! {"
                     ---
+                    title: Test Issue
                     labels: [bug]
                     assignees: [testuser]
                     ---
-
-                    # Test Issue
 
                     This is the body.
                 "},
@@ -253,9 +252,8 @@ mod tests {
                 &new_dir,
                 indoc! {"
                     ---
+                    title: Dry Run Test
                     ---
-
-                    # Dry Run Test
 
                     Body content.
                 "},
@@ -327,9 +325,8 @@ mod tests {
                 &new_dir,
                 indoc! {"
                     ---
+                    title: With Repo Arg
                     ---
-
-                    # With Repo Arg
 
                     Body.
                 "},
@@ -366,9 +363,8 @@ mod tests {
                 &some_dir,
                 indoc! {"
                     ---
+                    title: Test
                     ---
-
-                    # Test
 
                     Body.
                 "},
@@ -438,10 +434,10 @@ mod tests {
         fn test_display_with_labels_and_assignees() {
             let issue = NewIssue {
                 frontmatter: NewIssueFrontmatter {
+                    title: "Test Title".to_string(),
                     labels: vec!["bug".to_string(), "urgent".to_string()],
                     assignees: vec!["user1".to_string()],
                 },
-                title: "Test Title".to_string(),
                 body: "Test body content.".to_string(),
             };
 
@@ -452,8 +448,10 @@ mod tests {
         #[rstest]
         fn test_display_with_empty_body() {
             let issue = NewIssue {
-                frontmatter: NewIssueFrontmatter::default(),
-                title: "Title Only".to_string(),
+                frontmatter: NewIssueFrontmatter {
+                    title: "Title Only".to_string(),
+                    ..Default::default()
+                },
                 body: String::new(),
             };
 
@@ -464,8 +462,10 @@ mod tests {
         #[rstest]
         fn test_display_minimal() {
             let issue = NewIssue {
-                frontmatter: NewIssueFrontmatter::default(),
-                title: "Minimal".to_string(),
+                frontmatter: NewIssueFrontmatter {
+                    title: "Minimal".to_string(),
+                    ..Default::default()
+                },
                 body: "Body".to_string(),
             };
 

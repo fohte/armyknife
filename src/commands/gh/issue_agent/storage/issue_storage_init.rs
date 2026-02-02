@@ -11,11 +11,10 @@ use crate::commands::gh::issue_agent::models::IssueTemplate;
 
 /// Default content for a new issue file.
 const NEW_ISSUE_TEMPLATE: &str = r#"---
+title: ""
 labels: []
 assignees: []
 ---
-
-# Title
 
 Body
 "#;
@@ -97,7 +96,7 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(
             content,
-            "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+            "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
         );
     }
 
@@ -123,9 +122,9 @@ mod tests {
         assert!(path.exists());
 
         let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("title: \"Bug: \""));
         assert!(content.contains("labels: [bug, needs-triage]"));
         assert!(content.contains("assignees: [alice]"));
-        assert!(content.contains("# Bug: "));
         assert!(content.contains("Describe the bug here"));
     }
 

@@ -199,7 +199,10 @@ fn run_init_issue_with_storage(
 
     eprintln!("Created: {}", path.display());
     eprintln!();
-    eprintln!("Edit the file, then run: a gh issue-agent push new");
+    eprintln!(
+        "Edit the file, then run: a gh issue-agent push {}",
+        storage.dir().display()
+    );
 
     Ok(())
 }
@@ -276,7 +279,7 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert_eq!(
                 content,
-                "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+                "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
             );
         }
 
@@ -302,8 +305,8 @@ mod tests {
             assert!(path.exists());
 
             let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("title: \"Bug: \""));
             assert!(content.contains("labels: [bug]"));
-            assert!(content.contains("# Bug: "));
             assert!(content.contains("Describe the bug"));
         }
 

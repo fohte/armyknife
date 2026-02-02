@@ -29,16 +29,15 @@ impl IssueTemplate {
     /// The output format matches the issue-agent's expected format:
     /// ```markdown
     /// ---
+    /// title: "Default Title"
     /// labels: [label1, label2]
     /// assignees: [user1, user2]
     /// ---
     ///
-    /// # Title
-    ///
     /// Body content
     /// ```
     pub fn to_issue_content(&self) -> String {
-        let title = self.title.as_deref().unwrap_or("Title");
+        let title = self.title.as_deref().unwrap_or("");
         let body = self.body.as_deref().unwrap_or("Body");
 
         let labels_yaml = if self.labels.is_empty() {
@@ -54,8 +53,8 @@ impl IssueTemplate {
         };
 
         format!(
-            "---\nlabels: {}\nassignees: {}\n---\n\n# {}\n\n{}\n",
-            labels_yaml, assignees_yaml, title, body
+            "---\ntitle: \"{}\"\nlabels: {}\nassignees: {}\n---\n\n{}\n",
+            title, labels_yaml, assignees_yaml, body
         )
     }
 }
@@ -97,10 +96,10 @@ mod tests {
         assert_eq!(
             content,
             "---\n\
+             title: \"Bug: \"\n\
              labels: [bug, needs-triage]\n\
              assignees: [alice, bob]\n\
              ---\n\n\
-             # Bug: \n\n\
              Describe the bug here\n"
         );
     }
@@ -113,10 +112,10 @@ mod tests {
         assert_eq!(
             content,
             "---\n\
+             title: \"\"\n\
              labels: []\n\
              assignees: []\n\
              ---\n\n\
-             # Title\n\n\
              Body\n"
         );
     }
@@ -132,6 +131,7 @@ mod tests {
         );
 
         let content = template.to_issue_content();
+        assert!(content.contains("title: \"Feature: \""));
         assert!(content.contains("labels: [enhancement]"));
         assert!(content.contains("assignees: []"));
     }
