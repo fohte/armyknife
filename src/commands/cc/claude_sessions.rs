@@ -9,8 +9,17 @@
 use lazy_regex::regex_replace_all;
 use serde::Deserialize;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+/// Initial buffer size for reading from end of file (8KB)
+const INITIAL_READ_SIZE: usize = 8 * 1024;
+
+/// Maximum buffer size to prevent reading too much data (64KB)
+const MAX_READ_SIZE: usize = 64 * 1024;
+
+/// Maximum number of lines to scan from the end before giving up
+const MAX_LINES_TO_SCAN: usize = 20;
 
 /// Claude Code sessions-index.json structure
 #[derive(Debug, Deserialize)]
@@ -295,11 +304,104 @@ fn get_last_assistant_message_in_home(
     }
 
     let file = File::open(&jsonl_path).ok()?;
-    let reader = BufReader::new(file);
+
+    // Try reverse reading first for large files
+    if let Some(text) = read_last_assistant_message_reverse(&file) {
+        return Some(text);
+    }
+
+    // Fallback to forward reading for small files or edge cases
+    read_last_assistant_message_forward(&file)
+}
+
+/// Reads the last assistant message by scanning from the end of file.
+/// Uses progressive buffer expansion: starts with a small buffer and doubles
+/// if no text message is found (e.g., when last entries are tool_use only).
+fn read_last_assistant_message_reverse(file: &File) -> Option<String> {
+    let metadata = file.metadata().ok()?;
+    let file_size = metadata.len();
+
+    // For very small files, use forward reading
+    if file_size < INITIAL_READ_SIZE as u64 {
+        return None;
+    }
+
+    let mut read_size = INITIAL_READ_SIZE;
+
+    // Progressive expansion: try small buffer first, expand if needed
+    while read_size <= MAX_READ_SIZE {
+        let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
+
+        if let Some(text) = try_read_last_lines(file, actual_read) {
+            return Some(text);
+        }
+
+        // Double the buffer size and try again
+        read_size *= 2;
+    }
+
+    None
+}
+
+/// Attempts to read the last lines from a file and find an assistant text message.
+fn try_read_last_lines(file: &File, read_size: usize) -> Option<String> {
+    let mut reader = BufReader::new(file);
+
+    // Seek to near the end
+    reader.seek(SeekFrom::End(-(read_size as i64))).ok()?;
+
+    let mut buffer = vec![0u8; read_size];
+    reader.read_exact(&mut buffer).ok()?;
+
+    // Find the last complete lines by locating newlines
+    let content = String::from_utf8_lossy(&buffer);
+
+    // Skip the first line as it might be partial (cut at arbitrary byte boundary)
+    let first_newline = content.find('\n')?;
+    let complete_content = &content[first_newline + 1..];
+
+    // Collect lines and scan from the end
+    let lines: Vec<&str> = complete_content.lines().collect();
+
+    for line in lines.iter().rev().take(MAX_LINES_TO_SCAN) {
+        if line.is_empty() {
+            continue;
+        }
+
+        let Ok(entry) = serde_json::from_str::<AssistantJsonlEntry>(line) else {
+            continue;
+        };
+
+        if entry.entry_type.as_deref() != Some("assistant") {
+            continue;
+        }
+
+        if let Some(message) = entry.message
+            && let Some(contents) = message.content
+        {
+            for content in contents {
+                if content.content_type.as_deref() == Some("text")
+                    && let Some(text) = content.text
+                    && !text.is_empty()
+                {
+                    return Some(normalize_title(&text));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Fallback: reads the entire file forward (original implementation).
+fn read_last_assistant_message_forward(file: &File) -> Option<String> {
+    let mut file = BufReader::new(file);
+    // Reset to beginning in case it was seeked
+    file.seek(SeekFrom::Start(0)).ok()?;
 
     let mut last_text: Option<String> = None;
 
-    for line in reader.lines() {
+    for line in file.lines() {
         let Ok(line) = line else {
             continue;
         };
@@ -311,12 +413,10 @@ fn get_last_assistant_message_in_home(
             continue;
         };
 
-        // Look for "assistant" type entries
         if entry.entry_type.as_deref() != Some("assistant") {
             continue;
         }
 
-        // Extract text from content array
         if let Some(message) = entry.message
             && let Some(contents) = message.content
         {
@@ -326,7 +426,7 @@ fn get_last_assistant_message_in_home(
                     && !text.is_empty()
                 {
                     last_text = Some(normalize_title(&text));
-                    break; // Take the first text element in this message
+                    break;
                 }
             }
         }
@@ -529,5 +629,108 @@ mod tests {
     #[case::with_multiple_ansi("\x1b[32m\x1b[1mgreen bold\x1b[0m", "green bold")]
     fn test_normalize_title(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(normalize_title(input), expected);
+    }
+
+    // =========================================================================
+    // Tests for reverse reading optimization
+    // =========================================================================
+
+    #[test]
+    fn test_reverse_read_finds_last_message_in_large_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "large-session";
+
+        // Create a file larger than REVERSE_READ_BUFFER_SIZE (64KB)
+        let mut content = String::new();
+        for i in 0..500 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"Question {i}"}}}}"#
+            ));
+            content.push('\n');
+            content.push_str(&format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Answer {i}"}}]}}}}"#
+            ));
+            content.push('\n');
+        }
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, &content);
+
+        let result =
+            get_last_assistant_message_in_home(home_dir, Path::new(project_path), session_id);
+
+        // Should find the last message (Answer 499)
+        assert_eq!(result, Some("Answer 499".to_string()));
+    }
+
+    #[test]
+    fn test_small_file_uses_forward_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "small-session";
+
+        // Create a small file (less than 64KB)
+        let content = indoc! {r#"
+            {"type":"user","message":{"content":"Hello"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"First response"}]}}
+            {"type":"user","message":{"content":"More"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Last response"}]}}
+        "#};
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, content);
+
+        let result =
+            get_last_assistant_message_in_home(home_dir, Path::new(project_path), session_id);
+
+        // Should still find the last message via forward read
+        assert_eq!(result, Some("Last response".to_string()));
+    }
+
+    #[test]
+    fn test_reverse_read_skips_tool_use_only_messages() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "tool-use-session";
+
+        // Create a large file where the last assistant message is tool_use only
+        let mut content = String::new();
+        // Add padding to exceed 64KB
+        for i in 0..400 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"Padding question {i}"}}}}"#
+            ));
+            content.push('\n');
+            content.push_str(&format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Padding answer {i}"}}]}}}}"#
+            ));
+            content.push('\n');
+        }
+        // Add a text message followed by tool_use only messages
+        content.push_str(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"This is the real last text"}]}}"#,
+        );
+        content.push('\n');
+        content.push_str(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+        );
+        content.push('\n');
+        content.push_str(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#,
+        );
+        content.push('\n');
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, &content);
+
+        let result =
+            get_last_assistant_message_in_home(home_dir, Path::new(project_path), session_id);
+
+        // Should find the last message with text content, not tool_use
+        assert_eq!(result, Some("This is the real last text".to_string()));
     }
 }
