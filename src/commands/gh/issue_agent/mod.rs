@@ -32,7 +32,7 @@ impl IssueAgentCommands {
             Self::Pull(args) => commands::run_pull(args).await,
             Self::Push(args) => commands::run_push(args).await,
             Self::Diff(args) => commands::run_diff(args).await,
-            Self::Init(args) => commands::run_init(args),
+            Self::Init(args) => commands::run_init(args).await,
         }
     }
 }
