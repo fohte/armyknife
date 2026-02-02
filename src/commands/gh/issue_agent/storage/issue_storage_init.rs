@@ -10,11 +10,10 @@ use super::issue_storage::IssueStorage;
 
 /// Default content for a new issue file.
 const NEW_ISSUE_TEMPLATE: &str = r#"---
+title: ""
 labels: []
 assignees: []
 ---
-
-# Title
 
 Body
 "#;
@@ -90,7 +89,7 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(
             content,
-            "---\nlabels: []\nassignees: []\n---\n\n# Title\n\nBody\n"
+            "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
         );
     }
 
