@@ -242,9 +242,28 @@ mod tests {
             save_issue_to_storage(&storage, &test_issue(), &[]).unwrap();
 
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            // Should contain frontmatter and body
-            assert!(content.contains("---"));
-            assert!(content.contains("Test body content"));
+            // Verify frontmatter and body
+            assert_eq!(
+                content,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees:
+                    - assignee1
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    Test body content
+                "}
+            );
         }
 
         #[rstest]
@@ -255,9 +274,28 @@ mod tests {
             save_issue_to_storage(&storage, &issue, &[]).unwrap();
 
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            // Should contain frontmatter with empty body
-            assert!(content.contains("---"));
-            assert!(content.contains("title: Test Issue"));
+            // Verify frontmatter with empty body (body adds extra newline)
+            assert_eq!(
+                content,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees:
+                    - assignee1
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+
+                "}
+            );
         }
 
         #[rstest]
@@ -267,10 +305,27 @@ mod tests {
 
             // Metadata should now be in frontmatter of issue.md
             let content = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-            assert!(content.contains("title: Test Issue"));
-            assert!(content.contains("readonly:"));
-            assert!(content.contains("number: 123"));
-            assert!(content.contains("state: OPEN"));
+            assert_eq!(
+                content,
+                indoc! {"
+                    ---
+                    title: Test Issue
+                    labels:
+                    - bug
+                    assignees:
+                    - assignee1
+                    milestone: null
+                    readonly:
+                      number: 123
+                      state: OPEN
+                      author: testuser
+                      createdAt: 2024-01-01T00:00:00+00:00
+                      updatedAt: 2024-01-02T00:00:00+00:00
+                    ---
+
+                    Test body content
+                "}
+            );
         }
 
         #[rstest]

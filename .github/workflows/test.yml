@@ -40,9 +40,12 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: jdx/mise-action@v2
-
+      # Run rustup before mise-action to prevent race condition.
+      # Multiple cargo: tools in mise.toml trigger parallel rustup component downloads,
+      # causing "could not rename downloaded file" errors.
       - run: rustup show
+
+      - uses: jdx/mise-action@v2
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

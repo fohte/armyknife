@@ -937,13 +937,23 @@ mod tests {
         // Use wider terminal to show full truncation
         let output = render_to_string(&sessions, Some(0), now, 60, 11);
 
-        // Verify the last_message line is truncated with "..."
-        // Output shows "truncate.." due to terminal width cutting off the last char
-        assert!(
-            output.contains("This is a very long message that should be truncate.."),
-            "Expected truncation with '...' in output:\n{}",
-            output
-        );
+        // Verify the last_message line is truncated with ".."
+        // title_width = 60 - 6 = 54, so the message is truncated to 52 chars + ".."
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
+            └──────────────────────────────────────────────────────────┘
+            >  [1] ● webapp:dev  just now
+                   webapp:dev
+                   This is a very long message that should be truncate..
+
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+        };
+
+        assert_eq!(output, expected.trim_end());
     }
 
     #[test]

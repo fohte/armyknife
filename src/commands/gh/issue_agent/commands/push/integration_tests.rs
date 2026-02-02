@@ -6,7 +6,6 @@ use crate::commands::gh::issue_agent::commands::test_helpers::{
 };
 use crate::infra::github::RemoteComment;
 use rstest::rstest;
-use std::fs;
 use tempfile::TempDir;
 
 fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
@@ -390,11 +389,11 @@ async fn test_updates_metadata_after_push(test_dir: TempDir) {
     assert!(result.is_ok());
 
     // After push, issue.md should be updated with new frontmatter from mock response
-    let issue_md = fs::read_to_string(test_dir.path().join("issue.md")).unwrap();
-    // The TestSetup uses "2024-01-02T00:00:00Z" format for remote timestamps in mock
-    assert!(issue_md.contains("updatedAt:"));
-    // Verify it contains readonly section with updated timestamp
-    assert!(issue_md.contains("readonly:"));
+    // Parse the frontmatter to verify it contains proper structure
+    let issue_content = storage.read_issue().expect("should read issue");
+    // Verify readonly metadata is present with expected fields
+    assert!(!issue_content.frontmatter.readonly.updated_at.is_empty());
+    assert_eq!(issue_content.frontmatter.readonly.number, 123);
 }
 
 // Comment deletion tests
@@ -493,11 +492,9 @@ async fn test_rejects_new_issue_path(test_dir: TempDir) {
     let client = mock.client();
     let result = run_with_client_and_storage(&args, &client, &storage, "testuser").await;
 
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support new issue creation")
+    let err = result.expect_err("should fail for new issue path");
+    assert_eq!(
+        err.to_string(),
+        "run_with_client_and_storage does not support new issue creation"
     );
 }
