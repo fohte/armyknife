@@ -67,7 +67,10 @@ fn run_init_issue_with_storage(storage: &IssueStorage) -> anyhow::Result<()> {
 
     eprintln!("Created: {}", path.display());
     eprintln!();
-    eprintln!("Edit the file, then run: a gh issue-agent push");
+    eprintln!(
+        "Edit the file, then run: a gh issue-agent push {}",
+        storage.dir().display()
+    );
 
     Ok(())
 }
