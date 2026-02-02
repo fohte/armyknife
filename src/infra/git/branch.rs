@@ -190,6 +190,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RepoClient for MockRepoClient {
+        async fn repo_exists(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> crate::infra::github::error::Result<bool> {
+            Ok(self.default_branch.is_some())
+        }
+
         async fn is_repo_private(
             &self,
             _owner: &str,
