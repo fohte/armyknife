@@ -15,7 +15,7 @@ use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::infra::github::OctocrabClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
-use detect::check_remote_unchanged;
+use detect::{ConflictCheckInput, check_conflicts};
 
 /// Target for push command: either an issue number or a path to new issue directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,17 +127,30 @@ async fn run_with_context(
     let remote = ctx.fetch_remote(client).await?;
     let local = ctx.load_local()?;
 
-    // Check if remote has changed since pull
-    let remote_updated_at = remote.issue.updated_at.to_rfc3339();
-    if let Err(msg) =
-        check_remote_unchanged(&local.metadata.updated_at, &remote_updated_at, args.force)
-    {
-        eprintln!();
-        eprintln!("{}", msg);
-        eprintln!();
-        anyhow::bail!(
-            "Remote has changed. Use --force to overwrite, or 'pull --force' to update local copy."
-        );
+    // Check for field-level conflicts unless --force is specified
+    if !args.force {
+        let conflict_input = ConflictCheckInput {
+            local_metadata: &local.metadata,
+            local_body: &local.body,
+            local_comments: &local.comments,
+            remote_issue: &remote.issue,
+            remote_comments: &remote.comments,
+        };
+        let conflicts = check_conflicts(&conflict_input);
+
+        if !conflicts.is_empty() {
+            eprintln!();
+            eprintln!(
+                "Conflict detected! The following fields were edited both locally and remotely:"
+            );
+            for conflict in &conflicts {
+                eprintln!("  - {}", conflict);
+            }
+            eprintln!();
+            anyhow::bail!(
+                "Remote has changed. Use --force to overwrite, or 'pull --force' to update local copy."
+            );
+        }
     }
 
     // Detect all changes

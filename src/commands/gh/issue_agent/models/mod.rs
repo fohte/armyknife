@@ -8,9 +8,7 @@ mod timeline_event;
 
 pub use author::Author;
 pub use comment::Comment;
-pub use issue::Issue;
-#[cfg(test)]
-pub use issue::Label;
+pub use issue::{Issue, Label, Milestone};
 pub use issue_template::IssueTemplate;
 #[cfg(test)]
 pub use metadata::ReadonlyMetadata;

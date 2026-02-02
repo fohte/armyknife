@@ -6,7 +6,6 @@ use clap::Args;
 
 use super::common::IssueContext;
 use super::push::changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
-use super::push::detect::check_remote_unchanged;
 use crate::infra::github::OctocrabClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -48,8 +47,10 @@ async fn run_with_context(ctx: &IssueContext, client: &OctocrabClient) -> anyhow
     let local = ctx.load_local()?;
 
     // Warn if remote has changed since pull (but don't error, just show diff)
+    // For diff command, we use simple timestamp comparison since we just want
+    // to warn the user, not block the operation.
     let remote_updated_at = remote.issue.updated_at.to_rfc3339();
-    if check_remote_unchanged(&local.metadata.updated_at, &remote_updated_at, false).is_err() {
+    if local.metadata.updated_at != remote_updated_at {
         eprintln!();
         eprintln!("Warning: Remote has been updated since last pull.");
         eprintln!("Consider running 'a gh issue-agent pull --force' to update local copy.");

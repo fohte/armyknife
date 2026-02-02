@@ -232,6 +232,7 @@ mod tests {
                 c.database_id = 12345;
                 c.author = Some(factories::author("commenter"));
                 c.created_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+                c.updated_at = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
                 c.body = "Test comment body".to_string();
             })
         }
@@ -345,6 +346,7 @@ mod tests {
                 indoc! {"
                     <!-- author: commenter -->
                     <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                    <!-- updatedAt: 2024-01-01T12:00:00+00:00 -->
                     <!-- id: IC_abc123 -->
                     <!-- databaseId: 12345 -->
 
@@ -363,6 +365,7 @@ mod tests {
                         login: "user1".to_string(),
                     }),
                     created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+                    updated_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
                     body: "First comment".to_string(),
                 },
                 Comment {
@@ -372,6 +375,7 @@ mod tests {
                         login: "user2".to_string(),
                     }),
                     created_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+                    updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
                     body: "Second comment".to_string(),
                 },
             ];
@@ -751,6 +755,7 @@ mod tests {
                 indoc! {"
                     <!-- author: newuser -->
                     <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                    <!-- updatedAt: 2024-01-01T12:00:00+00:00 -->
                     <!-- id: IC_new -->
                     <!-- databaseId: 99999 -->
 
@@ -821,6 +826,8 @@ mod tests {
                 author: "testuser".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
+                body_last_edited_at: None,
+                title_last_edited_at: None,
             };
             storage.save_metadata(&local_metadata).unwrap();
 
@@ -956,6 +963,8 @@ mod tests {
                 author: "testuser".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
+                body_last_edited_at: None,
+                title_last_edited_at: None,
             };
             storage.save_metadata(&local_metadata).unwrap();
 
@@ -967,6 +976,7 @@ mod tests {
                 indoc! {"
                     <!-- author: testuser -->
                     <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- updatedAt: 2024-01-01T00:00:00Z -->
                     <!-- id: IC_abc123 -->
                     <!-- databaseId: 12345 -->
 

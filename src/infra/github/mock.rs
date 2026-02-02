@@ -423,6 +423,8 @@ impl<'a> MockRepoContext<'a> {
             body: "Test body",
             updated_at: "2024-01-02T00:00:00Z",
             labels: vec!["bug"],
+            body_last_edited_at: None,
+            title_last_edited_at: None,
         }
     }
 
@@ -487,6 +489,7 @@ impl<'a> MockRepoContext<'a> {
                     "databaseId": c.database_id,
                     "author": {"login": c.author},
                     "createdAt": "2024-01-01T12:00:00Z",
+                    "updatedAt": "2024-01-01T12:00:00Z",
                     "body": c.body
                 })
             })
@@ -615,6 +618,8 @@ pub struct MockIssueBuilder<'a> {
     body: &'a str,
     updated_at: &'a str,
     labels: Vec<&'a str>,
+    body_last_edited_at: Option<&'a str>,
+    title_last_edited_at: Option<&'a str>,
 }
 
 impl<'a> MockIssueBuilder<'a> {
@@ -642,24 +647,41 @@ impl<'a> MockIssueBuilder<'a> {
         self
     }
 
-    /// Mount mock for GET /repos/{owner}/{repo}/issues/{number} (success).
+    /// Set the bodyLastEditedAt timestamp.
+    pub fn body_last_edited_at(mut self, ts: &'a str) -> Self {
+        self.body_last_edited_at = Some(ts);
+        self
+    }
+
+    /// Mount mock for GraphQL issue query (success).
+    /// This replaces the REST API mock since get_issue now uses GraphQL.
     pub async fn get(self) {
-        let owner = self.owner;
-        let repo = self.repo;
-        let number = self.number;
-        Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/issues/{number}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(mock_issue_with_labels(
-                    owner,
-                    repo,
-                    number,
-                    self.title,
-                    self.body,
-                    self.updated_at,
-                    &self.labels,
-                )),
-            )
+        let labels_json: Vec<serde_json::Value> =
+            self.labels.iter().map(|l| json!({"name": l})).collect();
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("bodyLastEditedAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "number": self.number,
+                            "title": self.title,
+                            "body": self.body,
+                            "state": "OPEN",
+                            "labels": {"nodes": labels_json},
+                            "assignees": {"nodes": []},
+                            "milestone": null,
+                            "author": {"login": "testuser"},
+                            "createdAt": "2024-01-01T00:00:00Z",
+                            "updatedAt": self.updated_at,
+                            "bodyLastEditedAt": self.body_last_edited_at,
+                            "titleLastEditedAt": self.title_last_edited_at
+                        }
+                    }
+                }
+            })))
             .mount(self.server)
             .await;
     }

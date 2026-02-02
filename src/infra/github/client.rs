@@ -98,15 +98,131 @@ impl OctocrabClient {
 
     // ============ Issue Operations ============
 
-    /// Get an issue by number.
+    /// Get an issue by number using GraphQL.
+    /// This fetches additional fields not available via REST API:
+    /// - bodyLastEditedAt: timestamp when the body was last edited
+    /// - titleLastEditedAt: timestamp when the title was last edited
     pub async fn get_issue(
         &self,
         owner: &str,
         repo: &str,
         issue_number: u64,
     ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
-        let issue = self.client.issues(owner, repo).get(issue_number).await?;
-        Ok(issue.into())
+        #[derive(Debug, Deserialize)]
+        struct GetIssueData {
+            repository: GetIssueRepositoryData,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GetIssueRepositoryData {
+            issue: GraphQLIssue,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct GraphQLIssue {
+            number: i64,
+            title: String,
+            body: Option<String>,
+            state: String,
+            labels: LabelsConnection,
+            assignees: AssigneesConnection,
+            milestone: Option<MilestoneData>,
+            author: Option<GraphQLAuthor>,
+            created_at: chrono::DateTime<chrono::Utc>,
+            updated_at: chrono::DateTime<chrono::Utc>,
+            body_last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
+            title_last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelsConnection {
+            nodes: Vec<LabelNode>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelNode {
+            name: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneesConnection {
+            nodes: Vec<AssigneeNode>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneeNode {
+            login: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct MilestoneData {
+            title: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLAuthor {
+            login: String,
+        }
+
+        const GET_ISSUE_QUERY: &str = indoc! {"
+            query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                        number
+                        title
+                        body
+                        state
+                        labels(first: 100) { nodes { name } }
+                        assignees(first: 100) { nodes { login } }
+                        milestone { title }
+                        author { login }
+                        createdAt
+                        updatedAt
+                        bodyLastEditedAt
+                        titleLastEditedAt
+                    }
+                }
+            }
+        "};
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo,
+            "number": issue_number as i64,
+        });
+
+        let response: GetIssueData = self.graphql(GET_ISSUE_QUERY, variables).await?;
+        let issue = response.repository.issue;
+
+        Ok(crate::commands::gh::issue_agent::models::Issue {
+            number: issue.number,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+            labels: issue
+                .labels
+                .nodes
+                .into_iter()
+                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
+                .collect(),
+            assignees: issue
+                .assignees
+                .nodes
+                .into_iter()
+                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
+                .collect(),
+            milestone: issue
+                .milestone
+                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
+            author: issue
+                .author
+                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login }),
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+            body_last_edited_at: issue.body_last_edited_at,
+            title_last_edited_at: issue.title_last_edited_at,
+        })
     }
 
     /// Update an issue's body.
@@ -234,6 +350,7 @@ impl OctocrabClient {
             database_id: i64,
             author: Option<GraphQLAuthor>,
             created_at: chrono::DateTime<chrono::Utc>,
+            updated_at: chrono::DateTime<chrono::Utc>,
             body: String,
         }
 
@@ -252,6 +369,7 @@ impl OctocrabClient {
                                 databaseId
                                 author { login }
                                 createdAt
+                                updatedAt
                                 body
                             }
                         }
@@ -281,6 +399,7 @@ impl OctocrabClient {
                     .author
                     .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login }),
                 created_at: c.created_at,
+                updated_at: c.updated_at,
                 body: c.body,
             })
             .collect())
@@ -335,6 +454,8 @@ impl OctocrabClient {
                 login: comment.user.login,
             }),
             created_at: comment.created_at,
+            // For newly created comments, updated_at equals created_at if not provided
+            updated_at: comment.updated_at.unwrap_or(comment.created_at),
             body: comment.body.unwrap_or_default(),
         })
     }

@@ -209,21 +209,178 @@ pub(super) fn check_can_edit_comment(
     }
 }
 
-/// Check if remote has changed since the last pull.
-/// Returns Ok(()) if no conflict, Err with message if changed.
-pub(crate) fn check_remote_unchanged(
-    local_updated_at: &str,
-    remote_updated_at: &str,
-    force: bool,
-) -> Result<(), String> {
-    if force || local_updated_at == remote_updated_at {
-        Ok(())
-    } else {
-        Err(format!(
-            "Remote has changed since pull. Local: {}, Remote: {}",
-            local_updated_at, remote_updated_at
-        ))
+/// Represents a field-level conflict between local and remote state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conflict {
+    /// Issue body was edited both locally and remotely.
+    Body {
+        local_timestamp: Option<String>,
+        remote_timestamp: Option<String>,
+    },
+    /// Issue title was edited both locally and remotely.
+    Title {
+        local_timestamp: Option<String>,
+        remote_timestamp: Option<String>,
+    },
+    /// Comment was edited both locally and remotely.
+    Comment {
+        database_id: i64,
+        local_timestamp: String,
+        remote_timestamp: String,
+    },
+}
+
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Conflict::Body {
+                local_timestamp,
+                remote_timestamp,
+            } => write!(
+                f,
+                "Issue body: local={}, remote={}",
+                local_timestamp.as_deref().unwrap_or("(never edited)"),
+                remote_timestamp.as_deref().unwrap_or("(never edited)")
+            ),
+            Conflict::Title {
+                local_timestamp,
+                remote_timestamp,
+            } => write!(
+                f,
+                "Issue title: local={}, remote={}",
+                local_timestamp.as_deref().unwrap_or("(never edited)"),
+                remote_timestamp.as_deref().unwrap_or("(never edited)")
+            ),
+            Conflict::Comment {
+                database_id,
+                local_timestamp,
+                remote_timestamp,
+            } => write!(
+                f,
+                "Comment (database_id={}): local={}, remote={}",
+                database_id, local_timestamp, remote_timestamp
+            ),
+        }
     }
+}
+
+/// Input data for conflict detection.
+pub(crate) struct ConflictCheckInput<'a> {
+    /// Local metadata from frontmatter.
+    pub local_metadata: &'a IssueMetadata,
+    /// Local issue body.
+    pub local_body: &'a str,
+    /// Local comments.
+    pub local_comments: &'a [LocalComment],
+    /// Remote issue state.
+    pub remote_issue: &'a Issue,
+    /// Remote comments.
+    pub remote_comments: &'a [Comment],
+}
+
+/// Check for field-level conflicts between local and remote state.
+///
+/// This function performs smart conflict detection by comparing timestamps
+/// of individual fields rather than the entire issue's updated_at timestamp.
+///
+/// Returns a list of conflicts found. Empty list means no conflicts.
+///
+/// The logic is:
+/// - For body: conflict if local body differs from remote AND remote bodyLastEditedAt
+///   has changed since pull
+/// - For title: conflict if local title differs from remote AND remote titleLastEditedAt
+///   has changed since pull
+/// - For comments: conflict if local comment body differs from remote AND remote updatedAt
+///   has changed since pull
+pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
+    let mut conflicts = Vec::new();
+
+    // Check body conflict
+    let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
+    let local_body_changed = input.local_body != remote_body;
+
+    if local_body_changed {
+        // Local body was modified - check if remote body was also edited
+        let local_body_ts = input.local_metadata.body_last_edited_at.as_deref();
+        let remote_body_ts = input
+            .remote_issue
+            .body_last_edited_at
+            .map(|dt| dt.to_rfc3339());
+
+        if timestamps_differ(local_body_ts, remote_body_ts.as_deref()) {
+            conflicts.push(Conflict::Body {
+                local_timestamp: local_body_ts.map(|s| s.to_string()),
+                remote_timestamp: remote_body_ts,
+            });
+        }
+    }
+
+    // Check title conflict
+    let local_title_changed = input.local_metadata.title != input.remote_issue.title;
+
+    if local_title_changed {
+        // Local title was modified - check if remote title was also edited
+        let local_title_ts = input.local_metadata.title_last_edited_at.as_deref();
+        let remote_title_ts = input
+            .remote_issue
+            .title_last_edited_at
+            .map(|dt| dt.to_rfc3339());
+
+        if timestamps_differ(local_title_ts, remote_title_ts.as_deref()) {
+            conflicts.push(Conflict::Title {
+                local_timestamp: local_title_ts.map(|s| s.to_string()),
+                remote_timestamp: remote_title_ts,
+            });
+        }
+    }
+
+    // Check comment conflicts
+    let remote_comments_map: HashMap<&str, &Comment> = input
+        .remote_comments
+        .iter()
+        .map(|c| (c.id.as_str(), c))
+        .collect();
+
+    for local_comment in input.local_comments {
+        // Skip new comments - they can't have conflicts
+        if local_comment.is_new() {
+            continue;
+        }
+
+        let Some(comment_id) = &local_comment.metadata.id else {
+            continue;
+        };
+        let Some(remote_comment) = remote_comments_map.get(comment_id.as_str()) else {
+            continue;
+        };
+
+        // Check if local comment was modified
+        if local_comment.body.trim() == remote_comment.body.trim() {
+            continue;
+        }
+
+        // Local comment was modified - check if remote was also edited
+        let local_updated_at = local_comment.metadata.updated_at.as_deref();
+        let remote_updated_at = remote_comment.updated_at.to_rfc3339();
+
+        // If local_updated_at is None, this is a legacy comment file without
+        // timestamp tracking. We skip conflict detection for backward compatibility.
+        if let Some(local_ts) = local_updated_at.filter(|ts| *ts != remote_updated_at) {
+            conflicts.push(Conflict::Comment {
+                database_id: remote_comment.database_id,
+                local_timestamp: local_ts.to_string(),
+                remote_timestamp: remote_updated_at,
+            });
+        }
+    }
+
+    conflicts
+}
+
+/// Compare two optional timestamps.
+/// Returns true if they differ (including when one is Some and one is None).
+fn timestamps_differ(local: Option<&str>, remote: Option<&str>) -> bool {
+    local != remote
 }
 
 #[cfg(test)]
@@ -232,33 +389,6 @@ mod tests {
     use crate::commands::gh::issue_agent::models::IssueMetadata;
     use crate::commands::gh::issue_agent::testing::factories;
     use rstest::rstest;
-
-    mod check_remote_unchanged_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::same_timestamp("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", false)]
-        #[case::force_with_different("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", true)]
-        #[case::force_with_same("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", true)]
-        fn test_ok(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
-            assert!(check_remote_unchanged(local, remote, force).is_ok());
-        }
-
-        #[rstest]
-        #[case::different_timestamp("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", false)]
-        #[case::local_newer("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z", false)]
-        fn test_err(#[case] local: &str, #[case] remote: &str, #[case] force: bool) {
-            let result = check_remote_unchanged(local, remote, force);
-            assert!(result.is_err());
-            assert_eq!(
-                result.unwrap_err(),
-                format!(
-                    "Remote has changed since pull. Local: {}, Remote: {}",
-                    local, remote
-                )
-            );
-        }
-    }
 
     mod check_can_edit_comment_tests {
         use super::*;
@@ -309,6 +439,8 @@ mod tests {
                 author: "testuser".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
+                body_last_edited_at: None,
+                title_last_edited_at: None,
             }
         }
 

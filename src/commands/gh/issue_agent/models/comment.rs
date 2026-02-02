@@ -13,6 +13,9 @@ pub struct Comment {
     pub database_id: i64,
     pub author: Option<Author>,
     pub created_at: DateTime<Utc>,
+    /// Timestamp when the comment was last updated.
+    /// Used for field-level conflict detection.
+    pub updated_at: DateTime<Utc>,
     pub body: String,
 }
 
