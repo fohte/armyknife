@@ -46,12 +46,7 @@ fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
 /// Validates that session_id does not contain path separators to prevent
 /// path traversal attacks.
 pub fn session_file(session_id: &str) -> Result<PathBuf> {
-    // Reject session IDs with path separators to prevent path traversal
-    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
-        return Err(CcError::InvalidSessionId(session_id.to_string()).into());
-    }
-
-    sessions_dir().map(|d| d.join(format!("{session_id}.json")))
+    session_file_in(&sessions_dir()?, session_id)
 }
 
 /// Acquires an exclusive lock on a file with timeout and retry.
@@ -302,7 +297,25 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::SessionStatus;
     use chrono::Utc;
+    use rstest::fixture;
     use tempfile::TempDir;
+
+    struct TempSessionDir {
+        #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
+        temp_dir: TempDir,
+        sessions_path: PathBuf,
+    }
+
+    #[fixture]
+    fn temp_session_dir() -> TempSessionDir {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let sessions_path = temp_dir.path().join("sessions");
+        fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
+        TempSessionDir {
+            temp_dir,
+            sessions_path,
+        }
+    }
 
     fn create_test_session(id: &str) -> Session {
         Session {
@@ -365,26 +378,9 @@ mod tests {
 
     mod file_lock_tests {
         use super::*;
-        use rstest::{fixture, rstest};
+        use rstest::rstest;
         use std::sync::{Arc, Barrier};
         use std::thread;
-
-        struct TempSessionDir {
-            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
-            temp_dir: TempDir,
-            sessions_path: PathBuf,
-        }
-
-        #[fixture]
-        fn temp_session_dir() -> TempSessionDir {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let sessions_path = temp_dir.path().join("sessions");
-            fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
-            TempSessionDir {
-                temp_dir,
-                sessions_path,
-            }
-        }
 
         #[rstest]
         fn acquire_lock_succeeds_on_unlocked_file(temp_session_dir: TempSessionDir) {
@@ -474,24 +470,7 @@ mod tests {
     mod cleanup_stale_sessions_tests {
         use super::*;
         use crate::commands::cc::types::TmuxInfo;
-        use rstest::{fixture, rstest};
-
-        struct TempSessionDir {
-            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
-            temp_dir: TempDir,
-            sessions_path: PathBuf,
-        }
-
-        #[fixture]
-        fn temp_session_dir() -> TempSessionDir {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let sessions_path = temp_dir.path().join("sessions");
-            fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
-            TempSessionDir {
-                temp_dir,
-                sessions_path,
-            }
-        }
+        use rstest::rstest;
 
         /// Mock that treats all panes as dead
         fn mock_pane_always_dead(_pane_id: &str) -> bool {
@@ -648,24 +627,7 @@ mod tests {
 
     mod corrupted_file_recovery_tests {
         use super::*;
-        use rstest::{fixture, rstest};
-
-        struct TempSessionDir {
-            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
-            temp_dir: TempDir,
-            sessions_path: PathBuf,
-        }
-
-        #[fixture]
-        fn temp_session_dir() -> TempSessionDir {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let sessions_path = temp_dir.path().join("sessions");
-            fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
-            TempSessionDir {
-                temp_dir,
-                sessions_path,
-            }
-        }
+        use rstest::rstest;
 
         #[rstest]
         #[case::corrupted_with_extra_data(
