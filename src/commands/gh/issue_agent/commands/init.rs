@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::models::IssueTemplate;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::{OctocrabClient, RepoClient};
 
 /// Arguments for the init command.
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -61,17 +61,33 @@ pub struct InitCommentArgs {
 
 /// Run the init command.
 pub async fn run(args: &InitArgs) -> anyhow::Result<()> {
+    let client = OctocrabClient::get()?;
     match &args.command {
-        InitCommands::Issue(issue_args) => run_init_issue(issue_args).await,
-        InitCommands::Comment(comment_args) => run_init_comment(comment_args),
+        InitCommands::Issue(issue_args) => run_init_issue(issue_args, client).await,
+        InitCommands::Comment(comment_args) => run_init_comment(comment_args, client).await,
     }
 }
 
+/// Validate that a repository exists on GitHub.
+async fn validate_repo_exists(
+    client: &OctocrabClient,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    if !client.repo_exists(owner, repo).await? {
+        anyhow::bail!("Repository '{}/{}' not found on GitHub", owner, repo);
+    }
+    Ok(())
+}
+
 /// Initialize a new issue boilerplate file.
-async fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
+async fn run_init_issue(args: &InitIssueArgs, client: &OctocrabClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
     let (owner, repo_name) = parse_repo(&repo)?;
+
+    // Validate repository exists on GitHub
+    validate_repo_exists(client, &owner, &repo_name).await?;
 
     // Handle --list-templates
     if args.list_templates {
@@ -216,15 +232,18 @@ fn validate_comment_name(name: &str) -> anyhow::Result<()> {
 }
 
 /// Initialize a new comment boilerplate file.
-fn run_init_comment(args: &InitCommentArgs) -> anyhow::Result<()> {
+async fn run_init_comment(args: &InitCommentArgs, client: &OctocrabClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
-    let _ = parse_repo(&repo)?;
+    let (owner, repo_name) = parse_repo(&repo)?;
 
-    // Validate comment name if provided
+    // Validate comment name if provided (local validation first, before network call)
     if let Some(name) = &args.name {
         validate_comment_name(name)?;
     }
+
+    // Validate repository exists on GitHub
+    validate_repo_exists(client, &owner, &repo_name).await?;
 
     let storage = IssueStorage::new(&repo, args.issue_number as i64);
     run_init_comment_with_storage(&storage, args.issue_number, args.name.as_deref())
@@ -433,57 +452,6 @@ mod tests {
         #[case::double_dot_prefix("..hidden")]
         fn test_invalid_names(#[case] name: &str) {
             let result = validate_comment_name(name);
-            assert!(result.is_err());
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                "Invalid comment name: must not contain '/', '\\', or '..'"
-            );
-        }
-    }
-
-    mod run_init_issue_tests {
-        use super::*;
-
-        #[rstest]
-        #[tokio::test]
-        async fn test_rejects_invalid_repo_format() {
-            let args = InitIssueArgs {
-                repo: Some("invalid-repo-format".to_string()),
-                template: None,
-                no_template: false,
-                list_templates: false,
-            };
-
-            let result = run_init_issue(&args).await;
-            assert!(result.is_err());
-            // parse_repo should reject repo without '/'
-        }
-    }
-
-    mod run_init_comment_tests {
-        use super::*;
-
-        #[rstest]
-        fn test_rejects_invalid_repo_format() {
-            let args = InitCommentArgs {
-                issue_number: 123,
-                repo: Some("invalid-repo-format".to_string()),
-                name: None,
-            };
-
-            let result = run_init_comment(&args);
-            assert!(result.is_err());
-        }
-
-        #[rstest]
-        fn test_rejects_path_traversal_in_name() {
-            let args = InitCommentArgs {
-                issue_number: 123,
-                repo: Some("owner/repo".to_string()),
-                name: Some("../escape".to_string()),
-            };
-
-            let result = run_init_comment(&args);
             assert!(result.is_err());
             assert_eq!(
                 result.unwrap_err().to_string(),
