@@ -234,9 +234,15 @@ mod tests {
 
     #[rstest]
     #[case::not_started_gemini_only("not_started_gemini_only", "Review has not started yet")]
-    #[case::unable_existing("unable_existing", "Reviewer is unable to review this PR")]
-    #[case::unable_during_wait("unable_during_wait", "Reviewer is unable to review this PR")]
-    #[case::timeout("timeout", "Timeout waiting for review")]
+    #[case::unable_existing(
+        "unable_existing",
+        "Reviewer is unable to review this PR: Gemini is unable to review this PR."
+    )]
+    #[case::unable_during_wait(
+        "unable_during_wait",
+        "Reviewer is unable to review this PR: Gemini is unable to review this PR."
+    )]
+    #[case::timeout("timeout", "Timeout waiting for review after 1 seconds")]
     #[tokio::test]
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
         let (client, args) = build_error_client(scenario);
@@ -244,11 +250,7 @@ mod tests {
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
         let err = result.unwrap_err();
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains(expected_error),
-            "Expected error containing '{expected_error}', got '{err_msg}'"
-        );
+        assert_eq!(err.to_string(), expected_error);
     }
 
     #[rstest]
@@ -292,7 +294,7 @@ mod tests {
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Review has not started yet"));
+        assert_eq!(err.to_string(), "Review has not started yet");
     }
 
     #[tokio::test]

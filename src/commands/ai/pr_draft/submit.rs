@@ -303,12 +303,11 @@ mod tests {
         let client = env.mock.client();
         let result = run_impl(&args, &client).await;
 
-        assert!(result.is_err(), "submit should fail when not approved");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("not approved") || err_msg.contains("NotApproved"),
-            "error message should mention approval: {err_msg}"
-        );
+        let err = result.expect_err("submit should fail when not approved");
+        assert!(matches!(
+            err.downcast_ref::<PrDraftError>(),
+            Some(PrDraftError::NotApproved)
+        ));
     }
 
     #[tokio::test]
@@ -350,12 +349,11 @@ mod tests {
         let client = env.mock.client();
         let result = run_impl(&args, &client).await;
 
-        assert!(result.is_err(), "submit should fail with empty title");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("title"),
-            "error message should mention title: {err_msg}"
-        );
+        let err = result.expect_err("submit should fail with empty title");
+        assert!(matches!(
+            err.downcast_ref::<PrDraftError>(),
+            Some(PrDraftError::EmptyTitle)
+        ));
     }
 
     async fn setup_test_env_with_existing_pr(

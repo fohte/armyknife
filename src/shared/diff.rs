@@ -111,11 +111,12 @@ mod tests {
     #[rstest]
     fn test_format_diff_with_color_includes_ansi_codes() {
         let result = format_diff("old\n", "new\n", true);
-        // Should contain ANSI escape sequences
-        assert!(
-            result.contains("\x1b["),
-            "expected to contain ANSI escape sequence '\\x1b[', got: {}",
-            result
+        // Should contain ANSI escape sequences for red (delete) and green (insert)
+        // Format: \x1b[38;5;XXXm for SetForegroundColor, \x1b[0m for ResetColor
+        // Red = \x1b[38;5;9m, Green = \x1b[38;5;10m, Reset = \x1b[0m
+        assert_eq!(
+            result,
+            "\x1b[38;5;9m-old\n\x1b[0m\x1b[38;5;10m+new\n\x1b[0m"
         );
     }
 }

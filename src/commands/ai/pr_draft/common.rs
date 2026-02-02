@@ -397,23 +397,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::private(true, false)]
-    #[case::public(false, true)]
-    fn test_generate_frontmatter(
-        #[case] is_private: bool,
-        #[case] should_contain_ready_for_translation: bool,
-    ) {
+    #[case::private(
+        true,
+        indoc! {"
+            ---
+            title: Test Title
+            steps:
+              submit: false
+            ---
+        "}
+    )]
+    #[case::public(
+        false,
+        indoc! {"
+            ---
+            title: Test Title
+            steps:
+              ready-for-translation: false
+              submit: false
+            ---
+        "}
+    )]
+    fn test_generate_frontmatter(#[case] is_private: bool, #[case] expected: &str) {
         let result = generate_frontmatter("Test Title", is_private);
-        // serde_yaml may quote the title differently, just check the title value is present
-        assert!(result.contains("Test Title"), "result was: {result}");
-        assert!(
-            result.contains("submit: false"),
-            "expected to contain 'submit: false', got: {result}"
-        );
-        assert_eq!(
-            result.contains("ready-for-translation"),
-            should_contain_ready_for_translation
-        );
+        assert_eq!(result, expected);
     }
 
     #[test]

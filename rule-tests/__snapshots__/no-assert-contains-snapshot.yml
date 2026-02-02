@@ -1,5 +1,19 @@
 id: no-assert-contains
 snapshots:
+  ? |
+    assert!(
+        result.contains("expected"),
+        "should contain expected"
+    );
+  : labels:
+      - source: |-
+          assert!(
+              result.contains("expected"),
+              "should contain expected"
+          )
+        style: primary
+        start: 0
+        end: 73
   assert!(names.contains(&"feature-a"));:
     labels:
       - source: assert!(names.contains(&"feature-a"))

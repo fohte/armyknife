@@ -173,22 +173,10 @@ mod tests {
             .save_issue(&frontmatter, "Test body content")
             .unwrap();
 
-        let content = fs::read_to_string(dir.path().join("issue.md")).unwrap();
-        assert!(
-            content.starts_with("---\n"),
-            "expected to start with '---\\n', got: {}",
-            content
-        );
-        assert!(
-            content.contains("title: Test Issue"),
-            "expected to contain 'title: Test Issue', got: {}",
-            content
-        );
-        assert!(
-            content.contains("Test body content"),
-            "expected to contain 'Test body content', got: {}",
-            content
-        );
+        // Verify by loading back the issue content
+        let issue_content = storage.read_issue().unwrap();
+        assert_eq!(issue_content.frontmatter, frontmatter);
+        assert_eq!(issue_content.body, "Test body content");
     }
 
     #[rstest]
@@ -244,34 +232,28 @@ mod tests {
         let comments_dir = dir.path().join("comments");
         assert!(comments_dir.exists());
 
-        let first_comment = fs::read_to_string(comments_dir.join("001_comment_12345.md")).unwrap();
-        assert!(
-            first_comment.contains("<!-- author: testuser -->"),
-            "expected to contain '<!-- author: testuser -->', got: {}",
-            first_comment
-        );
-        assert!(
-            first_comment.contains("<!-- databaseId: 12345 -->"),
-            "expected to contain '<!-- databaseId: 12345 -->', got: {}",
-            first_comment
-        );
-        assert!(
-            first_comment.contains("First comment"),
-            "expected to contain 'First comment', got: {}",
-            first_comment
-        );
+        // Parse first comment and verify fields
+        let first_content = fs::read_to_string(comments_dir.join("001_comment_12345.md")).unwrap();
+        let first_comment = LocalComment::parse(
+            &first_content,
+            "001_comment_12345.md".to_string(),
+            &comments_dir,
+        )
+        .unwrap();
+        assert_eq!(first_comment.metadata.author, Some("testuser".to_string()));
+        assert_eq!(first_comment.metadata.database_id, Some(12345));
+        assert_eq!(first_comment.body, "First comment");
 
-        let second_comment = fs::read_to_string(comments_dir.join("002_comment_67890.md")).unwrap();
-        assert!(
-            second_comment.contains("<!-- author: unknown -->"),
-            "expected to contain '<!-- author: unknown -->', got: {}",
-            second_comment
-        );
-        assert!(
-            second_comment.contains("Second comment"),
-            "expected to contain 'Second comment', got: {}",
-            second_comment
-        );
+        // Parse second comment and verify fields
+        let second_content = fs::read_to_string(comments_dir.join("002_comment_67890.md")).unwrap();
+        let second_comment = LocalComment::parse(
+            &second_content,
+            "002_comment_67890.md".to_string(),
+            &comments_dir,
+        )
+        .unwrap();
+        assert_eq!(second_comment.metadata.author, Some("unknown".to_string()));
+        assert_eq!(second_comment.body, "Second comment");
     }
 
     #[rstest]
@@ -354,30 +336,19 @@ mod tests {
         let frontmatter = make_frontmatter();
         let content = format_issue_md(&frontmatter, "Body text");
 
-        assert!(
-            content.starts_with("---\n"),
-            "expected to start with '---\\n', got: {}",
-            content
+        // Split into frontmatter and body parts
+        let parts: Vec<&str> = content.splitn(3, "---\n").collect();
+        assert_eq!(parts.len(), 3, "should have frontmatter delimiters");
+        assert_eq!(
+            parts[0], "",
+            "content before first delimiter should be empty"
         );
-        assert!(
-            content.contains("title: Test Issue"),
-            "expected to contain 'title: Test Issue', got: {}",
-            content
-        );
-        assert!(
-            content.contains("readonly:"),
-            "expected to contain 'readonly:', got: {}",
-            content
-        );
-        assert!(
-            content.contains("number: 123"),
-            "expected to contain 'number: 123', got: {}",
-            content
-        );
-        assert!(
-            content.ends_with("Body text\n"),
-            "expected to end with 'Body text\\n', got: {}",
-            content
-        );
+
+        // Parse the YAML frontmatter and verify it matches the original
+        let parsed: IssueFrontmatter = serde_yaml::from_str(parts[1]).unwrap();
+        assert_eq!(parsed, frontmatter);
+
+        // Verify body ends correctly
+        assert_eq!(parts[2], "\nBody text\n");
     }
 }

@@ -123,20 +123,8 @@ fn test_root_comment_and_replies() {
     assert_eq!(root.unwrap().database_id, 1);
 
     let replies = thread.replies();
-    assert_eq!(replies.len(), 3);
     let reply_ids: Vec<i64> = replies.iter().map(|c| c.database_id).collect();
-    assert!(
-        reply_ids.contains(&2),
-        "expected to contain 2, got: {reply_ids:?}"
-    );
-    assert!(
-        reply_ids.contains(&3),
-        "expected to contain 3, got: {reply_ids:?}"
-    );
-    assert!(
-        reply_ids.contains(&4),
-        "expected to contain 4, got: {reply_ids:?}"
-    );
+    assert_eq!(reply_ids, vec![2, 3, 4]);
 }
 
 #[test]

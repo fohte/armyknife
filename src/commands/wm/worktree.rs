@@ -301,17 +301,9 @@ mod tests {
 
         assert_eq!(worktrees.len(), 2);
 
-        let names: Vec<&str> = worktrees.iter().map(|w| w.name.as_str()).collect();
-        assert!(
-            names.contains(&"feature-a"),
-            "expected to contain 'feature-a', got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"feature-b"),
-            "expected to contain 'feature-b', got: {:?}",
-            names
-        );
+        let mut names: Vec<&str> = worktrees.iter().map(|w| w.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["feature-a", "feature-b"]);
     }
 
     #[test]

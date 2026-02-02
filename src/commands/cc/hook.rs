@@ -698,41 +698,17 @@ mod tests {
             assert!(log_path.exists(), "hook log file should be created");
 
             let written = fs::read_to_string(&log_path).expect("should read log file");
-            assert!(
-                written.contains("=== Event ==="),
-                "expected to contain '=== Event ===', got: {written}"
-            );
-            assert!(
-                written.contains(event),
-                "expected to contain '{event}', got: {written}"
-            );
-            assert!(
-                written.contains("=== Status ==="),
-                "expected to contain '=== Status ===', got: {written}"
-            );
-            assert!(
-                written.contains(if success { "success" } else { "error" }),
-                "expected to contain status, got: {written}"
-            );
-            assert!(
-                written.contains("=== Raw Stdin ==="),
-                "expected to contain '=== Raw Stdin ===', got: {written}"
-            );
-            assert!(
-                written.contains(stdin_content),
-                "expected to contain stdin content, got: {written}"
-            );
 
-            if let Some(msg) = error_message {
-                assert!(
-                    written.contains("=== Error Message ==="),
-                    "expected to contain '=== Error Message ===', got: {written}"
-                );
-                assert!(
-                    written.contains(msg),
-                    "expected to contain '{msg}', got: {written}"
-                );
-            }
+            let expected = if let Some(msg) = error_message {
+                format!(
+                    "=== Event ===\n{event}\n\n=== Status ===\nerror\n\n=== Error Message ===\n{msg}\n\n=== Raw Stdin ===\n{stdin_content}"
+                )
+            } else {
+                format!(
+                    "=== Event ===\n{event}\n\n=== Status ===\nsuccess\n\n=== Raw Stdin ===\n{stdin_content}"
+                )
+            };
+            assert_eq!(written, expected);
         }
 
         #[test]
