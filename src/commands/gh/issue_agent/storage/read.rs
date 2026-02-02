@@ -9,6 +9,8 @@ use crate::commands::gh::issue_agent::models::Comment;
 pub struct CommentFileMetadata {
     pub author: Option<String>,
     pub created_at: Option<String>,
+    /// Timestamp when the comment was last updated (for conflict detection).
+    pub updated_at: Option<String>,
     pub id: Option<String>,
     pub database_id: Option<i64>,
 }
@@ -24,6 +26,7 @@ impl CommentFileMetadata {
                 match key {
                     "author" => metadata.author = Some(value),
                     "createdAt" => metadata.created_at = Some(value),
+                    "updatedAt" => metadata.updated_at = Some(value),
                     "id" => metadata.id = Some(value),
                     "databaseId" => {
                         metadata.database_id = Some(value.parse().map_err(|_| {
@@ -108,11 +111,13 @@ impl LocalComment {
             .map(|a| a.login.as_str())
             .unwrap_or("unknown");
         let created_at = comment.created_at.to_rfc3339();
+        let updated_at = comment.updated_at.to_rfc3339();
 
         format!(
-            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}\n",
+            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- updatedAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}\n",
             author,
             created_at,
+            updated_at,
             comment.id,
             comment.database_id,
             comment.body.trim()
