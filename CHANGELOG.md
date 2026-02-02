@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.71](https://github.com/fohte/armyknife/compare/v0.1.70...v0.1.71) (2026-02-02)
+
+
+### Features
+
+* **cc:** support session resumption using tmux user option ([#215](https://github.com/fohte/armyknife/issues/215)) ([202cf67](https://github.com/fohte/armyknife/commit/202cf672e0f02c2180f9a3b5ddc13f9f45d548e6))
+
 ## [0.1.70](https://github.com/fohte/armyknife/compare/v0.1.69...v0.1.70) (2026-02-02)
 
 
