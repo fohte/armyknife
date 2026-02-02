@@ -7,7 +7,8 @@ use super::error::CcError;
 
 /// Tmux user option name for storing Claude Code session ID.
 /// User options in tmux are prefixed with '@' and persist until explicitly unset.
-pub const TMUX_SESSION_OPTION: &str = "@armyknife-session-id";
+/// Uses a descriptive name to avoid conflicts with other potential armyknife options.
+pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
