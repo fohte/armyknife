@@ -160,13 +160,13 @@ fn write_local_changes<W: Write>(
             }
         }
 
-        // Show new comments that will be deleted
+        // Show new comments (preserved during pull --force)
         for local_comment in &local_comments {
             if changes.new_comment_files.contains(&local_comment.filename) {
                 writeln!(writer)?;
                 writeln!(
                     writer,
-                    "=== New Comment (will be deleted): {} ===",
+                    "=== New Comment (preserved): {} ===",
                     local_comment.filename
                 )?;
                 for line in local_comment.body.lines() {
@@ -902,7 +902,7 @@ mod tests {
         }
 
         #[rstest]
-        fn test_new_comments_to_be_deleted(test_dir: TempDir) {
+        fn test_new_comments_preserved(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
             let comments_dir = test_dir.path().join("comments");
@@ -930,7 +930,7 @@ mod tests {
 
                     === Local changes detected ===
 
-                    === New Comment (will be deleted): new_my_comment.md ===
+                    === New Comment (preserved): new_my_comment.md ===
                     - New comment line 1
                     - New comment line 2
 
@@ -1014,7 +1014,7 @@ mod tests {
                     -Local comment
                     +Remote comment
 
-                    === New Comment (will be deleted): new_draft.md ===
+                    === New Comment (preserved): new_draft.md ===
                     - Draft comment
 
                 "}
