@@ -601,4 +601,42 @@ mod tests {
             None => assert!(result.is_none()),
         }
     }
+
+    #[rstest]
+    #[case::with_option_value(
+        "main\t0\t1\t%5\tabc-123",
+        Some(("main", 0, 1, "%5", "abc-123"))
+    )]
+    #[case::uuid_option(
+        "work\t2\t0\t%10\t550e8400-e29b-41d4-a716-446655440000",
+        Some(("work", 2, 0, "%10", "550e8400-e29b-41d4-a716-446655440000"))
+    )]
+    #[case::session_with_slash(
+        "fohte/repo\t1\t2\t%3\txyz-456",
+        Some(("fohte/repo", 1, 2, "%3", "xyz-456"))
+    )]
+    #[case::empty_option_value("main\t0\t1\t%5\t", None)]
+    #[case::missing_option_field("main\t0\t1\t%5", None)]
+    #[case::insufficient_parts("main\t0\t1", None)]
+    #[case::empty_line("", None)]
+    #[case::invalid_window_index("main\tabc\t1\t%5\toption", None)]
+    #[case::invalid_pane_index("main\t0\tabc\t%5\toption", None)]
+    fn test_parse_pane_with_option_line(
+        #[case] line: &str,
+        #[case] expected: Option<(&str, u32, u32, &str, &str)>,
+    ) {
+        let result = parse_pane_with_option_line(line);
+
+        match expected {
+            Some((session, window_idx, pane_idx, pane_id, option)) => {
+                let info = result.expect("expected Some(PaneInfoWithOption)");
+                assert_eq!(info.session_name, session);
+                assert_eq!(info.window_index, window_idx);
+                assert_eq!(info.pane_index, pane_idx);
+                assert_eq!(info.pane_id, pane_id);
+                assert_eq!(info.option_value, Some(option.to_string()));
+            }
+            None => assert!(result.is_none()),
+        }
+    }
 }

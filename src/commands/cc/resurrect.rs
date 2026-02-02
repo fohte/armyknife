@@ -56,6 +56,30 @@ fn state_file_path() -> Result<PathBuf> {
         .join(RESURRECT_STATE_FILE))
 }
 
+/// Parses a state file line into (pane_position, session_id).
+/// Format: "session_name:window_index.pane_index<TAB>session_id"
+fn parse_state_line(line: &str) -> Option<(&str, &str)> {
+    if line.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() == 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+/// Parses a pane position string into (session_name, window_index, pane_index).
+/// Format: "session_name:window_index.pane_index"
+fn parse_pane_position(position: &str) -> Option<(&str, u32, u32)> {
+    let (session_name, rest) = position.split_once(':')?;
+    let (window_index_str, pane_index_str) = rest.split_once('.')?;
+    let window_index = window_index_str.parse::<u32>().ok()?;
+    let pane_index = pane_index_str.parse::<u32>().ok()?;
+    Some((session_name, window_index, pane_index))
+}
+
 /// Saves all pane session IDs to the state file.
 ///
 /// Format: session_name:window_index.pane_index<TAB>session_id
@@ -114,19 +138,9 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let mut pane_sessions: HashMap<String, String> = HashMap::new();
     for line in reader.lines() {
         let line = line?;
-        if line.is_empty() {
-            continue;
+        if let Some((pane_position, session_id)) = parse_state_line(&line) {
+            pane_sessions.insert(pane_position.to_string(), session_id.to_string());
         }
-
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 2 {
-            // Skip malformed lines
-            continue;
-        }
-
-        let pane_position = parts[0].to_string();
-        let session_id = parts[1].to_string();
-        pane_sessions.insert(pane_position, session_id);
     }
 
     if pane_sessions.is_empty() {
@@ -136,14 +150,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     // Restore session IDs to panes
     let mut restore_count = 0;
     for (pane_position, session_id) in &pane_sessions {
-        // Parse pane_position: "session_name:window_index.pane_index"
-        if let Some((session_name, rest)) = pane_position.split_once(':')
-            && let Some((window_index_str, pane_index_str)) = rest.split_once('.')
-            && let (Ok(window_index), Ok(pane_index)) = (
-                window_index_str.parse::<u32>(),
-                pane_index_str.parse::<u32>(),
-            )
-        {
+        if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position) {
             // Find the pane_id for this position
             if let Some(pane_id) =
                 tmux::find_pane_id_by_position(session_name, window_index, pane_index)
@@ -183,13 +190,7 @@ mod tests {
     #[case::extra_tabs("main:0.1\tabc\t123", None)]
     #[case::empty_line("", None)]
     fn test_parse_state_line(#[case] line: &str, #[case] expected: Option<(&str, &str)>) {
-        let parts: Vec<&str> = line.split('\t').collect();
-        let result = if parts.len() == 2 {
-            Some((parts[0], parts[1]))
-        } else {
-            None
-        };
-        assert_eq!(result, expected);
+        assert_eq!(parse_state_line(line), expected);
     }
 
     #[rstest]
@@ -204,23 +205,6 @@ mod tests {
         #[case] position: &str,
         #[case] expected: Option<(&str, u32, u32)>,
     ) {
-        let result = if let Some((session_name, rest)) = position.split_once(':') {
-            if let Some((window_index_str, pane_index_str)) = rest.split_once('.') {
-                if let (Ok(window_index), Ok(pane_index)) = (
-                    window_index_str.parse::<u32>(),
-                    pane_index_str.parse::<u32>(),
-                ) {
-                    Some((session_name, window_index, pane_index))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        assert_eq!(result, expected);
+        assert_eq!(parse_pane_position(position), expected);
     }
 }
