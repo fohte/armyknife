@@ -21,4 +21,5 @@ npm.bun = true
 description = "Run tests in sandbox"
 run = ["cargo test --no-run", "srt --settings ./srt-settings.json cargo test"]
 [tasks.test.env]
+# Disable sccache to avoid sandbox permission issues with cache directory writes
 RUSTC_WRAPPER = ""
