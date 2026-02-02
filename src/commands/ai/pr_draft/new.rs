@@ -180,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn new_generates_correct_frontmatter(
         #[case] is_private: bool,
-        #[case] expect_ready_for_translation: bool,
+        #[case] expect_ready_for_translation_field: bool,
     ) {
         // Use unique repo name to avoid conflicts in parallel tests
         let repo = format!("repo_frontmatter_{}", is_private);
@@ -202,10 +202,14 @@ mod tests {
         let draft_path = DraftFile::path_for(&repo_info);
         let content = fs::read_to_string(&draft_path).expect("read draft");
 
+        // Check if ready-for-translation field exists in the raw content
+        // (private repos don't have this field, public repos do)
+        let has_ready_for_translation_field = content
+            .lines()
+            .any(|line| line.trim().starts_with("ready-for-translation:"));
         assert_eq!(
-            content.contains("ready-for-translation"),
-            expect_ready_for_translation,
-            "expected ready-for-translation={expect_ready_for_translation}, got:\n{content}"
+            has_ready_for_translation_field,
+            expect_ready_for_translation_field
         );
     }
 
