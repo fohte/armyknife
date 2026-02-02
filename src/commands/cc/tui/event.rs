@@ -17,12 +17,28 @@ pub struct KeyEvent {
     pub modifiers: KeyModifiers,
 }
 
+/// Represents a change to a specific session file.
+#[derive(Debug, Clone)]
+pub struct SessionChange {
+    pub session_id: String,
+    pub change_type: SessionChangeType,
+}
+
+/// Type of change that occurred to a session file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionChangeType {
+    Created,
+    Modified,
+    Deleted,
+}
+
 /// Events that can occur in the TUI.
 pub enum AppEvent {
     /// A key was pressed.
     Key(KeyEvent),
     /// Session data changed on disk.
-    SessionsChanged,
+    /// Contains session changes if specific files were identified, or None for full reload.
+    SessionsChanged(Option<Vec<SessionChange>>),
     /// Tick for periodic updates.
     Tick,
 }
@@ -114,17 +130,9 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
-            // Only notify on relevant events
-            let should_notify = matches!(
-                event.kind,
-                EventKind::Create(CreateKind::File)
-                    | EventKind::Modify(ModifyKind::Data(_))
-                    | EventKind::Modify(ModifyKind::Name(_))
-                    | EventKind::Remove(RemoveKind::File)
-            );
-
-            if should_notify {
-                let _ = tx.send(AppEvent::SessionsChanged);
+            let changes = extract_session_changes(&event);
+            if !changes.is_empty() {
+                let _ = tx.send(AppEvent::SessionsChanged(Some(changes)));
             }
         }
     })?;
@@ -134,9 +142,38 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
     Ok(Some(watcher))
 }
 
+/// Extracts session IDs from file paths in the event.
+fn extract_session_changes(event: &notify::Event) -> Vec<SessionChange> {
+    let change_type = match event.kind {
+        EventKind::Create(CreateKind::File) => SessionChangeType::Created,
+        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_)) => SessionChangeType::Modified,
+        EventKind::Remove(RemoveKind::File) => SessionChangeType::Deleted,
+        _ => return Vec::new(),
+    };
+
+    event
+        .paths
+        .iter()
+        .filter_map(|path| {
+            // Only process .json files (not .lock or .tmp)
+            if path.extension()?.to_str()? != "json" {
+                return None;
+            }
+            let session_id = path.file_stem()?.to_str()?.to_string();
+            Some(SessionChange {
+                session_id,
+                change_type,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{DataChange, ModifyKind};
+    use rstest::rstest;
+    use std::path::PathBuf;
 
     #[test]
     fn test_app_event_enum() {
@@ -145,7 +182,76 @@ mod tests {
             code: KeyCode::Char('q'),
             modifiers: KeyModifiers::NONE,
         });
-        let _changed = AppEvent::SessionsChanged;
+        let _changed = AppEvent::SessionsChanged(None);
         let _tick = AppEvent::Tick;
+    }
+
+    #[rstest]
+    #[case::json_file(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json",
+        Some(("test-123", SessionChangeType::Modified))
+    )]
+    #[case::lock_file_ignored(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json.lock",
+        None
+    )]
+    #[case::tmp_file_ignored(
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        "/sessions/test-123.json.tmp",
+        None
+    )]
+    #[case::create_event(
+        EventKind::Create(CreateKind::File),
+        "/sessions/new-session.json",
+        Some(("new-session", SessionChangeType::Created))
+    )]
+    #[case::delete_event(
+        EventKind::Remove(RemoveKind::File),
+        "/sessions/deleted-session.json",
+        Some(("deleted-session", SessionChangeType::Deleted))
+    )]
+    fn test_extract_session_changes(
+        #[case] kind: EventKind,
+        #[case] path: &str,
+        #[case] expected: Option<(&str, SessionChangeType)>,
+    ) {
+        let event = notify::Event {
+            kind,
+            paths: vec![PathBuf::from(path)],
+            attrs: Default::default(),
+        };
+
+        let changes = extract_session_changes(&event);
+
+        match expected {
+            Some((session_id, change_type)) => {
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].session_id, session_id);
+                assert_eq!(changes[0].change_type, change_type);
+            }
+            None => {
+                assert!(changes.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_session_changes_multiple_files() {
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            paths: vec![
+                PathBuf::from("/sessions/session-1.json"),
+                PathBuf::from("/sessions/session-2.json"),
+                PathBuf::from("/sessions/session-3.json.lock"), // should be ignored
+            ],
+            attrs: Default::default(),
+        };
+
+        let changes = extract_session_changes(&event);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].session_id, "session-1");
+        assert_eq!(changes[1].session_id, "session-2");
     }
 }
