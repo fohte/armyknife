@@ -99,15 +99,20 @@ impl App {
 
     /// Performs a full reload of all sessions.
     fn full_reload(&mut self) -> Result<()> {
+        // Remember the currently selected session_id
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
 
         self.sessions = load_sessions()?;
+
+        // Rebuild title cache for new/changed sessions
         self.rebuild_title_cache();
 
+        // Incrementally update searchable text cache if it exists
         if self.searchable_text_cache.is_some() {
             self.update_searchable_text_cache();
         }
 
+        // Re-apply filter with current query
         self.apply_filter();
         self.restore_selection(selected_session_id.as_deref());
 
