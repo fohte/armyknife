@@ -182,8 +182,14 @@ fn select_template_pure(
     requested_name: Option<&str>,
 ) -> TemplateSelectionResult {
     match (templates.len(), requested_name) {
-        // No templates available - use default
-        (0, _) => TemplateSelectionResult::UseDefault,
+        // No templates available, none requested - use default
+        (0, None) => TemplateSelectionResult::UseDefault,
+
+        // No templates available but specific one requested - not found
+        (0, Some(name)) => TemplateSelectionResult::NotFound {
+            requested: name.to_string(),
+            available: vec![],
+        },
 
         // Specific template requested
         (_, Some(name)) => {
@@ -524,7 +530,14 @@ mod tests {
 
         #[rstest]
         #[case::no_templates_no_request(vec![], None, TemplateSelectionResult::UseDefault)]
-        #[case::no_templates_with_request(vec![], Some("Bug"), TemplateSelectionResult::UseDefault)]
+        #[case::no_templates_with_request(
+            vec![],
+            Some("Bug"),
+            TemplateSelectionResult::NotFound {
+                requested: "Bug".to_string(),
+                available: vec![],
+            }
+        )]
         #[case::single_template_auto_selects(
             vec![template("Bug")],
             None,
@@ -609,6 +622,11 @@ mod tests {
             vec![template("Bug")],
             Some("NonExistent"),
             "Template 'NonExistent' not found. Available templates: Bug"
+        )]
+        #[case::no_templates_with_request(
+            vec![],
+            Some("Bug"),
+            "Template 'Bug' not found. Available templates: "
         )]
         #[case::multiple_without_selection(
             vec![template("Bug"), template("Feature")],
