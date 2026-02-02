@@ -573,10 +573,10 @@ impl OctocrabClient {
                         body
                         about
                         filename
-                        labels(first: 10) {
+                        labels(first: 100) {
                             nodes { name }
                         }
-                        assignees(first: 10) {
+                        assignees(first: 100) {
                             nodes { login }
                         }
                     }

@@ -305,8 +305,8 @@ mod tests {
             assert!(path.exists());
 
             let content = fs::read_to_string(&path).unwrap();
-            assert!(content.contains("title: \"Bug: \""));
-            assert!(content.contains("labels: [bug]"));
+            assert!(content.contains("title: 'Bug: '"));
+            assert!(content.contains("- bug"));
             assert!(content.contains("Describe the bug"));
         }
 

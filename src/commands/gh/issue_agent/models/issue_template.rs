@@ -37,25 +37,25 @@ impl IssueTemplate {
     /// Body content
     /// ```
     pub fn to_issue_content(&self) -> String {
-        let title = self.title.as_deref().unwrap_or("");
+        #[derive(Serialize)]
+        struct Frontmatter<'a> {
+            title: &'a str,
+            labels: &'a [String],
+            assignees: &'a [String],
+        }
+
+        let frontmatter = Frontmatter {
+            title: self.title.as_deref().unwrap_or(""),
+            labels: &self.labels,
+            assignees: &self.assignees,
+        };
+
+        // serde_yaml::to_string is safe for the struct above and won't fail
+        let frontmatter_yaml = serde_yaml::to_string(&frontmatter)
+            .unwrap_or_else(|_| "title: \"\"\nlabels: []\nassignees: []".to_string());
         let body = self.body.as_deref().unwrap_or("Body");
 
-        let labels_yaml = if self.labels.is_empty() {
-            "[]".to_string()
-        } else {
-            format!("[{}]", self.labels.join(", "))
-        };
-
-        let assignees_yaml = if self.assignees.is_empty() {
-            "[]".to_string()
-        } else {
-            format!("[{}]", self.assignees.join(", "))
-        };
-
-        format!(
-            "---\ntitle: \"{}\"\nlabels: {}\nassignees: {}\n---\n\n{}\n",
-            title, labels_yaml, assignees_yaml, body
-        )
+        format!("---\n{}---\n\n{}\n", frontmatter_yaml, body)
     }
 }
 
@@ -93,15 +93,13 @@ mod tests {
         );
 
         let content = template.to_issue_content();
-        assert_eq!(
-            content,
-            "---\n\
-             title: \"Bug: \"\n\
-             labels: [bug, needs-triage]\n\
-             assignees: [alice, bob]\n\
-             ---\n\n\
-             Describe the bug here\n"
-        );
+        // serde_yaml uses single quotes for strings and multi-line format for arrays
+        assert!(content.contains("title: 'Bug: '"));
+        assert!(content.contains("- bug"));
+        assert!(content.contains("- needs-triage"));
+        assert!(content.contains("- alice"));
+        assert!(content.contains("- bob"));
+        assert!(content.contains("Describe the bug here"));
     }
 
     #[rstest]
@@ -109,15 +107,11 @@ mod tests {
         let template = create_template("Empty", None, None, vec![], vec![]);
 
         let content = template.to_issue_content();
-        assert_eq!(
-            content,
-            "---\n\
-             title: \"\"\n\
-             labels: []\n\
-             assignees: []\n\
-             ---\n\n\
-             Body\n"
-        );
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("title:"));
+        assert!(content.contains("labels: []"));
+        assert!(content.contains("assignees: []"));
+        assert!(content.ends_with("---\n\nBody\n"));
     }
 
     #[rstest]
@@ -131,8 +125,8 @@ mod tests {
         );
 
         let content = template.to_issue_content();
-        assert!(content.contains("title: \"Feature: \""));
-        assert!(content.contains("labels: [enhancement]"));
+        assert!(content.contains("title: 'Feature: '"));
+        assert!(content.contains("- enhancement"));
         assert!(content.contains("assignees: []"));
     }
 
