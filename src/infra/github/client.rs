@@ -510,6 +510,120 @@ impl OctocrabClient {
 
         Ok(all_events)
     }
+
+    // ============ Issue Template Operations ============
+
+    /// Get issue templates for a repository using GraphQL.
+    ///
+    /// Returns all issue templates configured in the repository's
+    /// `.github/ISSUE_TEMPLATE/` directory.
+    pub async fn get_issue_templates(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<crate::commands::gh::issue_agent::models::IssueTemplate>> {
+        #[derive(Debug, Deserialize)]
+        struct GetIssueTemplatesData {
+            repository: Option<RepositoryData>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RepositoryData {
+            issue_templates: Option<Vec<GraphQLIssueTemplate>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLIssueTemplate {
+            name: String,
+            title: Option<String>,
+            body: Option<String>,
+            about: Option<String>,
+            filename: Option<String>,
+            labels: Option<LabelsConnection>,
+            assignees: Option<AssigneesConnection>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelsConnection {
+            nodes: Option<Vec<LabelNode>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct LabelNode {
+            name: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneesConnection {
+            nodes: Option<Vec<AssigneeNode>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AssigneeNode {
+            login: String,
+        }
+
+        const GET_ISSUE_TEMPLATES_QUERY: &str = indoc! {"
+            query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) {
+                    issueTemplates {
+                        name
+                        title
+                        body
+                        about
+                        filename
+                        labels(first: 100) {
+                            nodes { name }
+                        }
+                        assignees(first: 100) {
+                            nodes { login }
+                        }
+                    }
+                }
+            }
+        "};
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo,
+        });
+
+        let response: GetIssueTemplatesData =
+            self.graphql(GET_ISSUE_TEMPLATES_QUERY, variables).await?;
+
+        let templates = response
+            .repository
+            .and_then(|r| r.issue_templates)
+            .unwrap_or_default()
+            .into_iter()
+            .map(
+                |t| crate::commands::gh::issue_agent::models::IssueTemplate {
+                    name: t.name,
+                    title: t.title,
+                    body: t.body,
+                    about: t.about,
+                    filename: t.filename,
+                    labels: t
+                        .labels
+                        .and_then(|l| l.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|n| n.name)
+                        .collect(),
+                    assignees: t
+                        .assignees
+                        .and_then(|a| a.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|n| n.login)
+                        .collect(),
+                },
+            )
+            .collect();
+
+        Ok(templates)
+    }
 }
 
 /// Get GitHub token from `gh auth token` command.
@@ -551,8 +665,95 @@ fn get_gh_token() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::commands::gh::issue_agent::models::IssueTemplate;
     use crate::infra::github::mock::GitHubMockServer;
     use rstest::rstest;
+
+    mod get_issue_templates_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_empty_when_no_templates() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(&[])
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_single_template() {
+            let mock = GitHubMockServer::start().await;
+            let template = IssueTemplate {
+                name: "Bug Report".to_string(),
+                title: Some("[Bug]: ".to_string()),
+                body: Some("## Description\n\nDescribe the bug".to_string()),
+                about: Some("File a bug report".to_string()),
+                filename: Some("bug_report.yml".to_string()),
+                labels: vec!["bug".to_string()],
+                assignees: vec![],
+            };
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(std::slice::from_ref(&template))
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            let templates = result.unwrap();
+            assert_eq!(templates.len(), 1);
+            assert_eq!(templates[0].name, "Bug Report");
+            assert_eq!(templates[0].title, Some("[Bug]: ".to_string()));
+            assert_eq!(templates[0].labels, vec!["bug".to_string()]);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_multiple_templates() {
+            let mock = GitHubMockServer::start().await;
+            let templates = vec![
+                IssueTemplate {
+                    name: "Bug Report".to_string(),
+                    title: None,
+                    body: None,
+                    about: None,
+                    filename: None,
+                    labels: vec!["bug".to_string()],
+                    assignees: vec![],
+                },
+                IssueTemplate {
+                    name: "Feature Request".to_string(),
+                    title: Some("[Feature]: ".to_string()),
+                    body: Some("Describe the feature".to_string()),
+                    about: Some("Suggest an idea".to_string()),
+                    filename: None,
+                    labels: vec!["enhancement".to_string()],
+                    assignees: vec!["maintainer".to_string()],
+                },
+            ];
+            mock.repo("owner", "repo")
+                .graphql_issue_templates(&templates)
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_templates("owner", "repo").await;
+
+            assert!(result.is_ok());
+            let fetched = result.unwrap();
+            assert_eq!(fetched.len(), 2);
+            assert_eq!(fetched[0].name, "Bug Report");
+            assert_eq!(fetched[1].name, "Feature Request");
+            assert_eq!(fetched[1].assignees, vec!["maintainer".to_string()]);
+        }
+    }
 
     mod create_issue_tests {
         use super::*;

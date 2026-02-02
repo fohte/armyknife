@@ -105,6 +105,7 @@ a gh issue-agent <command> <issue-number> [options]
 | `pull`  | Fetch issue and save locally                        |
 | `push`  | Push local changes to GitHub                        |
 | `diff`  | Show colored diff between local changes and remote  |
+| `init`  | Create boilerplate files for new issues or comments |
 
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |
@@ -113,6 +114,24 @@ a gh issue-agent <command> <issue-number> [options]
 | `--force`        | Overwrite local/remote changes (context-dependent) |
 | `--edit-others`  | Allow editing other users' comments                |
 | `--allow-delete` | Allow deleting comments removed locally            |
+
+##### `a gh issue-agent init issue`
+
+Create a new issue boilerplate file. Fetches issue templates from the repository if available.
+
+| Option              | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `--list-templates`  | List available issue templates and exit           |
+| `--template <NAME>` | Use a specific issue template by name             |
+| `--no-template`     | Use default boilerplate (skip template selection) |
+
+##### `a gh issue-agent init comment <issue-number>`
+
+Create a new comment boilerplate file for an existing issue.
+
+| Option          | Description                                    |
+| --------------- | ---------------------------------------------- |
+| `--name <NAME>` | Name for the comment file (default: timestamp) |
 
 #### `a gh check-pr-review`
 

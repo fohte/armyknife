@@ -435,6 +435,46 @@ impl<'a> MockRepoContext<'a> {
         }
     }
 
+    /// Mock GraphQL endpoint for fetching issue templates.
+    ///
+    /// Uses `body_string_contains` to distinguish from other GraphQL queries.
+    pub async fn graphql_issue_templates(
+        &self,
+        templates: &[crate::commands::gh::issue_agent::models::IssueTemplate],
+    ) {
+        let template_nodes: Vec<serde_json::Value> = templates
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "title": t.title,
+                    "body": t.body,
+                    "about": t.about,
+                    "filename": t.filename,
+                    "labels": {
+                        "nodes": t.labels.iter().map(|l| json!({"name": l})).collect::<Vec<_>>()
+                    },
+                    "assignees": {
+                        "nodes": t.assignees.iter().map(|a| json!({"login": a})).collect::<Vec<_>>()
+                    }
+                })
+            })
+            .collect();
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("issueTemplates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "issueTemplates": template_nodes
+                    }
+                }
+            })))
+            .mount(self.server)
+            .await;
+    }
+
     /// Mock GraphQL endpoint for fetching comments.
     ///
     /// Uses `body_string_contains` to distinguish from timeline events query.
