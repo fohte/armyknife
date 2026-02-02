@@ -1,7 +1,7 @@
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::store;
-use crate::commands::cc::tty;
 use crate::commands::cc::types::Session;
+use crate::infra::tmux;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
@@ -432,10 +432,13 @@ impl App {
 
 /// Checks if a session is stale (TTY no longer exists).
 fn is_session_stale(session: &Session) -> bool {
-    match &session.tty {
-        Some(tty_path) => !tty::is_tty_alive(tty_path),
-        None => true,
+    if !tmux::is_server_available() {
+        return false;
     }
+    session
+        .tmux_info
+        .as_ref()
+        .is_some_and(|info| !tmux::is_pane_alive(&info.pane_id))
 }
 
 /// Builds the searchable text cache for all sessions.
