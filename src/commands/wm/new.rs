@@ -23,21 +23,32 @@ fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
 /// Save prompt to cache directory for recovery.
 fn save_prompt_cache(repo_root: &str, prompt: &str) -> Result<PathBuf> {
     let path = get_prompt_cache_path(repo_root).context("Failed to determine cache directory")?;
+    save_prompt_cache_to(&path, prompt)?;
+    Ok(path)
+}
 
+/// Internal implementation for saving prompt to a specific path.
+/// Allows testing with temporary directories.
+fn save_prompt_cache_to(path: &Path, prompt: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create cache directory")?;
     }
 
-    std::fs::write(&path, prompt).context("Failed to save prompt")?;
+    std::fs::write(path, prompt).context("Failed to save prompt")?;
 
-    Ok(path)
+    Ok(())
 }
 
 /// Delete the saved prompt cache after successful completion.
 fn delete_prompt_cache(repo_root: &str) {
     if let Some(path) = get_prompt_cache_path(repo_root) {
-        let _ = std::fs::remove_file(path);
+        delete_prompt_cache_at(&path);
     }
+}
+
+/// Internal implementation for deleting prompt cache at a specific path.
+fn delete_prompt_cache_at(path: &Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 /// Open $EDITOR to let user input a prompt.
@@ -677,29 +688,37 @@ mod tests {
     #[rstest]
     fn save_and_delete_prompt_cache() {
         let temp_dir = TempDir::new().unwrap();
-        let repo_root = temp_dir.path().join("test-repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
+        let cache_path = temp_dir
+            .path()
+            .join("wm")
+            .join("test-repo")
+            .join("prompt.md");
 
         let prompt = "test prompt content";
-        let path = save_prompt_cache(repo_root.to_str().unwrap(), prompt).unwrap();
+        save_prompt_cache_to(&cache_path, prompt).unwrap();
 
         // File should exist with correct content
-        assert!(path.exists());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), prompt);
+        assert!(cache_path.exists());
+        assert_eq!(std::fs::read_to_string(&cache_path).unwrap(), prompt);
 
         // Delete should remove the file
-        delete_prompt_cache(repo_root.to_str().unwrap());
-        assert!(!path.exists());
+        delete_prompt_cache_at(&cache_path);
+        assert!(!cache_path.exists());
     }
 
     #[rstest]
     fn save_prompt_cache_creates_parent_directories() {
         let temp_dir = TempDir::new().unwrap();
-        let repo_root = temp_dir.path().join("nested").join("path").join("repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
+        let cache_path = temp_dir
+            .path()
+            .join("wm")
+            .join("nested")
+            .join("path")
+            .join("repo")
+            .join("prompt.md");
 
-        let path = save_prompt_cache(repo_root.to_str().unwrap(), "test").unwrap();
-        assert!(path.exists());
+        save_prompt_cache_to(&cache_path, "test").unwrap();
+        assert!(cache_path.exists());
     }
 
     #[rstest]

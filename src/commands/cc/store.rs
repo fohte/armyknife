@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -26,6 +26,17 @@ pub fn sessions_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("sessions"))
         .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
+/// Returns the file path for a specific session within a given directory.
+/// This is the internal implementation that accepts a custom sessions directory.
+fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
+    // Reject session IDs with path separators to prevent path traversal
+    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+        return Err(CcError::InvalidSessionId(session_id.to_string()).into());
+    }
+
+    Ok(sessions_dir.join(format!("{session_id}.json")))
 }
 
 /// Returns the file path for a specific session.
@@ -70,7 +81,14 @@ fn acquire_lock(file: &File) -> Result<()> {
 /// The corrupted file is not deleted here to avoid race conditions; instead,
 /// the next save_session call will atomically overwrite it.
 pub fn load_session(session_id: &str) -> Result<Option<Session>> {
-    let path = session_file(session_id)?;
+    let dir = sessions_dir()?;
+    load_session_from(&dir, session_id)
+}
+
+/// Internal implementation for loading a session from a specific directory.
+/// Allows testing with temporary directories.
+fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result<Option<Session>> {
+    let path = session_file_in(sessions_dir, session_id)?;
 
     if !path.exists() {
         return Ok(None);
@@ -139,7 +157,14 @@ fn acquire_shared_lock(file: &File) -> Result<()> {
 /// Uses atomic write (write to temp file, then rename) combined with
 /// file locking to prevent race conditions when multiple hooks run concurrently.
 pub fn save_session(session: &Session) -> Result<()> {
-    let path = session_file(&session.session_id)?;
+    let dir = sessions_dir()?;
+    save_session_to(&dir, session)
+}
+
+/// Internal implementation for saving a session to a specific directory.
+/// Allows testing with temporary directories.
+fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
+    let path = session_file_in(sessions_dir, &session.session_id)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -407,24 +432,23 @@ mod tests {
         }
 
         #[rstest]
-        fn concurrent_save_does_not_corrupt_file() {
+        fn concurrent_save_does_not_corrupt_file(temp_session_dir: TempSessionDir) {
             let num_threads = 10;
             let barrier = Arc::new(Barrier::new(num_threads));
-
-            let cache_sessions_dir = sessions_dir().expect("sessions_dir should succeed");
-            fs::create_dir_all(&cache_sessions_dir).expect("cache dir creation should succeed");
+            let sessions_path = Arc::new(temp_session_dir.sessions_path.clone());
 
             let session_id = format!("concurrent-test-{}", std::process::id());
             let handles: Vec<_> = (0..num_threads)
                 .map(|i| {
                     let barrier = Arc::clone(&barrier);
                     let session_id = session_id.clone();
+                    let sessions_path = Arc::clone(&sessions_path);
                     thread::spawn(move || {
                         let mut session = create_test_session(&session_id);
                         session.last_message = Some(format!("Message from thread {}", i));
 
                         barrier.wait();
-                        save_session(&session)
+                        save_session_to(&sessions_path, &session)
                     })
                 })
                 .collect();
@@ -440,38 +464,33 @@ mod tests {
                 );
             }
 
-            let loaded = load_session(&session_id).expect("load should succeed");
+            let loaded = load_session_from(&temp_session_dir.sessions_path, &session_id)
+                .expect("load should succeed");
             assert!(loaded.is_some(), "session should be loadable");
             assert_eq!(loaded.unwrap().session_id, session_id);
-
-            // Cleanup
-            let _ = delete_session(&session_id);
-            let lock_path = session_file(&session_id)
-                .expect("session_file should succeed")
-                .with_extension("json.lock");
-            let _ = fs::remove_file(&lock_path);
+            // TempDir cleanup happens automatically when temp_session_dir is dropped
         }
     }
 
     mod cleanup_stale_sessions_tests {
         use super::*;
         use crate::commands::cc::types::TmuxInfo;
-        use rstest::rstest;
+        use rstest::{fixture, rstest};
 
-        /// Helper to create a unique session ID and ensure cache dir exists.
-        fn setup_session(prefix: &str) -> (String, PathBuf) {
-            let cache_sessions_dir = sessions_dir().expect("sessions_dir should succeed");
-            fs::create_dir_all(&cache_sessions_dir).expect("cache dir creation should succeed");
-
-            let session_id = format!("{}-{}", prefix, std::process::id());
-            let path = session_file(&session_id).expect("session_file should succeed");
-            (session_id, path)
+        struct TempSessionDir {
+            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
+            temp_dir: TempDir,
+            sessions_path: PathBuf,
         }
 
-        fn cleanup_session(session_id: &str) {
-            let _ = delete_session(session_id);
-            if let Ok(path) = session_file(session_id) {
-                let _ = fs::remove_file(path.with_extension("json.lock"));
+        #[fixture]
+        fn temp_session_dir() -> TempSessionDir {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let sessions_path = temp_dir.path().join("sessions");
+            fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
+            TempSessionDir {
+                temp_dir,
+                sessions_path,
             }
         }
 
@@ -487,11 +506,15 @@ mod tests {
 
         /// Test helper that processes only a single session file.
         /// This ensures test isolation without affecting other parallel tests.
-        fn cleanup_single_session<F>(session_id: &str, is_pane_alive: F) -> Result<()>
+        fn cleanup_single_session_in<F>(
+            sessions_dir: &Path,
+            session_id: &str,
+            is_pane_alive: F,
+        ) -> Result<()>
         where
             F: Fn(&str) -> bool,
         {
-            let path = session_file(session_id)?;
+            let path = session_file_in(sessions_dir, session_id)?;
 
             if !path.exists() {
                 return Ok(());
@@ -515,21 +538,28 @@ mod tests {
         }
 
         #[rstest]
-        fn removes_session_with_nonexistent_pane() {
-            let (session_id, path) = setup_session("dead-pane");
+        fn removes_session_with_nonexistent_pane(temp_session_dir: TempSessionDir) {
+            let session_id = "dead-pane-test";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
 
-            let mut session = create_test_session(&session_id);
+            let mut session = create_test_session(session_id);
             session.tmux_info = Some(TmuxInfo {
                 session_name: "test".to_string(),
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%99999".to_string(),
             });
-            save_session(&session).expect("save should succeed");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_single_session(&session_id, mock_pane_always_dead)
-                .expect("cleanup should succeed");
+            cleanup_single_session_in(
+                &temp_session_dir.sessions_path,
+                session_id,
+                mock_pane_always_dead,
+            )
+            .expect("cleanup should succeed");
 
             assert!(
                 !path.exists(),
@@ -538,62 +568,79 @@ mod tests {
         }
 
         #[rstest]
-        fn keeps_session_with_alive_pane() {
-            let (session_id, path) = setup_session("alive-pane");
+        fn keeps_session_with_alive_pane(temp_session_dir: TempSessionDir) {
+            let session_id = "alive-pane-test";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
 
-            let mut session = create_test_session(&session_id);
+            let mut session = create_test_session(session_id);
             session.tmux_info = Some(TmuxInfo {
                 session_name: "test".to_string(),
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%1".to_string(),
             });
-            save_session(&session).expect("save should succeed");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
 
-            cleanup_single_session(&session_id, mock_pane_always_alive)
-                .expect("cleanup should succeed");
+            cleanup_single_session_in(
+                &temp_session_dir.sessions_path,
+                session_id,
+                mock_pane_always_alive,
+            )
+            .expect("cleanup should succeed");
 
             assert!(path.exists(), "session with alive pane should be kept");
-
-            cleanup_session(&session_id);
         }
 
         #[rstest]
-        fn keeps_session_without_tmux_info() {
-            let (session_id, path) = setup_session("no-tmux");
+        fn keeps_session_without_tmux_info(temp_session_dir: TempSessionDir) {
+            let session_id = "no-tmux-test";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
 
-            let mut session = create_test_session(&session_id);
+            let mut session = create_test_session(session_id);
             session.tmux_info = None;
-            save_session(&session).expect("save should succeed");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
 
             // Even with mock that treats all panes as dead, sessions without
             // tmux_info should be kept.
-            cleanup_single_session(&session_id, mock_pane_always_dead)
-                .expect("cleanup should succeed");
+            cleanup_single_session_in(
+                &temp_session_dir.sessions_path,
+                session_id,
+                mock_pane_always_dead,
+            )
+            .expect("cleanup should succeed");
 
             assert!(path.exists(), "session without tmux_info should be kept");
-
-            cleanup_session(&session_id);
         }
 
         #[rstest]
-        fn also_removes_lock_file() {
-            let (session_id, path) = setup_session("with-lock");
+        fn also_removes_lock_file(temp_session_dir: TempSessionDir) {
+            let session_id = "with-lock-test";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
 
-            let mut session = create_test_session(&session_id);
+            let mut session = create_test_session(session_id);
             session.tmux_info = Some(TmuxInfo {
                 session_name: "test".to_string(),
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%99999".to_string(),
             });
-            save_session(&session).expect("save should succeed");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
 
             let lock_path = path.with_extension("json.lock");
             assert!(path.exists(), "session file should exist");
 
-            cleanup_single_session(&session_id, mock_pane_always_dead)
-                .expect("cleanup should succeed");
+            cleanup_single_session_in(
+                &temp_session_dir.sessions_path,
+                session_id,
+                mock_pane_always_dead,
+            )
+            .expect("cleanup should succeed");
 
             assert!(!path.exists(), "session file should be removed");
             assert!(!lock_path.exists(), "lock file should also be removed");
@@ -602,16 +649,23 @@ mod tests {
 
     mod corrupted_file_recovery_tests {
         use super::*;
-        use rstest::rstest;
+        use rstest::{fixture, rstest};
 
-        /// Helper to create a unique session ID and ensure cache dir exists.
-        fn setup_session(prefix: &str) -> (String, PathBuf) {
-            let cache_sessions_dir = sessions_dir().expect("sessions_dir should succeed");
-            fs::create_dir_all(&cache_sessions_dir).expect("cache dir creation should succeed");
+        struct TempSessionDir {
+            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
+            temp_dir: TempDir,
+            sessions_path: PathBuf,
+        }
 
-            let session_id = format!("{}-{}", prefix, std::process::id());
-            let path = session_file(&session_id).expect("session_file should succeed");
-            (session_id, path)
+        #[fixture]
+        fn temp_session_dir() -> TempSessionDir {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let sessions_path = temp_dir.path().join("sessions");
+            fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
+            TempSessionDir {
+                temp_dir,
+                sessions_path,
+            }
         }
 
         #[rstest]
@@ -621,39 +675,36 @@ mod tests {
         )]
         #[case::truncated_json(r#"{"session_id": "test", "cwd": "/tmp""#, "truncated")]
         #[case::empty_file("", "empty")]
-        fn load_invalid_json_returns_none(#[case] content: &str, #[case] prefix: &str) {
-            let (session_id, path) = setup_session(prefix);
+        fn load_invalid_json_returns_none(
+            temp_session_dir: TempSessionDir,
+            #[case] content: &str,
+            #[case] prefix: &str,
+        ) {
+            let session_id = format!("{}-test", prefix);
+            let path = session_file_in(&temp_session_dir.sessions_path, &session_id)
+                .expect("session_file_in should succeed");
 
             fs::write(&path, content).expect("write should succeed");
 
-            let result = load_session(&session_id).expect("load should not error");
+            let result = load_session_from(&temp_session_dir.sessions_path, &session_id)
+                .expect("load should not error");
             assert!(result.is_none(), "{} session should return None", prefix);
             // File is not deleted to avoid race conditions; save_session will overwrite it
             assert!(path.exists(), "{} file should still exist", prefix);
-
-            // Cleanup
-            let _ = fs::remove_file(&path);
-            let lock_path = path.with_extension("json.lock");
-            let _ = fs::remove_file(&lock_path);
         }
 
         #[rstest]
-        fn load_valid_session_succeeds() {
-            let (session_id, _path) = setup_session("valid");
-            let session = create_test_session(&session_id);
+        fn load_valid_session_succeeds(temp_session_dir: TempSessionDir) {
+            let session_id = "valid-test";
+            let session = create_test_session(session_id);
 
-            save_session(&session).expect("save should succeed");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
 
-            let loaded = load_session(&session_id).expect("load should succeed");
+            let loaded = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed");
             assert!(loaded.is_some(), "valid session should load");
             assert_eq!(loaded.unwrap().session_id, session_id);
-
-            // Cleanup
-            let _ = delete_session(&session_id);
-            let lock_path = session_file(&session_id)
-                .expect("session_file should succeed")
-                .with_extension("json.lock");
-            let _ = fs::remove_file(&lock_path);
         }
     }
 }
