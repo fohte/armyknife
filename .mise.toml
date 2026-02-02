@@ -1,6 +1,6 @@
 [tools]
+"cargo:ast-grep" = "0.40.4"
 lefthook = "2.0.15"
-"npm:@ast-grep/cli" = "0.40.4"
 
 # lefthook hooks
 actionlint = "1.7.10"
