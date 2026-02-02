@@ -418,10 +418,12 @@ fn read_last_assistant_message_forward(file: &File) -> Option<String> {
             continue;
         };
 
+        // Look for "assistant" type entries
         if entry.entry_type.as_deref() != Some("assistant") {
             continue;
         }
 
+        // Extract text from content array
         if let Some(message) = entry.message
             && let Some(contents) = message.content
         {
@@ -431,7 +433,7 @@ fn read_last_assistant_message_forward(file: &File) -> Option<String> {
                     && !text.is_empty()
                 {
                     last_text = Some(normalize_title(&text));
-                    break;
+                    break; // Take the first text element in this message
                 }
             }
         }
