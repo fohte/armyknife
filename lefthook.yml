@@ -8,7 +8,7 @@ remotes:
 pre-commit:
   commands:
     ast-grep-test:
-      glob: 'rules/*.yml'
+      glob: '.sg/{rules,tests}/*.yml'
       run: sg test
     ast-grep-scan:
       glob: '*.rs'
