@@ -468,7 +468,6 @@ mod tests {
                 .expect("load should succeed");
             assert!(loaded.is_some(), "session should be loadable");
             assert_eq!(loaded.unwrap().session_id, session_id);
-            // TempDir cleanup happens automatically when temp_session_dir is dropped
         }
     }
 
