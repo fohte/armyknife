@@ -257,20 +257,6 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
-/// Set the title of a tmux pane.
-/// This does not require being inside tmux, as it targets a specific pane ID.
-#[expect(dead_code, reason = "may be used in future for display purposes")]
-pub fn set_pane_title(pane_id: &str, title: &str) -> Result<()> {
-    run_tmux(&["select-pane", "-t", pane_id, "-T", title])
-}
-
-/// Get the current pane's title.
-/// Returns None if not in tmux or if the command fails.
-#[expect(dead_code, reason = "may be used in future for display purposes")]
-pub fn get_current_pane_title() -> Option<String> {
-    query_tmux_value("#{pane_title}")
-}
-
 /// Set a user option on a specific tmux pane.
 /// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.
@@ -358,29 +344,34 @@ pub fn list_all_panes_with_option(option: &str) -> Vec<PaneInfoWithOption> {
 
     output
         .lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-
-            let session_name = parts.next()?.to_string();
-            let window_index = parts.next()?.parse::<u32>().ok()?;
-            let pane_index = parts.next()?.parse::<u32>().ok()?;
-            let pane_id = parts.next()?.to_string();
-            let option_value = parts.next().map(|s| s.to_string());
-
-            // Only include panes where the option is set
-            if option_value.as_ref().is_some_and(|v| !v.is_empty()) {
-                Some(PaneInfoWithOption {
-                    session_name,
-                    window_index,
-                    pane_index,
-                    pane_id,
-                    option_value,
-                })
-            } else {
-                None
-            }
-        })
+        .filter_map(parse_pane_with_option_line)
         .collect()
+}
+
+/// Parses a single line from tmux list-panes output with user option.
+/// Format: "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{option}"
+/// Returns None if the line is malformed or the option is empty.
+fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
+    let mut parts = line.split('\t');
+
+    let session_name = parts.next()?.to_string();
+    let window_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_id = parts.next()?.to_string();
+    let option_value = parts.next().map(|s| s.to_string());
+
+    // Only include panes where the option is set
+    if option_value.as_ref().is_some_and(|v| !v.is_empty()) {
+        Some(PaneInfoWithOption {
+            session_name,
+            window_index,
+            pane_index,
+            pane_id,
+            option_value,
+        })
+    } else {
+        None
+    }
 }
 
 /// Finds a pane by session:window_index.pane_index and returns its pane_id.
