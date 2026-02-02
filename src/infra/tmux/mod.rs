@@ -257,16 +257,35 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
-/// Set the title of a tmux pane.
+/// Set a user option on a specific tmux pane.
+/// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.
-pub fn set_pane_title(pane_id: &str, title: &str) -> Result<()> {
-    run_tmux(&["select-pane", "-t", pane_id, "-T", title])
+pub fn set_pane_option(pane_id: &str, option: &str, value: &str) -> Result<()> {
+    run_tmux(&["set-option", "-p", "-t", pane_id, option, value])
 }
 
-/// Get the current pane's title.
-/// Returns None if not in tmux or if the command fails.
-pub fn get_current_pane_title() -> Option<String> {
-    query_tmux_value("#{pane_title}")
+/// Unset a user option on a specific tmux pane.
+/// User options are prefixed with '@' (e.g., "@armyknife-session-id").
+/// This does not require being inside tmux, as it targets a specific pane ID.
+pub fn unset_pane_option(pane_id: &str, option: &str) -> Result<()> {
+    run_tmux(&["set-option", "-p", "-u", "-t", pane_id, option])
+}
+
+/// Get a user option value from the current tmux pane.
+/// Returns None if not in tmux, the option is not set, or the command fails.
+pub fn get_current_pane_option(option: &str) -> Option<String> {
+    if !in_tmux() {
+        return None;
+    }
+
+    // Use show-options to get pane-specific option value
+    // Format: "option_name value"
+    let output = run_tmux_output(&["show-options", "-p", "-v", option]).ok()?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
 }
 
 /// Get the current pane's ID (e.g., "%0").
@@ -295,6 +314,84 @@ pub struct PaneInfo {
     pub window_name: String,
     pub window_index: u32,
     pub pane_id: String,
+}
+
+/// Information about a tmux pane with user option values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfoWithOption {
+    pub session_name: String,
+    pub window_index: u32,
+    pub pane_index: u32,
+    pub pane_id: String,
+    pub option_value: Option<String>,
+}
+
+/// Lists all tmux panes with a specific user option value.
+/// Returns panes where the option is set (non-empty value).
+/// The option name should include the '@' prefix (e.g., "@armyknife-session-id").
+pub fn list_all_panes_with_option(option: &str) -> Vec<PaneInfoWithOption> {
+    // Build format string to get pane info and option value
+    // #{option} syntax retrieves the option value for each pane
+    let format = format!(
+        "#{{session_name}}\t#{{window_index}}\t#{{pane_index}}\t#{{pane_id}}\t#{{{}}}",
+        option
+    );
+
+    let output = match run_tmux_output(&["list-panes", "-a", "-F", &format]) {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
+    };
+
+    output
+        .lines()
+        .filter_map(parse_pane_with_option_line)
+        .collect()
+}
+
+/// Parses a single line from tmux list-panes output with user option.
+/// Format: "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{option}"
+/// Returns None if the line is malformed or the option is empty.
+fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
+    let mut parts = line.split('\t');
+
+    let session_name = parts.next()?.to_string();
+    let window_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_id = parts.next()?.to_string();
+    let option_value = parts.next().map(|s| s.to_string());
+
+    // Only include panes where the option is set
+    if option_value.as_ref().is_some_and(|v| !v.is_empty()) {
+        Some(PaneInfoWithOption {
+            session_name,
+            window_index,
+            pane_index,
+            pane_id,
+            option_value,
+        })
+    } else {
+        None
+    }
+}
+
+/// Finds a pane by session:window_index.pane_index and returns its pane_id.
+/// Returns None if the pane is not found.
+pub fn find_pane_id_by_position(
+    session_name: &str,
+    window_index: u32,
+    pane_index: u32,
+) -> Option<String> {
+    // Target format: session_name:window_index.pane_index
+    let target = format!("{}:{}.{}", session_name, window_index, pane_index);
+
+    // Use list-panes with target to get pane_id
+    let output = run_tmux_output(&["list-panes", "-t", &target, "-F", "#{pane_id}"]).ok()?;
+
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
 }
 
 /// Gets tmux pane information for a given process ID.
@@ -500,6 +597,44 @@ mod tests {
                 assert_eq!(info.window_name, window);
                 assert_eq!(info.window_index, index);
                 assert_eq!(info.pane_id, pane);
+            }
+            None => assert!(result.is_none()),
+        }
+    }
+
+    #[rstest]
+    #[case::with_option_value(
+        "main\t0\t1\t%5\tabc-123",
+        Some(("main", 0, 1, "%5", "abc-123"))
+    )]
+    #[case::uuid_option(
+        "work\t2\t0\t%10\t550e8400-e29b-41d4-a716-446655440000",
+        Some(("work", 2, 0, "%10", "550e8400-e29b-41d4-a716-446655440000"))
+    )]
+    #[case::session_with_slash(
+        "fohte/repo\t1\t2\t%3\txyz-456",
+        Some(("fohte/repo", 1, 2, "%3", "xyz-456"))
+    )]
+    #[case::empty_option_value("main\t0\t1\t%5\t", None)]
+    #[case::missing_option_field("main\t0\t1\t%5", None)]
+    #[case::insufficient_parts("main\t0\t1", None)]
+    #[case::empty_line("", None)]
+    #[case::invalid_window_index("main\tabc\t1\t%5\toption", None)]
+    #[case::invalid_pane_index("main\t0\tabc\t%5\toption", None)]
+    fn test_parse_pane_with_option_line(
+        #[case] line: &str,
+        #[case] expected: Option<(&str, u32, u32, &str, &str)>,
+    ) {
+        let result = parse_pane_with_option_line(line);
+
+        match expected {
+            Some((session, window_idx, pane_idx, pane_id, option)) => {
+                let info = result.expect("expected Some(PaneInfoWithOption)");
+                assert_eq!(info.session_name, session);
+                assert_eq!(info.window_index, window_idx);
+                assert_eq!(info.pane_index, pane_idx);
+                assert_eq!(info.pane_id, pane_id);
+                assert_eq!(info.option_value, Some(option.to_string()));
             }
             None => assert!(result.is_none()),
         }
