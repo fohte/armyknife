@@ -1,6 +1,7 @@
 //! Common utilities shared across issue-agent commands.
 
 use std::path::Path;
+use std::process::Command;
 
 use super::IssueArgs;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
@@ -30,6 +31,34 @@ pub fn get_repo_from_arg_or_git(repo_arg: &Option<String>) -> anyhow::Result<Str
     })?;
 
     Ok(format!("{}/{}", owner, repo))
+}
+
+/// Validate that a repository exists on GitHub using `gh repo view`.
+///
+/// Returns Ok(()) if the repository exists, or an error if it doesn't exist
+/// or if the validation fails.
+pub fn validate_repo_exists(repo: &str) -> anyhow::Result<()> {
+    let output = Command::new("gh")
+        .args(["repo", "view", repo, "--json", "name"])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Check for common error patterns
+        if stderr.contains("Could not resolve to a Repository")
+            || stderr.contains("not found")
+            || stderr.contains("Not Found")
+        {
+            anyhow::bail!("Repository '{}' not found on GitHub", repo);
+        }
+        anyhow::bail!(
+            "Failed to validate repository '{}': {}",
+            repo,
+            stderr.trim()
+        );
+    }
+
+    Ok(())
 }
 
 /// Context for issue operations containing all necessary state.
@@ -163,4 +192,28 @@ mod tests {
     }
 
     // diff tests are now in src/shared/diff.rs
+
+    mod validate_repo_exists_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_returns_ok_for_existing_repo() {
+            // Use a well-known public repository
+            let result = validate_repo_exists("cli/cli");
+            assert!(result.is_ok());
+        }
+
+        #[rstest]
+        fn test_returns_error_for_nonexistent_repo() {
+            // Use a clearly nonexistent repository
+            let result = validate_repo_exists("nonexistent-owner-xyz/nonexistent-repo-xyz");
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not found on GitHub")
+            );
+        }
+    }
 }

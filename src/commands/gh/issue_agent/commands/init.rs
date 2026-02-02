@@ -2,7 +2,7 @@
 
 use clap::{Args, Subcommand};
 
-use super::common::{get_repo_from_arg_or_git, parse_repo};
+use super::common::{get_repo_from_arg_or_git, parse_repo, validate_repo_exists};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 
 /// Arguments for the init command.
@@ -58,6 +58,8 @@ fn run_init_issue(args: &InitIssueArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
     let _ = parse_repo(&repo)?;
+    // Validate repository exists on GitHub
+    validate_repo_exists(&repo)?;
     let storage = IssueStorage::new_for_new_issue(&repo);
     run_init_issue_with_storage(&storage)
 }
@@ -87,10 +89,13 @@ fn run_init_comment(args: &InitCommentArgs) -> anyhow::Result<()> {
     // Validate repo format to prevent path traversal
     let _ = parse_repo(&repo)?;
 
-    // Validate comment name if provided
+    // Validate comment name if provided (local validation first, before network call)
     if let Some(name) = &args.name {
         validate_comment_name(name)?;
     }
+
+    // Validate repository exists on GitHub
+    validate_repo_exists(&repo)?;
 
     let storage = IssueStorage::new(&repo, args.issue_number as i64);
     run_init_comment_with_storage(&storage, args.issue_number, args.name.as_deref())
