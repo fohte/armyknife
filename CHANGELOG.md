@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.64](https://github.com/fohte/armyknife/compare/v0.1.63...v0.1.64) (2026-02-02)
+
+
+### Features
+
+* **gh/issue-agent:** manage title in frontmatter instead of body h1 ([#201](https://github.com/fohte/armyknife/issues/201)) ([c791583](https://github.com/fohte/armyknife/commit/c7915835908346c9839a7b94d955608374491562))
+
 ## [0.1.63](https://github.com/fohte/armyknife/compare/v0.1.62...v0.1.63) (2026-02-02)
 
 
