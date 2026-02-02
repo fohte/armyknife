@@ -33,8 +33,8 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             AppEvent::Key(key) => {
                 handle_key_event(&mut app, key);
             }
-            AppEvent::SessionsChanged => {
-                app.reload_sessions()?;
+            AppEvent::SessionsChanged(changes) => {
+                app.reload_sessions(changes.as_deref())?;
             }
             AppEvent::Tick => {
                 // Periodic refresh for relative time updates

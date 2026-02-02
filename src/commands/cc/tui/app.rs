@@ -1,10 +1,13 @@
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::store;
+use crate::commands::cc::tty;
 use crate::commands::cc::types::Session;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+
+use super::event::{SessionChange, SessionChangeType};
 
 /// Application mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -83,33 +86,110 @@ impl App {
     }
 
     /// Reloads sessions from disk.
+    /// If changes are provided, only those sessions are reloaded (incremental).
+    /// If None, performs a full reload.
     /// Preserves the selection by session_id if possible.
-    pub fn reload_sessions(&mut self) -> Result<()> {
-        // Remember the currently selected session_id
+    pub fn reload_sessions(&mut self, changes: Option<&[SessionChange]>) -> Result<()> {
+        match changes {
+            Some(changes) => self.apply_incremental_changes(changes)?,
+            None => self.full_reload()?,
+        }
+        Ok(())
+    }
+
+    /// Performs a full reload of all sessions.
+    fn full_reload(&mut self) -> Result<()> {
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
 
         self.sessions = load_sessions()?;
-
-        // Rebuild title cache for new/changed sessions
         self.rebuild_title_cache();
 
-        // Incrementally update searchable text cache if it exists
         if self.searchable_text_cache.is_some() {
             self.update_searchable_text_cache();
         }
 
-        // Re-apply filter with current query
         self.apply_filter();
+        self.restore_selection(selected_session_id.as_deref());
 
-        // Try to restore selection by session_id within filtered results
-        if let Some(ref id) = selected_session_id
+        Ok(())
+    }
+
+    /// Applies incremental changes to the session list.
+    fn apply_incremental_changes(&mut self, changes: &[SessionChange]) -> Result<()> {
+        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+
+        for change in changes {
+            match change.change_type {
+                SessionChangeType::Created | SessionChangeType::Modified => {
+                    // Load the specific session
+                    if let Some(session) = store::load_session(&change.session_id)? {
+                        // Check if session is stale (TTY check)
+                        if is_session_stale(&session) {
+                            self.remove_session(&change.session_id);
+                            store::delete_session(&change.session_id)?;
+                        } else {
+                            self.upsert_session(session);
+                        }
+                    } else {
+                        // File was deleted or corrupted
+                        self.remove_session(&change.session_id);
+                    }
+                }
+                SessionChangeType::Deleted => {
+                    self.remove_session(&change.session_id);
+                }
+            }
+        }
+
+        // Re-sort sessions by updated_at descending
+        self.sessions
+            .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        // Rebuild caches for changed sessions only
+        self.rebuild_title_cache_incremental(changes);
+
+        if self.searchable_text_cache.is_some() {
+            self.update_searchable_text_cache();
+        }
+
+        self.apply_filter();
+        self.restore_selection(selected_session_id.as_deref());
+
+        Ok(())
+    }
+
+    /// Inserts or updates a session in the list.
+    fn upsert_session(&mut self, session: Session) {
+        if let Some(existing) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.session_id == session.session_id)
+        {
+            *existing = session;
+        } else {
+            self.sessions.push(session);
+        }
+    }
+
+    /// Removes a session from the list and caches.
+    fn remove_session(&mut self, session_id: &str) {
+        self.sessions.retain(|s| s.session_id != session_id);
+        self.title_cache.remove(session_id);
+        if let Some(ref mut cache) = self.searchable_text_cache {
+            cache.remove(session_id);
+        }
+    }
+
+    /// Restores selection by session_id if possible, otherwise adjusts.
+    fn restore_selection(&mut self, session_id: Option<&str>) {
+        if let Some(id) = session_id
             && let Some(filtered_pos) = self
                 .filtered_indices
                 .iter()
-                .position(|&i| self.sessions.get(i).is_some_and(|s| &s.session_id == id))
+                .position(|&i| self.sessions.get(i).is_some_and(|s| s.session_id == id))
         {
             self.list_state.select(Some(filtered_pos));
-            return Ok(());
+            return;
         }
 
         // Fallback: adjust selection if needed
@@ -123,8 +203,6 @@ impl App {
         } else {
             self.list_state.select(Some(0));
         }
-
-        Ok(())
     }
 
     /// Moves selection to the next item in filtered list.
@@ -328,6 +406,35 @@ impl App {
     /// Rebuilds the title cache for all sessions.
     fn rebuild_title_cache(&mut self) {
         self.title_cache = build_title_cache(&self.sessions);
+    }
+
+    /// Incrementally updates the title cache for changed sessions only.
+    fn rebuild_title_cache_incremental(&mut self, changes: &[SessionChange]) {
+        for change in changes {
+            match change.change_type {
+                SessionChangeType::Created | SessionChangeType::Modified => {
+                    if let Some(session) = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.session_id == change.session_id)
+                    {
+                        let title = get_title_display_name(session);
+                        self.title_cache.insert(change.session_id.clone(), title);
+                    }
+                }
+                SessionChangeType::Deleted => {
+                    self.title_cache.remove(&change.session_id);
+                }
+            }
+        }
+    }
+}
+
+/// Checks if a session is stale (TTY no longer exists).
+fn is_session_stale(session: &Session) -> bool {
+    match &session.tty {
+        Some(tty_path) => !tty::is_tty_alive(tty_path),
+        None => true,
     }
 }
 
