@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.68](https://github.com/fohte/armyknife/compare/v0.1.67...v0.1.68) (2026-02-02)
+
+
+### Dependencies
+
+* update rust crate http to v1.4.0 ([#121](https://github.com/fohte/armyknife/issues/121)) ([f36c784](https://github.com/fohte/armyknife/commit/f36c7848946c56f81fa76946248f2faf36703a0e))
+
 ## [0.1.67](https://github.com/fohte/armyknife/compare/v0.1.66...v0.1.67) (2026-02-02)
 
 
