@@ -17,14 +17,12 @@ pub struct Issue {
     pub author: Option<Author>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Timestamp when the issue body was last edited (from GraphQL API).
-    /// None if the body has never been edited since creation.
+    /// Timestamp when the issue body was last edited (from GraphQL `lastEditedAt`).
+    /// None if the issue has never been edited since creation.
+    /// Note: GitHub API only provides a single `lastEditedAt` for body edits.
+    /// Title edits are detected via `updatedAt` instead.
     #[serde(default)]
-    pub body_last_edited_at: Option<DateTime<Utc>>,
-    /// Timestamp when the issue title was last edited (from GraphQL API).
-    /// None if the title has never been edited since creation.
-    #[serde(default)]
-    pub title_last_edited_at: Option<DateTime<Utc>>,
+    pub last_edited_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +71,8 @@ impl From<octocrab::models::issues::Issue> for Issue {
             }),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
-            // REST API doesn't provide these fields, they need to be populated via GraphQL
-            body_last_edited_at: None,
-            title_last_edited_at: None,
+            // REST API doesn't provide this field, it needs to be populated via GraphQL
+            last_edited_at: None,
         }
     }
 }

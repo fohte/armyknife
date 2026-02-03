@@ -280,32 +280,25 @@ pub(crate) struct ConflictCheckInput<'a> {
 
 /// Check for field-level conflicts between local and remote state.
 ///
-/// This function performs smart conflict detection by comparing timestamps
-/// of individual fields rather than the entire issue's updated_at timestamp.
-///
 /// Returns a list of conflicts found. Empty list means no conflicts.
 ///
 /// The logic is:
-/// - For body: conflict if local body differs from remote AND remote bodyLastEditedAt
+/// - For body: conflict if local body differs from remote AND remote `lastEditedAt`
 ///   has changed since pull
-/// - For title: conflict if local title differs from remote AND remote titleLastEditedAt
-///   has changed since pull
-/// - For comments: conflict if local comment body differs from remote AND remote updatedAt
+/// - For title: conflict if local title differs from remote AND remote `updatedAt`
+///   has changed since pull (no field-level timestamp available for title)
+/// - For comments: conflict if local comment body differs from remote AND remote `updatedAt`
 ///   has changed since pull
 pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
     let mut conflicts = Vec::new();
 
-    // Check body conflict
+    // Check body conflict using lastEditedAt
     let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
     let local_body_changed = input.local_body != remote_body;
 
     if local_body_changed {
-        // Local body was modified - check if remote body was also edited
-        let local_body_ts = input.local_metadata.body_last_edited_at.as_deref();
-        let remote_body_ts = input
-            .remote_issue
-            .body_last_edited_at
-            .map(|dt| dt.to_rfc3339());
+        let local_body_ts = input.local_metadata.last_edited_at.as_deref();
+        let remote_body_ts = input.remote_issue.last_edited_at.map(|dt| dt.to_rfc3339());
 
         if timestamps_differ(local_body_ts, remote_body_ts.as_deref()) {
             conflicts.push(Conflict::Body {
@@ -315,21 +308,17 @@ pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
         }
     }
 
-    // Check title conflict
+    // Check title conflict using updatedAt (no field-level timestamp for title)
     let local_title_changed = input.local_metadata.title != input.remote_issue.title;
 
     if local_title_changed {
-        // Local title was modified - check if remote title was also edited
-        let local_title_ts = input.local_metadata.title_last_edited_at.as_deref();
-        let remote_title_ts = input
-            .remote_issue
-            .title_last_edited_at
-            .map(|dt| dt.to_rfc3339());
+        let local_title_ts = &input.local_metadata.updated_at;
+        let remote_title_ts = input.remote_issue.updated_at.to_rfc3339();
 
-        if timestamps_differ(local_title_ts, remote_title_ts.as_deref()) {
+        if local_title_ts != &remote_title_ts {
             conflicts.push(Conflict::Title {
-                local_timestamp: local_title_ts.map(|s| s.to_string()),
-                remote_timestamp: remote_title_ts,
+                local_timestamp: Some(local_title_ts.clone()),
+                remote_timestamp: Some(remote_title_ts),
             });
         }
     }
@@ -439,8 +428,7 @@ mod tests {
                 author: "testuser".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
-                body_last_edited_at: None,
-                title_last_edited_at: None,
+                last_edited_at: None,
             }
         }
 
