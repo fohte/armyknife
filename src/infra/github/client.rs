@@ -99,6 +99,9 @@ impl OctocrabClient {
     // ============ Issue Operations ============
 
     /// Get an issue by number using GraphQL.
+    /// This fetches additional fields not available via REST API:
+    /// - bodyLastEditedAt: timestamp when the body was last edited
+    /// - titleLastEditedAt: timestamp when the title was last edited
     pub async fn get_issue(
         &self,
         owner: &str,
@@ -128,6 +131,8 @@ impl OctocrabClient {
             author: Option<GraphQLAuthor>,
             created_at: chrono::DateTime<chrono::Utc>,
             updated_at: chrono::DateTime<chrono::Utc>,
+            body_last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
+            title_last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
         }
 
         #[derive(Debug, Deserialize)]
@@ -174,6 +179,8 @@ impl OctocrabClient {
                         author { login }
                         createdAt
                         updatedAt
+                        bodyLastEditedAt
+                        titleLastEditedAt
                     }
                 }
             }
@@ -213,6 +220,8 @@ impl OctocrabClient {
                 .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login }),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
+            body_last_edited_at: issue.body_last_edited_at,
+            title_last_edited_at: issue.title_last_edited_at,
         })
     }
 

@@ -110,6 +110,8 @@ mod tests {
             }),
             created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+            body_last_edited_at: None,
+            title_last_edited_at: None,
         }
     }
 

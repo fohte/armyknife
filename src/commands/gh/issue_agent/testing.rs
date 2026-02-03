@@ -43,6 +43,8 @@ pub mod factories {
             // Use relative times for consistent relative time formatting in tests
             created_at: Utc::now() - Duration::hours(2),
             updated_at: Utc::now(),
+            body_last_edited_at: None,
+            title_last_edited_at: None,
         }
     }
 
