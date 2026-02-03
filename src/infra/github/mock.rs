@@ -423,8 +423,6 @@ impl<'a> MockRepoContext<'a> {
             body: "Test body",
             updated_at: "2024-01-02T00:00:00Z",
             labels: vec!["bug"],
-            body_last_edited_at: None,
-            title_last_edited_at: None,
         }
     }
 
@@ -618,8 +616,6 @@ pub struct MockIssueBuilder<'a> {
     body: &'a str,
     updated_at: &'a str,
     labels: Vec<&'a str>,
-    body_last_edited_at: Option<&'a str>,
-    title_last_edited_at: Option<&'a str>,
 }
 
 impl<'a> MockIssueBuilder<'a> {
@@ -647,21 +643,16 @@ impl<'a> MockIssueBuilder<'a> {
         self
     }
 
-    /// Set the bodyLastEditedAt timestamp.
-    pub fn body_last_edited_at(mut self, ts: &'a str) -> Self {
-        self.body_last_edited_at = Some(ts);
-        self
-    }
-
     /// Mount mock for GraphQL issue query (success).
     /// This replaces the REST API mock since get_issue now uses GraphQL.
+    /// Uses `body_string_contains("milestone")` to distinguish from comments query.
     pub async fn get(self) {
         let labels_json: Vec<serde_json::Value> =
             self.labels.iter().map(|l| json!({"name": l})).collect();
 
         Mock::given(method("POST"))
             .and(path("/graphql"))
-            .and(body_string_contains("bodyLastEditedAt"))
+            .and(body_string_contains("milestone"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {
                     "repository": {
@@ -675,9 +666,7 @@ impl<'a> MockIssueBuilder<'a> {
                             "milestone": null,
                             "author": {"login": "testuser"},
                             "createdAt": "2024-01-01T00:00:00Z",
-                            "updatedAt": self.updated_at,
-                            "bodyLastEditedAt": self.body_last_edited_at,
-                            "titleLastEditedAt": self.title_last_edited_at
+                            "updatedAt": self.updated_at
                         }
                     }
                 }

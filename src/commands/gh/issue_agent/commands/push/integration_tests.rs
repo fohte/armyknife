@@ -166,13 +166,13 @@ async fn test_updates_labels(test_dir: TempDir) {
 #[rstest]
 #[tokio::test]
 async fn test_remote_changed_fails(test_dir: TempDir) {
-    // Scenario: Local body was modified, and remote body was also edited.
+    // Scenario: Local body was modified, and remote issue was also updated.
     // This should fail due to conflict.
     let (mock, storage) = TestSetup::new(test_dir.path())
         .local_body("Modified body")
-        .local_body_last_edited_at(Some("2024-01-01T00:00:00+00:00"))
+        .local_ts("2024-01-01T00:00:00+00:00")
         .remote_body("Original body")
-        .remote_body_last_edited_at(Some("2024-01-02T00:00:00+00:00"))
+        .remote_ts("2024-01-02T00:00:00+00:00")
         .build()
         .await;
 
@@ -197,9 +197,9 @@ async fn test_remote_changed_force_overrides(test_dir: TempDir) {
     // This should succeed because force bypasses conflict detection.
     let (mock, storage) = TestSetup::new(test_dir.path())
         .local_body("Modified body")
-        .local_body_last_edited_at(Some("2024-01-01T00:00:00+00:00"))
+        .local_ts("2024-01-01T00:00:00+00:00")
         .remote_body("Original body")
-        .remote_body_last_edited_at(Some("2024-01-02T00:00:00+00:00"))
+        .remote_ts("2024-01-02T00:00:00+00:00")
         .build()
         .await;
 

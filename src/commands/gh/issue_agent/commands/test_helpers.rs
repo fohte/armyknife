@@ -15,14 +15,12 @@ pub fn test_dir() -> TempDir {
     tempfile::tempdir().unwrap()
 }
 
-/// Create metadata JSON with all fields including last edited timestamps.
+/// Create metadata JSON with all fields.
 pub fn create_metadata_json_full(
     number: i64,
     title: &str,
     updated_at: &str,
     labels: &[&str],
-    body_last_edited_at: Option<&str>,
-    title_last_edited_at: Option<&str>,
 ) -> String {
     let metadata = IssueMetadata {
         number,
@@ -34,8 +32,6 @@ pub fn create_metadata_json_full(
         author: "testuser".to_string(),
         created_at: "2024-01-01T00:00:00+00:00".to_string(),
         updated_at: updated_at.to_string(),
-        body_last_edited_at: body_last_edited_at.map(|s| s.to_string()),
-        title_last_edited_at: title_last_edited_at.map(|s| s.to_string()),
     };
     serde_json::to_string(&metadata).unwrap()
 }
@@ -96,14 +92,12 @@ pub struct TestSetup<'a> {
     pub remote_title: &'a str,
     pub remote_body: &'a str,
     pub remote_ts: &'a str,
-    pub remote_body_last_edited_at: Option<&'a str>,
     pub remote_comments: Vec<RemoteComment<'a>>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
     pub local_body: &'a str,
     pub local_labels: Vec<&'a str>,
     pub local_ts: &'a str,
-    pub local_body_last_edited_at: Option<&'a str>,
     // Mock client config
     pub current_user: &'a str,
 }
@@ -115,13 +109,11 @@ impl<'a> TestSetup<'a> {
             remote_title: "Title",
             remote_body: "Body",
             remote_ts: DEFAULT_TS,
-            remote_body_last_edited_at: None,
             remote_comments: vec![],
             local_title: "Title",
             local_body: "Body",
             local_labels: vec!["bug"],
             local_ts: DEFAULT_TS,
-            local_body_last_edited_at: None,
             current_user: "testuser",
         }
     }
@@ -130,13 +122,11 @@ impl<'a> TestSetup<'a> {
         remote_title: &'a str,
         remote_body: &'a str,
         remote_ts: &'a str,
-        remote_body_last_edited_at: Option<&'a str>,
         remote_comments: Vec<RemoteComment<'a>>,
         local_title: &'a str,
         local_body: &'a str,
         local_labels: Vec<&'a str>,
         local_ts: &'a str,
-        local_body_last_edited_at: Option<&'a str>,
     }
 
     /// Build the GitHubMockServer and IssueStorage.
@@ -145,16 +135,12 @@ impl<'a> TestSetup<'a> {
         let ctx = mock.repo("owner", "repo");
 
         // Set up remote issue mock
-        let mut issue_builder = ctx
-            .issue(123)
+        ctx.issue(123)
             .title(self.remote_title)
             .body(self.remote_body)
-            .updated_at(self.remote_ts);
-
-        if let Some(ts) = self.remote_body_last_edited_at {
-            issue_builder = issue_builder.body_last_edited_at(ts);
-        }
-        issue_builder.get().await;
+            .updated_at(self.remote_ts)
+            .get()
+            .await;
 
         // Set up remote comments mock
         ctx.graphql_comments(&self.remote_comments).await;
@@ -167,14 +153,7 @@ impl<'a> TestSetup<'a> {
         fs::write(self.dir.join("issue.md"), format!("{}\n", self.local_body)).unwrap();
         fs::write(
             self.dir.join("metadata.json"),
-            create_metadata_json_full(
-                123,
-                self.local_title,
-                self.local_ts,
-                &self.local_labels,
-                self.local_body_last_edited_at,
-                None, // title_last_edited_at - add setter when needed
-            ),
+            create_metadata_json_full(123, self.local_title, self.local_ts, &self.local_labels),
         )
         .unwrap();
 

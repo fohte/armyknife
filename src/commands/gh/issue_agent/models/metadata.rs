@@ -12,14 +12,6 @@ pub struct ReadonlyMetadata {
     pub author: String,
     pub created_at: String,
     pub updated_at: String,
-    /// Timestamp when the issue body was last edited (from GraphQL API).
-    /// Used for field-level conflict detection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_last_edited_at: Option<String>,
-    /// Timestamp when the issue title was last edited (from GraphQL API).
-    /// Used for field-level conflict detection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title_last_edited_at: Option<String>,
 }
 
 /// Issue frontmatter stored in issue.md.
@@ -51,8 +43,6 @@ impl IssueFrontmatter {
                 author: issue.author_login().to_string(),
                 created_at: issue.created_at.to_rfc3339(),
                 updated_at: issue.updated_at.to_rfc3339(),
-                body_last_edited_at: issue.body_last_edited_at.map(|dt| dt.to_rfc3339()),
-                title_last_edited_at: issue.title_last_edited_at.map(|dt| dt.to_rfc3339()),
             },
         }
     }
@@ -72,14 +62,6 @@ pub struct IssueMetadata {
     pub author: String,
     pub created_at: String,
     pub updated_at: String,
-    /// Timestamp when the issue body was last edited (from GraphQL API).
-    /// Used for field-level conflict detection.
-    #[serde(default)]
-    pub body_last_edited_at: Option<String>,
-    /// Timestamp when the issue title was last edited (from GraphQL API).
-    /// Used for field-level conflict detection.
-    #[serde(default)]
-    pub title_last_edited_at: Option<String>,
 }
 
 impl From<IssueFrontmatter> for IssueMetadata {
@@ -94,8 +76,6 @@ impl From<IssueFrontmatter> for IssueMetadata {
             author: fm.readonly.author,
             created_at: fm.readonly.created_at,
             updated_at: fm.readonly.updated_at,
-            body_last_edited_at: fm.readonly.body_last_edited_at,
-            title_last_edited_at: fm.readonly.title_last_edited_at,
         }
     }
 }
