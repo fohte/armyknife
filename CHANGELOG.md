@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.74](https://github.com/fohte/armyknife/compare/v0.1.73...v0.1.74) (2026-02-03)
+
+
+### Dependencies
+
+* update rust crate clap to v4.5.55 ([#224](https://github.com/fohte/armyknife/issues/224)) ([1fa9f62](https://github.com/fohte/armyknife/commit/1fa9f62058e74e8291d019cf9c1a42db50643f3a))
+
 ## [0.1.73](https://github.com/fohte/armyknife/compare/v0.1.72...v0.1.73) (2026-02-03)
 
 
