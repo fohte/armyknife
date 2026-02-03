@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.73](https://github.com/fohte/armyknife/compare/v0.1.72...v0.1.73) (2026-02-03)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** use correct GraphQL fields for conflict detection ([#222](https://github.com/fohte/armyknife/issues/222)) ([ecdb0a6](https://github.com/fohte/armyknife/commit/ecdb0a6848d6bda3dc9910401910f478c33772f9))
+
 ## [0.1.72](https://github.com/fohte/armyknife/compare/v0.1.71...v0.1.72) (2026-02-02)
 
 
