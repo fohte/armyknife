@@ -2,12 +2,14 @@ mod app;
 mod event;
 mod ui;
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode};
-use self::event::{AppEvent, EventHandler, KeyEvent};
+use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChangeType};
 use crate::infra::tmux;
 
 /// Runs the TUI application.
@@ -19,25 +21,45 @@ pub fn run() -> Result<()> {
 }
 
 /// Main application loop.
+///
+/// Uses an event-drain strategy to prevent queue buildup:
+/// 1. Block-wait for the first event
+/// 2. Drain all remaining queued events (non-blocking)
+/// 3. Key events are processed immediately during drain
+/// 4. SessionsChanged events are merged (deduplicated by session_id)
+/// 5. The merged reload + render happens once per iteration
 fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
     loop {
-        // Draw UI
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        // Handle events
-        match event_handler.next()? {
-            AppEvent::Key(key) => {
-                handle_key_event(&mut app, key);
+        let first_event = event_handler.next()?;
+        let mut needs_full_reload = false;
+        let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
+
+        // Process first event + drain all remaining queued events
+        for event in
+            std::iter::once(first_event).chain(std::iter::from_fn(|| event_handler.try_next()))
+        {
+            match event {
+                AppEvent::Key(k) => handle_key_event(&mut app, k),
+                AppEvent::SessionsChanged(Some(changes)) => {
+                    for c in changes {
+                        change_map.insert(c.session_id, c.change_type);
+                    }
+                }
+                AppEvent::SessionsChanged(None) => needs_full_reload = true,
+                AppEvent::Tick => {}
             }
-            AppEvent::SessionsChanged(changes) => {
-                app.reload_sessions(changes.as_deref())?;
-            }
-            AppEvent::Tick => {
-                // Periodic refresh for relative time updates
-            }
+        }
+
+        // Apply merged session changes in a single reload
+        match merge_session_changes(change_map, needs_full_reload) {
+            None => app.reload_sessions(None)?,
+            Some(ref merged) if !merged.is_empty() => app.reload_sessions(Some(merged))?,
+            _ => {}
         }
 
         if app.should_quit {
@@ -46,6 +68,27 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Merges session changes by deduplicating on session_id, keeping the last change_type.
+/// Returns `None` if `needs_full_reload` is true (caller should do a full reload).
+/// Returns `Some(vec)` with deduplicated changes, or `Some(empty)` if no changes.
+fn merge_session_changes(
+    change_map: HashMap<String, SessionChangeType>,
+    needs_full_reload: bool,
+) -> Option<Vec<SessionChange>> {
+    if needs_full_reload {
+        return None;
+    }
+    Some(
+        change_map
+            .into_iter()
+            .map(|(session_id, change_type)| SessionChange {
+                session_id,
+                change_type,
+            })
+            .collect(),
+    )
 }
 
 /// Handles key events in Search mode.
@@ -368,5 +411,94 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Esc));
         assert!(app.should_quit);
+    }
+
+    // =========================================================================
+    // merge_session_changes tests
+    // =========================================================================
+
+    #[test]
+    fn test_merge_session_changes_full_reload_returns_none() {
+        let map = HashMap::from([("s1".to_string(), SessionChangeType::Modified)]);
+        // Even with changes in the map, full reload takes precedence
+        assert!(merge_session_changes(map, true).is_none());
+    }
+
+    #[test]
+    fn test_merge_session_changes_empty_map_no_reload() {
+        let map = HashMap::new();
+        let result = merge_session_changes(map, false);
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_merge_session_changes_dedup_same_session() {
+        // Simulate: session "s1" was Created then Modified → HashMap keeps last insert
+        let mut map = HashMap::new();
+        map.insert("s1".to_string(), SessionChangeType::Created);
+        map.insert("s1".to_string(), SessionChangeType::Modified);
+
+        let result = merge_session_changes(map, false).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].session_id, "s1");
+        assert_eq!(result[0].change_type, SessionChangeType::Modified);
+    }
+
+    #[test]
+    fn test_merge_session_changes_distinct_sessions() {
+        let map = HashMap::from([
+            ("s1".to_string(), SessionChangeType::Created),
+            ("s2".to_string(), SessionChangeType::Deleted),
+            ("s3".to_string(), SessionChangeType::Modified),
+        ]);
+
+        let result = merge_session_changes(map, false).unwrap();
+        assert_eq!(result.len(), 3);
+
+        // Verify each session_id appears exactly once
+        let mut ids: Vec<&str> = result.iter().map(|c| c.session_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["s1", "s2", "s3"]);
+    }
+
+    #[rstest]
+    #[case::created_then_deleted(
+        SessionChangeType::Created,
+        SessionChangeType::Deleted,
+        SessionChangeType::Deleted
+    )]
+    #[case::modified_then_deleted(
+        SessionChangeType::Modified,
+        SessionChangeType::Deleted,
+        SessionChangeType::Deleted
+    )]
+    #[case::deleted_then_created(
+        SessionChangeType::Deleted,
+        SessionChangeType::Created,
+        SessionChangeType::Created
+    )]
+    fn test_merge_session_changes_last_wins(
+        #[case] first: SessionChangeType,
+        #[case] second: SessionChangeType,
+        #[case] expected: SessionChangeType,
+    ) {
+        let mut map = HashMap::new();
+        map.insert("s1".to_string(), first);
+        map.insert("s1".to_string(), second);
+
+        let result = merge_session_changes(map, false).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].change_type, expected);
+    }
+
+    #[test]
+    fn test_merge_session_changes_full_reload_overrides_changes() {
+        // Even with many changes, full reload means None
+        let map = HashMap::from([
+            ("s1".to_string(), SessionChangeType::Modified),
+            ("s2".to_string(), SessionChangeType::Created),
+            ("s3".to_string(), SessionChangeType::Deleted),
+        ]);
+        assert!(merge_session_changes(map, true).is_none());
     }
 }

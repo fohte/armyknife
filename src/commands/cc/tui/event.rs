@@ -83,6 +83,11 @@ impl EventHandler {
             .recv()
             .map_err(|e| anyhow::anyhow!("Event channel closed: {}", e))
     }
+
+    /// Non-blocking receive: returns `Some(event)` if available, `None` otherwise.
+    pub fn try_next(&self) -> Option<AppEvent> {
+        self.receiver.try_recv().ok()
+    }
 }
 
 /// Handles keyboard events in a background thread.
@@ -235,6 +240,67 @@ mod tests {
                 assert!(changes.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn test_try_next_returns_none_on_empty_channel() {
+        let (_tx, rx) = mpsc::channel::<AppEvent>();
+        let handler = EventHandler {
+            receiver: rx,
+            _watcher: None,
+        };
+        assert!(handler.try_next().is_none());
+    }
+
+    #[test]
+    fn test_try_next_returns_events_then_none() {
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let handler = EventHandler {
+            receiver: rx,
+            _watcher: None,
+        };
+
+        tx.send(AppEvent::Tick).unwrap();
+        tx.send(AppEvent::Key(KeyEvent {
+            code: KeyCode::Char('j'),
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+
+        // First call returns the Tick
+        let first = handler.try_next();
+        assert!(first.is_some());
+
+        // Second call returns the Key
+        let second = handler.try_next();
+        assert!(second.is_some());
+
+        // Third call returns None (queue drained)
+        assert!(handler.try_next().is_none());
+    }
+
+    #[test]
+    fn test_try_next_drains_all_queued_events() {
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let handler = EventHandler {
+            receiver: rx,
+            _watcher: None,
+        };
+
+        // Enqueue multiple SessionsChanged events
+        for i in 0..5 {
+            tx.send(AppEvent::SessionsChanged(Some(vec![SessionChange {
+                session_id: format!("session-{i}"),
+                change_type: SessionChangeType::Modified,
+            }])))
+            .unwrap();
+        }
+
+        let mut count = 0;
+        while handler.try_next().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 5);
     }
 
     #[test]
