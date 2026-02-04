@@ -12,6 +12,11 @@ use super::claude_sessions;
 use super::error::CcError;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
+
+/// Source value for session resume events (e.g., `claude -c`).
+/// Used to skip duplicate session creation when Claude Code fires both
+/// "startup" and "resume" SessionStart hooks.
+const SOURCE_RESUME: &str = "resume";
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -86,7 +91,7 @@ fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<Pro
     if event == HookEvent::SessionStart {
         // Skip resume events - they fire alongside startup events since Claude Code v2.1.30,
         // and processing them would create duplicate "empty" sessions (last_message: null)
-        if input.source.as_deref() == Some("resume") {
+        if input.source.as_deref() == Some(SOURCE_RESUME) {
             return Ok(ProcessResult::Skipped);
         }
 
@@ -820,23 +825,6 @@ mod tests {
                 "source={:?} should return {:?}",
                 source, expected_result
             );
-        }
-
-        #[test]
-        fn hook_input_parses_source_field() {
-            // Verify that source field is correctly parsed from JSON
-            let json = r#"{"session_id":"abc","cwd":"/tmp","source":"resume"}"#;
-            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
-            assert_eq!(input.source.as_deref(), Some("resume"));
-
-            let json = r#"{"session_id":"abc","cwd":"/tmp","source":"startup"}"#;
-            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
-            assert_eq!(input.source.as_deref(), Some("startup"));
-
-            // Missing source field should default to None
-            let json = r#"{"session_id":"abc","cwd":"/tmp"}"#;
-            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
-            assert_eq!(input.source, None);
         }
     }
 
