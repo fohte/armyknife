@@ -453,12 +453,22 @@ mod tests {
     use rstest::rstest;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
+        create_test_input_with_source(notification_type, None)
+    }
+
+    fn create_test_input_with_source(
+        notification_type: Option<&str>,
+        source: Option<&str>,
+    ) -> HookInput {
         let mut json_parts = vec![
             r#""session_id":"test-123""#.to_string(),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
             json_parts.push(format!(r#""notification_type":"{}""#, t));
+        }
+        if let Some(s) = source {
+            json_parts.push(format!(r#""source":"{}""#, s));
         }
         let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")
@@ -762,6 +772,50 @@ mod tests {
                 logs.ends_with("cc/logs"),
                 "expected to end with 'cc/logs', got: {logs:?}"
             );
+        }
+    }
+
+    mod session_start_source_tests {
+        use super::*;
+        use rstest::rstest;
+
+        /// Returns true if the session-start event should be skipped (early return).
+        /// This mirrors the logic in run() for testing purposes.
+        fn should_skip_session_start(input: &HookInput) -> bool {
+            input.source.as_deref() == Some("resume")
+        }
+
+        #[rstest]
+        #[case::startup_should_process(Some("startup"), false)]
+        #[case::resume_should_skip(Some("resume"), true)]
+        #[case::none_should_process(None, false)]
+        #[case::unknown_should_process(Some("unknown"), false)]
+        fn session_start_skip_logic(#[case] source: Option<&str>, #[case] expected_skip: bool) {
+            let input = create_test_input_with_source(None, source);
+            assert_eq!(
+                should_skip_session_start(&input),
+                expected_skip,
+                "source={:?} should {} be skipped",
+                source,
+                if expected_skip { "" } else { "not" }
+            );
+        }
+
+        #[test]
+        fn hook_input_parses_source_field() {
+            // Verify that source field is correctly parsed from JSON
+            let json = r#"{"session_id":"abc","cwd":"/tmp","source":"resume"}"#;
+            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
+            assert_eq!(input.source.as_deref(), Some("resume"));
+
+            let json = r#"{"session_id":"abc","cwd":"/tmp","source":"startup"}"#;
+            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
+            assert_eq!(input.source.as_deref(), Some("startup"));
+
+            // Missing source field should default to None
+            let json = r#"{"session_id":"abc","cwd":"/tmp"}"#;
+            let input: HookInput = serde_json::from_str(json).expect("valid JSON");
+            assert_eq!(input.source, None);
         }
     }
 
