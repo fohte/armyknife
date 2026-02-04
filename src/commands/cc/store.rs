@@ -692,15 +692,11 @@ mod tests {
         use super::*;
         use chrono::{DateTime, TimeDelta};
 
-        /// Returns a base time aligned to avoid bucket boundaries.
-        /// Offset by 1/6 of the threshold from the bucket start so that
-        /// small deltas (+5s, +3s) stay within the same bucket.
-        fn aligned_base_time() -> DateTime<Utc> {
-            let now = Utc::now();
-            let ts = now.timestamp();
-            let aligned = (ts / SORT_STABILITY_THRESHOLD_SECS) * SORT_STABILITY_THRESHOLD_SECS
-                + SORT_STABILITY_THRESHOLD_SECS / 6;
-            DateTime::from_timestamp(aligned, 0).unwrap_or(now)
+        /// Fixed base time for deterministic tests.
+        /// Aligned to a bucket boundary (timestamp divisible by 30) so that
+        /// small positive deltas stay within the same bucket.
+        fn base_time() -> DateTime<Utc> {
+            DateTime::from_timestamp(1_700_000_400, 0).expect("valid fixed timestamp")
         }
 
         fn session_with_times(
@@ -724,7 +720,7 @@ mod tests {
 
         #[test]
         fn within_threshold_sorted_by_created_at() {
-            let base = aligned_base_time();
+            let base = base_time();
             // Both updated_at values fit within the same 30s bucket
             let s1 = session_with_times(
                 "older-created",
@@ -743,7 +739,7 @@ mod tests {
 
         #[test]
         fn beyond_threshold_sorted_by_updated_at() {
-            let base = aligned_base_time();
+            let base = base_time();
             // Ensure sessions fall into different buckets by using a large gap
             let s1 = session_with_times(
                 "old-update",
@@ -762,7 +758,7 @@ mod tests {
 
         #[test]
         fn same_bucket_stable_by_created_at_descending() {
-            let base = aligned_base_time();
+            let base = base_time();
             // All within the same 30s bucket
             let s1 = session_with_times("a", base - TimeDelta::seconds(20), base);
             let s2 = session_with_times(
@@ -783,7 +779,7 @@ mod tests {
 
         #[test]
         fn mixed_buckets_and_tiebreaker() {
-            let base = aligned_base_time();
+            let base = base_time();
             // s1 and s2 in the same bucket (recent), s3 in an older bucket
             let s1 = session_with_times("recent-old-created", base - TimeDelta::seconds(10), base);
             let s2 = session_with_times("recent-new-created", base, base + TimeDelta::seconds(2));
