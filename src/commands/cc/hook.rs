@@ -89,15 +89,15 @@ fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<Pro
     // By skipping "startup", we only create sessions for "resume" events (restored sessions)
     // or when source is absent (backward compatibility / other cases).
     if event == HookEvent::SessionStart {
+        // Skip "startup" events before setting pane option to avoid setting wrong session_id
+        if input.source.as_deref() == Some("startup") {
+            return Ok(ProcessResult::Skipped);
+        }
+
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-        }
-
-        // Skip "startup" events - they create unwanted empty sessions on `claude -c`
-        if input.source.as_deref() == Some("startup") {
-            return Ok(ProcessResult::Skipped);
         }
     }
 
