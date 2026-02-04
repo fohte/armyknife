@@ -828,6 +828,66 @@ mod tests {
                 source, expected_result
             );
         }
+
+        #[test]
+        fn claude_c_resume_scenario() {
+            // Simulate `claude -c` which fires two SessionStart hooks in quick succession.
+            // The "startup" event should be skipped, "resume" should create the session.
+
+            // First event: "startup" with a new (unwanted) session_id
+            let startup_input = create_test_input_with_source(None, Some("startup"));
+            let startup_result =
+                process_hook_event_internal(HookEvent::SessionStart, startup_input)
+                    .expect("startup should succeed");
+            assert_eq!(
+                startup_result,
+                ProcessResult::Skipped,
+                "startup event should be skipped to prevent empty session creation"
+            );
+
+            // Second event: "resume" with the actual session_id being restored
+            let resume_input = create_test_input_with_source(None, Some("resume"));
+            let resume_result = process_hook_event_internal(HookEvent::SessionStart, resume_input)
+                .expect("resume should succeed");
+            assert_eq!(
+                resume_result,
+                ProcessResult::SessionSaved,
+                "resume event should create the session"
+            );
+        }
+
+        #[test]
+        fn new_session_without_c_flag() {
+            // Simulate `claude` (without -c) which fires only one SessionStart hook.
+            // Since source="startup", the session is NOT created on SessionStart.
+            // Session will be created on first user-prompt-submit instead.
+            let input = create_test_input_with_source(None, Some("startup"));
+
+            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+                .expect("should succeed");
+
+            assert_eq!(
+                result,
+                ProcessResult::Skipped,
+                "new session startup should be skipped; session created on user-prompt-submit"
+            );
+        }
+
+        #[test]
+        fn user_prompt_submit_creates_session() {
+            // Verify that user-prompt-submit creates a session (for new sessions that
+            // skipped SessionStart due to source="startup")
+            let input = create_test_input(None);
+
+            let result = process_hook_event_internal(HookEvent::UserPromptSubmit, input)
+                .expect("should succeed");
+
+            assert_eq!(
+                result,
+                ProcessResult::SessionSaved,
+                "user-prompt-submit should create the session"
+            );
+        }
     }
 
     mod log_level_tests {
