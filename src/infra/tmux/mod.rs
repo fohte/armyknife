@@ -245,12 +245,6 @@ pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
     window_ids
 }
 
-/// Select a tmux window by target (e.g., "session:0" or "session:window_name").
-/// Returns an error if not running inside tmux.
-pub fn select_window(target: &str) -> Result<()> {
-    run_tmux_in_session(&["select-window", "-t", target])
-}
-
 /// Select a tmux pane by ID (e.g., "%0").
 /// Returns an error if not running inside tmux.
 pub fn select_pane(pane_id: &str) -> Result<()> {

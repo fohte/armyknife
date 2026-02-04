@@ -33,11 +33,10 @@ fn extract_tmux_info(session_id: &str, session: Option<Session>) -> Result<TmuxI
 }
 
 /// Focuses the tmux pane specified by TmuxInfo.
-/// Switches to the target session, then selects the window and pane.
+/// Switches to the target session, then selects the pane.
+/// Note: `select_pane` automatically switches to the window containing the pane.
 fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
     tmux::switch_to_session(&info.session_name)?;
-    let window_target = format!("{}:{}", info.session_name, info.window_index);
-    tmux::select_window(&window_target)?;
     tmux::select_pane(&info.pane_id)?;
     Ok(())
 }
