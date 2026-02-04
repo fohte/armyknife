@@ -60,11 +60,18 @@ pub fn run(args: &HookArgs) -> Result<()> {
     }
 
     // Handle session start by setting pane option for session tracking
-    if event == HookEvent::SessionStart
-        && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
-    {
-        // Ignore errors; pane option is nice-to-have, not critical
-        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+    if event == HookEvent::SessionStart {
+        // Skip resume events - they fire alongside startup events since Claude Code v2.1.30,
+        // and processing them would create duplicate "empty" sessions (last_message: null)
+        if input.source.as_deref() == Some("resume") {
+            return Ok(());
+        }
+
+        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+            // Ignore errors; pane option is nice-to-have, not critical
+            let _ =
+                tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+        }
     }
 
     // Get tmux info by finding the pane that contains this process

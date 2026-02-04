@@ -70,6 +70,12 @@ pub struct HookInput {
     #[serde(default)]
     pub transcript_path: Option<PathBuf>,
 
+    // SessionStart event fields
+    /// Source of the session start event: "startup" (new session) or "resume" (session restore).
+    /// Used to distinguish between new sessions and restored sessions (e.g., `claude -c`).
+    #[serde(default)]
+    pub source: Option<String>,
+
     // Notification event fields
     #[serde(default)]
     pub notification_type: Option<String>,
