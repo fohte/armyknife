@@ -51,12 +51,35 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
+    process_hook_event(event, input)
+}
+
+/// Result of processing a hook event.
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessResult {
+    /// Session was created or updated
+    SessionSaved,
+    /// Session was deleted (session-end event)
+    SessionDeleted,
+    /// Event was skipped (e.g., resume session-start)
+    Skipped,
+}
+
+/// Processes a hook event with the given input.
+/// This is the core logic separated from stdin handling for testability.
+fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
+    process_hook_event_internal(event, input).map(|_| ())
+}
+
+/// Internal implementation that returns ProcessResult for testing.
+fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     // Handle session end by clearing pane option and deleting the session file
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
-        return store::delete_session(&input.session_id);
+        store::delete_session(&input.session_id)?;
+        return Ok(ProcessResult::SessionDeleted);
     }
 
     // Handle session start by setting pane option for session tracking
@@ -64,7 +87,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         // Skip resume events - they fire alongside startup events since Claude Code v2.1.30,
         // and processing them would create duplicate "empty" sessions (last_message: null)
         if input.source.as_deref() == Some("resume") {
-            return Ok(());
+            return Ok(ProcessResult::Skipped);
         }
 
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
@@ -132,7 +155,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         send_notification(event, &input, &session);
     }
 
-    Ok(())
+    Ok(ProcessResult::SessionSaved)
 }
 
 /// Reads raw content from stdin.
@@ -779,25 +802,23 @@ mod tests {
         use super::*;
         use rstest::rstest;
 
-        /// Returns true if the session-start event should be skipped (early return).
-        /// This mirrors the logic in run() for testing purposes.
-        fn should_skip_session_start(input: &HookInput) -> bool {
-            input.source.as_deref() == Some("resume")
-        }
-
         #[rstest]
-        #[case::startup_should_process(Some("startup"), false)]
-        #[case::resume_should_skip(Some("resume"), true)]
-        #[case::none_should_process(None, false)]
-        #[case::unknown_should_process(Some("unknown"), false)]
-        fn session_start_skip_logic(#[case] source: Option<&str>, #[case] expected_skip: bool) {
+        #[case::startup_creates_session(Some("startup"), ProcessResult::SessionSaved)]
+        #[case::resume_skips_processing(Some("resume"), ProcessResult::Skipped)]
+        #[case::none_creates_session(None, ProcessResult::SessionSaved)]
+        fn session_start_with_source(
+            #[case] source: Option<&str>,
+            #[case] expected_result: ProcessResult,
+        ) {
             let input = create_test_input_with_source(None, source);
+
+            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+                .expect("should succeed");
+
             assert_eq!(
-                should_skip_session_start(&input),
-                expected_skip,
-                "source={:?} should {} be skipped",
-                source,
-                if expected_skip { "" } else { "not" }
+                result, expected_result,
+                "source={:?} should return {:?}",
+                source, expected_result
             );
         }
 
