@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.78](https://github.com/fohte/armyknife/compare/v0.1.77...v0.1.78) (2026-02-04)
+
+
+### Dependencies
+
+* update rust crate git2 to v0.20.4 [security] ([#233](https://github.com/fohte/armyknife/issues/233)) ([d8a4e58](https://github.com/fohte/armyknife/commit/d8a4e58a7ad342342734e39b39984e176d0e7202))
+
 ## [0.1.77](https://github.com/fohte/armyknife/compare/v0.1.76...v0.1.77) (2026-02-04)
 
 
