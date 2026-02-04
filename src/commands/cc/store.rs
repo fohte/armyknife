@@ -692,6 +692,17 @@ mod tests {
         use super::*;
         use chrono::{DateTime, TimeDelta};
 
+        /// Returns a base time aligned to avoid bucket boundaries.
+        /// Offset by 1/6 of the threshold from the bucket start so that
+        /// small deltas (+5s, +3s) stay within the same bucket.
+        fn aligned_base_time() -> DateTime<Utc> {
+            let now = Utc::now();
+            let ts = now.timestamp();
+            let aligned = (ts / SORT_STABILITY_THRESHOLD_SECS) * SORT_STABILITY_THRESHOLD_SECS
+                + SORT_STABILITY_THRESHOLD_SECS / 6;
+            DateTime::from_timestamp(aligned, 0).unwrap_or(now)
+        }
+
         fn session_with_times(
             id: &str,
             created_at: DateTime<Utc>,
@@ -713,14 +724,14 @@ mod tests {
 
         #[test]
         fn within_threshold_sorted_by_created_at() {
-            let now = Utc::now();
-            // Both updated within the same 30s bucket
-            let mut s1 = session_with_times("older-created", now, now);
-            let mut s2 = session_with_times("newer-created", now, now);
-            s1.created_at = now - TimeDelta::seconds(10);
-            s1.updated_at = now + TimeDelta::seconds(5);
-            s2.created_at = now;
-            s2.updated_at = now;
+            let base = aligned_base_time();
+            // Both updated_at values fit within the same 30s bucket
+            let s1 = session_with_times(
+                "older-created",
+                base - TimeDelta::seconds(10),
+                base + TimeDelta::seconds(5),
+            );
+            let s2 = session_with_times("newer-created", base, base);
 
             let mut sessions = vec![s1, s2];
             sort_sessions(&mut sessions);
@@ -732,14 +743,14 @@ mod tests {
 
         #[test]
         fn beyond_threshold_sorted_by_updated_at() {
-            let now = Utc::now();
+            let base = aligned_base_time();
             // Ensure sessions fall into different buckets by using a large gap
             let s1 = session_with_times(
                 "old-update",
-                now - TimeDelta::seconds(120),
-                now - TimeDelta::seconds(60),
+                base - TimeDelta::seconds(120),
+                base - TimeDelta::seconds(60),
             );
-            let s2 = session_with_times("new-update", now - TimeDelta::seconds(100), now);
+            let s2 = session_with_times("new-update", base - TimeDelta::seconds(100), base);
 
             let mut sessions = vec![s1, s2];
             sort_sessions(&mut sessions);
@@ -751,15 +762,15 @@ mod tests {
 
         #[test]
         fn same_bucket_stable_by_created_at_descending() {
-            let now = Utc::now();
+            let base = aligned_base_time();
             // All within the same 30s bucket
-            let s1 = session_with_times("a", now - TimeDelta::seconds(20), now);
+            let s1 = session_with_times("a", base - TimeDelta::seconds(20), base);
             let s2 = session_with_times(
                 "b",
-                now - TimeDelta::seconds(10),
-                now + TimeDelta::seconds(3),
+                base - TimeDelta::seconds(10),
+                base + TimeDelta::seconds(3),
             );
-            let s3 = session_with_times("c", now, now + TimeDelta::seconds(5));
+            let s3 = session_with_times("c", base, base + TimeDelta::seconds(5));
 
             let mut sessions = vec![s1, s2, s3];
             sort_sessions(&mut sessions);
@@ -772,14 +783,14 @@ mod tests {
 
         #[test]
         fn mixed_buckets_and_tiebreaker() {
-            let now = Utc::now();
+            let base = aligned_base_time();
             // s1 and s2 in the same bucket (recent), s3 in an older bucket
-            let s1 = session_with_times("recent-old-created", now - TimeDelta::seconds(10), now);
-            let s2 = session_with_times("recent-new-created", now, now + TimeDelta::seconds(2));
+            let s1 = session_with_times("recent-old-created", base - TimeDelta::seconds(10), base);
+            let s2 = session_with_times("recent-new-created", base, base + TimeDelta::seconds(2));
             let s3 = session_with_times(
                 "old-bucket",
-                now - TimeDelta::seconds(5),
-                now - TimeDelta::seconds(60),
+                base - TimeDelta::seconds(5),
+                base - TimeDelta::seconds(60),
             );
 
             let mut sessions = vec![s3, s1, s2];
