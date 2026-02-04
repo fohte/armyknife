@@ -82,17 +82,23 @@ fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<Pro
         return Ok(ProcessResult::SessionDeleted);
     }
 
-    // Handle session start: only set pane option, don't create session file.
-    // Session file will be created on first meaningful event (e.g., user-prompt-submit).
-    // This avoids creating empty sessions when `claude -c` fires both "startup" and "resume"
-    // SessionStart hooks - the startup event creates a new empty session_id that we don't want.
+    // Handle session start: skip "startup" events to avoid creating empty sessions.
+    // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
+    // - "startup" with a new (unwanted) session_id
+    // - "resume" with the actual session_id being restored
+    // By skipping "startup", we only create sessions for "resume" events (restored sessions)
+    // or when source is absent (backward compatibility / other cases).
     if event == HookEvent::SessionStart {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
         }
-        return Ok(ProcessResult::Skipped);
+
+        // Skip "startup" events - they create unwanted empty sessions on `claude -c`
+        if input.source.as_deref() == Some("startup") {
+            return Ok(ProcessResult::Skipped);
+        }
     }
 
     // Get tmux info by finding the pane that contains this process
@@ -474,12 +480,22 @@ mod tests {
     use rstest::rstest;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
+        create_test_input_with_source(notification_type, None)
+    }
+
+    fn create_test_input_with_source(
+        notification_type: Option<&str>,
+        source: Option<&str>,
+    ) -> HookInput {
         let mut json_parts = vec![
             r#""session_id":"test-123""#.to_string(),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
             json_parts.push(format!(r#""notification_type":"{}""#, t));
+        }
+        if let Some(s) = source {
+            json_parts.push(format!(r#""source":"{}""#, s));
         }
         let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")
@@ -788,18 +804,29 @@ mod tests {
 
     mod session_start_tests {
         use super::*;
+        use rstest::rstest;
 
-        #[test]
-        fn session_start_skips_session_creation() {
-            // SessionStart should not create a session file to avoid duplicate sessions
-            // when `claude -c` fires both "startup" and "resume" events.
-            // Session files are created on first meaningful event (e.g., user-prompt-submit).
-            let input = create_test_input(None);
+        #[rstest]
+        #[case::startup_skips(Some("startup"), ProcessResult::Skipped)]
+        #[case::resume_creates_session(Some("resume"), ProcessResult::SessionSaved)]
+        #[case::none_creates_session(None, ProcessResult::SessionSaved)]
+        fn session_start_with_source(
+            #[case] source: Option<&str>,
+            #[case] expected_result: ProcessResult,
+        ) {
+            // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
+            // - "startup" with a new (unwanted) session_id -> should be skipped
+            // - "resume" with the actual session_id -> should create session
+            let input = create_test_input_with_source(None, source);
 
             let result = process_hook_event_internal(HookEvent::SessionStart, input)
                 .expect("should succeed");
 
-            assert_eq!(result, ProcessResult::Skipped);
+            assert_eq!(
+                result, expected_result,
+                "source={:?} should return {:?}",
+                source, expected_result
+            );
         }
     }
 
