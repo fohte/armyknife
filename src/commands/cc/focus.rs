@@ -18,7 +18,7 @@ pub fn run(args: &FocusArgs) -> Result<()> {
     let session = store::load_session(&args.session_id)?;
     let tmux_info = extract_tmux_info(&args.session_id, session)?;
 
-    focus_tmux_pane(&tmux_info)?;
+    tmux::focus_pane(&tmux_info.session_name, &tmux_info.pane_id)?;
 
     Ok(())
 }
@@ -30,16 +30,6 @@ fn extract_tmux_info(session_id: &str, session: Option<Session>) -> Result<TmuxI
     session
         .tmux_info
         .ok_or_else(|| CcError::NoTmuxInfo(session_id.to_string()))
-}
-
-/// Focuses the tmux pane specified by TmuxInfo.
-/// Switches to the target session, then selects the window and pane.
-fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
-    tmux::switch_to_session(&info.session_name)?;
-    let window_target = format!("{}:{}", info.session_name, info.window_index);
-    tmux::select_window(&window_target)?;
-    tmux::select_pane(&info.pane_id)?;
-    Ok(())
 }
 
 #[cfg(test)]

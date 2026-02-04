@@ -8,7 +8,6 @@ use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode};
 use self::event::{AppEvent, EventHandler, KeyEvent};
-use crate::commands::cc::types::TmuxInfo;
 use crate::infra::tmux;
 
 /// Runs the TUI application.
@@ -142,7 +141,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         KeyCode::Enter | KeyCode::Char('f') => {
             if let Some(session) = app.selected_session()
                 && let Some(ref tmux_info) = session.tmux_info
-                && let Err(e) = focus_tmux_pane(tmux_info)
+                && let Err(e) = tmux::focus_pane(&tmux_info.session_name, &tmux_info.pane_id)
             {
                 app.set_error(format!("Failed to focus tmux pane: {e}"));
             }
@@ -156,15 +155,6 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
 
         _ => {}
     }
-}
-
-/// Focuses the tmux pane specified by TmuxInfo.
-fn focus_tmux_pane(info: &TmuxInfo) -> Result<()> {
-    tmux::switch_to_session(&info.session_name)?;
-    let window_target = format!("{}:{}", info.session_name, info.window_index);
-    tmux::select_window(&window_target)?;
-    tmux::select_pane(&info.pane_id)?;
-    Ok(())
 }
 
 /// Handles key events based on current mode.
