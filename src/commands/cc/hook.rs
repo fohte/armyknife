@@ -51,20 +51,54 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
+    process_hook_event(event, input)
+}
+
+/// Result of processing a hook event.
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessResult {
+    /// Session was created or updated
+    SessionSaved,
+    /// Session was deleted (session-end event)
+    SessionDeleted,
+    /// Event was skipped (e.g., resume session-start)
+    Skipped,
+}
+
+/// Processes a hook event with the given input.
+/// This is the core logic separated from stdin handling for testability.
+fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
+    process_hook_event_internal(event, input).map(|_| ())
+}
+
+/// Internal implementation that returns ProcessResult for testing.
+fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     // Handle session end by clearing pane option and deleting the session file
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
-        return store::delete_session(&input.session_id);
+        store::delete_session(&input.session_id)?;
+        return Ok(ProcessResult::SessionDeleted);
     }
 
-    // Handle session start by setting pane option for session tracking
-    if event == HookEvent::SessionStart
-        && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
-    {
-        // Ignore errors; pane option is nice-to-have, not critical
-        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+    // Handle session start: skip "startup" events to avoid creating empty sessions.
+    // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
+    // - "startup" with a new (unwanted) session_id
+    // - "resume" with the actual session_id being restored
+    // By skipping "startup", we only create sessions for "resume" events (restored sessions)
+    // or when source is absent (backward compatibility / other cases).
+    if event == HookEvent::SessionStart {
+        // Skip "startup" events before setting pane option to avoid setting wrong session_id
+        if input.source.as_deref() == Some("startup") {
+            return Ok(ProcessResult::Skipped);
+        }
+
+        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+            // Ignore errors; pane option is nice-to-have, not critical
+            let _ =
+                tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+        }
     }
 
     // Get tmux info by finding the pane that contains this process
@@ -125,7 +159,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         send_notification(event, &input, &session);
     }
 
-    Ok(())
+    Ok(ProcessResult::SessionSaved)
 }
 
 /// Reads raw content from stdin.
@@ -446,12 +480,22 @@ mod tests {
     use rstest::rstest;
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
+        create_test_input_with_source(notification_type, None)
+    }
+
+    fn create_test_input_with_source(
+        notification_type: Option<&str>,
+        source: Option<&str>,
+    ) -> HookInput {
         let mut json_parts = vec![
             r#""session_id":"test-123""#.to_string(),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
             json_parts.push(format!(r#""notification_type":"{}""#, t));
+        }
+        if let Some(s) = source {
+            json_parts.push(format!(r#""source":"{}""#, s));
         }
         let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")
@@ -754,6 +798,94 @@ mod tests {
             assert!(
                 logs.ends_with("cc/logs"),
                 "expected to end with 'cc/logs', got: {logs:?}"
+            );
+        }
+    }
+
+    mod session_start_tests {
+        use super::*;
+        use rstest::rstest;
+
+        #[rstest]
+        #[case::startup_skips(Some("startup"), ProcessResult::Skipped)]
+        #[case::resume_creates_session(Some("resume"), ProcessResult::SessionSaved)]
+        #[case::none_creates_session(None, ProcessResult::SessionSaved)]
+        fn session_start_with_source(
+            #[case] source: Option<&str>,
+            #[case] expected_result: ProcessResult,
+        ) {
+            // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
+            // - "startup" with a new (unwanted) session_id -> should be skipped
+            // - "resume" with the actual session_id -> should create session
+            let input = create_test_input_with_source(None, source);
+
+            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+                .expect("should succeed");
+
+            assert_eq!(
+                result, expected_result,
+                "source={:?} should return {:?}",
+                source, expected_result
+            );
+        }
+
+        #[test]
+        fn claude_c_resume_scenario() {
+            // Simulate `claude -c` which fires two SessionStart hooks in quick succession.
+            // The "startup" event should be skipped, "resume" should create the session.
+
+            // First event: "startup" with a new (unwanted) session_id
+            let startup_input = create_test_input_with_source(None, Some("startup"));
+            let startup_result =
+                process_hook_event_internal(HookEvent::SessionStart, startup_input)
+                    .expect("startup should succeed");
+            assert_eq!(
+                startup_result,
+                ProcessResult::Skipped,
+                "startup event should be skipped to prevent empty session creation"
+            );
+
+            // Second event: "resume" with the actual session_id being restored
+            let resume_input = create_test_input_with_source(None, Some("resume"));
+            let resume_result = process_hook_event_internal(HookEvent::SessionStart, resume_input)
+                .expect("resume should succeed");
+            assert_eq!(
+                resume_result,
+                ProcessResult::SessionSaved,
+                "resume event should create the session"
+            );
+        }
+
+        #[test]
+        fn new_session_without_c_flag() {
+            // Simulate `claude` (without -c) which fires only one SessionStart hook.
+            // Since source="startup", the session is NOT created on SessionStart.
+            // Session will be created on first user-prompt-submit instead.
+            let input = create_test_input_with_source(None, Some("startup"));
+
+            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+                .expect("should succeed");
+
+            assert_eq!(
+                result,
+                ProcessResult::Skipped,
+                "new session startup should be skipped; session created on user-prompt-submit"
+            );
+        }
+
+        #[test]
+        fn user_prompt_submit_creates_session() {
+            // Verify that user-prompt-submit creates a session (for new sessions that
+            // skipped SessionStart due to source="startup")
+            let input = create_test_input(None);
+
+            let result = process_hook_event_internal(HookEvent::UserPromptSubmit, input)
+                .expect("should succeed");
+
+            assert_eq!(
+                result,
+                ProcessResult::SessionSaved,
+                "user-prompt-submit should create the session"
             );
         }
     }
