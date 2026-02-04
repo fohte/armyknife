@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.77](https://github.com/fohte/armyknife/compare/v0.1.76...v0.1.77) (2026-02-04)
+
+
+### Bug Fixes
+
+* **cc/watch:** stabilize session list sort order during concurrent execution ([#230](https://github.com/fohte/armyknife/issues/230)) ([0fad137](https://github.com/fohte/armyknife/commit/0fad13710b037a85076d7375b836f75fd155576e))
+
 ## [0.1.76](https://github.com/fohte/armyknife/compare/v0.1.75...v0.1.76) (2026-02-04)
 
 
