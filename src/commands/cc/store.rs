@@ -10,6 +10,11 @@ use super::types::Session;
 use crate::infra::tmux;
 use crate::shared::cache;
 
+/// Threshold in seconds for sort stability.
+/// Sessions updated within this window are sorted by created_at instead,
+/// preventing rapid reordering during concurrent agent execution.
+const SORT_STABILITY_THRESHOLD_SECS: i64 = 30;
+
 /// Lock timeout for file operations.
 /// Short timeout to minimize performance impact while preventing race conditions.
 const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -206,6 +211,21 @@ pub fn delete_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Sorts sessions by updated_at descending with stability threshold.
+///
+/// Sessions updated within [`SORT_STABILITY_THRESHOLD_SECS`] of each other
+/// are considered equivalent and sorted by created_at descending instead.
+/// This prevents rapid reordering when multiple sessions are updated concurrently.
+pub fn sort_sessions(sessions: &mut [Session]) {
+    sessions.sort_by(|a, b| {
+        let bucket_a = a.updated_at.timestamp() / SORT_STABILITY_THRESHOLD_SECS;
+        let bucket_b = b.updated_at.timestamp() / SORT_STABILITY_THRESHOLD_SECS;
+        bucket_b
+            .cmp(&bucket_a)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+}
+
 /// Lists all sessions from disk.
 /// Reads all .json files in the sessions directory.
 pub fn list_sessions() -> Result<Vec<Session>> {
@@ -229,8 +249,7 @@ pub fn list_sessions() -> Result<Vec<Session>> {
         }
     }
 
-    // Sort by updated_at descending (most recent first)
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sort_sessions(&mut sessions);
 
     Ok(sessions)
 }
@@ -666,6 +685,110 @@ mod tests {
                 .expect("load should succeed");
             assert!(loaded.is_some(), "valid session should load");
             assert_eq!(loaded.unwrap().session_id, session_id);
+        }
+    }
+
+    mod sort_sessions_tests {
+        use super::*;
+        use chrono::{DateTime, TimeDelta};
+
+        fn session_with_times(
+            id: &str,
+            created_at: DateTime<Utc>,
+            updated_at: DateTime<Utc>,
+        ) -> Session {
+            Session {
+                session_id: id.to_string(),
+                cwd: PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at,
+                updated_at,
+                last_message: None,
+                current_tool: None,
+            }
+        }
+
+        #[test]
+        fn within_threshold_sorted_by_created_at() {
+            let now = Utc::now();
+            // Both updated within the same 30s bucket
+            let mut s1 = session_with_times("older-created", now, now);
+            let mut s2 = session_with_times("newer-created", now, now);
+            s1.created_at = now - TimeDelta::seconds(10);
+            s1.updated_at = now + TimeDelta::seconds(5);
+            s2.created_at = now;
+            s2.updated_at = now;
+
+            let mut sessions = vec![s1, s2];
+            sort_sessions(&mut sessions);
+
+            // newer created_at should come first (descending)
+            assert_eq!(sessions[0].session_id, "newer-created");
+            assert_eq!(sessions[1].session_id, "older-created");
+        }
+
+        #[test]
+        fn beyond_threshold_sorted_by_updated_at() {
+            let now = Utc::now();
+            // Ensure sessions fall into different buckets by using a large gap
+            let s1 = session_with_times(
+                "old-update",
+                now - TimeDelta::seconds(120),
+                now - TimeDelta::seconds(60),
+            );
+            let s2 = session_with_times("new-update", now - TimeDelta::seconds(100), now);
+
+            let mut sessions = vec![s1, s2];
+            sort_sessions(&mut sessions);
+
+            // More recently updated should come first
+            assert_eq!(sessions[0].session_id, "new-update");
+            assert_eq!(sessions[1].session_id, "old-update");
+        }
+
+        #[test]
+        fn same_bucket_stable_by_created_at_descending() {
+            let now = Utc::now();
+            // All within the same 30s bucket
+            let s1 = session_with_times("a", now - TimeDelta::seconds(20), now);
+            let s2 = session_with_times(
+                "b",
+                now - TimeDelta::seconds(10),
+                now + TimeDelta::seconds(3),
+            );
+            let s3 = session_with_times("c", now, now + TimeDelta::seconds(5));
+
+            let mut sessions = vec![s1, s2, s3];
+            sort_sessions(&mut sessions);
+
+            // Should be sorted by created_at descending: c, b, a
+            assert_eq!(sessions[0].session_id, "c");
+            assert_eq!(sessions[1].session_id, "b");
+            assert_eq!(sessions[2].session_id, "a");
+        }
+
+        #[test]
+        fn mixed_buckets_and_tiebreaker() {
+            let now = Utc::now();
+            // s1 and s2 in the same bucket (recent), s3 in an older bucket
+            let s1 = session_with_times("recent-old-created", now - TimeDelta::seconds(10), now);
+            let s2 = session_with_times("recent-new-created", now, now + TimeDelta::seconds(2));
+            let s3 = session_with_times(
+                "old-bucket",
+                now - TimeDelta::seconds(5),
+                now - TimeDelta::seconds(60),
+            );
+
+            let mut sessions = vec![s3, s1, s2];
+            sort_sessions(&mut sessions);
+
+            // Recent bucket first (s2, s1 by created_at desc), then old bucket (s3)
+            assert_eq!(sessions[0].session_id, "recent-new-created");
+            assert_eq!(sessions[1].session_id, "recent-old-created");
+            assert_eq!(sessions[2].session_id, "old-bucket");
         }
     }
 }

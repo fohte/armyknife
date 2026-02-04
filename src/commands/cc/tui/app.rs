@@ -146,9 +146,8 @@ impl App {
             }
         }
 
-        // Re-sort sessions by updated_at descending
-        self.sessions
-            .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        // Re-sort with stability threshold to prevent rapid reordering
+        store::sort_sessions(&mut self.sessions);
 
         // Rebuild caches for changed sessions only
         self.rebuild_title_cache_incremental(changes);
