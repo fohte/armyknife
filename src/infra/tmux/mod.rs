@@ -251,6 +251,14 @@ pub fn select_pane(pane_id: &str) -> Result<()> {
     run_tmux_in_session(&["select-pane", "-t", pane_id])
 }
 
+/// Focus a tmux pane by switching to its session and selecting it.
+/// Note: `select_pane` automatically switches to the window containing the pane.
+pub fn focus_pane(session_name: &str, pane_id: &str) -> Result<()> {
+    switch_to_session(session_name)?;
+    select_pane(pane_id)?;
+    Ok(())
+}
+
 /// Set a user option on a specific tmux pane.
 /// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.
