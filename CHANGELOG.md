@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.75](https://github.com/fohte/armyknife/compare/v0.1.74...v0.1.75) (2026-02-04)
+
+
+### Bug Fixes
+
+* **cc/watch:** use pane_id only for tmux focus to handle window index drift ([#226](https://github.com/fohte/armyknife/issues/226)) ([1caf219](https://github.com/fohte/armyknife/commit/1caf21926321d8a35f96045c4d93e322dd58a29a))
+
 ## [0.1.74](https://github.com/fohte/armyknife/compare/v0.1.73...v0.1.74) (2026-02-03)
 
 
