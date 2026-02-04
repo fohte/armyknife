@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.76](https://github.com/fohte/armyknife/compare/v0.1.75...v0.1.76) (2026-02-04)
+
+
+### Bug Fixes
+
+* **cc/hook:** prevent duplicate session creation on `claude -c` resume ([#228](https://github.com/fohte/armyknife/issues/228)) ([25c941f](https://github.com/fohte/armyknife/commit/25c941fd9485ee2e118f518711f6558d3f391c41))
+
 ## [0.1.75](https://github.com/fohte/armyknife/compare/v0.1.74...v0.1.75) (2026-02-04)
 
 
