@@ -1,8 +1,16 @@
 use std::path::PathBuf;
 
+/// Environment variable to override the cache directory (primarily for testing).
+const CACHE_DIR_ENV: &str = "ARMYKNIFE_CACHE_DIR";
+
 /// Base cache directory for armyknife.
 /// Returns ~/.cache/armyknife (Linux) or ~/Library/Caches/armyknife (macOS).
+///
+/// Can be overridden by setting the `ARMYKNIFE_CACHE_DIR` environment variable.
 pub fn base_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(CACHE_DIR_ENV) {
+        return Some(PathBuf::from(dir));
+    }
     dirs::cache_dir().map(|d| d.join("armyknife"))
 }
 

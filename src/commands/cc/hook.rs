@@ -805,6 +805,16 @@ mod tests {
     mod session_start_tests {
         use super::*;
         use rstest::rstest;
+        use tempfile::TempDir;
+
+        /// Sets up a temporary cache directory for testing.
+        /// Returns the TempDir which must be kept alive for the duration of the test.
+        fn setup_temp_cache() -> TempDir {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            // SAFETY: Tests run single-threaded and this env var is only read by our code
+            unsafe { std::env::set_var("ARMYKNIFE_CACHE_DIR", temp_dir.path()) };
+            temp_dir
+        }
 
         #[rstest]
         #[case::startup_skips(Some("startup"), ProcessResult::Skipped)]
@@ -814,6 +824,8 @@ mod tests {
             #[case] source: Option<&str>,
             #[case] expected_result: ProcessResult,
         ) {
+            let _temp_dir = setup_temp_cache();
+
             // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
             // - "startup" with a new (unwanted) session_id -> should be skipped
             // - "resume" with the actual session_id -> should create session
@@ -831,6 +843,8 @@ mod tests {
 
         #[test]
         fn claude_c_resume_scenario() {
+            let _temp_dir = setup_temp_cache();
+
             // Simulate `claude -c` which fires two SessionStart hooks in quick succession.
             // The "startup" event should be skipped, "resume" should create the session.
 
@@ -858,6 +872,8 @@ mod tests {
 
         #[test]
         fn new_session_without_c_flag() {
+            let _temp_dir = setup_temp_cache();
+
             // Simulate `claude` (without -c) which fires only one SessionStart hook.
             // Since source="startup", the session is NOT created on SessionStart.
             // Session will be created on first user-prompt-submit instead.
@@ -875,6 +891,8 @@ mod tests {
 
         #[test]
         fn user_prompt_submit_creates_session() {
+            let _temp_dir = setup_temp_cache();
+
             // Verify that user-prompt-submit creates a session (for new sessions that
             // skipped SessionStart due to source="startup")
             let input = create_test_input(None);
