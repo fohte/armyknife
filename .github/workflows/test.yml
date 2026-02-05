@@ -45,7 +45,7 @@ jobs:
       # causing "could not rename downloaded file" errors.
       - run: rustup show
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -83,7 +83,7 @@ jobs:
 
       - run: rustup show
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
