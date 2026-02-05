@@ -115,11 +115,13 @@ jobs:
           cargo build --tests --all-features --workspace
 
       - name: Run tests in sandbox
+        # Use /tmp directly as TMPDIR to avoid issues with non-existent subdirectories
+        env:
+          TMPDIR: /tmp
         run: |
           # shellcheck source=/dev/null
           source <(cargo llvm-cov show-env --export-prefix)
-          # Use /tmp directly as TMPDIR to avoid issues with non-existent subdirectories
-          TMPDIR=/tmp srt --settings ./srt-settings.json cargo test --all-features --workspace
+          srt --settings ./srt-settings.json cargo test --all-features --workspace
 
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info
