@@ -45,25 +45,35 @@ pub fn last_selected_session_file() -> Result<PathBuf> {
 /// Saves the last selected session ID to disk.
 /// Uses atomic write (temp file + rename) to prevent corruption.
 pub fn save_last_selected_session(session_id: &str) -> Result<()> {
-    let path = last_selected_session_file()?;
+    save_last_selected_session_to(&last_selected_session_file()?, session_id)
+}
+
+/// Saves the last selected session ID to a specific path.
+/// Allows testing with temporary directories.
+pub(crate) fn save_last_selected_session_to(path: &Path, session_id: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     // Atomic write via temp file + rename
     let temp_path = path.with_extension("tmp");
     fs::write(&temp_path, session_id)?;
-    fs::rename(&temp_path, &path)?;
+    fs::rename(&temp_path, path)?;
     Ok(())
 }
 
 /// Loads the last selected session ID from disk.
 /// Returns Ok(None) if the file doesn't exist or is empty.
 pub fn load_last_selected_session() -> Result<Option<String>> {
-    let path = last_selected_session_file()?;
+    load_last_selected_session_from(&last_selected_session_file()?)
+}
+
+/// Loads the last selected session ID from a specific path.
+/// Allows testing with temporary directories.
+pub(crate) fn load_last_selected_session_from(path: &Path) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(path)?;
     let session_id = content.trim().to_string();
     if session_id.is_empty() {
         return Ok(None);
@@ -838,104 +848,79 @@ mod tests {
         use super::*;
         use rstest::rstest;
 
-        struct TempCacheDir {
-            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
-            temp_dir: TempDir,
-            cache_path: PathBuf,
-        }
-
-        #[fixture]
-        fn temp_cache_dir() -> TempCacheDir {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let cache_path = temp_dir.path().join("cc");
-            fs::create_dir_all(&cache_path).expect("dir creation should succeed");
-            TempCacheDir {
-                temp_dir,
-                cache_path,
-            }
-        }
-
         #[rstest]
-        fn save_and_load_round_trip(temp_cache_dir: TempCacheDir) {
-            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
-
-            // Save
+        fn save_and_load_round_trip(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("last_selected_session");
             let session_id = "test-session-123";
-            fs::write(&file_path, session_id).expect("write should succeed");
 
-            // Load
-            let content = fs::read_to_string(&file_path).expect("read should succeed");
-            let loaded = content.trim().to_string();
+            save_last_selected_session_to(&file_path, session_id).expect("save should succeed");
 
-            assert_eq!(loaded, session_id);
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
+
+            assert_eq!(loaded, Some(session_id.to_string()));
         }
 
         #[rstest]
-        fn load_returns_none_for_nonexistent_file(temp_cache_dir: TempCacheDir) {
-            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+        fn load_returns_none_for_nonexistent_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("nonexistent");
 
-            // File doesn't exist
             assert!(!file_path.exists());
 
-            // Simulate load_last_selected_session logic
-            let result = if file_path.exists() {
-                Some(fs::read_to_string(&file_path).expect("read should succeed"))
-            } else {
-                None
-            };
+            let result = load_last_selected_session_from(&file_path).expect("load should succeed");
 
             assert!(result.is_none());
         }
 
         #[rstest]
-        fn load_returns_none_for_empty_file(temp_cache_dir: TempCacheDir) {
-            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+        fn load_returns_none_for_empty_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("empty_session");
 
-            // Write empty content
+            // Write empty content directly to test the load function behavior
             fs::write(&file_path, "").expect("write should succeed");
 
-            // Simulate load_last_selected_session logic
-            let content = fs::read_to_string(&file_path).expect("read should succeed");
-            let trimmed = content.trim();
-            let result = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
+            let result = load_last_selected_session_from(&file_path).expect("load should succeed");
 
             assert!(result.is_none());
         }
 
         #[rstest]
-        fn load_trims_whitespace(temp_cache_dir: TempCacheDir) {
-            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+        fn load_trims_whitespace(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("whitespace_session");
 
-            // Write with trailing newline
+            // Write with trailing newline directly to test the load function behavior
             fs::write(&file_path, "test-session\n").expect("write should succeed");
 
-            // Simulate load_last_selected_session logic
-            let content = fs::read_to_string(&file_path).expect("read should succeed");
-            let loaded = content.trim().to_string();
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
 
-            assert_eq!(loaded, "test-session");
+            assert_eq!(loaded, Some("test-session".to_string()));
         }
 
         #[rstest]
-        fn atomic_write_creates_temp_file(temp_cache_dir: TempCacheDir) {
-            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
-            let temp_path = file_path.with_extension("tmp");
+        fn save_creates_parent_directories(temp_session_dir: TempSessionDir) {
+            let nested_path = temp_session_dir
+                .sessions_path
+                .join("nested")
+                .join("dir")
+                .join("last_selected_session");
+            let session_id = "nested-test";
 
-            // Simulate save_last_selected_session logic
-            let session_id = "atomic-test";
-            fs::write(&temp_path, session_id).expect("write should succeed");
-            fs::rename(&temp_path, &file_path).expect("rename should succeed");
+            save_last_selected_session_to(&nested_path, session_id).expect("save should succeed");
 
-            // Temp file should not exist after rename
-            assert!(!temp_path.exists());
-            // Main file should exist with correct content
-            assert!(file_path.exists());
-            let content = fs::read_to_string(&file_path).expect("read should succeed");
-            assert_eq!(content, session_id);
+            assert!(nested_path.exists());
+            let loaded =
+                load_last_selected_session_from(&nested_path).expect("load should succeed");
+            assert_eq!(loaded, Some(session_id.to_string()));
+        }
+
+        #[rstest]
+        fn save_overwrites_existing_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("overwrite_test");
+
+            save_last_selected_session_to(&file_path, "first").expect("save should succeed");
+            save_last_selected_session_to(&file_path, "second").expect("save should succeed");
+
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
+            assert_eq!(loaded, Some("second".to_string()));
         }
     }
 }
