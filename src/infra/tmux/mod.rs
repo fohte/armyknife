@@ -245,18 +245,12 @@ pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
     window_ids
 }
 
-/// Select a tmux pane by ID (e.g., "%0").
-/// Returns an error if not running inside tmux.
-pub fn select_pane(pane_id: &str) -> Result<()> {
-    run_tmux_in_session(&["select-pane", "-t", pane_id])
-}
-
-/// Focus a tmux pane by switching to its session and selecting it.
-/// Note: `select_pane` automatically switches to the window containing the pane.
-pub fn focus_pane(session_name: &str, pane_id: &str) -> Result<()> {
-    switch_to_session(session_name)?;
-    select_pane(pane_id)?;
-    Ok(())
+/// Focus a tmux pane by switching directly to it.
+///
+/// Uses `switch-client -t <pane_id>` to switch to the session, window, and pane
+/// in a single operation.
+pub fn focus_pane(pane_id: &str) -> Result<()> {
+    run_tmux_in_session(&["switch-client", "-t", pane_id])
 }
 
 /// Set a user option on a specific tmux pane.

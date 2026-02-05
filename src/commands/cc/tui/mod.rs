@@ -190,7 +190,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         KeyCode::Enter | KeyCode::Char('f') => {
             if let Some(session) = app.selected_session()
                 && let Some(ref tmux_info) = session.tmux_info
-                && let Err(e) = tmux::focus_pane(&tmux_info.session_name, &tmux_info.pane_id)
+                && let Err(e) = tmux::focus_pane(&tmux_info.pane_id)
             {
                 app.set_error(format!("Failed to focus tmux pane: {e}"));
             }
