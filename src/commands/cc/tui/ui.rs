@@ -169,7 +169,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("  C-n/C-p", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": move  "),
             Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": confirm  "),
+            Span::raw(": focus  "),
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(": cancel"),
         ]),
