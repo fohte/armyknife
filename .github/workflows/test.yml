@@ -91,10 +91,17 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      # Note: srt sandbox cannot run in GitHub Actions due to bwrap permission restrictions.
-      # Tests use tempfile::TempDir for filesystem isolation instead.
-      - name: Run tests with coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - name: Install srt dependencies
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+
+      - name: Enable bwrap namespace creation
+        run: |
+          # Ubuntu 24.04+ restricts unprivileged user namespaces by default.
+          # Set setuid bit on bwrap to allow namespace creation.
+          sudo chmod u+s "$(which bwrap)"
+
+      - name: Run tests with coverage in sandbox
+        run: srt --settings ./srt-settings.json cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
