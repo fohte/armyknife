@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -68,17 +68,23 @@ enum ProcessResult {
 /// Processes a hook event with the given input.
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
-    process_hook_event_internal(event, input).map(|_| ())
+    let sessions_dir = store::sessions_dir()?;
+    process_hook_event_impl(event, input, &sessions_dir).map(|_| ())
 }
 
 /// Internal implementation that returns ProcessResult for testing.
-fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
+/// Accepts sessions_dir as a parameter to allow testing with temporary directories.
+fn process_hook_event_impl(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+) -> Result<ProcessResult> {
     // Handle session end by clearing pane option and deleting the session file
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
-        store::delete_session(&input.session_id)?;
+        store::delete_session_from(sessions_dir, &input.session_id)?;
         return Ok(ProcessResult::SessionDeleted);
     }
 
@@ -114,18 +120,19 @@ fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<Pro
 
     // Load existing session or create new one
     let now = Utc::now();
-    let mut session = store::load_session(&input.session_id)?.unwrap_or_else(|| Session {
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-        transcript_path: input.transcript_path.clone(),
-        tty: None,
-        tmux_info: tmux_info.clone(),
-        status,
-        created_at: now,
-        updated_at: now,
-        last_message: None,
-        current_tool: None,
-    });
+    let mut session =
+        store::load_session_from(sessions_dir, &input.session_id)?.unwrap_or_else(|| Session {
+            session_id: input.session_id.clone(),
+            cwd: input.cwd.clone(),
+            transcript_path: input.transcript_path.clone(),
+            tty: None,
+            tmux_info: tmux_info.clone(),
+            status,
+            created_at: now,
+            updated_at: now,
+            last_message: None,
+            current_tool: None,
+        });
 
     // Update session fields
     session.cwd.clone_from(&input.cwd);
@@ -152,7 +159,7 @@ fn process_hook_event_internal(event: HookEvent, input: HookInput) -> Result<Pro
     };
 
     // Save updated session
-    store::save_session(&session)?;
+    store::save_session_to(sessions_dir, &session)?;
 
     // Send notification if applicable (errors are logged but don't fail the hook)
     if should_notify(event) {
@@ -804,16 +811,12 @@ mod tests {
 
     mod session_start_tests {
         use super::*;
-        use crate::shared::cache;
         use rstest::rstest;
         use tempfile::TempDir;
 
-        /// Sets up a temporary cache directory for testing.
-        /// Returns a tuple of (TempDir, CacheDirOverrideGuard) which must be kept alive.
-        fn setup_temp_cache() -> (TempDir, cache::CacheDirOverrideGuard) {
-            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-            let guard = cache::set_base_dir_override(temp_dir.path().to_path_buf());
-            (temp_dir, guard)
+        /// Creates a temporary directory for session storage.
+        fn create_temp_sessions_dir() -> TempDir {
+            TempDir::new().expect("temp dir creation should succeed")
         }
 
         #[rstest]
@@ -824,14 +827,14 @@ mod tests {
             #[case] source: Option<&str>,
             #[case] expected_result: ProcessResult,
         ) {
-            let (_temp_dir, _guard) = setup_temp_cache();
+            let temp_dir = create_temp_sessions_dir();
 
             // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
             // - "startup" with a new (unwanted) session_id -> should be skipped
             // - "resume" with the actual session_id -> should create session
             let input = create_test_input_with_source(None, source);
 
-            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+            let result = process_hook_event_impl(HookEvent::SessionStart, input, temp_dir.path())
                 .expect("should succeed");
 
             assert_eq!(
@@ -843,7 +846,7 @@ mod tests {
 
         #[test]
         fn claude_c_resume_scenario() {
-            let (_temp_dir, _guard) = setup_temp_cache();
+            let temp_dir = create_temp_sessions_dir();
 
             // Simulate `claude -c` which fires two SessionStart hooks in quick succession.
             // The "startup" event should be skipped, "resume" should create the session.
@@ -851,7 +854,7 @@ mod tests {
             // First event: "startup" with a new (unwanted) session_id
             let startup_input = create_test_input_with_source(None, Some("startup"));
             let startup_result =
-                process_hook_event_internal(HookEvent::SessionStart, startup_input)
+                process_hook_event_impl(HookEvent::SessionStart, startup_input, temp_dir.path())
                     .expect("startup should succeed");
             assert_eq!(
                 startup_result,
@@ -861,8 +864,9 @@ mod tests {
 
             // Second event: "resume" with the actual session_id being restored
             let resume_input = create_test_input_with_source(None, Some("resume"));
-            let resume_result = process_hook_event_internal(HookEvent::SessionStart, resume_input)
-                .expect("resume should succeed");
+            let resume_result =
+                process_hook_event_impl(HookEvent::SessionStart, resume_input, temp_dir.path())
+                    .expect("resume should succeed");
             assert_eq!(
                 resume_result,
                 ProcessResult::SessionSaved,
@@ -872,14 +876,14 @@ mod tests {
 
         #[test]
         fn new_session_without_c_flag() {
-            let (_temp_dir, _guard) = setup_temp_cache();
+            let temp_dir = create_temp_sessions_dir();
 
             // Simulate `claude` (without -c) which fires only one SessionStart hook.
             // Since source="startup", the session is NOT created on SessionStart.
             // Session will be created on first user-prompt-submit instead.
             let input = create_test_input_with_source(None, Some("startup"));
 
-            let result = process_hook_event_internal(HookEvent::SessionStart, input)
+            let result = process_hook_event_impl(HookEvent::SessionStart, input, temp_dir.path())
                 .expect("should succeed");
 
             assert_eq!(
@@ -891,14 +895,15 @@ mod tests {
 
         #[test]
         fn user_prompt_submit_creates_session() {
-            let (_temp_dir, _guard) = setup_temp_cache();
+            let temp_dir = create_temp_sessions_dir();
 
             // Verify that user-prompt-submit creates a session (for new sessions that
             // skipped SessionStart due to source="startup")
             let input = create_test_input(None);
 
-            let result = process_hook_event_internal(HookEvent::UserPromptSubmit, input)
-                .expect("should succeed");
+            let result =
+                process_hook_event_impl(HookEvent::UserPromptSubmit, input, temp_dir.path())
+                    .expect("should succeed");
 
             assert_eq!(
                 result,

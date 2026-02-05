@@ -50,6 +50,7 @@ fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
 ///
 /// Validates that session_id does not contain path separators to prevent
 /// path traversal attacks.
+#[cfg(test)]
 pub fn session_file(session_id: &str) -> Result<PathBuf> {
     session_file_in(&sessions_dir()?, session_id)
 }
@@ -85,9 +86,9 @@ pub fn load_session(session_id: &str) -> Result<Option<Session>> {
     load_session_from(&dir, session_id)
 }
 
-/// Internal implementation for loading a session from a specific directory.
+/// Loads a session from a specific directory.
 /// Allows testing with temporary directories.
-fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result<Option<Session>> {
+pub(crate) fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result<Option<Session>> {
     let path = session_file_in(sessions_dir, session_id)?;
 
     if !path.exists() {
@@ -156,14 +157,18 @@ fn acquire_shared_lock(file: &File) -> Result<()> {
 ///
 /// Uses atomic write (write to temp file, then rename) combined with
 /// file locking to prevent race conditions when multiple hooks run concurrently.
+#[expect(
+    dead_code,
+    reason = "Public API for future use; hook.rs uses save_session_to directly"
+)]
 pub fn save_session(session: &Session) -> Result<()> {
     let dir = sessions_dir()?;
     save_session_to(&dir, session)
 }
 
-/// Internal implementation for saving a session to a specific directory.
+/// Saves a session to a specific directory.
 /// Allows testing with temporary directories.
-fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
+pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
     let path = session_file_in(sessions_dir, &session.session_id)?;
 
     if let Some(parent) = path.parent() {
@@ -202,7 +207,13 @@ fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
-    let path = session_file(session_id)?;
+    delete_session_from(&sessions_dir()?, session_id)
+}
+
+/// Deletes a session from a specific directory.
+/// Allows testing with temporary directories.
+pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    let path = session_file_in(sessions_dir, session_id)?;
 
     if path.exists() {
         fs::remove_file(&path)?;
