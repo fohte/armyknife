@@ -48,9 +48,17 @@ pub struct App {
 
 impl App {
     /// Creates a new App instance with initial session data.
+    /// Restores the last selected session if available.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
-        Ok(Self::with_sessions(sessions))
+        let mut app = Self::with_sessions(sessions);
+
+        // Restore last selected session if available
+        if let Ok(Some(session_id)) = store::load_last_selected_session() {
+            app.restore_selection(Some(&session_id));
+        }
+
+        Ok(app)
     }
 
     /// Creates a new App instance with the given sessions.
@@ -209,6 +217,14 @@ impl App {
         }
     }
 
+    /// Persists the currently selected session ID to disk.
+    /// Ignores errors to avoid disrupting UX.
+    fn persist_selection(&self) {
+        if let Some(session) = self.selected_session() {
+            let _ = store::save_last_selected_session(&session.session_id);
+        }
+    }
+
     /// Moves selection to the next item in filtered list.
     pub fn select_next(&mut self) {
         if self.filtered_indices.is_empty() {
@@ -226,6 +242,7 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.persist_selection();
     }
 
     /// Moves selection to the previous item in filtered list.
@@ -245,12 +262,14 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.persist_selection();
     }
 
     /// Selects a session by its 1-indexed number (1-9) within filtered list.
     pub fn select_by_number(&mut self, num: usize) {
         if num > 0 && num <= self.filtered_indices.len() {
             self.list_state.select(Some(num - 1));
+            self.persist_selection();
         }
     }
 

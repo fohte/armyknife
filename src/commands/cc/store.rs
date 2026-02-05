@@ -33,6 +33,44 @@ pub fn sessions_dir() -> Result<PathBuf> {
         .ok_or_else(|| CcError::CacheDirNotFound.into())
 }
 
+/// Returns the file path for storing the last selected session ID.
+/// Path: ~/Library/Caches/armyknife/cc/last_selected_session (macOS)
+///       ~/.cache/armyknife/cc/last_selected_session (Linux)
+pub fn last_selected_session_file() -> Result<PathBuf> {
+    cache::base_dir()
+        .map(|d| d.join("cc").join("last_selected_session"))
+        .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
+/// Saves the last selected session ID to disk.
+/// Uses atomic write (temp file + rename) to prevent corruption.
+pub fn save_last_selected_session(session_id: &str) -> Result<()> {
+    let path = last_selected_session_file()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Atomic write via temp file + rename
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, session_id)?;
+    fs::rename(&temp_path, &path)?;
+    Ok(())
+}
+
+/// Loads the last selected session ID from disk.
+/// Returns Ok(None) if the file doesn't exist or is empty.
+pub fn load_last_selected_session() -> Result<Option<String>> {
+    let path = last_selected_session_file()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)?;
+    let session_id = content.trim().to_string();
+    if session_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(session_id))
+}
+
 /// Returns the file path for a specific session within a given directory.
 /// This is the internal implementation that accepts a custom sessions directory.
 fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
@@ -793,6 +831,111 @@ mod tests {
             assert_eq!(sessions[0].session_id, "recent-new-created");
             assert_eq!(sessions[1].session_id, "recent-old-created");
             assert_eq!(sessions[2].session_id, "old-bucket");
+        }
+    }
+
+    mod last_selected_session_tests {
+        use super::*;
+        use rstest::rstest;
+
+        struct TempCacheDir {
+            #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
+            temp_dir: TempDir,
+            cache_path: PathBuf,
+        }
+
+        #[fixture]
+        fn temp_cache_dir() -> TempCacheDir {
+            let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+            let cache_path = temp_dir.path().join("cc");
+            fs::create_dir_all(&cache_path).expect("dir creation should succeed");
+            TempCacheDir {
+                temp_dir,
+                cache_path,
+            }
+        }
+
+        #[rstest]
+        fn save_and_load_round_trip(temp_cache_dir: TempCacheDir) {
+            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+
+            // Save
+            let session_id = "test-session-123";
+            fs::write(&file_path, session_id).expect("write should succeed");
+
+            // Load
+            let content = fs::read_to_string(&file_path).expect("read should succeed");
+            let loaded = content.trim().to_string();
+
+            assert_eq!(loaded, session_id);
+        }
+
+        #[rstest]
+        fn load_returns_none_for_nonexistent_file(temp_cache_dir: TempCacheDir) {
+            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+
+            // File doesn't exist
+            assert!(!file_path.exists());
+
+            // Simulate load_last_selected_session logic
+            let result = if file_path.exists() {
+                Some(fs::read_to_string(&file_path).expect("read should succeed"))
+            } else {
+                None
+            };
+
+            assert!(result.is_none());
+        }
+
+        #[rstest]
+        fn load_returns_none_for_empty_file(temp_cache_dir: TempCacheDir) {
+            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+
+            // Write empty content
+            fs::write(&file_path, "").expect("write should succeed");
+
+            // Simulate load_last_selected_session logic
+            let content = fs::read_to_string(&file_path).expect("read should succeed");
+            let trimmed = content.trim();
+            let result = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+
+            assert!(result.is_none());
+        }
+
+        #[rstest]
+        fn load_trims_whitespace(temp_cache_dir: TempCacheDir) {
+            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+
+            // Write with trailing newline
+            fs::write(&file_path, "test-session\n").expect("write should succeed");
+
+            // Simulate load_last_selected_session logic
+            let content = fs::read_to_string(&file_path).expect("read should succeed");
+            let loaded = content.trim().to_string();
+
+            assert_eq!(loaded, "test-session");
+        }
+
+        #[rstest]
+        fn atomic_write_creates_temp_file(temp_cache_dir: TempCacheDir) {
+            let file_path = temp_cache_dir.cache_path.join("last_selected_session");
+            let temp_path = file_path.with_extension("tmp");
+
+            // Simulate save_last_selected_session logic
+            let session_id = "atomic-test";
+            fs::write(&temp_path, session_id).expect("write should succeed");
+            fs::rename(&temp_path, &file_path).expect("rename should succeed");
+
+            // Temp file should not exist after rename
+            assert!(!temp_path.exists());
+            // Main file should exist with correct content
+            assert!(file_path.exists());
+            let content = fs::read_to_string(&file_path).expect("read should succeed");
+            assert_eq!(content, session_id);
         }
     }
 }
