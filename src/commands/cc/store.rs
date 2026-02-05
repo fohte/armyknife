@@ -33,6 +33,54 @@ pub fn sessions_dir() -> Result<PathBuf> {
         .ok_or_else(|| CcError::CacheDirNotFound.into())
 }
 
+/// Returns the file path for storing the last selected session ID.
+/// Path: ~/Library/Caches/armyknife/cc/last_selected_session (macOS)
+///       ~/.cache/armyknife/cc/last_selected_session (Linux)
+pub fn last_selected_session_file() -> Result<PathBuf> {
+    cache::base_dir()
+        .map(|d| d.join("cc").join("last_selected_session"))
+        .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
+/// Saves the last selected session ID to disk.
+/// Uses atomic write (temp file + rename) to prevent corruption.
+pub fn save_last_selected_session(session_id: &str) -> Result<()> {
+    save_last_selected_session_to(&last_selected_session_file()?, session_id)
+}
+
+/// Saves the last selected session ID to a specific path.
+/// Allows testing with temporary directories.
+pub(crate) fn save_last_selected_session_to(path: &Path, session_id: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Atomic write via temp file + rename
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, session_id)?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+/// Loads the last selected session ID from disk.
+/// Returns Ok(None) if the file doesn't exist or is empty.
+pub fn load_last_selected_session() -> Result<Option<String>> {
+    load_last_selected_session_from(&last_selected_session_file()?)
+}
+
+/// Loads the last selected session ID from a specific path.
+/// Allows testing with temporary directories.
+pub(crate) fn load_last_selected_session_from(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let session_id = content.trim().to_string();
+    if session_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(session_id))
+}
+
 /// Returns the file path for a specific session within a given directory.
 /// This is the internal implementation that accepts a custom sessions directory.
 fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
@@ -793,6 +841,86 @@ mod tests {
             assert_eq!(sessions[0].session_id, "recent-new-created");
             assert_eq!(sessions[1].session_id, "recent-old-created");
             assert_eq!(sessions[2].session_id, "old-bucket");
+        }
+    }
+
+    mod last_selected_session_tests {
+        use super::*;
+        use rstest::rstest;
+
+        #[rstest]
+        fn save_and_load_round_trip(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("last_selected_session");
+            let session_id = "test-session-123";
+
+            save_last_selected_session_to(&file_path, session_id).expect("save should succeed");
+
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
+
+            assert_eq!(loaded, Some(session_id.to_string()));
+        }
+
+        #[rstest]
+        fn load_returns_none_for_nonexistent_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("nonexistent");
+
+            assert!(!file_path.exists());
+
+            let result = load_last_selected_session_from(&file_path).expect("load should succeed");
+
+            assert!(result.is_none());
+        }
+
+        #[rstest]
+        fn load_returns_none_for_empty_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("empty_session");
+
+            // Write empty content directly to test the load function behavior
+            fs::write(&file_path, "").expect("write should succeed");
+
+            let result = load_last_selected_session_from(&file_path).expect("load should succeed");
+
+            assert!(result.is_none());
+        }
+
+        #[rstest]
+        fn load_trims_whitespace(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("whitespace_session");
+
+            // Write with trailing newline directly to test the load function behavior
+            fs::write(&file_path, "test-session\n").expect("write should succeed");
+
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
+
+            assert_eq!(loaded, Some("test-session".to_string()));
+        }
+
+        #[rstest]
+        fn save_creates_parent_directories(temp_session_dir: TempSessionDir) {
+            let nested_path = temp_session_dir
+                .sessions_path
+                .join("nested")
+                .join("dir")
+                .join("last_selected_session");
+            let session_id = "nested-test";
+
+            save_last_selected_session_to(&nested_path, session_id).expect("save should succeed");
+
+            assert!(nested_path.exists());
+            let loaded =
+                load_last_selected_session_from(&nested_path).expect("load should succeed");
+            assert_eq!(loaded, Some(session_id.to_string()));
+        }
+
+        #[rstest]
+        fn save_overwrites_existing_file(temp_session_dir: TempSessionDir) {
+            let file_path = temp_session_dir.sessions_path.join("overwrite_test");
+
+            save_last_selected_session_to(&file_path, "first").expect("save should succeed");
+            save_last_selected_session_to(&file_path, "second").expect("save should succeed");
+
+            let loaded = load_last_selected_session_from(&file_path).expect("load should succeed");
+            assert_eq!(loaded, Some("second".to_string()));
         }
     }
 }
