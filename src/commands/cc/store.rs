@@ -152,20 +152,6 @@ fn acquire_shared_lock(file: &File) -> Result<()> {
     Err(CcError::LockTimeout(LOCK_TIMEOUT).into())
 }
 
-/// Saves a session to disk with exclusive file locking.
-/// Creates the parent directory if it doesn't exist.
-///
-/// Uses atomic write (write to temp file, then rename) combined with
-/// file locking to prevent race conditions when multiple hooks run concurrently.
-#[expect(
-    dead_code,
-    reason = "Public API for future use; hook.rs uses save_session_to directly"
-)]
-pub fn save_session(session: &Session) -> Result<()> {
-    let dir = sessions_dir()?;
-    save_session_to(&dir, session)
-}
-
 /// Saves a session to a specific directory.
 /// Allows testing with temporary directories.
 pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
