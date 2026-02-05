@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.81](https://github.com/fohte/armyknife/compare/v0.1.80...v0.1.81) (2026-02-05)
+
+
+### Features
+
+* **cc/watch:** preserve selected session across restarts ([#240](https://github.com/fohte/armyknife/issues/240)) ([84f6c3e](https://github.com/fohte/armyknife/commit/84f6c3ed1ce7e61fc86531c6aedabe4fe823e80b))
+
 ## [0.1.80](https://github.com/fohte/armyknife/compare/v0.1.79...v0.1.80) (2026-02-05)
 
 
