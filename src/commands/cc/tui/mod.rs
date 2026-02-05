@@ -97,6 +97,16 @@ fn merge_session_changes(
     )
 }
 
+/// Focuses on the selected session's tmux pane.
+fn focus_selected_session(app: &mut App) {
+    if let Some(session) = app.selected_session()
+        && let Some(ref tmux_info) = session.tmux_info
+        && let Err(e) = tmux::focus_pane(&tmux_info.pane_id)
+    {
+        app.set_error(format!("Failed to focus tmux pane: {e}"));
+    }
+}
+
 /// Handles key events in Search mode.
 fn handle_search_key_event(app: &mut App, key: KeyEvent) {
     match (key.code, key.modifiers) {
@@ -108,12 +118,7 @@ fn handle_search_key_event(app: &mut App, key: KeyEvent) {
         // Confirm search and focus on selected session
         (KeyCode::Enter, _) => {
             app.confirm_search();
-            if let Some(session) = app.selected_session()
-                && let Some(ref tmux_info) = session.tmux_info
-                && let Err(e) = tmux::focus_pane(&tmux_info.pane_id)
-            {
-                app.set_error(format!("Failed to focus tmux pane: {e}"));
-            }
+            focus_selected_session(app);
         }
 
         // Navigation within filtered results (Ctrl+n/p or arrow keys only)
@@ -194,12 +199,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
 
         // Focus on selected session's tmux pane
         KeyCode::Enter | KeyCode::Char('f') => {
-            if let Some(session) = app.selected_session()
-                && let Some(ref tmux_info) = session.tmux_info
-                && let Err(e) = tmux::focus_pane(&tmux_info.pane_id)
-            {
-                app.set_error(format!("Failed to focus tmux pane: {e}"));
-            }
+            focus_selected_session(app);
         }
 
         // Quick select (1-9)
