@@ -123,7 +123,10 @@ jobs:
           srt --settings ./srt-settings.json cargo test --all-features --workspace
 
       - name: Generate coverage report
-        run: cargo llvm-cov report --lcov --output-path lcov.info
+        run: |
+          # shellcheck source=/dev/null
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
