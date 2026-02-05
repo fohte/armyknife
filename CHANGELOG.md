@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.82](https://github.com/fohte/armyknife/compare/v0.1.81...v0.1.82) (2026-02-05)
+
+
+### Bug Fixes
+
+* **cc/watch:** focus selected session directly from search mode ([#241](https://github.com/fohte/armyknife/issues/241)) ([416c46e](https://github.com/fohte/armyknife/commit/416c46e65ead623d82223dc83240e5b6ca8c365e))
+
 ## [0.1.81](https://github.com/fohte/armyknife/compare/v0.1.80...v0.1.81) (2026-02-05)
 
 
