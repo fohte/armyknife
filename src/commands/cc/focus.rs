@@ -18,7 +18,7 @@ pub fn run(args: &FocusArgs) -> Result<()> {
     let session = store::load_session(&args.session_id)?;
     let tmux_info = extract_tmux_info(&args.session_id, session)?;
 
-    tmux::focus_pane(&tmux_info.session_name, &tmux_info.pane_id)?;
+    tmux::focus_pane(&tmux_info.pane_id)?;
 
     Ok(())
 }
