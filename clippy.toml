@@ -17,6 +17,10 @@ reason = "Do not create new runtimes. Use async fn and .await with the existing 
 path = "std::env::set_var"
 reason = "Unsafe in multi-threaded contexts. Use explicit configuration passing instead."
 
+[[disallowed-methods]]
+path = "std::env::remove_var"
+reason = "Unsafe in multi-threaded contexts. Avoid modifying environment variables at runtime."
+
 # Disallow serial_test crate - tests requiring serialization indicate
 # side effects that should be eliminated through proper test isolation
 [[disallowed-macros]]
