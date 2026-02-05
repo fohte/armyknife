@@ -16,7 +16,8 @@ See [docs/architecture.md](docs/architecture.md).
 
 ## Development
 
-- `cargo build` / `cargo test`
+- Build: `cargo build`
+- Test: `mise run test` (runs tests in srt sandbox to prevent filesystem side effects)
 - Formatting and linting run automatically via lefthook pre-commit
 - Coverage: `cargo llvm-cov` (generates lcov.info, uploaded to Codecov in CI)
 

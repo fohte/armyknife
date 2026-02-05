@@ -83,14 +83,55 @@ jobs:
 
       - run: rustup show
 
+      - uses: jdx/mise-action@v2
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Run tests with coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      # Install llvm-tools-preview before srt sandbox.
+      # cargo-llvm-cov auto-installs this component on first run, but that
+      # would fail inside the read-only sandbox.
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
+      - name: Install srt dependencies
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+
+      - name: Enable bwrap namespace creation
+        run: |
+          # Ubuntu 24.04+ restricts unprivileged user namespaces by default.
+          # Set setuid bit on bwrap to allow namespace creation.
+          sudo chmod u+s "$(which bwrap)"
+
+      # Build outside sandbox (needs network for crates.io), run tests inside sandbox.
+      # This catches filesystem side effects while allowing normal dependency resolution.
+      - name: Build tests with coverage instrumentation
+        run: |
+          # Set RUSTFLAGS and LLVM_PROFILE_FILE for coverage instrumentation.
+          # shellcheck source=/dev/null
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo build --tests --all-features --workspace
+
+      - name: Run tests in sandbox
+        run: |
+          # Set LLVM_PROFILE_FILE so test binaries write .profraw files to the correct location.
+          # shellcheck source=/dev/null
+          source <(cargo llvm-cov show-env --export-prefix)
+          # srt hardcodes TMPDIR=/tmp/claude in sandbox-utils.ts:
+          # https://github.com/anthropic-experimental/sandbox-runtime/blob/dcf3f91/src/sandbox/sandbox-utils.ts#L335
+          # The directory doesn't exist by default, so create it for TempDir::new() to work.
+          mkdir -p /tmp/claude
+          srt --settings ./srt-settings.json cargo test --all-features --workspace
+
+      - name: Generate coverage report
+        run: |
+          # Set env vars so cargo llvm-cov report can find the .profraw files.
+          # shellcheck source=/dev/null
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
