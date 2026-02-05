@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.80](https://github.com/fohte/armyknife/compare/v0.1.79...v0.1.80) (2026-02-05)
+
+
+### Bug Fixes
+
+* **cc:** allow focusing panes across different tmux sessions ([#236](https://github.com/fohte/armyknife/issues/236)) ([688c19d](https://github.com/fohte/armyknife/commit/688c19dea433ddd484e99ebe09c28b47e5212829))
+
 ## [0.1.79](https://github.com/fohte/armyknife/compare/v0.1.78...v0.1.79) (2026-02-05)
 
 
