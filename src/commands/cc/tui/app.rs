@@ -309,9 +309,17 @@ impl App {
     }
 
     /// Exits search mode, confirming the search.
+    /// Preserves the current selection position.
     pub fn confirm_search(&mut self) {
+        let current_selection = self.list_state.selected();
         self.confirmed_query = self.search_query.clone();
         self.apply_filter();
+        // Restore selection position (apply_filter resets to 0)
+        if let Some(pos) = current_selection
+            && pos < self.filtered_indices.len()
+        {
+            self.list_state.select(Some(pos));
+        }
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
     }

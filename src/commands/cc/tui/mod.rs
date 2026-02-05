@@ -105,9 +105,15 @@ fn handle_search_key_event(app: &mut App, key: KeyEvent) {
             app.cancel_search();
         }
 
-        // Confirm search
+        // Confirm search and focus on selected session
         (KeyCode::Enter, _) => {
             app.confirm_search();
+            if let Some(session) = app.selected_session()
+                && let Some(ref tmux_info) = session.tmux_info
+                && let Err(e) = tmux::focus_pane(&tmux_info.pane_id)
+            {
+                app.set_error(format!("Failed to focus tmux pane: {e}"));
+            }
         }
 
         // Navigation within filtered results (Ctrl+n/p or arrow keys only)
