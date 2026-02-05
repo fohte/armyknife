@@ -20,11 +20,14 @@ pub fn run() -> Result<()> {
     result
 }
 
+/// Maximum events to drain per iteration to prevent starvation under sustained load.
+const MAX_DRAIN_PER_ITERATION: usize = 100;
+
 /// Main application loop.
 ///
 /// Uses an event-drain strategy to prevent queue buildup:
 /// 1. Block-wait for the first event
-/// 2. Drain all remaining queued events (non-blocking)
+/// 2. Drain remaining queued events (non-blocking, up to MAX_DRAIN_PER_ITERATION)
 /// 3. Key events are processed immediately during drain
 /// 4. SessionsChanged events are merged (deduplicated by session_id)
 /// 5. The merged reload + render happens once per iteration
@@ -39,9 +42,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         let mut needs_full_reload = false;
         let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
 
-        // Process first event + drain all remaining queued events
-        for event in
-            std::iter::once(first_event).chain(std::iter::from_fn(|| event_handler.try_next()))
+        // Process first event + drain queued events (bounded to prevent starvation)
+        for event in std::iter::once(first_event)
+            .chain(std::iter::from_fn(|| event_handler.try_next()))
+            .take(MAX_DRAIN_PER_ITERATION)
         {
             match event {
                 AppEvent::Key(k) => handle_key_event(&mut app, k),
@@ -56,10 +60,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         }
 
         // Apply merged session changes in a single reload
-        match merge_session_changes(change_map, needs_full_reload) {
-            None => app.reload_sessions(None)?,
-            Some(ref merged) if !merged.is_empty() => app.reload_sessions(Some(merged))?,
-            _ => {}
+        if let Some(merged) = merge_session_changes(change_map, needs_full_reload) {
+            if !merged.is_empty() {
+                app.reload_sessions(Some(&merged))?;
+            }
+        } else {
+            app.reload_sessions(None)?;
         }
 
         if app.should_quit {
@@ -452,13 +458,18 @@ mod tests {
             ("s3".to_string(), SessionChangeType::Modified),
         ]);
 
-        let result = merge_session_changes(map, false).unwrap();
+        let mut result = merge_session_changes(map, false).unwrap();
         assert_eq!(result.len(), 3);
 
-        // Verify each session_id appears exactly once
-        let mut ids: Vec<&str> = result.iter().map(|c| c.session_id.as_str()).collect();
-        ids.sort();
-        assert_eq!(ids, vec!["s1", "s2", "s3"]);
+        // Sort by session_id for deterministic verification
+        result.sort_by_key(|c| c.session_id.clone());
+
+        assert_eq!(result[0].session_id, "s1");
+        assert_eq!(result[0].change_type, SessionChangeType::Created);
+        assert_eq!(result[1].session_id, "s2");
+        assert_eq!(result[1].change_type, SessionChangeType::Deleted);
+        assert_eq!(result[2].session_id, "s3");
+        assert_eq!(result[2].change_type, SessionChangeType::Modified);
     }
 
     #[rstest]
