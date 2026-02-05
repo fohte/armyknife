@@ -91,6 +91,12 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # Install llvm-tools-preview before srt sandbox.
+      # cargo-llvm-cov auto-installs this component on first run, but that
+      # would fail inside the read-only sandbox.
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
       - name: Install srt dependencies
         run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
 
