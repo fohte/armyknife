@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.79](https://github.com/fohte/armyknife/compare/v0.1.78...v0.1.79) (2026-02-05)
+
+
+### Performance Improvements
+
+* **cc/watch:** resolve key input lag during rapid hook firing ([#231](https://github.com/fohte/armyknife/issues/231)) ([483426e](https://github.com/fohte/armyknife/commit/483426e352fdae30ee993aa2b22745fb35b77278))
+
 ## [0.1.78](https://github.com/fohte/armyknife/compare/v0.1.77...v0.1.78) (2026-02-04)
 
 
