@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.85](https://github.com/fohte/armyknife/compare/v0.1.84...v0.1.85) (2026-02-07)
+
+
+### Features
+
+* **cc/list:** support tmux status bar session status display ([#247](https://github.com/fohte/armyknife/issues/247)) ([1366ddf](https://github.com/fohte/armyknife/commit/1366ddfea744aef142e34d4b77916646300d6cbd))
+
 ## [0.1.84](https://github.com/fohte/armyknife/compare/v0.1.83...v0.1.84) (2026-02-07)
 
 
