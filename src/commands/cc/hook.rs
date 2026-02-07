@@ -85,6 +85,7 @@ fn process_hook_event_impl(
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
         store::delete_session_from(sessions_dir, &input.session_id)?;
+        let _ = tmux::refresh_status();
         return Ok(ProcessResult::SessionDeleted);
     }
 
@@ -160,6 +161,10 @@ fn process_hook_event_impl(
 
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
+
+    // Refresh tmux status bar so `#()` commands pick up the state change immediately.
+    // Silently ignore errors (e.g., not in tmux, tmux not installed).
+    let _ = tmux::refresh_status();
 
     // Send notification if applicable (errors are logged but don't fail the hook)
     if should_notify(event) {
