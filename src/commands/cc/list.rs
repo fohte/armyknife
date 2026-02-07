@@ -22,16 +22,26 @@ const MIN_TITLE_WIDTH: usize = 20;
 const COLUMN_SPACES: usize = 5;
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct ListArgs {}
+pub struct ListArgs {
+    /// Output short status for tmux status bar
+    #[arg(long)]
+    pub tmux: bool,
+}
 
 /// Runs the list command.
 /// Displays all Claude Code sessions in a formatted table.
-pub fn run(_args: &ListArgs) -> Result<()> {
+pub fn run(args: &ListArgs) -> Result<()> {
     // Clean up stale sessions first
     store::cleanup_stale_sessions()?;
 
     // Load all sessions
     let sessions = store::list_sessions()?;
+
+    if args.tmux {
+        let mut stdout = io::stdout().lock();
+        render_tmux_status(&mut stdout, &sessions)?;
+        return Ok(());
+    }
 
     let mut stdout = io::stdout().lock();
     let term_width = get_terminal_width();
@@ -55,6 +65,35 @@ fn calculate_title_width(term_width: usize) -> usize {
     } else {
         MIN_TITLE_WIDTH
     }
+}
+
+/// Renders a short status string for tmux status bar.
+///
+/// - If any session is WaitingInput: `#[fg=yellow]◐ N` (N = count of non-running sessions)
+/// - If only Stopped sessions exist: `○ N`
+/// - If all Running or no sessions: empty string (no output)
+fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
+    let (waiting_count, stopped_count) =
+        sessions
+            .iter()
+            .fold((0, 0), |(waiting, stopped), s| match s.status {
+                SessionStatus::WaitingInput => (waiting + 1, stopped),
+                SessionStatus::Stopped => (waiting, stopped + 1),
+                _ => (waiting, stopped),
+            });
+
+    let pending_count = waiting_count + stopped_count;
+    if pending_count == 0 {
+        return Ok(());
+    }
+
+    if waiting_count > 0 {
+        write!(writer, "#[fg=yellow]\u{25d0} {pending_count}#[default]")?;
+    } else {
+        write!(writer, "\u{25cb} {pending_count}")?;
+    }
+
+    Ok(())
 }
 
 /// Renders sessions to the given writer.
@@ -444,6 +483,100 @@ mod tests {
         // When sessions-index.json doesn't exist, returns "-"
         let session = create_test_session();
         assert_eq!(get_title_display_name(&session), "-");
+    }
+
+    // =========================================================================
+    // tmux status output tests
+    // =========================================================================
+
+    #[test]
+    fn test_render_tmux_status_empty() {
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &[]).expect("render should succeed");
+        assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
+    }
+
+    #[test]
+    fn test_render_tmux_status_all_running() {
+        let sessions = vec![
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+        ];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
+    }
+
+    #[test]
+    fn test_render_tmux_status_waiting_input() {
+        let sessions = vec![
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::WaitingInput,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::WaitingInput,
+                ..create_test_session()
+            },
+        ];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            "#[fg=yellow]\u{25d0} 2#[default]"
+        );
+    }
+
+    #[test]
+    fn test_render_tmux_status_stopped_only() {
+        let sessions = vec![
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::Stopped,
+                ..create_test_session()
+            },
+        ];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        assert_eq!(String::from_utf8(output).expect("valid utf8"), "\u{25cb} 1");
+    }
+
+    #[test]
+    fn test_render_tmux_status_mixed_waiting_and_stopped() {
+        let sessions = vec![
+            Session {
+                status: SessionStatus::WaitingInput,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::Stopped,
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+        ];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        // WaitingInput takes priority for the symbol, count includes both
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            "#[fg=yellow]\u{25d0} 2#[default]"
+        );
     }
 
     // =========================================================================

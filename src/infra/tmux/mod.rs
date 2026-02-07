@@ -290,6 +290,13 @@ pub fn current_pane_id() -> Option<String> {
     query_tmux_value("#{pane_id}")
 }
 
+/// Refresh all tmux clients' status bars.
+/// Useful after session state changes to immediately reflect updates
+/// in `#()` status bar commands.
+pub fn refresh_status() -> Result<()> {
+    run_tmux(&["refresh-client", "-S"])
+}
+
 /// Check if the tmux server is available (running and responsive).
 pub fn is_server_available() -> bool {
     run_tmux_output(&["list-sessions"]).is_ok()
