@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.86](https://github.com/fohte/armyknife/compare/v0.1.85...v0.1.86) (2026-02-07)
+
+
+### Bug Fixes
+
+* **cc/hook:** ensure stop hook notification shows the latest assistant response ([#248](https://github.com/fohte/armyknife/issues/248)) ([ad637d8](https://github.com/fohte/armyknife/commit/ad637d8c3cb6d5af74adf90234b29bfa5f2fd2b7))
+
 ## [0.1.85](https://github.com/fohte/armyknife/compare/v0.1.84...v0.1.85) (2026-02-07)
 
 
