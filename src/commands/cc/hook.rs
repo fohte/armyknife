@@ -156,13 +156,19 @@ fn process_hook_event_impl(
     }
 
     // Update last_message from Claude Code's transcript.
-    // Retry if transcript hasn't been updated yet (race condition with Claude Code's write).
+    // For Stop events, retry if transcript hasn't been updated yet (race condition with
+    // Claude Code's write). For other events, read once without retrying.
+    let max_retries = if event == HookEvent::Stop {
+        TRANSCRIPT_MAX_RETRIES
+    } else {
+        0
+    };
     session.last_message = get_last_message_with_retry(
         &session.cwd,
         &session.session_id,
         session.last_message.as_deref(),
         TRANSCRIPT_RETRY_DELAY,
-        TRANSCRIPT_MAX_RETRIES,
+        max_retries,
     );
 
     // Update current_tool based on event type
@@ -391,30 +397,25 @@ fn get_last_message_with_retry_impl<F>(
 where
     F: Fn() -> Option<String>,
 {
-    let current = read_message();
-
     // No previous message means this is the first read for this session; no retry needed.
     let Some(prev) = previous_message else {
-        return current;
+        return read_message();
     };
 
-    // If the message has changed, the transcript is up to date.
-    if current.as_deref() != Some(prev) {
-        return current;
-    }
+    for i in 0..=max_retries {
+        let current = read_message();
 
-    // Message unchanged — transcript may not have been flushed yet. Retry.
-    for _ in 0..max_retries {
-        thread::sleep(retry_delay);
-
-        let refreshed = read_message();
-        if refreshed.as_deref() != Some(prev) {
-            return refreshed;
+        // If the message has changed, or this is the last attempt, return the result.
+        if current.as_deref() != Some(prev) || i == max_retries {
+            return current;
         }
+
+        // Message is still unchanged, wait before retrying.
+        thread::sleep(retry_delay);
     }
 
-    // Retries exhausted — return whatever we have (may genuinely be the same message).
-    current
+    // Unreachable: the loop always returns.
+    unreachable!()
 }
 
 /// Determines the session status based on the event and input.
