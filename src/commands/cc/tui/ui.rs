@@ -454,18 +454,36 @@ fn highlight_matches<'a>(text: &str, query: &str, base_style: Style) -> Vec<Span
         return vec![Span::styled(text.to_string(), base_style)];
     }
 
-    let text_lower = text.to_lowercase();
+    // Build a mapping from lowercased byte offsets to original byte offsets.
+    // to_lowercase() can change byte length (e.g. 'İ' -> "i\u{307}"),
+    // so we must map match positions in the lowercased string back to the original.
+    let mut text_lower = String::new();
+    let mut lower_to_orig: Vec<usize> = Vec::new();
+    for (orig_offset, ch) in text.char_indices() {
+        for lower_ch in ch.to_lowercase() {
+            let lower_start = text_lower.len();
+            text_lower.push(lower_ch);
+            // Map each byte of the lowercased char to the original char's byte offset
+            for _ in lower_start..text_lower.len() {
+                lower_to_orig.push(orig_offset);
+            }
+        }
+    }
+    // Sentinel: map end-of-lowered-string to end-of-original-string
+    lower_to_orig.push(text.len());
 
-    // Collect all match ranges (byte offsets)
+    // Collect all match ranges (byte offsets in the original string)
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for word in &words {
         let word_lower = word.to_lowercase();
         let mut start = 0;
         while let Some(pos) = text_lower[start..].find(&word_lower) {
-            let abs_start = start + pos;
-            let abs_end = abs_start + word_lower.len();
-            ranges.push((abs_start, abs_end));
-            start = abs_start + 1;
+            let lower_start = start + pos;
+            let lower_end = lower_start + word_lower.len();
+            let orig_start = lower_to_orig[lower_start];
+            let orig_end = lower_to_orig[lower_end];
+            ranges.push((orig_start, orig_end));
+            start = lower_start + 1;
         }
     }
 
@@ -1077,6 +1095,8 @@ mod tests {
     #[case::overlapping_ranges("abcd", "ab bc", &[("abc", true), ("d", false)])]
     #[case::multiple_occurrences("abcabc", "ab", &[("ab", true), ("c", false), ("ab", true), ("c", false)])]
     #[case::empty_text("", "web", &[("", false)])]
+    #[case::unicode_byte_length_increase("İstanbul City", "city", &[("İstanbul ", false), ("City", true)])]
+    #[case::unicode_byte_length_decrease("\u{212A}elvin", "kelvin", &[("\u{212A}elvin", true)])]
     fn test_highlight_matches(
         #[case] text: &str,
         #[case] query: &str,
