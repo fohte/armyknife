@@ -483,7 +483,12 @@ fn highlight_matches<'a>(text: &str, query: &str, base_style: Style) -> Vec<Span
             let orig_start = lower_to_orig[lower_start];
             let orig_end = lower_to_orig[lower_end];
             ranges.push((orig_start, orig_end));
-            start = lower_start + 1;
+            // Advance by one character (not one byte) to stay on a char boundary
+            start = lower_start
+                + text_lower[lower_start..]
+                    .chars()
+                    .next()
+                    .map_or(1, |c| c.len_utf8());
         }
     }
 
@@ -1097,6 +1102,7 @@ mod tests {
     #[case::empty_text("", "web", &[("", false)])]
     #[case::unicode_byte_length_increase("İstanbul City", "city", &[("İstanbul ", false), ("City", true)])]
     #[case::unicode_byte_length_decrease("\u{212A}elvin", "kelvin", &[("\u{212A}elvin", true)])]
+    #[case::multibyte_overlapping_match("ああいああ", "ああ", &[("ああ", true), ("い", false), ("ああ", true)])]
     fn test_highlight_matches(
         #[case] text: &str,
         #[case] query: &str,
