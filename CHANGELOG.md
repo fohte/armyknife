@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.84](https://github.com/fohte/armyknife/compare/v0.1.83...v0.1.84) (2026-02-07)
+
+
+### Features
+
+* **cc/watch:** highlight search query matches in session list ([#246](https://github.com/fohte/armyknife/issues/246)) ([ea47f5b](https://github.com/fohte/armyknife/commit/ea47f5b8ed95c6e47c2db74295080a3ad36d7785))
+
 ## [0.1.83](https://github.com/fohte/armyknife/compare/v0.1.82...v0.1.83) (2026-02-05)
 
 
