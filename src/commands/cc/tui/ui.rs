@@ -481,7 +481,16 @@ fn highlight_matches<'a>(text: &str, query: &str, base_style: Style) -> Vec<Span
             let lower_start = start + pos;
             let lower_end = lower_start + word_lower.len();
             let orig_start = lower_to_orig[lower_start];
-            let orig_end = lower_to_orig[lower_end];
+            let mut orig_end = lower_to_orig[lower_end];
+            // When lowercasing expands bytes (e.g. İ -> i\u{307}), a match
+            // within the expansion maps start and end to the same original
+            // offset. Extend to cover the full original character.
+            if orig_end <= orig_start {
+                orig_end = text[orig_start..]
+                    .chars()
+                    .next()
+                    .map_or(text.len(), |c| orig_start + c.len_utf8());
+            }
             ranges.push((orig_start, orig_end));
             // Advance by one character (not one byte) to stay on a char boundary
             start = lower_start
