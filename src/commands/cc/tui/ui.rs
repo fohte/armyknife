@@ -146,12 +146,20 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
     }
 
     let term_width = area.width as usize;
+
+    // Determine the active search query for highlighting
+    let query = if app.mode == AppMode::Search {
+        &app.search_query
+    } else {
+        &app.confirmed_query
+    };
+
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(i, session, cached_title, now, term_width)
+            create_session_item(i, session, cached_title, now, term_width, query)
         })
         .collect();
 
@@ -298,6 +306,7 @@ fn create_session_item(
     cached_title: Option<&str>,
     now: DateTime<Utc>,
     term_width: usize,
+    query: &str,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -311,26 +320,24 @@ fn create_session_item(
     let title_width = calculate_title_width(term_width);
 
     // First line: [number] status session:window time
-    let line1 = Line::from(vec![
+    let truncated_info = truncate(&session_info, session_info_width);
+    let info_style = Style::default().add_modifier(Modifier::BOLD);
+    let mut line1_spans = vec![
         Span::raw(format!("  [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
-        Span::styled(
-            truncate(&session_info, session_info_width),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(time_ago, Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
+    line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
+    line1_spans.push(Span::raw("  "));
+    line1_spans.push(Span::styled(time_ago, Style::default().fg(Color::DarkGray)));
+    let line1 = Line::from(line1_spans);
 
     // Second line: title (from Claude Code session)
-    let line2 = Line::from(vec![
-        Span::raw("      "),
-        Span::styled(
-            truncate(&title, title_width),
-            Style::default().fg(Color::Gray),
-        ),
-    ]);
+    let truncated_title = truncate(&title, title_width);
+    let title_style = Style::default().fg(Color::Gray);
+    let mut line2_spans = vec![Span::raw("      ")];
+    line2_spans.extend(highlight_matches(&truncated_title, query, title_style));
+    let line2 = Line::from(line2_spans);
 
     // Third line: current tool (if running) or last assistant message
     let line3_content = session
@@ -338,11 +345,11 @@ fn create_session_item(
         .as_deref()
         .or(session.last_message.as_deref())
         .unwrap_or("");
+    let truncated_line3 = truncate(line3_content, title_width);
     let line3_style = Style::default().add_modifier(Modifier::DIM);
-    let line3 = Line::from(vec![
-        Span::raw("      "),
-        Span::styled(truncate(line3_content, title_width), line3_style),
-    ]);
+    let mut line3_spans = vec![Span::raw("      ")];
+    line3_spans.extend(highlight_matches(&truncated_line3, query, line3_style));
+    let line3 = Line::from(line3_spans);
 
     // Empty line for spacing
     let line4 = Line::from("");
@@ -434,6 +441,71 @@ fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     } else {
         format!("{}d ago", days)
     }
+}
+
+/// Splits text into spans, highlighting portions that match any of the search words.
+///
+/// Uses case-insensitive matching consistent with the existing search logic.
+/// When multiple words produce overlapping match ranges, they are merged.
+/// Highlighted spans receive `fg(Color::Yellow)` and `BOLD` on top of `base_style`.
+fn highlight_matches<'a>(text: &str, query: &str, base_style: Style) -> Vec<Span<'a>> {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.is_empty() || text.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    let text_lower = text.to_lowercase();
+
+    // Collect all match ranges (byte offsets)
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for word in &words {
+        let word_lower = word.to_lowercase();
+        let mut start = 0;
+        while let Some(pos) = text_lower[start..].find(&word_lower) {
+            let abs_start = start + pos;
+            let abs_end = abs_start + word_lower.len();
+            ranges.push((abs_start, abs_end));
+            start = abs_start + 1;
+        }
+    }
+
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    // Sort by start position, then by end position descending to prefer longer matches
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+
+    // Merge overlapping ranges
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.0 <= last.1
+        {
+            last.1 = last.1.max(range.1);
+            continue;
+        }
+        merged.push(range);
+    }
+
+    // Build spans from merged ranges
+    let highlight_style = base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+
+    for (start, end) in merged {
+        if cursor < start {
+            spans.push(Span::styled(text[cursor..start].to_string(), base_style));
+        }
+        spans.push(Span::styled(text[start..end].to_string(), highlight_style));
+        cursor = end;
+    }
+
+    if cursor < text.len() {
+        spans.push(Span::styled(text[cursor..].to_string(), base_style));
+    }
+
+    spans
 }
 
 /// Truncates a string to fit within the specified display width.
@@ -551,9 +623,9 @@ fn render_session_list_internal(
         .iter()
         .enumerate()
         .map(|(i, session)| {
-            // Use fallback for tests (no cache available)
+            // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(i, session, Some(&title), now, term_width)
+            create_session_item(i, session, Some(&title), now, term_width, "")
         })
         .collect();
 
@@ -989,5 +1061,36 @@ mod tests {
         };
 
         assert_eq!(output, expected.trim_end());
+    }
+
+    // =========================================================================
+    // highlight_matches tests
+    // =========================================================================
+
+    /// Each expected element is (content, is_highlighted).
+    #[rstest]
+    #[case::empty_query("webapp:dev", "", &[("webapp:dev", false)])]
+    #[case::no_match("webapp:dev", "xyz", &[("webapp:dev", false)])]
+    #[case::single_word("webapp:dev", "web", &[("web", true), ("app:dev", false)])]
+    #[case::case_insensitive("WebApp", "web", &[("Web", true), ("App", false)])]
+    #[case::multiple_words("webapp:dev", "web dev", &[("web", true), ("app:", false), ("dev", true)])]
+    #[case::overlapping_ranges("abcd", "ab bc", &[("abc", true), ("d", false)])]
+    #[case::multiple_occurrences("abcabc", "ab", &[("ab", true), ("c", false), ("ab", true), ("c", false)])]
+    #[case::empty_text("", "web", &[("", false)])]
+    fn test_highlight_matches(
+        #[case] text: &str,
+        #[case] query: &str,
+        #[case] expected: &[(&str, bool)],
+    ) {
+        let base = Style::default().add_modifier(Modifier::BOLD);
+        let highlight = base.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+
+        let spans = highlight_matches(text, query, base);
+
+        assert_eq!(spans.len(), expected.len(), "span count mismatch");
+        for (span, &(content, is_highlighted)) in spans.iter().zip(expected) {
+            assert_eq!(span.content, content);
+            assert_eq!(span.style, if is_highlighted { highlight } else { base });
+        }
     }
 }
