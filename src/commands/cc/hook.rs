@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -16,6 +18,12 @@ use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::command::find_command_path;
+
+/// Delay between retries when waiting for transcript to be updated.
+const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// Maximum number of retries when transcript hasn't been updated yet.
+const TRANSCRIPT_MAX_RETRIES: u32 = 5;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
@@ -147,9 +155,15 @@ fn process_hook_event_impl(
         session.transcript_path.clone_from(&input.transcript_path);
     }
 
-    // Update last_message from Claude Code's transcript
-    session.last_message =
-        claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id);
+    // Update last_message from Claude Code's transcript.
+    // Retry if transcript hasn't been updated yet (race condition with Claude Code's write).
+    session.last_message = get_last_message_with_retry(
+        &session.cwd,
+        &session.session_id,
+        session.last_message.as_deref(),
+        TRANSCRIPT_RETRY_DELAY,
+        TRANSCRIPT_MAX_RETRIES,
+    );
 
     // Update current_tool based on event type
     session.current_tool = match event {
@@ -345,6 +359,62 @@ fn format_permission_request_message(input: &HookInput) -> Option<String> {
 
     // Strip ANSI escape sequences
     Some(regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", &result, |_| "").to_string())
+}
+
+/// Reads the last assistant message from the transcript, retrying if it hasn't changed.
+///
+/// Claude Code may not have written the latest response to the transcript .jsonl file
+/// by the time the stop hook fires. To mitigate this race condition, we compare the
+/// newly read message against the previously saved one. If they match (suggesting the
+/// transcript hasn't been updated yet), we wait briefly and retry.
+///
+/// Skips retries when there's no previous message (first hook invocation for this session).
+fn get_last_message_with_retry(
+    cwd: &Path,
+    session_id: &str,
+    previous_message: Option<&str>,
+    retry_delay: Duration,
+    max_retries: u32,
+) -> Option<String> {
+    get_last_message_with_retry_impl(previous_message, retry_delay, max_retries, || {
+        claude_sessions::get_last_assistant_message(cwd, session_id)
+    })
+}
+
+/// Internal implementation that accepts a closure for testability.
+fn get_last_message_with_retry_impl<F>(
+    previous_message: Option<&str>,
+    retry_delay: Duration,
+    max_retries: u32,
+    read_message: F,
+) -> Option<String>
+where
+    F: Fn() -> Option<String>,
+{
+    let current = read_message();
+
+    // No previous message means this is the first read for this session; no retry needed.
+    let Some(prev) = previous_message else {
+        return current;
+    };
+
+    // If the message has changed, the transcript is up to date.
+    if current.as_deref() != Some(prev) {
+        return current;
+    }
+
+    // Message unchanged — transcript may not have been flushed yet. Retry.
+    for _ in 0..max_retries {
+        thread::sleep(retry_delay);
+
+        let refreshed = read_message();
+        if refreshed.as_deref() != Some(prev) {
+            return refreshed;
+        }
+    }
+
+    // Retries exhausted — return whatever we have (may genuinely be the same message).
+    current
 }
 
 /// Determines the session status based on the event and input.
@@ -934,6 +1004,112 @@ mod tests {
         #[case::off(LogLevel::Off, false)]
         fn should_log_errors(#[case] level: LogLevel, #[case] expected: bool) {
             assert_eq!(level.should_log_errors(), expected);
+        }
+    }
+
+    mod transcript_retry_tests {
+        use super::*;
+        use std::cell::Cell;
+        use std::time::Duration;
+
+        /// Zero delay for fast tests
+        const TEST_DELAY: Duration = Duration::from_millis(0);
+
+        #[test]
+        fn returns_immediately_when_no_previous_message() {
+            let call_count = Cell::new(0u32);
+            let result = get_last_message_with_retry_impl(None, TEST_DELAY, 5, || {
+                call_count.set(call_count.get() + 1);
+                Some("new message".to_string())
+            });
+
+            assert_eq!(result, Some("new message".to_string()));
+            assert_eq!(call_count.get(), 1, "should read transcript exactly once");
+        }
+
+        #[test]
+        fn returns_immediately_when_message_changed() {
+            let call_count = Cell::new(0u32);
+            let result =
+                get_last_message_with_retry_impl(Some("old message"), TEST_DELAY, 5, || {
+                    call_count.set(call_count.get() + 1);
+                    Some("new message".to_string())
+                });
+
+            assert_eq!(result, Some("new message".to_string()));
+            assert_eq!(call_count.get(), 1, "should read transcript exactly once");
+        }
+
+        #[test]
+        fn retries_when_message_unchanged_then_succeeds() {
+            let call_count = Cell::new(0u32);
+            let result =
+                get_last_message_with_retry_impl(Some("old message"), TEST_DELAY, 5, || {
+                    call_count.set(call_count.get() + 1);
+                    if call_count.get() <= 2 {
+                        // First read + first retry: transcript not yet updated
+                        Some("old message".to_string())
+                    } else {
+                        // Second retry: transcript updated
+                        Some("new message".to_string())
+                    }
+                });
+
+            assert_eq!(result, Some("new message".to_string()));
+            // 1 initial read + 2 retries (first retry returns old, second returns new)
+            assert_eq!(call_count.get(), 3);
+        }
+
+        #[test]
+        fn returns_old_message_after_max_retries() {
+            let call_count = Cell::new(0u32);
+            let result =
+                get_last_message_with_retry_impl(Some("same message"), TEST_DELAY, 3, || {
+                    call_count.set(call_count.get() + 1);
+                    Some("same message".to_string())
+                });
+
+            assert_eq!(result, Some("same message".to_string()));
+            // 1 initial read + 3 retries
+            assert_eq!(call_count.get(), 4);
+        }
+
+        #[test]
+        fn returns_none_when_transcript_empty_and_no_previous() {
+            let result = get_last_message_with_retry_impl(None, TEST_DELAY, 5, || None);
+
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn returns_none_immediately_when_transcript_becomes_empty() {
+            // Previous message existed but transcript now returns None (different from previous)
+            let call_count = Cell::new(0u32);
+            let result =
+                get_last_message_with_retry_impl(Some("old message"), TEST_DELAY, 5, || {
+                    call_count.set(call_count.get() + 1);
+                    None
+                });
+
+            assert!(result.is_none());
+            assert_eq!(call_count.get(), 1, "should not retry when result differs");
+        }
+
+        #[test]
+        fn zero_max_retries_reads_once() {
+            let call_count = Cell::new(0u32);
+            let result =
+                get_last_message_with_retry_impl(Some("old message"), TEST_DELAY, 0, || {
+                    call_count.set(call_count.get() + 1);
+                    Some("old message".to_string())
+                });
+
+            assert_eq!(result, Some("old message".to_string()));
+            assert_eq!(
+                call_count.get(),
+                1,
+                "should read exactly once with 0 retries"
+            );
         }
     }
 }
