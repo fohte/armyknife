@@ -73,14 +73,14 @@ fn calculate_title_width(term_width: usize) -> usize {
 /// - If only Stopped sessions exist: `○ N`
 /// - If all Running or no sessions: empty string (no output)
 fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
-    let waiting_count = sessions
-        .iter()
-        .filter(|s| s.status == SessionStatus::WaitingInput)
-        .count();
-    let stopped_count = sessions
-        .iter()
-        .filter(|s| s.status == SessionStatus::Stopped)
-        .count();
+    let (waiting_count, stopped_count) =
+        sessions
+            .iter()
+            .fold((0, 0), |(waiting, stopped), s| match s.status {
+                SessionStatus::WaitingInput => (waiting + 1, stopped),
+                SessionStatus::Stopped => (waiting, stopped + 1),
+                _ => (waiting, stopped),
+            });
 
     let pending_count = waiting_count + stopped_count;
     if pending_count == 0 {
