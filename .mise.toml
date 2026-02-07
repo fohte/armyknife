@@ -1,3 +1,7 @@
+[env]
+# Share target dir across worktrees to avoid full recompilation
+CARGO_TARGET_DIR = "{{config_root}}/target"
+
 [tools]
 "cargo:ast-grep" = "0.40.4"
 lefthook = "2.0.15"
