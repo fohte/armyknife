@@ -55,6 +55,8 @@ pub fn launch_terminal(
 ) -> std::io::Result<ExitStatus> {
     if is_wezterm_command(terminal_command) {
         launch_wezterm(terminal_command, options, command, args)
+    } else if is_ghostty_command(terminal_command) {
+        launch_ghostty(terminal_command, options, command, args)
     } else if let Some((program, base_args)) = terminal_command.split_first() {
         let mut cmd = Command::new(program);
         cmd.args(base_args);
@@ -131,6 +133,42 @@ fn is_wezterm_command(terminal_command: &[String]) -> bool {
     })
 }
 
+/// Check if the terminal command targets Ghostty.
+fn is_ghostty_command(terminal_command: &[String]) -> bool {
+    terminal_command.first().is_some_and(|first| {
+        first == "ghostty"
+            || first.ends_with("/ghostty")
+            || (cfg!(target_os = "macos")
+                && terminal_command
+                    .iter()
+                    .any(|arg| arg == "Ghostty" || arg == "ghostty"))
+    })
+}
+
+/// Launch Ghostty with Ghostty-specific options.
+fn launch_ghostty(
+    terminal_command: &[String],
+    options: &LaunchOptions,
+    command: impl AsRef<OsStr>,
+    args: &[OsString],
+) -> std::io::Result<ExitStatus> {
+    let fallback_program = "ghostty".to_string();
+    let (program, base_args) = terminal_command
+        .split_first()
+        .unwrap_or((&fallback_program, &[]));
+
+    let width_flag = format!("--window-width={}", options.window_cols);
+    let height_flag = format!("--window-height={}", options.window_rows);
+    let title_flag = format!("--title={}", options.window_title);
+
+    let mut cmd = Command::new(program);
+    cmd.args(base_args);
+    cmd.args([&width_flag, &height_flag, &title_flag, "-e"]);
+    cmd.arg(command);
+    cmd.args(args);
+    cmd.status()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +194,22 @@ mod tests {
     #[case::macos_open_other(&[s("open"), s("-n"), s("-a"), s("Alacritty"), s("--args")], false)]
     fn test_is_wezterm_command_macos(#[case] terminal_command: &[String], #[case] expected: bool) {
         assert_eq!(is_wezterm_command(terminal_command), expected);
+    }
+
+    #[rstest]
+    #[case::bare_ghostty(&[s("ghostty")], true)]
+    #[case::ghostty_with_path(&[s("/usr/bin/ghostty")], true)]
+    #[case::not_ghostty(&[s("alacritty"), s("-e")], false)]
+    #[case::empty(&[], false)]
+    fn test_is_ghostty_command(#[case] terminal_command: &[String], #[case] expected: bool) {
+        assert_eq!(is_ghostty_command(terminal_command), expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    #[case::macos_open_ghostty(&[s("open"), s("-na"), s("Ghostty"), s("--args")], true)]
+    #[case::macos_open_other(&[s("open"), s("-na"), s("Alacritty"), s("--args")], false)]
+    fn test_is_ghostty_command_macos(#[case] terminal_command: &[String], #[case] expected: bool) {
+        assert_eq!(is_ghostty_command(terminal_command), expected);
     }
 }
