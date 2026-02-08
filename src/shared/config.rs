@@ -242,6 +242,13 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
 
 /// Parse YAML content into Config.
 fn parse_config(content: &str, path: &Path) -> anyhow::Result<Config> {
+    // Empty or comment-only YAML deserializes as null in serde_yaml,
+    // which fails for a struct. Treat as default config.
+    if content.trim().is_empty()
+        || serde_yaml::from_str::<serde_yaml::Value>(content).ok() == Some(serde_yaml::Value::Null)
+    {
+        return Ok(Config::default());
+    }
     serde_yaml::from_str(content)
         .map_err(|e| ConfigError::ParseError {
             path: path.to_path_buf(),
@@ -524,6 +531,22 @@ second:
     #[test]
     fn load_config_from_dir_no_file_returns_default() {
         let dir = TempDir::new().unwrap();
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn load_config_from_dir_empty_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("config.yaml"), "").unwrap();
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn load_config_from_dir_comment_only_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("config.yaml"), "# just a comment\n").unwrap();
         let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(config, Config::default());
     }
