@@ -5,6 +5,7 @@ use anyhow::{Context, ensure};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     DocumentSchema, ReviewHandler, complete_review, start_review,
 };
@@ -94,6 +95,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
         .canonicalize()
         .with_context(|| format!("Failed to resolve path: {}", args.path.display()))?;
 
+    let config = load_config()?;
     let window_title = args
         .title
         .clone()
@@ -106,7 +108,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
             format!("Draft: {}", file_name)
         });
 
-    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler)?;
+    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
 
     println!("Opened draft in editor: {}", path.display());
 
@@ -114,11 +116,14 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
 }
 
 fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
+    let config = load_config()?;
+
     complete_review::<EmptySchema, _>(
         &args.path,
         args.tmux_target.as_deref(),
         args.title.as_deref(),
         &DraftHandler,
+        &config.editor,
     )?;
 
     Ok(())
