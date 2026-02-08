@@ -108,33 +108,62 @@ pub struct PaneConfig {
     pub focus: bool,
 }
 
+/// Terminal emulator to use for human-in-the-loop reviews.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Terminal {
+    /// WezTerm terminal emulator.
+    #[default]
+    Wezterm,
+    /// Ghostty terminal emulator.
+    Ghostty,
+}
+
+impl Terminal {
+    /// Returns the default macOS app name for focus-on-click.
+    pub fn default_focus_app(&self) -> &str {
+        match self {
+            Terminal::Wezterm => "WezTerm",
+            Terminal::Ghostty => "Ghostty",
+        }
+    }
+}
+
 /// Terminal/editor configuration for human-in-the-loop reviews.
 #[derive(Debug, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EditorConfig {
-    /// Terminal emulator launch command.
-    /// Editor command is appended as the last argument.
-    #[serde(default = "default_terminal_command")]
-    #[schemars(default = "default_terminal_command")]
-    pub terminal_command: Vec<String>,
+    /// Terminal emulator (default: "wezterm").
+    #[serde(default)]
+    pub terminal: Terminal,
 
     /// Editor command (default: "nvim").
     #[serde(default = "default_editor_command")]
     #[schemars(default = "default_editor_command")]
     pub editor_command: String,
 
-    /// App name to focus on notification click (macOS only, default: "WezTerm").
-    #[serde(default = "default_focus_app")]
-    #[schemars(default = "default_focus_app")]
-    pub focus_app: String,
+    /// App name to focus on notification click (macOS only).
+    /// If omitted, derived from the terminal setting.
+    #[serde(default)]
+    pub focus_app: Option<String>,
+}
+
+impl EditorConfig {
+    /// Returns the app name to focus on notification click.
+    /// Uses the explicit setting if present, otherwise derives from the terminal.
+    pub fn focus_app(&self) -> &str {
+        self.focus_app
+            .as_deref()
+            .unwrap_or_else(|| self.terminal.default_focus_app())
+    }
 }
 
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
-            terminal_command: default_terminal_command(),
+            terminal: Terminal::default(),
             editor_command: default_editor_command(),
-            focus_app: default_focus_app(),
+            focus_app: None,
         }
     }
 }
@@ -181,24 +210,6 @@ fn default_notification_sound() -> String {
 
 fn default_editor_command() -> String {
     "nvim".to_string()
-}
-
-fn default_focus_app() -> String {
-    "WezTerm".to_string()
-}
-
-fn default_terminal_command() -> Vec<String> {
-    if cfg!(target_os = "macos") {
-        vec![
-            "open".to_string(),
-            "-n".to_string(),
-            "-a".to_string(),
-            "WezTerm".to_string(),
-            "--args".to_string(),
-        ]
-    } else {
-        vec!["wezterm".to_string()]
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -290,8 +301,10 @@ mod tests {
                 })),
             })
         );
+        assert_eq!(config.editor.terminal, Terminal::Wezterm);
         assert_eq!(config.editor.editor_command, "nvim");
-        assert_eq!(config.editor.focus_app, "WezTerm");
+        assert_eq!(config.editor.focus_app, None);
+        assert_eq!(config.editor.focus_app(), "WezTerm");
         assert!(config.notification.enabled);
         assert_eq!(config.notification.sound, "Glass");
     }
@@ -310,9 +323,7 @@ mod tests {
                 second:
                   command: bash
             editor:
-              terminal_command:
-                - alacritty
-                - -e
+              terminal: ghostty
               editor_command: vim
               focus_app: Alacritty
             notification:
@@ -337,9 +348,10 @@ mod tests {
                 })),
             })
         );
+        assert_eq!(config.editor.terminal, Terminal::Ghostty);
         assert_eq!(config.editor.editor_command, "vim");
-        assert_eq!(config.editor.focus_app, "Alacritty");
-        assert_eq!(config.editor.terminal_command, vec!["alacritty", "-e"]);
+        assert_eq!(config.editor.focus_app, Some("Alacritty".to_string()));
+        assert_eq!(config.editor.focus_app(), "Alacritty");
         assert!(!config.notification.enabled);
         assert_eq!(config.notification.sound, "Ping");
     }
@@ -366,6 +378,47 @@ mod tests {
         let yaml = "{}";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[rstest]
+    #[case::wezterm("wezterm", Terminal::Wezterm)]
+    #[case::ghostty("ghostty", Terminal::Ghostty)]
+    fn parse_terminal_enum(#[case] yaml_value: &str, #[case] expected: Terminal) {
+        let yaml = format!("editor:\n  terminal: {}", yaml_value);
+        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(config.editor.terminal, expected);
+    }
+
+    #[test]
+    fn terminal_default_is_wezterm() {
+        assert_eq!(Terminal::default(), Terminal::Wezterm);
+    }
+
+    #[rstest]
+    #[case::wezterm(Terminal::Wezterm, "WezTerm")]
+    #[case::ghostty(Terminal::Ghostty, "Ghostty")]
+    fn terminal_default_focus_app(#[case] terminal: Terminal, #[case] expected: &str) {
+        assert_eq!(terminal.default_focus_app(), expected);
+    }
+
+    #[test]
+    fn editor_config_focus_app_uses_explicit_value() {
+        let config = EditorConfig {
+            terminal: Terminal::Ghostty,
+            focus_app: Some("CustomApp".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.focus_app(), "CustomApp");
+    }
+
+    #[test]
+    fn editor_config_focus_app_derives_from_terminal() {
+        let config = EditorConfig {
+            terminal: Terminal::Ghostty,
+            focus_app: None,
+            ..Default::default()
+        };
+        assert_eq!(config.focus_app(), "Ghostty");
     }
 
     #[test]
@@ -626,5 +679,12 @@ mod tests {
 
         let editor_defaults = &defs["EditorConfig"]["properties"];
         assert_eq!(editor_defaults["editor_command"]["default"], "nvim");
+
+        // Terminal enum default is handled by #[default] attribute
+        let terminal_def = &defs["Terminal"];
+        assert!(
+            terminal_def["oneOf"].is_array() || terminal_def["enum"].is_array(),
+            "Terminal should be an enum in the schema"
+        );
     }
 }

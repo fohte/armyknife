@@ -542,8 +542,9 @@ fn build_notification(
         && let Ok(tmux) = shlex::try_quote(&tmux_path.to_string_lossy())
     {
         // Use tmux switch-client with the first available client, then focus the configured app
-        let focus_app = shlex::try_quote(&config.editor.focus_app)
-            .unwrap_or_else(|_| config.editor.focus_app.clone().into());
+        let focus_app_str = config.editor.focus_app();
+        let focus_app =
+            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
         let command = format!(
             r#"client_name=$({tmux} list-clients -F '#{{client_name}}' | head -n1); {tmux} switch-client -c "$client_name" -t {}; open -a {focus_app}"#,
             escaped_pane_id
@@ -841,7 +842,7 @@ mod tests {
         }));
         session.status = SessionStatus::Stopped;
         let mut config = Config::default();
-        config.editor.focus_app = "Alacritty".to_string();
+        config.editor.focus_app = Some("Alacritty".to_string());
         let notification = build_notification(HookEvent::Stop, &input, &session, &config);
 
         // Action command should use the configured focus_app

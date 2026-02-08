@@ -29,17 +29,13 @@
           "default": "nvim"
         },
         "focus_app": {
-          "description": "App name to focus on notification click (macOS only, default: \"WezTerm\").",
-          "type": "string",
-          "default": "WezTerm"
+          "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
+          "type": ["string", "null"],
+          "default": null
         },
-        "terminal_command": {
-          "description": "Terminal emulator launch command.\nEditor command is appended as the last argument.",
-          "type": "array",
-          "default": ["open", "-n", "-a", "WezTerm", "--args"],
-          "items": {
-            "type": "string"
-          }
+        "terminal": {
+          "description": "Terminal emulator (default: \"wezterm\").",
+          "$ref": "#/$defs/Terminal"
         }
       },
       "additionalProperties": false
@@ -123,6 +119,21 @@
           "description": "Vertical split (tmux split-window -v).",
           "type": "string",
           "const": "vertical"
+        }
+      ]
+    },
+    "Terminal": {
+      "description": "Terminal emulator to use for human-in-the-loop reviews.",
+      "oneOf": [
+        {
+          "description": "WezTerm terminal emulator.",
+          "type": "string",
+          "const": "wezterm"
+        },
+        {
+          "description": "Ghostty terminal emulator.",
+          "type": "string",
+          "const": "ghostty"
         }
       ]
     },

@@ -56,13 +56,9 @@ wm:
       command: claude
 
 editor:
-  terminal_command: # terminal emulator launch command
-    - open
-    - -na
-    - Ghostty
-    - --args
+  terminal: ghostty # terminal emulator: "wezterm" (default) or "ghostty"
   editor_command: nvim # editor for human-in-the-loop reviews (default: "nvim")
-  focus_app: Ghostty # app to focus on notification click, macOS only (default: "WezTerm")
+  focus_app: Ghostty # app to focus on notification click, macOS only (default: derived from terminal)
 
 notification:
   enabled: true # enable desktop notifications (default: true)
@@ -71,13 +67,12 @@ notification:
 
 ### Supported Terminal Emulators
 
-The `editor.terminal_command` configures which terminal emulator opens for human-in-the-loop reviews. WezTerm and Ghostty have built-in support for window size and title options. Other terminals work as a generic fallback (the editor command is appended as arguments).
+The `editor.terminal` setting selects which terminal emulator opens for human-in-the-loop reviews. Each terminal has built-in support for window size and title options.
 
-| Terminal | Example `terminal_command`                            |
-| -------- | ----------------------------------------------------- |
-| WezTerm  | `["open", "-n", "-a", "WezTerm", "--args"]` (default) |
-| Ghostty  | `["open", "-na", "Ghostty", "--args"]`                |
-| Other    | `["alacritty", "-e"]`                                 |
+| `terminal` value | Terminal          |
+| ---------------- | ----------------- |
+| `wezterm`        | WezTerm (default) |
+| `ghostty`        | Ghostty           |
 
 ## Commands
 

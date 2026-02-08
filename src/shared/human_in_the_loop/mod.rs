@@ -98,12 +98,7 @@ where
         ..Default::default()
     };
 
-    let status = launch_terminal(
-        &editor_config.terminal_command,
-        &options,
-        &exe_path,
-        &review_args,
-    )?;
+    let status = launch_terminal(&editor_config.terminal, &options, &exe_path, &review_args)?;
 
     if !status.success() {
         return Err(HumanInTheLoopError::CommandFailed(format!(
