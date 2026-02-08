@@ -30,7 +30,10 @@
         },
         "focus_app": {
           "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null
         },
         "terminal": {
@@ -85,7 +88,9 @@
         }
       },
       "additionalProperties": false,
-      "required": ["command"]
+      "required": [
+        "command"
+      ]
     },
     "SplitConfig": {
       "description": "Split configuration with direction and two child nodes.",
@@ -105,7 +110,11 @@
         }
       },
       "additionalProperties": false,
-      "required": ["direction", "first", "second"]
+      "required": [
+        "direction",
+        "first",
+        "second"
+      ]
     },
     "SplitDirection": {
       "description": "Split direction.",
