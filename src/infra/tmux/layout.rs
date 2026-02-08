@@ -1,5 +1,7 @@
 //! Layout builder: converts a LayoutNode tree into tmux command sequences.
 
+use std::path::Path;
+
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 /// A single tmux command represented as a list of arguments.
@@ -26,12 +28,14 @@ struct PaneEntry {
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
 /// The first command creates a new window, subsequent commands split panes.
+/// If `prompt_file` is provided, claude pane commands will read the prompt
+/// from the file at shell execution time and delete it afterward.
 pub fn build_layout_commands(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
-    prompt: Option<&str>,
+    prompt_file: Option<&Path>,
 ) -> Vec<TmuxCommand> {
     let mut commands = Vec::new();
     let mut pane_entries: Vec<PaneEntry> = Vec::new();
@@ -53,7 +57,7 @@ pub fn build_layout_commands(
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{}", i + 1);
-        let cmd = apply_prompt_if_claude(&entry.command, prompt);
+        let cmd = apply_prompt_if_claude(&entry.command, prompt_file);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately.
@@ -112,13 +116,22 @@ fn collect_layout(
     }
 }
 
-/// If the command starts with "claude", append the prompt with shell-safe quoting.
-fn apply_prompt_if_claude(command: &str, prompt: Option<&str>) -> String {
-    match prompt {
-        Some(p) if command.starts_with("claude") => {
-            // Escape single quotes for POSIX shell: replace ' with '\''
-            let escaped = p.replace('\'', "'\\''");
-            format!("{} '{}'", command, escaped)
+/// If the command starts with "claude", append the prompt file path.
+///
+/// Uses `$(cat <path>)` to read the prompt at shell execution time,
+/// then deletes the temp file. This avoids issues with shell special
+/// characters or long prompts being passed inline via tmux send-keys.
+fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>) -> String {
+    match prompt_file {
+        Some(path) => {
+            if !command.starts_with("claude") {
+                return command.to_string();
+            }
+            let path_str = path.display().to_string();
+            let escaped_path = shlex::try_quote(&path_str)
+                .map(|c| c.into_owned())
+                .unwrap_or(path_str);
+            format!("{command} \"$(cat {escaped_path})\" ; rm {escaped_path}")
         }
         _ => command.to_string(),
     }
@@ -127,16 +140,41 @@ fn apply_prompt_if_claude(command: &str, prompt: Option<&str>) -> String {
 /// Build and execute tmux layout from a LayoutNode tree.
 ///
 /// Creates a new tmux window and configures panes according to the layout.
-/// If prompt is provided, it's appended to pane commands that start with "claude".
+/// If prompt is provided, writes it to a temp file and passes the path to
+/// claude pane commands. The temp file is read and deleted by the shell
+/// command at execution time.
 pub fn build_layout(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
     prompt: Option<&str>,
-) -> super::Result<()> {
-    let commands = build_layout_commands(session, cwd, window_name, layout, prompt);
-    execute_commands(&commands)
+) -> anyhow::Result<()> {
+    let prompt_file = prompt.map(write_prompt_file).transpose()?;
+    let prompt_path = prompt_file.as_deref();
+    let commands = build_layout_commands(session, cwd, window_name, layout, prompt_path);
+    execute_commands(&commands)?;
+    Ok(())
+}
+
+/// Write prompt to a temp file that persists until the shell command reads it.
+fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::Context;
+
+    let prompt_file = tempfile::Builder::new()
+        .prefix("claude-prompt-")
+        .suffix(".txt")
+        .tempfile()
+        .context("Failed to create temp file for prompt")?;
+
+    std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt to temp file")?;
+
+    // Keep the temp file so it persists after this function returns.
+    // The shell command will delete it after reading.
+    prompt_file
+        .into_temp_path()
+        .keep()
+        .context("Failed to persist prompt temp file")
 }
 
 /// Execute a sequence of TmuxCommand by chaining them with ";".
@@ -158,6 +196,7 @@ mod tests {
     use super::*;
     use crate::shared::config::{PaneConfig, SplitConfig, SplitDirection};
     use rstest::rstest;
+    use std::path::PathBuf;
 
     /// Helper: create a TmuxCommand from a slice of string slices.
     fn cmd(args: &[&str]) -> TmuxCommand {
@@ -169,22 +208,34 @@ mod tests {
     // =========================================================================
 
     #[rstest]
-    #[case::claude_with_prompt("claude", Some("fix the bug"), "claude 'fix the bug'")]
-    #[case::claude_code_with_prompt("claude code", Some("review"), "claude code 'review'")]
-    #[case::claude_without_prompt("claude", None, "claude")]
-    #[case::non_claude_with_prompt("nvim", Some("fix the bug"), "nvim")]
-    #[case::non_claude_without_prompt("bash", None, "bash")]
-    #[case::prompt_with_single_quote(
+    #[case::claude_without_prompt("claude", None)]
+    #[case::non_claude_with_prompt("nvim", Some("/tmp/prompt.txt"))]
+    #[case::non_claude_without_prompt("bash", None)]
+    fn test_apply_prompt_if_claude_no_expansion(#[case] command: &str, #[case] path: Option<&str>) {
+        let path_buf = path.map(PathBuf::from);
+        let result = apply_prompt_if_claude(command, path_buf.as_deref());
+        assert_eq!(result, command);
+    }
+
+    #[rstest]
+    #[case::claude_with_prompt(
         "claude",
-        Some("fix the 'bug'"),
-        "claude 'fix the '\\''bug'\\'''"
+        "/tmp/prompt.txt",
+        "claude \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
     )]
-    fn test_apply_prompt_if_claude(
+    #[case::claude_code_with_prompt(
+        "claude code",
+        "/tmp/prompt.txt",
+        "claude code \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    fn test_apply_prompt_if_claude_with_file(
         #[case] command: &str,
-        #[case] prompt: Option<&str>,
+        #[case] path: &str,
         #[case] expected: &str,
     ) {
-        assert_eq!(apply_prompt_if_claude(command, prompt), expected);
+        let path_buf = PathBuf::from(path);
+        let result = apply_prompt_if_claude(command, Some(&path_buf));
+        assert_eq!(result, expected);
     }
 
     // =========================================================================
@@ -333,11 +384,12 @@ mod tests {
     }
 
     // =========================================================================
-    // build_layout_commands: prompt appended to claude commands
+    // build_layout_commands: prompt file appended to claude commands
     // =========================================================================
 
     #[test]
-    fn prompt_appended_to_claude_commands() {
+    fn prompt_file_appended_to_claude_commands() {
+        let prompt_path = PathBuf::from("/tmp/claude-prompt-test.txt");
         let layout = LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: Box::new(LayoutNode::Pane(PaneConfig {
@@ -350,7 +402,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, Some("fix the bug"));
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path));
 
         assert_eq!(
             commands,
@@ -361,7 +413,12 @@ mod tests {
                 cmd(&["send-keys", "-l", "--", "nvim"]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&["send-keys", "-l", "--", "claude 'fix the bug'"]),
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "claude \"$(cat /tmp/claude-prompt-test.txt)\" ; rm /tmp/claude-prompt-test.txt",
+                ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
