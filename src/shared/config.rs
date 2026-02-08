@@ -265,7 +265,8 @@ pub fn generate_schema() -> schemars::Schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use indoc::indoc;
+    use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
 
@@ -297,27 +298,27 @@ mod tests {
 
     #[test]
     fn parse_full_yaml_config() {
-        let yaml = "\
-wm:
-  worktrees_dir: .wt
-  branch_prefix: user/
-  layout:
-    direction: vertical
-    first:
-      command: vim
-      focus: true
-    second:
-      command: bash
-editor:
-  terminal_command:
-    - alacritty
-    - -e
-  editor_command: vim
-  focus_app: Alacritty
-notification:
-  enabled: false
-  sound: Ping
-";
+        let yaml = indoc! {"
+            wm:
+              worktrees_dir: .wt
+              branch_prefix: user/
+              layout:
+                direction: vertical
+                first:
+                  command: vim
+                  focus: true
+                second:
+                  command: bash
+            editor:
+              terminal_command:
+                - alacritty
+                - -e
+              editor_command: vim
+              focus_app: Alacritty
+            notification:
+              enabled: false
+              sound: Ping
+        "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.wm.worktrees_dir, ".wt");
@@ -345,10 +346,10 @@ notification:
 
     #[test]
     fn parse_partial_yaml_uses_defaults() {
-        let yaml = "\
-wm:
-  worktrees_dir: custom-worktrees
-";
+        let yaml = indoc! {"
+            wm:
+              worktrees_dir: custom-worktrees
+        "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.wm.worktrees_dir, "custom-worktrees");
@@ -369,10 +370,10 @@ wm:
 
     #[test]
     fn layout_single_pane() {
-        let yaml = "\
-command: nvim
-focus: true
-";
+        let yaml = indoc! {"
+            command: nvim
+            focus: true
+        "};
         let layout: LayoutNode = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             layout,
@@ -385,14 +386,14 @@ focus: true
 
     #[test]
     fn layout_horizontal_split() {
-        let yaml = "\
-direction: horizontal
-first:
-  command: nvim
-  focus: true
-second:
-  command: claude
-";
+        let yaml = indoc! {"
+            direction: horizontal
+            first:
+              command: nvim
+              focus: true
+            second:
+              command: claude
+        "};
         let layout: LayoutNode = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             layout,
@@ -412,13 +413,13 @@ second:
 
     #[test]
     fn layout_vertical_split() {
-        let yaml = "\
-direction: vertical
-first:
-  command: top
-second:
-  command: bash
-";
+        let yaml = indoc! {"
+            direction: vertical
+            first:
+              command: top
+            second:
+              command: bash
+        "};
         let layout: LayoutNode = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             layout,
@@ -438,18 +439,18 @@ second:
 
     #[test]
     fn layout_nested_split() {
-        let yaml = "\
-direction: horizontal
-first:
-  command: nvim
-  focus: true
-second:
-  direction: vertical
-  first:
-    command: claude
-  second:
-    command: bash
-";
+        let yaml = indoc! {"
+            direction: horizontal
+            first:
+              command: nvim
+              focus: true
+            second:
+              direction: vertical
+              first:
+                command: claude
+              second:
+                command: bash
+        "};
         let layout: LayoutNode = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             layout,
@@ -490,23 +491,23 @@ second:
         );
     }
 
-    #[test]
-    fn load_config_from_dir_with_yaml_file() {
+    #[rstest]
+    #[case::yaml("config.yaml")]
+    #[case::yml("config.yml")]
+    fn load_config_from_dir_with_config_file(#[case] filename: &str) {
         let dir = TempDir::new().unwrap();
-        let yaml = "notification:\n  enabled: false\n";
-        fs::write(dir.path().join("config.yaml"), yaml).unwrap();
+        fs::write(
+            dir.path().join(filename),
+            indoc! {"
+                notification:
+                  enabled: false
+                  sound: Ping
+            "},
+        )
+        .unwrap();
 
         let config = load_config_from_dir(dir.path()).unwrap();
         assert!(!config.notification.enabled);
-    }
-
-    #[test]
-    fn load_config_from_dir_with_yml_file() {
-        let dir = TempDir::new().unwrap();
-        let yaml = "notification:\n  sound: Ping\n";
-        fs::write(dir.path().join("config.yml"), yaml).unwrap();
-
-        let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(config.notification.sound, "Ping");
     }
 
@@ -515,12 +516,18 @@ second:
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("config.yaml"),
-            "notification:\n  sound: FromYaml\n",
+            indoc! {"
+                notification:
+                  sound: FromYaml
+            "},
         )
         .unwrap();
         fs::write(
             dir.path().join("config.yml"),
-            "notification:\n  sound: FromYml\n",
+            indoc! {"
+                notification:
+                  sound: FromYml
+            "},
         )
         .unwrap();
 
@@ -528,56 +535,26 @@ second:
         assert_eq!(config.notification.sound, "FromYaml");
     }
 
-    #[test]
-    fn load_config_from_dir_no_file_returns_default() {
+    #[rstest]
+    #[case::no_file(None)]
+    #[case::empty_file(Some(""))]
+    #[case::comment_only(Some("# just a comment\n"))]
+    fn load_config_from_dir_returns_default_for_absent_or_empty(#[case] content: Option<&str>) {
         let dir = TempDir::new().unwrap();
-        let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config, Config::default());
-    }
-
-    #[test]
-    fn load_config_from_dir_empty_file_returns_default() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("config.yaml"), "").unwrap();
-        let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config, Config::default());
-    }
-
-    #[test]
-    fn load_config_from_dir_comment_only_file_returns_default() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("config.yaml"), "# just a comment\n").unwrap();
-        let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config, Config::default());
-    }
-
-    #[test]
-    fn load_config_from_dir_parse_error_includes_path_and_line() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("config.yaml");
-        // Actual YAML syntax error: unterminated flow sequence
-        fs::write(&path, "wm:\n  - [broken\n").unwrap();
-
-        let err = load_config_from_dir(dir.path()).unwrap_err();
-        let config_err = err.downcast_ref::<ConfigError>().unwrap();
-        match config_err {
-            ConfigError::ParseError {
-                path: err_path,
-                message,
-            } => {
-                assert_eq!(err_path, &path);
-                // serde_yaml errors include position info
-                assert!(!message.is_empty(), "error message should not be empty");
-            }
-            other => panic!("expected ParseError, got: {other:?}"),
+        if let Some(c) = content {
+            fs::write(dir.path().join("config.yaml"), c).unwrap();
         }
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(config, Config::default());
     }
 
-    #[test]
-    fn load_config_from_dir_deny_unknown_fields_error() {
+    #[rstest]
+    #[case::syntax_error("wm:\n  - [broken\n")]
+    #[case::unknown_field("unknown_top_level_key: true\n")]
+    fn load_config_from_dir_parse_error(#[case] yaml: &str) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.yaml");
-        fs::write(&path, "unknown_top_level_key: true\n").unwrap();
+        fs::write(&path, yaml).unwrap();
 
         let err = load_config_from_dir(dir.path()).unwrap_err();
         let config_err = err.downcast_ref::<ConfigError>().unwrap();
@@ -596,8 +573,14 @@ second:
     #[test]
     fn load_config_from_dir_partial_config_uses_defaults() {
         let dir = TempDir::new().unwrap();
-        let yaml = "wm:\n  worktrees_dir: custom-wt\n";
-        fs::write(dir.path().join("config.yaml"), yaml).unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            indoc! {"
+                wm:
+                  worktrees_dir: custom-wt
+            "},
+        )
+        .unwrap();
 
         let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(config.wm.worktrees_dir, "custom-wt");
@@ -608,35 +591,32 @@ second:
         assert_eq!(config.notification, NotificationConfig::default());
     }
 
-    #[test]
-    fn generate_schema_returns_valid_json_with_title() {
+    #[fixture]
+    fn schema_value() -> serde_json::Value {
         let schema = generate_schema();
-        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
-
-        // schemars generates a title from the struct name
-        assert_eq!(value["title"], "Config");
+        serde_json::to_value(&schema).unwrap()
     }
 
-    #[test]
-    fn generate_schema_contains_wm_description() {
-        let schema = generate_schema();
-        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
+    #[rstest]
+    fn generate_schema_returns_valid_json_with_title(schema_value: serde_json::Value) {
+        // schemars generates a title from the struct name
+        assert_eq!(schema_value["title"], "Config");
+    }
 
+    #[rstest]
+    fn generate_schema_contains_wm_description(schema_value: serde_json::Value) {
         // Doc comments should appear as descriptions in the schema
-        let wm_desc = value["properties"]["wm"]["description"]
+        let wm_desc = schema_value["properties"]["wm"]["description"]
             .as_str()
             .unwrap_or("");
         assert_eq!(wm_desc, "Worktree management settings.");
     }
 
-    #[test]
-    fn generate_schema_contains_default_values() {
-        let schema = generate_schema();
-        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
-
+    #[rstest]
+    fn generate_schema_contains_default_values(schema_value: serde_json::Value) {
         // Default values from schemars(default = ...) should appear in the schema.
         // Navigate through $ref to find WmConfig properties.
-        let defs = &value["$defs"];
+        let defs = &schema_value["$defs"];
         let wm_defaults = &defs["WmConfig"]["properties"];
         assert_eq!(wm_defaults["worktrees_dir"]["default"], ".worktrees");
         assert_eq!(wm_defaults["branch_prefix"]["default"], "fohte/");
