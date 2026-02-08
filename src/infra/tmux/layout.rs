@@ -51,13 +51,22 @@ pub fn build_layout_commands(
         window_name,
     ]));
 
-    // Recursively process layout tree to collect split commands and pane info
-    collect_layout(layout, &mut commands, &mut pane_entries, cwd);
+    // Recursively process layout tree to collect split commands and pane info.
+    // Pane indices are 1-based in tmux (new-window creates pane 1).
+    collect_layout(layout, &mut commands, &mut pane_entries, cwd, 1);
+
+    // Find the last claude pane index so only it performs temp file cleanup
+    let last_claude_index = prompt_file.and_then(|_| {
+        pane_entries
+            .iter()
+            .rposition(|e| e.command.starts_with("claude"))
+    });
 
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{}", i + 1);
-        let cmd = apply_prompt_if_claude(&entry.command, prompt_file);
+        let cleanup = last_claude_index == Some(i);
+        let cmd = apply_prompt_if_claude(&entry.command, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately.
@@ -81,11 +90,17 @@ pub fn build_layout_commands(
 }
 
 /// Recursively collect split commands and pane entries from the layout tree.
+///
+/// `pane_offset` is the 1-based index of the first pane that will be created
+/// for this subtree. It is used to emit `-t` targeting on `split-window`
+/// commands so that nested splits target the correct pane regardless of which
+/// pane is currently focused.
 fn collect_layout(
     node: &LayoutNode,
     commands: &mut Vec<TmuxCommand>,
     panes: &mut Vec<PaneEntry>,
     cwd: &str,
+    pane_offset: usize,
 ) {
     match node {
         LayoutNode::Pane(pane) => {
@@ -95,33 +110,50 @@ fn collect_layout(
             });
         }
         LayoutNode::Split(split) => {
-            // Process first child (uses current pane)
-            collect_layout(&split.first, commands, panes, cwd);
+            // Process first child (uses current pane at pane_offset)
+            collect_layout(&split.first, commands, panes, cwd, pane_offset);
 
-            // Split to create second child's pane
+            let first_pane_count = count_panes(&split.first);
+
+            // Split the first child's root pane to create second child's pane.
+            // Use -t to explicitly target the pane, because recursing into
+            // first may have created additional panes that changed the active pane.
             let direction_flag = match split.direction {
                 SplitDirection::Horizontal => "-h",
                 SplitDirection::Vertical => "-v",
             };
+            let target = format!("{}", pane_offset);
             commands.push(TmuxCommand::new(&[
                 "split-window",
                 direction_flag,
+                "-t",
+                &target,
                 "-c",
                 cwd,
             ]));
 
             // Process second child
-            collect_layout(&split.second, commands, panes, cwd);
+            let second_offset = pane_offset + first_pane_count;
+            collect_layout(&split.second, commands, panes, cwd, second_offset);
         }
+    }
+}
+
+/// Count the total number of leaf panes in a layout subtree.
+fn count_panes(node: &LayoutNode) -> usize {
+    match node {
+        LayoutNode::Pane(_) => 1,
+        LayoutNode::Split(split) => count_panes(&split.first) + count_panes(&split.second),
     }
 }
 
 /// If the command starts with "claude", append the prompt file path.
 ///
-/// Uses `$(cat <path>)` to read the prompt at shell execution time,
-/// then deletes the temp file. This avoids issues with shell special
-/// characters or long prompts being passed inline via tmux send-keys.
-fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>) -> String {
+/// Uses `$(cat <path>)` to read the prompt at shell execution time.
+/// If `cleanup` is true, also deletes the temp file after reading.
+/// Only the last claude pane should set `cleanup = true` to avoid
+/// deleting the file before other panes have read it.
+fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>, cleanup: bool) -> String {
     match prompt_file {
         Some(path) => {
             if !command.starts_with("claude") {
@@ -131,7 +163,11 @@ fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>) -> String {
             let escaped_path = shlex::try_quote(&path_str)
                 .map(|c| c.into_owned())
                 .unwrap_or(path_str);
-            format!("{command} \"$(cat {escaped_path})\" ; rm {escaped_path}")
+            if cleanup {
+                format!("{command} \"$(cat {escaped_path})\" ; rm {escaped_path}")
+            } else {
+                format!("{command} \"$(cat {escaped_path})\"")
+            }
         }
         _ => command.to_string(),
     }
@@ -213,28 +249,37 @@ mod tests {
     #[case::non_claude_without_prompt("bash", None)]
     fn test_apply_prompt_if_claude_no_expansion(#[case] command: &str, #[case] path: Option<&str>) {
         let path_buf = path.map(PathBuf::from);
-        let result = apply_prompt_if_claude(command, path_buf.as_deref());
+        let result = apply_prompt_if_claude(command, path_buf.as_deref(), true);
         assert_eq!(result, command);
     }
 
     #[rstest]
-    #[case::claude_with_prompt(
+    #[case::claude_with_cleanup(
         "claude",
         "/tmp/prompt.txt",
+        true,
         "claude \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
     )]
-    #[case::claude_code_with_prompt(
+    #[case::claude_without_cleanup(
+        "claude",
+        "/tmp/prompt.txt",
+        false,
+        "claude \"$(cat /tmp/prompt.txt)\""
+    )]
+    #[case::claude_code_with_cleanup(
         "claude code",
         "/tmp/prompt.txt",
+        true,
         "claude code \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
     )]
     fn test_apply_prompt_if_claude_with_file(
         #[case] command: &str,
         #[case] path: &str,
+        #[case] cleanup: bool,
         #[case] expected: &str,
     ) {
         let path_buf = PathBuf::from(path);
-        let result = apply_prompt_if_claude(command, Some(&path_buf));
+        let result = apply_prompt_if_claude(command, Some(&path_buf), cleanup);
         assert_eq!(result, expected);
     }
 
@@ -287,7 +332,7 @@ mod tests {
             commands,
             vec![
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
-                cmd(&["split-window", "-h", "-c", "/tmp"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
                 cmd(&["send-keys", "-l", "--", "nvim"]),
                 cmd(&["send-keys", "C-m"]),
@@ -323,7 +368,7 @@ mod tests {
             commands,
             vec![
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "monitor"]),
-                cmd(&["split-window", "-v", "-c", "/tmp"]),
+                cmd(&["split-window", "-v", "-t", "1", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
                 cmd(&["send-keys", "-l", "--", "top"]),
                 cmd(&["send-keys", "C-m"]),
@@ -367,8 +412,8 @@ mod tests {
             commands,
             vec![
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
-                cmd(&["split-window", "-h", "-c", "/tmp"]),
-                cmd(&["split-window", "-v", "-c", "/tmp"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["split-window", "-v", "-t", "2", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
                 cmd(&["send-keys", "-l", "--", "nvim"]),
                 cmd(&["send-keys", "C-m"]),
@@ -408,7 +453,7 @@ mod tests {
             commands,
             vec![
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
-                cmd(&["split-window", "-h", "-c", "/tmp"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
                 cmd(&["send-keys", "-l", "--", "nvim"]),
                 cmd(&["send-keys", "C-m"]),
@@ -471,5 +516,108 @@ mod tests {
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
         assert_eq!(last_cmd, &cmd(&["send-keys", "C-m"]));
+    }
+
+    // =========================================================================
+    // build_layout_commands: left-nested layout (first child is a split)
+    // Regression test for: split-window targeting wrong pane when first child
+    // is itself a Split node.
+    // =========================================================================
+
+    #[test]
+    fn left_nested_layout_targets_correct_pane() {
+        // Expected: left-top=a, left-bottom=b, right=c (full height)
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: Box::new(LayoutNode::Split(SplitConfig {
+                direction: SplitDirection::Vertical,
+                first: Box::new(LayoutNode::Pane(PaneConfig {
+                    command: "a".to_string(),
+                    focus: true,
+                })),
+                second: Box::new(LayoutNode::Pane(PaneConfig {
+                    command: "b".to_string(),
+                    focus: false,
+                })),
+            })),
+            second: Box::new(LayoutNode::Pane(PaneConfig {
+                command: "c".to_string(),
+                focus: false,
+            })),
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                // Inner vertical split: splits pane 1 vertically -> panes 1, 2
+                cmd(&["split-window", "-v", "-t", "1", "-c", "/tmp"]),
+                // Outer horizontal split: splits pane 1 (the root of first subtree)
+                // horizontally -> creates pane 3 for "c"
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                cmd(&["send-keys", "-l", "--", "a"]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                cmd(&["send-keys", "-l", "--", "b"]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "3"]),
+                cmd(&["send-keys", "-l", "--", "c"]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "1"]),
+            ]
+        );
+    }
+
+    // =========================================================================
+    // build_layout_commands: multiple claude panes with prompt file
+    // Only the last claude pane should delete the temp file.
+    // =========================================================================
+
+    #[test]
+    fn multiple_claude_panes_only_last_deletes_prompt_file() {
+        let prompt_path = PathBuf::from("/tmp/prompt.txt");
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: Box::new(LayoutNode::Pane(PaneConfig {
+                command: "claude -p agent1".to_string(),
+                focus: true,
+            })),
+            second: Box::new(LayoutNode::Pane(PaneConfig {
+                command: "claude -p agent2".to_string(),
+                focus: false,
+            })),
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path));
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                // First claude pane: reads prompt but does NOT delete file
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "claude -p agent1 \"$(cat /tmp/prompt.txt)\"",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                // Last claude pane: reads prompt AND deletes file
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "claude -p agent2 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "1"]),
+            ]
+        );
     }
 }
