@@ -1,19 +1,30 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 /// Configuration management commands.
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ConfigCommands {
     /// Print JSON Schema for the configuration file
-    Schema,
+    Schema {
+        /// Write schema to file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 impl ConfigCommands {
     pub fn run(&self) -> anyhow::Result<()> {
         match self {
-            Self::Schema => {
+            Self::Schema { output } => {
                 let schema = crate::shared::config::generate_schema();
                 let json = serde_json::to_string_pretty(&schema)?;
-                println!("{json}");
+                if let Some(path) = output {
+                    std::fs::write(path, format!("{json}\n"))?;
+                    eprintln!("Schema written to {}", path.display());
+                } else {
+                    println!("{json}");
+                }
                 Ok(())
             }
         }

@@ -245,6 +245,26 @@ Supported shells: `bash`, `elvish`, `fish`, `powershell`, `zsh`
 a completions zsh > ~/.zfunc/_a
 ```
 
+### `a config`
+
+Configuration management.
+
+#### `a config schema`
+
+Print JSON Schema for the configuration file.
+
+| Option                | Description                            |
+| --------------------- | -------------------------------------- |
+| `-o, --output <path>` | Write schema to file instead of stdout |
+
+##### Editor Integration
+
+Add `$schema` to your `~/.config/armyknife/config.yaml` for editor autocompletion:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
+```
+
 ## License
 
 [MIT](LICENSE)
