@@ -12,6 +12,7 @@ name = "a"
 path = "src/main.rs"
 
 [dependencies]
+<<<<<<< before updating
 anyhow = "=1.0.100"
 async-trait = "=0.1.89"
 chrono = "=0.4.43"
@@ -54,3 +55,9 @@ disallowed_macros = "deny"
 expect_used = "deny"
 panic = "deny"
 unwrap_used = "deny"
+=======
+thiserror = "=2.0.18"
+
+[dev-dependencies]
+rstest = "=0.26.1"
+>>>>>>> after updating
