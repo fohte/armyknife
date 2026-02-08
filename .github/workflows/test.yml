@@ -5,6 +5,7 @@ on:
     branches-ignore:
       # Skip release-please branches (Release PRs) since they only update CHANGELOG and version
       - release-please--branches--*
+  pull_request:
 
 permissions:
   contents: write
@@ -20,7 +21,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -40,12 +41,7 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Run rustup before mise-action to prevent race condition.
-      # Multiple cargo: tools in mise.toml trigger parallel rustup component downloads,
-      # causing "could not rename downloaded file" errors.
-      - run: rustup show
-
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -79,11 +75,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - run: rustup show
-
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
