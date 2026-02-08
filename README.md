@@ -29,6 +29,56 @@ cargo install --git https://github.com/fohte/armyknife
 a <command>
 ```
 
+## Configuration
+
+armyknife reads its configuration from `~/.config/armyknife/config.yaml` (or `config.yml`). All fields are optional and fall back to sensible defaults.
+
+For editor autocompletion, add the following to the top of your config file:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
+```
+
+### Example
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
+
+wm:
+  worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
+  branch_prefix: fohte/ # branch name prefix for `a wm new` (default: "fohte/")
+  layout: # tmux pane layout for `a wm new`
+    direction: horizontal
+    first:
+      command: nvim
+      focus: true
+    second:
+      command: claude
+
+editor:
+  terminal_command: # terminal emulator launch command
+    - open
+    - -na
+    - Ghostty
+    - --args
+  editor_command: nvim # editor for human-in-the-loop reviews (default: "nvim")
+  focus_app: Ghostty # app to focus on notification click, macOS only (default: "WezTerm")
+
+notification:
+  enabled: true # enable desktop notifications (default: true)
+  sound: Glass # notification sound name, empty string for silent (default: "Glass")
+```
+
+### Supported Terminal Emulators
+
+The `editor.terminal_command` configures which terminal emulator opens for human-in-the-loop reviews. WezTerm and Ghostty have built-in support for window size and title options. Other terminals work as a generic fallback (the editor command is appended as arguments).
+
+| Terminal | Example `terminal_command`                            |
+| -------- | ----------------------------------------------------- |
+| WezTerm  | `["open", "-n", "-a", "WezTerm", "--args"]` (default) |
+| Ghostty  | `["open", "-na", "Ghostty", "--args"]`                |
+| Other    | `["alacritty", "-e"]`                                 |
+
 ## Commands
 
 ### `a update`
@@ -256,14 +306,6 @@ Print JSON Schema for the configuration file.
 | Option                | Description                            |
 | --------------------- | -------------------------------------- |
 | `-o, --output <path>` | Write schema to file instead of stdout |
-
-##### Editor Integration
-
-Add `$schema` to your `~/.config/armyknife/config.yaml` for editor autocompletion:
-
-```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
-```
 
 ## License
 
