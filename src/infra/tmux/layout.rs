@@ -55,7 +55,10 @@ pub fn build_layout_commands(
         let pane_target = format!("{}", i + 1);
         let cmd = apply_prompt_if_claude(&entry.command, prompt);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
-        commands.push(TmuxCommand::new(&["send-keys", &cmd, "C-m"]));
+        // Use -l to send the command literally (prevents interpreting special key sequences),
+        // then send Enter separately.
+        commands.push(TmuxCommand::new(&["send-keys", "-l", "--", &cmd]));
+        commands.push(TmuxCommand::new(&["send-keys", "C-m"]));
     }
 
     // Focus the last pane with focus: true
@@ -202,7 +205,8 @@ mod tests {
             vec![
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "editor"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&["send-keys", "nvim", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
         );
@@ -234,9 +238,11 @@ mod tests {
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
                 cmd(&["split-window", "-h", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&["send-keys", "nvim", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&["send-keys", "claude", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "claude"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
         );
@@ -268,9 +274,11 @@ mod tests {
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "monitor"]),
                 cmd(&["split-window", "-v", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&["send-keys", "top", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "top"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&["send-keys", "bash", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "bash"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
             ]
         );
@@ -311,11 +319,14 @@ mod tests {
                 cmd(&["split-window", "-h", "-c", "/tmp"]),
                 cmd(&["split-window", "-v", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&["send-keys", "nvim", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&["send-keys", "claude", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "claude"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "3"]),
-                cmd(&["send-keys", "bash", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "bash"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
         );
@@ -347,9 +358,11 @@ mod tests {
                 cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
                 cmd(&["split-window", "-h", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&["send-keys", "nvim", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&["send-keys", "claude 'fix the bug'", "C-m"]),
+                cmd(&["send-keys", "-l", "--", "claude 'fix the bug'"]),
+                cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
         );
@@ -398,8 +411,8 @@ mod tests {
 
         let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
 
-        // Last command should be a send-keys, not select-pane for focus
+        // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
-        assert_eq!(last_cmd, &cmd(&["send-keys", "bash", "C-m"]));
+        assert_eq!(last_cmd, &cmd(&["send-keys", "C-m"]));
     }
 }
