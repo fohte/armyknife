@@ -29,6 +29,51 @@ cargo install --git https://github.com/fohte/armyknife
 a <command>
 ```
 
+## Configuration
+
+armyknife reads its configuration from `~/.config/armyknife/config.yaml` (or `config.yml`). All fields are optional and fall back to sensible defaults.
+
+For editor autocompletion, add the following to the top of your config file:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
+```
+
+### Example
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
+
+wm:
+  worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
+  branch_prefix: fohte/ # branch name prefix for `a wm new` (default: "fohte/")
+  layout: # tmux pane layout for `a wm new`
+    direction: horizontal
+    first:
+      command: nvim
+      focus: true
+    second:
+      command: claude
+
+editor:
+  terminal: ghostty # terminal emulator: "wezterm" (default) or "ghostty"
+  editor_command: nvim # editor for human-in-the-loop reviews (default: "nvim")
+  focus_app: Ghostty # app to focus on notification click, macOS only (default: derived from terminal)
+
+notification:
+  enabled: true # enable desktop notifications (default: true)
+  sound: Glass # notification sound name, empty string for silent (default: "Glass")
+```
+
+### Supported Terminal Emulators
+
+The `editor.terminal` setting selects which terminal emulator opens for human-in-the-loop reviews. Each terminal has built-in support for window size and title options.
+
+| `terminal` value | Terminal          |
+| ---------------- | ----------------- |
+| `wezterm`        | WezTerm (default) |
+| `ghostty`        | Ghostty           |
+
 ## Commands
 
 ### `a update`
@@ -244,6 +289,18 @@ Supported shells: `bash`, `elvish`, `fish`, `powershell`, `zsh`
 # Example: Add to your shell profile
 a completions zsh > ~/.zfunc/_a
 ```
+
+### `a config`
+
+Configuration management.
+
+#### `a config schema`
+
+Print JSON Schema for the configuration file.
+
+| Option                | Description                            |
+| --------------------- | -------------------------------------- |
+| `-o, --output <path>` | Write schema to file instead of stdout |
 
 ## License
 

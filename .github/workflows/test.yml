@@ -55,6 +55,9 @@ jobs:
         continue-on-error: true
         run: lefthook run pre-commit --all-files
 
+      - name: Regenerate config schema
+        run: cargo run -- config schema --output docs/config-schema.json
+
       # lefthook-config's formatters run `git add` after formatting, which stages the changes.
       # https://github.com/fohte/lefthook-config/blob/v0.1.7/base.yml
       # commit-action uses `git ls-files --modified` which only detects unstaged changes.

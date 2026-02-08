@@ -3,6 +3,7 @@ use clap_complete::Shell;
 
 use crate::commands::ai::AiCommands;
 use crate::commands::cc::CcCommands;
+use crate::commands::config::ConfigCommands;
 use crate::commands::gh::GhCommands;
 use crate::commands::name_branch::NameBranchArgs;
 use crate::commands::wm::WmCommands;
@@ -34,6 +35,10 @@ pub enum Commands {
     /// GitHub-related tools
     #[command(subcommand)]
     Gh(GhCommands),
+
+    /// Configuration management
+    #[command(subcommand)]
+    Config(ConfigCommands),
 
     /// Generate a branch name from a description using AI
     NameBranch(NameBranchArgs),

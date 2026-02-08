@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use super::common::{DraftFile, Frontmatter, RepoInfo};
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
 };
@@ -94,19 +95,28 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         }
     };
 
+    let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    start_review::<Frontmatter, _>(&draft_path, &window_title, &PrDraftReviewHandler)?;
+    start_review::<Frontmatter, _>(
+        &draft_path,
+        &window_title,
+        &PrDraftReviewHandler,
+        &config.editor,
+    )?;
 
     Ok(())
 }
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
+    let config = load_config()?;
+
     complete_review::<Frontmatter, _>(
         &args.filepath,
         args.tmux_target.as_deref(),
         args.window_title.as_deref(),
         &PrDraftReviewHandler,
+        &config.editor,
     )?;
 
     Ok(())

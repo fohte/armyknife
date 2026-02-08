@@ -1,4 +1,4 @@
-use crate::commands::wm::git::branch_to_worktree_name;
+use crate::commands::wm::git::{BRANCH_PREFIX, branch_to_worktree_name};
 use crate::infra::git::get_repo_root_in;
 use crate::shared::testing::TestRepo;
 
@@ -39,8 +39,17 @@ fn worktrees_dir_created_in_main_when_run_from_worktree() {
 
 #[test]
 fn branch_to_worktree_name_removes_prefix_and_slashes() {
-    assert_eq!(branch_to_worktree_name("feature"), "feature");
-    assert_eq!(branch_to_worktree_name("fohte/feature"), "feature");
-    assert_eq!(branch_to_worktree_name("feature/sub"), "feature-sub");
-    assert_eq!(branch_to_worktree_name("fohte/feature/sub"), "feature-sub");
+    assert_eq!(branch_to_worktree_name("feature", BRANCH_PREFIX), "feature");
+    assert_eq!(
+        branch_to_worktree_name("fohte/feature", BRANCH_PREFIX),
+        "feature"
+    );
+    assert_eq!(
+        branch_to_worktree_name("feature/sub", BRANCH_PREFIX),
+        "feature-sub"
+    );
+    assert_eq!(
+        branch_to_worktree_name("fohte/feature/sub", BRANCH_PREFIX),
+        "feature-sub"
+    );
 }

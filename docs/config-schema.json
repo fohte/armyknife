@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Top-level configuration for armyknife.",
+  "type": "object",
+  "properties": {
+    "editor": {
+      "description": "Terminal/editor settings for human-in-the-loop reviews.",
+      "$ref": "#/$defs/EditorConfig"
+    },
+    "notification": {
+      "description": "Notification settings.",
+      "$ref": "#/$defs/NotificationConfig"
+    },
+    "wm": {
+      "description": "Worktree management settings.",
+      "$ref": "#/$defs/WmConfig"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "EditorConfig": {
+      "description": "Terminal/editor configuration for human-in-the-loop reviews.",
+      "type": "object",
+      "properties": {
+        "editor_command": {
+          "description": "Editor command (default: \"nvim\").",
+          "type": "string",
+          "default": "nvim"
+        },
+        "focus_app": {
+          "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "terminal": {
+          "description": "Terminal emulator (default: \"wezterm\").",
+          "$ref": "#/$defs/Terminal"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LayoutNode": {
+      "description": "Layout tree node: either a single pane (leaf) or a split (internal node).",
+      "anyOf": [
+        {
+          "description": "Split node with two children.",
+          "$ref": "#/$defs/SplitConfig"
+        },
+        {
+          "description": "Leaf node: a single pane.",
+          "$ref": "#/$defs/PaneConfig"
+        }
+      ]
+    },
+    "NotificationConfig": {
+      "description": "Notification configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether notifications are enabled (default: true).",
+          "type": "boolean",
+          "default": true
+        },
+        "sound": {
+          "description": "Notification sound name (default: \"Glass\"). Empty string for silent.",
+          "type": "string",
+          "default": "Glass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PaneConfig": {
+      "description": "Configuration for a single tmux pane.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Command to run in the pane.",
+          "type": "string"
+        },
+        "focus": {
+          "description": "Whether to focus this pane (default: false).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ]
+    },
+    "SplitConfig": {
+      "description": "Split configuration with direction and two child nodes.",
+      "type": "object",
+      "properties": {
+        "direction": {
+          "description": "Split direction (\"horizontal\" or \"vertical\").",
+          "$ref": "#/$defs/SplitDirection"
+        },
+        "first": {
+          "description": "First child (left for horizontal, top for vertical).",
+          "$ref": "#/$defs/LayoutNode"
+        },
+        "second": {
+          "description": "Second child (right for horizontal, bottom for vertical).",
+          "$ref": "#/$defs/LayoutNode"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "direction",
+        "first",
+        "second"
+      ]
+    },
+    "SplitDirection": {
+      "description": "Split direction.",
+      "oneOf": [
+        {
+          "description": "Horizontal split (tmux split-window -h).",
+          "type": "string",
+          "const": "horizontal"
+        },
+        {
+          "description": "Vertical split (tmux split-window -v).",
+          "type": "string",
+          "const": "vertical"
+        }
+      ]
+    },
+    "Terminal": {
+      "description": "Terminal emulator to use for human-in-the-loop reviews.",
+      "oneOf": [
+        {
+          "description": "WezTerm terminal emulator.",
+          "type": "string",
+          "const": "wezterm"
+        },
+        {
+          "description": "Ghostty terminal emulator.",
+          "type": "string",
+          "const": "ghostty"
+        }
+      ]
+    },
+    "WmConfig": {
+      "description": "Worktree management configuration.",
+      "type": "object",
+      "properties": {
+        "branch_prefix": {
+          "description": "Branch prefix (default: \"fohte/\").",
+          "type": "string",
+          "default": "fohte/"
+        },
+        "layout": {
+          "description": "tmux pane layout definition.",
+          "$ref": "#/$defs/LayoutNode"
+        },
+        "worktrees_dir": {
+          "description": "Worktree directory name (default: \".worktrees\").",
+          "type": "string",
+          "default": ".worktrees"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
