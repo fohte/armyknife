@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.88](https://github.com/fohte/armyknife/compare/v0.1.87...v0.1.88) (2026-02-09)
+
+
+### Bug Fixes
+
+* use XDG base directories instead of platform-specific paths on macOS ([#256](https://github.com/fohte/armyknife/issues/256)) ([3dc590c](https://github.com/fohte/armyknife/commit/3dc590cfb4fdf0427b5cbba8fcb33e682cbcfbc2))
+
 ## [0.1.87](https://github.com/fohte/armyknife/compare/v0.1.86...v0.1.87) (2026-02-09)
 
 
