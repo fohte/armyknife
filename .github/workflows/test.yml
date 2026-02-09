@@ -49,6 +49,8 @@ jobs:
       # causing "could not rename downloaded file" errors.
       - run: rustup show
 
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -96,6 +98,8 @@ jobs:
 
       - run: rustup show
 
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
