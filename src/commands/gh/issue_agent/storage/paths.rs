@@ -3,7 +3,10 @@ use std::path::PathBuf;
 /// Returns the cache directory for gh-issue-agent.
 /// Uses XDG_CACHE_HOME if set, otherwise defaults to ~/.cache/gh-issue-agent
 pub fn get_cache_dir() -> PathBuf {
-    get_cache_dir_with_env(std::env::var("XDG_CACHE_HOME").ok(), dirs::home_dir())
+    get_cache_dir_with_env(
+        std::env::var("XDG_CACHE_HOME").ok(),
+        crate::shared::dirs::home_dir(),
+    )
 }
 
 /// Internal function for testability without environment variable mutation.

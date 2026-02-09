@@ -31,7 +31,7 @@ a <command>
 
 ## Configuration
 
-armyknife reads its configuration from `~/.config/armyknife/config.yaml` (or `config.yml`). All fields are optional and fall back to sensible defaults.
+armyknife reads its configuration from `~/.config/armyknife/config.yaml` (or `config.yml`). If `XDG_CONFIG_HOME` is set, it reads from `$XDG_CONFIG_HOME/armyknife/config.yaml` instead. All fields are optional and fall back to sensible defaults.
 
 For editor autocompletion, add the following to the top of your config file:
 

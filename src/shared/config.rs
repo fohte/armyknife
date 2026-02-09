@@ -229,7 +229,7 @@ pub enum ConfigError {
 /// Load configuration from ~/.config/armyknife/config.ya?ml.
 /// Returns Config::default() if no config file exists.
 pub fn load_config() -> anyhow::Result<Config> {
-    let Some(dir) = dirs::config_dir() else {
+    let Some(dir) = super::dirs::config_dir() else {
         return Ok(Config::default());
     };
     load_config_from_dir(&dir.join("armyknife"))
