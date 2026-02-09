@@ -226,23 +226,13 @@ pub enum ConfigError {
     ParseError { path: PathBuf, message: String },
 }
 
-/// Resolve the config directory using XDG_CONFIG_HOME or ~/.config fallback.
-/// CLI tools conventionally use ~/.config on all platforms (including macOS),
-/// unlike `dirs::config_dir()` which returns ~/Library/Application Support on macOS.
-fn config_dir() -> Option<PathBuf> {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(xdg).join("armyknife"));
-    }
-    dirs::home_dir().map(|home| home.join(".config").join("armyknife"))
-}
-
 /// Load configuration from ~/.config/armyknife/config.ya?ml.
 /// Returns Config::default() if no config file exists.
 pub fn load_config() -> anyhow::Result<Config> {
-    let Some(dir) = config_dir() else {
+    let Some(dir) = super::dirs::config_dir() else {
         return Ok(Config::default());
     };
-    load_config_from_dir(&dir)
+    load_config_from_dir(&dir.join("armyknife"))
 }
 
 /// Load configuration from a specific directory.
@@ -652,28 +642,6 @@ mod tests {
         // Other sections use defaults entirely
         assert_eq!(config.editor, EditorConfig::default());
         assert_eq!(config.notification, NotificationConfig::default());
-    }
-
-    #[test]
-    fn config_dir_uses_xdg_config_home_when_set() {
-        temp_env::with_vars([("XDG_CONFIG_HOME", Some("/custom/config"))], || {
-            let dir = config_dir();
-            assert_eq!(dir, Some(PathBuf::from("/custom/config/armyknife")));
-        });
-    }
-
-    #[test]
-    fn config_dir_falls_back_to_home_dot_config() {
-        temp_env::with_vars(
-            [
-                ("XDG_CONFIG_HOME", None::<&str>),
-                ("HOME", Some("/test/home")),
-            ],
-            || {
-                let dir = config_dir();
-                assert_eq!(dir, Some(PathBuf::from("/test/home/.config/armyknife")));
-            },
-        );
     }
 
     #[fixture]

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 /// Base cache directory for armyknife.
-/// Returns ~/.cache/armyknife (Linux) or ~/Library/Caches/armyknife (macOS).
+/// Returns ~/.cache/armyknife on all platforms.
 pub fn base_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("armyknife"))
+    super::dirs::cache_dir().map(|d| d.join("armyknife"))
 }
 
 /// Cache path for update check timestamp.

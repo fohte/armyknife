@@ -2,6 +2,7 @@ pub mod cache;
 pub mod command;
 pub mod config;
 pub mod diff;
+pub mod dirs;
 pub mod human_in_the_loop;
 pub mod table;
 #[cfg(test)]

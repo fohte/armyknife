@@ -90,7 +90,7 @@ pub fn encode_project_path(path: &Path) -> String {
 ///
 /// Path format: ~/.claude/projects/{encoded-path}/
 fn project_dir(project_path: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::shared::dirs::home_dir()?;
     let encoded = encode_project_path(project_path);
     Some(home.join(".claude").join("projects").join(encoded))
 }
@@ -208,7 +208,7 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
 /// Scans the file and returns the text content from the last assistant message
 /// that contains a text element. Skips assistant messages that only have tool_use.
 pub fn get_last_assistant_message(project_path: &Path, session_id: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::shared::dirs::home_dir()?;
     get_last_assistant_message_in_home(&home, project_path, session_id)
 }
 
@@ -217,7 +217,7 @@ pub fn get_last_assistant_message(project_path: &Path, session_id: &str) -> Opti
 /// Returns a concatenated string of all user messages and assistant text responses.
 /// Excludes tool outputs (like Bash, Read, etc.) to focus on conversation content.
 pub fn get_conversation_text(project_path: &Path, session_id: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::shared::dirs::home_dir()?;
     get_conversation_text_in_home(&home, project_path, session_id)
 }
 
