@@ -5,6 +5,11 @@ use std::process::{Command, ExitStatus};
 
 use crate::shared::config::Terminal;
 
+/// Approximate width of a terminal character cell in pixels.
+const APPROX_CHAR_WIDTH_PX: u32 = 8;
+/// Approximate height of a terminal character cell in pixels.
+const APPROX_CHAR_HEIGHT_PX: u32 = 16;
+
 /// Options for launching a terminal window.
 pub struct LaunchOptions {
     pub window_title: String,
@@ -204,11 +209,13 @@ fn create_ghostty_wrapper_script(
 
     // Self-cleanup: the script removes itself via a trap after the command exits.
     // `exec` is not used because it replaces the shell process and would discard
-    // the trap handler.
+    // the trap handler. The path is stored in a variable to avoid quoting issues
+    // inside the trap string.
     let self_path = path.display().to_string();
     let quoted_self = shlex::try_quote(&self_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let mut script = format!("#!/bin/bash\ntrap 'rm -f {quoted_self}' EXIT\n{quoted_cmd}");
+    let mut script =
+        format!("#!/bin/bash\n_SELF={quoted_self}\ntrap 'rm -f \"$_SELF\"' EXIT\n{quoted_cmd}");
     for arg in args {
         let arg_str = arg.to_string_lossy();
         let quoted_arg = shlex::try_quote(&arg_str)
@@ -251,9 +258,8 @@ fn compute_centered_position(cols: u32, rows: u32) -> Option<(u32, u32)> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_display_resolution(&stdout).map(|(screen_w, screen_h)| {
-        // Approximate pixel size of the terminal window from cell dimensions
-        let window_w = cols * 8;
-        let window_h = rows * 16;
+        let window_w = cols * APPROX_CHAR_WIDTH_PX;
+        let window_h = rows * APPROX_CHAR_HEIGHT_PX;
 
         let pos_x = screen_w.saturating_sub(window_w) / 2;
         let pos_y = screen_h.saturating_sub(window_h) / 2;
@@ -333,12 +339,12 @@ mod tests {
         let mut file = std::fs::File::open(&wrapper_path).unwrap();
         file.read_to_string(&mut content).unwrap();
 
-        // Verify shebang and trap are present, and command line is correct
+        // Verify shebang, self-cleanup variable, trap, and command line
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines[0], "#!/bin/bash");
-        assert!(lines[1].starts_with("trap 'rm -f "));
-        assert!(lines[1].ends_with("' EXIT"));
-        assert_eq!(format!("{}\n", lines[2]), expected_cmd_line);
+        assert!(lines[1].starts_with("_SELF="));
+        assert_eq!(lines[2], r#"trap 'rm -f "$_SELF"' EXIT"#);
+        assert_eq!(format!("{}\n", lines[3]), expected_cmd_line);
 
         // Verify the script is executable
         #[cfg(unix)]
