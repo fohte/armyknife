@@ -65,8 +65,10 @@ pub struct WaitConfig {
     pub timeout: u64,
 }
 
-/// Poll until all reviewers post a review after start_time.
+/// Poll until all non-skipped reviewers post a review after start_time.
 /// Returns the list of reviewers that completed reviews.
+/// Reviewers that post "unable to" comments are skipped rather than causing an error.
+/// Returns an error only if all reviewers are unable to review.
 pub async fn wait_for_all_reviews(
     client: &dyn ReviewClient,
     owner: &str,
@@ -80,6 +82,7 @@ pub async fn wait_for_all_reviews(
     let started_at = Instant::now();
 
     let mut completed: Vec<Reviewer> = Vec::new();
+    let mut skipped: Vec<Reviewer> = Vec::new();
 
     loop {
         // Check timeout
@@ -90,7 +93,7 @@ pub async fn wait_for_all_reviews(
 
         // Check for new reviews from all reviewers
         for reviewer in &config.reviewers {
-            if completed.contains(reviewer) {
+            if completed.contains(reviewer) || skipped.contains(reviewer) {
                 continue;
             }
 
@@ -104,14 +107,14 @@ pub async fn wait_for_all_reviews(
             }
         }
 
-        // Check if all reviewers have completed
-        if completed.len() == config.reviewers.len() {
+        // Check if all non-skipped reviewers have completed
+        if completed.len() + skipped.len() == config.reviewers.len() {
             return Ok(completed);
         }
 
         // Check if any reviewer posted an "unable to" comment
         for reviewer in &config.reviewers {
-            if completed.contains(reviewer) {
+            if completed.contains(reviewer) || skipped.contains(reviewer) {
                 continue;
             }
 
@@ -119,8 +122,17 @@ pub async fn wait_for_all_reviews(
                 .check_reviewer_unable_comment(owner, repo, pr_number, start_time, *reviewer)
                 .await?
             {
-                return Err(ReviewError::ReviewerUnable(unable_msg).into());
+                println!(
+                    "\n{:?} is unable to review this PR: {}. Skipping.",
+                    reviewer, unable_msg
+                );
+                skipped.push(*reviewer);
             }
+        }
+
+        // Re-check completion after skipping
+        if completed.len() + skipped.len() == config.reviewers.len() {
+            return Ok(completed);
         }
 
         // Print progress
@@ -128,7 +140,7 @@ pub async fn wait_for_all_reviews(
         let pending: Vec<_> = config
             .reviewers
             .iter()
-            .filter(|r| !completed.contains(r))
+            .filter(|r| !completed.contains(r) && !skipped.contains(r))
             .collect();
         print!(
             "\rWaiting for review from {:?}... ({elapsed_secs}s elapsed, timeout: {}s)   ",
