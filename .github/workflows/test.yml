@@ -24,7 +24,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -48,6 +48,11 @@ jobs:
       # Multiple cargo: tools in mise.toml trigger parallel rustup component downloads,
       # causing "could not rename downloaded file" errors.
       - run: rustup show
+<<<<<<< before updating
+=======
+
+      - uses: jdx/mise-action@v3
+>>>>>>> after updating
 
       - uses: jdx/mise-action@v2
         with:
@@ -92,8 +97,11 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
+      - run: rustup show
+
+<<<<<<< before updating
       - run: rustup show
 
       - uses: jdx/mise-action@v2
@@ -105,6 +113,9 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+=======
+      - uses: jdx/mise-action@v3
+>>>>>>> after updating
 
       # Install llvm-tools-preview before srt sandbox.
       # cargo-llvm-cov auto-installs this component on first run, but that

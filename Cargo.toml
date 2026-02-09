@@ -12,6 +12,7 @@ name = "a"
 path = "src/main.rs"
 
 [dependencies]
+<<<<<<< before updating
 anyhow = "=1.0.100"
 async-trait = "=0.1.89"
 chrono = "=0.4.43"
@@ -47,6 +48,12 @@ notify-rust = "=4.11.7"
 rstest = "=0.26.1"
 temp-env = "=0.3.6"
 wiremock = "=0.6.5"
+=======
+thiserror = "=2.0.18"
+
+[dev-dependencies]
+rstest = "=0.26.1"
+>>>>>>> after updating
 
 [lints.clippy]
 allow_attributes = "warn"
