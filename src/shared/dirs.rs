@@ -6,19 +6,26 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 /// Returns the XDG cache directory (~/.cache or $XDG_CACHE_HOME).
+/// Empty values are treated as unset per XDG Base Directory Specification.
 pub fn cache_dir() -> Option<PathBuf> {
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+    if let Some(xdg) = non_empty_env("XDG_CACHE_HOME") {
         return Some(PathBuf::from(xdg));
     }
     home_dir().map(|home| home.join(".cache"))
 }
 
 /// Returns the XDG config directory (~/.config or $XDG_CONFIG_HOME).
+/// Empty values are treated as unset per XDG Base Directory Specification.
 pub fn config_dir() -> Option<PathBuf> {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+    if let Some(xdg) = non_empty_env("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(xdg));
     }
     home_dir().map(|home| home.join(".config"))
+}
+
+/// Returns the value of an environment variable, treating empty strings as unset.
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -66,6 +73,26 @@ mod tests {
                 ("XDG_CONFIG_HOME", None::<&str>),
                 ("HOME", Some("/test/home")),
             ],
+            || {
+                assert_eq!(config_dir(), Some(PathBuf::from("/test/home/.config")));
+            },
+        );
+    }
+
+    #[test]
+    fn cache_dir_treats_empty_xdg_as_unset() {
+        temp_env::with_vars(
+            [("XDG_CACHE_HOME", Some("")), ("HOME", Some("/test/home"))],
+            || {
+                assert_eq!(cache_dir(), Some(PathBuf::from("/test/home/.cache")));
+            },
+        );
+    }
+
+    #[test]
+    fn config_dir_treats_empty_xdg_as_unset() {
+        temp_env::with_vars(
+            [("XDG_CONFIG_HOME", Some("")), ("HOME", Some("/test/home"))],
             || {
                 assert_eq!(config_dir(), Some(PathBuf::from("/test/home/.config")));
             },
