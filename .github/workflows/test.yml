@@ -49,6 +49,9 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: 'true'
 
       - name: Run lefthook
         id: lefthook
@@ -90,6 +93,9 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: 'true'
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
