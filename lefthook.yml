@@ -7,15 +7,9 @@ remotes:
 
 pre-commit:
   commands:
-<<<<<<< before updating
     ast-grep-test:
       glob: '.sg/{rules,tests}/*.yml'
       run: sg test
     ast-grep-scan:
       glob: '*.rs'
       run: sg scan
-=======
-    ast-grep:
-      glob: '*.rs'
-      run: ast-grep scan --rule .sg/rules/no-assert-contains.yml {staged_files}
->>>>>>> after updating

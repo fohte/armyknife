@@ -5,7 +5,6 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 
-<<<<<<< before updating
 # Prevent Tokio runtime nesting issues.
 # Only main() should create a runtime via #[tokio::main].
 # All other async code should use async fn and .await.
@@ -14,8 +13,6 @@ allow-panic-in-tests = true
 path = "tokio::runtime::Runtime::new"
 reason = "Do not create new runtimes. Use async fn and .await with the existing runtime from main()"
 
-=======
->>>>>>> after updating
 [[disallowed-methods]]
 path = "std::env::set_var"
 reason = "Unsafe in multi-threaded contexts. Use explicit configuration passing instead."

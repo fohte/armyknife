@@ -3,13 +3,8 @@
 CARGO_TARGET_DIR = "{{config_root}}/target"
 
 [tools]
-<<<<<<< before updating
 "cargo:ast-grep" = "0.40.4"
-lefthook = "2.0.15"
-=======
 lefthook = "2.0.16"
-"cargo:ast-grep" = "0.40.4"
->>>>>>> after updating
 
 # lefthook hooks
 actionlint = "1.7.10"
