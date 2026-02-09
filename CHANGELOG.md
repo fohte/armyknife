@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.89](https://github.com/fohte/armyknife/compare/v0.1.88...v0.1.89) (2026-02-09)
+
+
+### Bug Fixes
+
+* **review:** skip unable reviewers instead of failing the entire wait ([#262](https://github.com/fohte/armyknife/issues/262)) ([9b67983](https://github.com/fohte/armyknife/commit/9b67983ff874f11d9ee5381ea4c84516a94a3c72))
+
 ## [0.1.88](https://github.com/fohte/armyknife/compare/v0.1.87...v0.1.88) (2026-02-09)
 
 
