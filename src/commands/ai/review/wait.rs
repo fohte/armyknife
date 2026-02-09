@@ -57,8 +57,8 @@ pub(crate) async fn run_wait(
     // Record start time to detect "new" reviews
     let start_time = Utc::now();
 
-    // Check if all reviewers have already posted reviews
-    let mut all_completed = true;
+    // Check if reviewers have already posted reviews
+    let mut already_completed: Vec<Reviewer> = Vec::new();
     for reviewer in reviewers {
         if let Some(review_time) = client
             .find_latest_review(owner, repo, pr_number, *reviewer)
@@ -69,20 +69,22 @@ pub(crate) async fn run_wait(
                 reviewer,
                 review_time.format("%Y-%m-%d %H:%M:%S UTC")
             );
-        } else {
-            all_completed = false;
+            already_completed.push(*reviewer);
         }
     }
-    if all_completed {
+    if already_completed.len() == reviewers.len() {
         println!("All reviews already completed!");
         return Ok(());
     }
 
     // Check if any reviewer already posted an "unable to" comment.
-    // Skip unable reviewers instead of erroring, unless all are unable.
+    // Skip unable reviewers instead of erroring.
     let past_time = DateTime::<Utc>::MIN_UTC;
     let mut skipped_reviewers: Vec<Reviewer> = Vec::new();
     for reviewer in reviewers {
+        if already_completed.contains(reviewer) {
+            continue;
+        }
         if let Some(unable_msg) = client
             .check_reviewer_unable_comment(owner, repo, pr_number, past_time, *reviewer)
             .await?
@@ -94,15 +96,17 @@ pub(crate) async fn run_wait(
             skipped_reviewers.push(*reviewer);
         }
     }
-    if skipped_reviewers.len() == reviewers.len() {
-        println!("All reviewers are unable to review this PR. Skipping wait.");
-        return Ok(());
-    }
+
+    // Reviewers that still need to post a new review
     let active_reviewers: Vec<Reviewer> = reviewers
         .iter()
-        .filter(|r| !skipped_reviewers.contains(r))
+        .filter(|r| !already_completed.contains(r) && !skipped_reviewers.contains(r))
         .copied()
         .collect();
+    if active_reviewers.is_empty() {
+        println!("All reviews already completed or skipped!");
+        return Ok(());
+    }
 
     // Check if review has started for reviewers that require start detection.
     // For reviewers that don't require start detection (e.g., Devin), skip this check.
@@ -247,6 +251,18 @@ mod tests {
                 ),
                 make_args_single(Reviewer::Gemini, 1, 5),
             ),
+            "one_completed_other_unable" => (
+                // Gemini already reviewed, Devin is unable
+                // Should succeed without polling (no active reviewers remain)
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_comment(
+                        "devin-ai-integration",
+                        "Devin is unable to review this PR.",
+                        now - ChronoDuration::hours(1),
+                    ),
+                make_args_both(1, 5),
+            ),
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
@@ -258,6 +274,7 @@ mod tests {
     #[case::one_unable_during_wait_other_completes("one_unable_during_wait_other_completes")]
     #[case::all_unable_existing("all_unable_existing")]
     #[case::single_unable("single_unable")]
+    #[case::one_completed_other_unable("one_completed_other_unable")]
     #[tokio::test]
     async fn wait_succeeds(#[case] scenario: &str) {
         let (client, args) = build_success_client(scenario);

@@ -68,7 +68,7 @@ pub struct WaitConfig {
 /// Poll until all non-skipped reviewers post a review after start_time.
 /// Returns the list of reviewers that completed reviews.
 /// Reviewers that post "unable to" comments are skipped rather than causing an error.
-/// Returns an error only if all reviewers are unable to review.
+/// Returns Ok with an empty list if all reviewers are unable to review.
 pub async fn wait_for_all_reviews(
     client: &dyn ReviewClient,
     owner: &str,
