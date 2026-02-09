@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 /// Returns the user's home directory from the HOME environment variable.
+/// Empty values are treated as unset.
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+    non_empty_env("HOME").map(PathBuf::from)
 }
 
 /// Returns the XDG cache directory (~/.cache or $XDG_CACHE_HOME).
@@ -36,6 +37,13 @@ mod tests {
     fn home_dir_returns_home_env() {
         temp_env::with_vars([("HOME", Some("/test/home"))], || {
             assert_eq!(home_dir(), Some(PathBuf::from("/test/home")));
+        });
+    }
+
+    #[test]
+    fn home_dir_treats_empty_as_unset() {
+        temp_env::with_vars([("HOME", Some(""))], || {
+            assert_eq!(home_dir(), None);
         });
     }
 
