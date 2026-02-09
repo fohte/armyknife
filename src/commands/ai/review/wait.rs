@@ -57,8 +57,8 @@ pub(crate) async fn run_wait(
     // Record start time to detect "new" reviews
     let start_time = Utc::now();
 
-    // Check if all reviewers have already posted reviews
-    let mut all_completed = true;
+    // Check if reviewers have already posted reviews
+    let mut already_completed: Vec<Reviewer> = Vec::new();
     for reviewer in reviewers {
         if let Some(review_time) = client
             .find_latest_review(owner, repo, pr_number, *reviewer)
@@ -69,30 +69,48 @@ pub(crate) async fn run_wait(
                 reviewer,
                 review_time.format("%Y-%m-%d %H:%M:%S UTC")
             );
-        } else {
-            all_completed = false;
+            already_completed.push(*reviewer);
         }
     }
-    if all_completed {
+    if already_completed.len() == reviewers.len() {
         println!("All reviews already completed!");
         return Ok(());
     }
 
-    // Check if any reviewer already posted an "unable to" comment
-    // Use a time in the past to check for any existing "unable" comment
+    // Check if any reviewer already posted an "unable to" comment.
+    // Skip unable reviewers instead of erroring.
     let past_time = DateTime::<Utc>::MIN_UTC;
+    let mut skipped_reviewers: Vec<Reviewer> = Vec::new();
     for reviewer in reviewers {
+        if already_completed.contains(reviewer) {
+            continue;
+        }
         if let Some(unable_msg) = client
             .check_reviewer_unable_comment(owner, repo, pr_number, past_time, *reviewer)
             .await?
         {
-            return Err(ReviewError::ReviewerUnable(unable_msg).into());
+            println!(
+                "{:?} is unable to review this PR: {}. Skipping.",
+                reviewer, unable_msg
+            );
+            skipped_reviewers.push(*reviewer);
         }
+    }
+
+    // Reviewers that still need to post a new review
+    let active_reviewers: Vec<Reviewer> = reviewers
+        .iter()
+        .filter(|r| !already_completed.contains(r) && !skipped_reviewers.contains(r))
+        .copied()
+        .collect();
+    if active_reviewers.is_empty() {
+        println!("All reviews already completed or skipped!");
+        return Ok(());
     }
 
     // Check if review has started for reviewers that require start detection.
     // For reviewers that don't require start detection (e.g., Devin), skip this check.
-    let reviewers_requiring_start: Vec<_> = reviewers
+    let reviewers_requiring_start: Vec<_> = active_reviewers
         .iter()
         .filter(|r| r.requires_start_detection())
         .collect();
@@ -109,10 +127,11 @@ pub(crate) async fn run_wait(
             }
         }
 
-        // If all reviewers require start detection and none have started, return error.
+        // If all active reviewers require start detection and none have started, return error.
         // But if some reviewers don't require start detection, we can still wait.
-        let has_no_start_detection_reviewers =
-            reviewers.iter().any(|r| !r.requires_start_detection());
+        let has_no_start_detection_reviewers = active_reviewers
+            .iter()
+            .any(|r| !r.requires_start_detection());
 
         if !any_started && !has_no_start_detection_reviewers {
             return Err(ReviewError::ReviewNotStarted.into());
@@ -121,12 +140,12 @@ pub(crate) async fn run_wait(
 
     println!(
         "Waiting for all reviews to complete from {:?}...",
-        reviewers
+        active_reviewers
     );
 
-    // Poll for new reviews from all reviewers
+    // Poll for new reviews from active (non-skipped) reviewers
     let config = WaitConfig {
-        reviewers: reviewers.clone(),
+        reviewers: active_reviewers,
         interval: args.interval,
         timeout: args.timeout,
     };
@@ -164,23 +183,86 @@ mod tests {
     }
 
     /// Helper to build a mock client for success cases.
-    fn build_success_client(scenario: &str) -> MockReviewClient {
+    fn build_success_client(scenario: &str) -> (MockReviewClient, WaitArgs) {
         let now = Utc::now();
         match scenario {
-            "already_completed_both" => {
+            "already_completed_both" => (
                 // Reviews already exist from both reviewers
                 MockReviewClient::new()
                     .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
-                    .with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
-            }
-            "in_progress_completes_both" => {
+                    .with_review(Reviewer::Devin, now - ChronoDuration::hours(1)),
+                make_args_both(1, 5),
+            ),
+            "in_progress_completes_both" => (
                 // Both reviews appear after polling
                 MockReviewClient::new()
                     .with_comment("gemini-code-assist", "Starting review...", now)
                     .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
                     .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
-                    .skip_first_n_review_calls(2) // Skip initial check for both
-            }
+                    .skip_first_n_review_calls(2), // Skip initial check for both
+                make_args_both(1, 5),
+            ),
+            "one_unable_existing_other_completes" => (
+                // Gemini already posted "unable", Devin review completes
+                MockReviewClient::new()
+                    .with_comment(
+                        "gemini-code-assist",
+                        "Gemini is unable to review this PR.",
+                        now - ChronoDuration::hours(1),
+                    )
+                    .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+                    .skip_first_n_review_calls(1), // Skip initial check for Devin
+                make_args_both(1, 5),
+            ),
+            "one_unable_during_wait_other_completes" => (
+                // Gemini posts "unable" during polling, Devin review completes
+                MockReviewClient::new()
+                    .with_comment("gemini-code-assist", "Starting review...", now)
+                    .with_comment(
+                        "gemini-code-assist",
+                        "Gemini is unable to review this PR.",
+                        now + ChronoDuration::milliseconds(100),
+                    )
+                    .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+                    .skip_first_n_review_calls(1), // Skip initial check for Devin
+                make_args_both(1, 5),
+            ),
+            "all_unable_existing" => (
+                // Both reviewers already posted "unable" comments
+                MockReviewClient::new()
+                    .with_comment(
+                        "gemini-code-assist",
+                        "Gemini is unable to review this PR.",
+                        now - ChronoDuration::hours(1),
+                    )
+                    .with_comment(
+                        "devin-ai-integration",
+                        "Devin is unable to review this PR.",
+                        now - ChronoDuration::hours(1),
+                    ),
+                make_args_both(1, 5),
+            ),
+            "single_unable" => (
+                // Single reviewer that is unable
+                MockReviewClient::new().with_comment(
+                    "gemini-code-assist",
+                    "Gemini is unable to review this PR.",
+                    now - ChronoDuration::hours(1),
+                ),
+                make_args_single(Reviewer::Gemini, 1, 5),
+            ),
+            "one_completed_other_unable" => (
+                // Gemini already reviewed, Devin is unable
+                // Should succeed without polling (no active reviewers remain)
+                MockReviewClient::new()
+                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_comment(
+                        "devin-ai-integration",
+                        "Devin is unable to review this PR.",
+                        now - ChronoDuration::hours(1),
+                    ),
+                make_args_both(1, 5),
+            ),
             _ => panic!("Unknown scenario: {scenario}"),
         }
     }
@@ -188,10 +270,14 @@ mod tests {
     #[rstest]
     #[case::already_completed_both("already_completed_both")]
     #[case::in_progress_completes_both("in_progress_completes_both")]
+    #[case::one_unable_existing_other_completes("one_unable_existing_other_completes")]
+    #[case::one_unable_during_wait_other_completes("one_unable_during_wait_other_completes")]
+    #[case::all_unable_existing("all_unable_existing")]
+    #[case::single_unable("single_unable")]
+    #[case::one_completed_other_unable("one_completed_other_unable")]
     #[tokio::test]
     async fn wait_succeeds(#[case] scenario: &str) {
-        let client = build_success_client(scenario);
-        let args = make_args_both(1, 5);
+        let (client, args) = build_success_client(scenario);
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
 
@@ -200,29 +286,10 @@ mod tests {
 
     /// Helper to build a mock client for error cases.
     fn build_error_client(scenario: &str) -> (MockReviewClient, WaitArgs) {
-        let now = Utc::now();
         match scenario {
             "not_started_gemini_only" => (
                 MockReviewClient::new(),
                 make_args_single(Reviewer::Gemini, 1, 5),
-            ),
-            "unable_existing" => (
-                MockReviewClient::new().with_comment(
-                    "gemini-code-assist",
-                    "Gemini is unable to review this PR.",
-                    now - ChronoDuration::hours(1),
-                ),
-                make_args_both(1, 5),
-            ),
-            "unable_during_wait" => (
-                MockReviewClient::new()
-                    .with_comment("gemini-code-assist", "Starting review...", now)
-                    .with_comment(
-                        "gemini-code-assist",
-                        "Gemini is unable to review this PR.",
-                        now + ChronoDuration::milliseconds(100),
-                    ),
-                make_args_both(1, 5),
             ),
             "timeout" => (
                 MockReviewClient::new(),
@@ -234,14 +301,6 @@ mod tests {
 
     #[rstest]
     #[case::not_started_gemini_only("not_started_gemini_only", "Review has not started yet")]
-    #[case::unable_existing(
-        "unable_existing",
-        "Reviewer is unable to review this PR: Gemini is unable to review this PR."
-    )]
-    #[case::unable_during_wait(
-        "unable_during_wait",
-        "Reviewer is unable to review this PR: Gemini is unable to review this PR."
-    )]
     #[case::timeout("timeout", "Timeout waiting for review after 1 seconds")]
     #[tokio::test]
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {

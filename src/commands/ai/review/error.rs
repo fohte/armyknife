@@ -23,9 +23,6 @@ pub enum ReviewError {
     #[error("Failed to parse review timestamp: {0}")]
     TimestampParseError(String),
 
-    #[error("Reviewer is unable to review this PR: {0}")]
-    ReviewerUnable(String),
-
     #[error("Review has not started yet")]
     ReviewNotStarted,
 

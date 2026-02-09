@@ -182,32 +182,54 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[case::timeout(
-        MockReviewClient::new(),
-        1,
-        "Timeout waiting for review after 1 seconds"
-    )]
-    #[case::unable_to_review(
-        MockReviewClient::new().with_comment(
-            "gemini-code-assist",
-            "Gemini is unable to review this PR.",
-            Utc::now() + ChronoDuration::milliseconds(100),
-        ),
-        5,
-        "Reviewer is unable to review this PR: Gemini is unable to review this PR."
-    )]
     #[tokio::test]
-    async fn request_fails(
-        #[case] client: MockReviewClient,
-        #[case] timeout: u64,
-        #[case] expected_error: &str,
-    ) {
-        let args = make_args_both(1, timeout);
+    async fn request_fails_on_timeout() {
+        let client = MockReviewClient::new();
+        let args = make_args_both(1, 1);
         let result = run_request(&args, &client, "owner", "repo", 1).await;
 
         let err_msg = result.unwrap_err().to_string();
-        assert_eq!(err_msg, expected_error);
+        assert_eq!(err_msg, "Timeout waiting for review after 1 seconds");
+    }
+
+    #[tokio::test]
+    async fn request_succeeds_when_all_unable() {
+        let now = Utc::now();
+        let client = MockReviewClient::new()
+            .with_comment(
+                "gemini-code-assist",
+                "Gemini is unable to review this PR.",
+                now + ChronoDuration::milliseconds(100),
+            )
+            .with_comment(
+                "devin-ai-integration",
+                "Devin is unable to review this PR.",
+                now + ChronoDuration::milliseconds(100),
+            );
+
+        let args = make_args_both(1, 5);
+        let result = run_request(&args, &client, "owner", "repo", 1).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn request_skips_unable_reviewer_and_waits_for_other() {
+        // Gemini posts "unable" during polling, but Devin completes review
+        let now = Utc::now();
+        let client = MockReviewClient::new()
+            .with_comment(
+                "gemini-code-assist",
+                "Gemini is unable to review this PR.",
+                now + ChronoDuration::milliseconds(100),
+            )
+            .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
+            .skip_first_n_review_calls(2); // Skip initial check for both reviewers
+
+        let args = make_args_both(1, 5);
+        let result = run_request(&args, &client, "owner", "repo", 1).await;
+
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
