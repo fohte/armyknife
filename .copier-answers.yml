@@ -1,12 +1,12 @@
 # Changes here will be overwritten by Copier
 _commit: v0.3.1
 _src_path: https://github.com/fohte/generic-boilerplate
-auto_merge_release_pr: false
+auto_merge_release_pr: true
 description: Personal CLI toolkit written in Rust
 is_public: true
 project_name: armyknife
-release_binary: false
+release_binary: true
 release_type: rust
 type: rust
-use_coverage: false
+use_coverage: true
 use_release_please: true
