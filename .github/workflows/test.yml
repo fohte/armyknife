@@ -46,6 +46,8 @@ jobs:
       - run: rustup show
 
       - uses: jdx/mise-action@v2
+        with:
+          cache: true
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -87,6 +89,8 @@ jobs:
       - run: rustup show
 
       - uses: jdx/mise-action@v2
+        with:
+          cache: true
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
