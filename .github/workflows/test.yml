@@ -24,7 +24,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -49,12 +49,14 @@ jobs:
       # causing "could not rename downloaded file" errors.
       - run: rustup show
 
-      - uses: jdx/mise-action@v2
-        with:
-          cache: true
-
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
 
       - name: Run lefthook
         id: lefthook
@@ -92,16 +94,18 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - run: rustup show
 
-      - uses: jdx/mise-action@v2
-        with:
-          cache: true
-
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
