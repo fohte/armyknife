@@ -2,6 +2,7 @@
 _commit: v0.3.1
 _src_path: https://github.com/fohte/generic-boilerplate
 auto_merge_release_pr: true
+binary_name: armyknife
 description: Personal CLI toolkit written in Rust
 is_public: true
 project_name: armyknife
