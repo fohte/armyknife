@@ -50,10 +50,18 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      # Run cargo-clippy outside lefthook to benefit from Rust cache.
+      # Inside lefthook, clippy re-downloads and recompiles crates (~48s).
+      - name: Run cargo clippy
+        id: cargo-clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Run lefthook
         id: lefthook
         continue-on-error: true
-        run: lefthook run pre-commit --all-files
+        # Skip cargo-clippy (run separately above) to avoid redundant compilation
+        run: LEFTHOOK_EXCLUDE=cargo-clippy lefthook run pre-commit --all-files
 
       - name: Regenerate config schema
         run: cargo run -- config schema --output docs/config-schema.json
@@ -74,8 +82,8 @@ jobs:
           workflow: deny
           github_token: ${{ steps.app-token.outputs.token }}
 
-      - name: Fail if lefthook failed
-        if: steps.lefthook.outcome == 'failure'
+      - name: Fail if lint checks failed
+        if: steps.cargo-clippy.outcome == 'failure' || steps.lefthook.outcome == 'failure'
         run: exit 1
 
   unit-test:
