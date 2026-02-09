@@ -57,6 +57,10 @@ jobs:
 
       - name: Regenerate config schema
         run: cargo run -- config schema --output docs/config-schema.json
+        env:
+          # Skip debug info generation to speed up the binary build.
+          # This step only generates a JSON schema file; debug symbols are unnecessary.
+          CARGO_PROFILE_DEV_DEBUG: '0'
 
       # lefthook-config's formatters run `git add` after formatting, which stages the changes.
       # https://github.com/fohte/lefthook-config/blob/v0.1.7/base.yml
