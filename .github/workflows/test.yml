@@ -50,6 +50,8 @@ jobs:
       - run: rustup show
 
       - uses: jdx/mise-action@v2
+        with:
+          cache: true
 
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -95,6 +97,8 @@ jobs:
       - run: rustup show
 
       - uses: jdx/mise-action@v2
+        with:
+          cache: true
 
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
