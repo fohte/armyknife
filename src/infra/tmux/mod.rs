@@ -1,5 +1,7 @@
 //! Tmux session and window management.
 
+pub mod layout;
+
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
@@ -78,7 +80,7 @@ fn run_tmux_output(args: &[&str]) -> Result<String> {
 }
 
 /// Run a tmux command, returning Ok(()) on success.
-fn run_tmux(args: &[&str]) -> Result<()> {
+pub(crate) fn run_tmux(args: &[&str]) -> Result<()> {
     run_tmux_output(args).map(|_| ())
 }
 
@@ -113,13 +115,13 @@ pub fn in_tmux() -> bool {
 /// Get the tmux session name for a repository path.
 ///
 /// Returns `org/repo` format from the last two path components.
-/// Strips `/.worktrees/<name>` suffix if present.
+/// Strips `/<worktrees_dir>/<name>` suffix if present.
 /// Replaces `.` with `_` to comply with tmux session name conventions.
-pub fn get_session_name(repo_root: &str) -> String {
+pub fn get_session_name(repo_root: &str, worktrees_dir: &str) -> String {
     let path = Path::new(repo_root);
 
-    // Strip /.worktrees/<name> suffix if present
-    let path = strip_worktree_suffix(path);
+    // Strip /<worktrees_dir>/<name> suffix if present
+    let path = strip_worktree_suffix(path, worktrees_dir);
 
     // Extract org/repo from path (last two components)
     let repo = path
@@ -135,13 +137,13 @@ pub fn get_session_name(repo_root: &str) -> String {
     format!("{org}/{repo}").replace('.', "_")
 }
 
-/// Strip `/.worktrees/<name>` suffix from a path.
-fn strip_worktree_suffix(path: &Path) -> &Path {
+/// Strip `/<worktrees_dir>/<name>` suffix from a path.
+fn strip_worktree_suffix<'a>(path: &'a Path, worktrees_dir: &str) -> &'a Path {
     use std::ffi::OsStr;
 
-    // Check if path ends with /.worktrees/<something>
+    // Check if path ends with /<worktrees_dir>/<something>
     if let Some(parent) = path.parent()
-        && parent.file_name() == Some(OsStr::new(".worktrees"))
+        && parent.file_name() == Some(OsStr::new(worktrees_dir))
         && let Some(repo_root) = parent.parent()
     {
         return repo_root;
@@ -477,41 +479,6 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
     })
 }
 
-/// Create a new window with a horizontal split and run commands in each pane.
-///
-/// - Left pane (pane 1): runs `left_cmd`
-/// - Right pane (pane 2): runs `right_cmd`
-/// - Focus ends on left pane
-pub fn create_split_window(
-    session: &str,
-    cwd: &str,
-    window_name: &str,
-    left_cmd: &str,
-    right_cmd: &str,
-) -> Result<()> {
-    // Build tmux command chain. Each sub-array is one tmux command.
-    let commands: &[&[&str]] = &[
-        &["new-window", "-t", session, "-c", cwd, "-n", window_name],
-        &["split-window", "-h", "-c", cwd],
-        &["select-pane", "-t", "1"],
-        &["send-keys", left_cmd, "C-m"],
-        &["select-pane", "-t", "2"],
-        &["send-keys", right_cmd, "C-m"],
-        &["select-pane", "-t", "1"],
-    ];
-
-    // Interleave commands with ";" separator for tmux chaining
-    let mut args: Vec<&str> = Vec::new();
-    for (i, cmd) in commands.iter().enumerate() {
-        if i > 0 {
-            args.push(";");
-        }
-        args.extend_from_slice(cmd);
-    }
-
-    run_tmux(&args)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,7 +489,7 @@ mod tests {
     #[case("/Users/fohte/ghq/github.com/fohte/dotfiles", "fohte/dotfiles")]
     #[case("/home/user/projects/org/my-repo", "org/my-repo")]
     fn test_get_session_name_normal_path(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(get_session_name(input), expected);
+        assert_eq!(get_session_name(input, ".worktrees"), expected);
     }
 
     #[rstest]
@@ -535,14 +502,14 @@ mod tests {
         "fohte/dotfiles"
     )]
     fn test_get_session_name_worktree_path(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(get_session_name(input), expected);
+        assert_eq!(get_session_name(input, ".worktrees"), expected);
     }
 
     #[rstest]
     #[case("/Users/fohte/ghq/github.com/fohte/my.dotfiles", "fohte/my_dotfiles")]
     #[case("/Users/fohte/ghq/github.com/some.org/some.repo", "some_org/some_repo")]
     fn test_get_session_name_replaces_dots(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(get_session_name(input), expected);
+        assert_eq!(get_session_name(input, ".worktrees"), expected);
     }
 
     #[rstest]
@@ -555,7 +522,7 @@ mod tests {
         "/Users/fohte/ghq/github.com/fohte/dotfiles"
     )]
     fn test_strip_worktree_suffix_with_worktree(#[case] input: &str, #[case] expected: &str) {
-        let result = strip_worktree_suffix(Path::new(input));
+        let result = strip_worktree_suffix(Path::new(input), ".worktrees");
         assert_eq!(result, Path::new(expected));
     }
 
@@ -563,8 +530,51 @@ mod tests {
     #[case("/Users/fohte/ghq/github.com/fohte/armyknife")]
     #[case("/Users/fohte/projects/myrepo")]
     fn test_strip_worktree_suffix_without_worktree(#[case] input: &str) {
-        let result = strip_worktree_suffix(Path::new(input));
+        let result = strip_worktree_suffix(Path::new(input), ".worktrees");
         assert_eq!(result, Path::new(input));
+    }
+
+    #[rstest]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/armyknife/.wt/feature-branch",
+        ".wt",
+        "/Users/fohte/ghq/github.com/fohte/armyknife"
+    )]
+    #[case(
+        "/Users/fohte/ghq/github.com/fohte/repo/worktrees/fix-bug",
+        "worktrees",
+        "/Users/fohte/ghq/github.com/fohte/repo"
+    )]
+    fn test_strip_worktree_suffix_custom_dir(
+        #[case] input: &str,
+        #[case] worktrees_dir: &str,
+        #[case] expected: &str,
+    ) {
+        let result = strip_worktree_suffix(Path::new(input), worktrees_dir);
+        assert_eq!(result, Path::new(expected));
+    }
+
+    #[test]
+    fn test_get_session_name_with_custom_worktrees_dir() {
+        assert_eq!(
+            get_session_name(
+                "/Users/fohte/ghq/github.com/fohte/armyknife/.wt/feature",
+                ".wt"
+            ),
+            "fohte/armyknife"
+        );
+    }
+
+    #[test]
+    fn test_get_session_name_with_worktrees_dir_no_match() {
+        // Path uses .worktrees but we pass .wt, so no stripping occurs
+        assert_eq!(
+            get_session_name(
+                "/Users/fohte/ghq/github.com/fohte/armyknife/.worktrees/feature",
+                ".wt"
+            ),
+            "_worktrees/feature"
+        );
     }
 
     #[rstest]

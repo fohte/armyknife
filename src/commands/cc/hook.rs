@@ -18,6 +18,7 @@ use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::command::find_command_path;
+use crate::shared::config::{self, Config};
 
 /// Delay between retries when waiting for transcript to be updated.
 const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -186,9 +187,11 @@ fn process_hook_event_impl(
     // Silently ignore errors (e.g., not in tmux, tmux not installed).
     let _ = tmux::refresh_status();
 
-    // Send notification if applicable (errors are logged but don't fail the hook)
-    if should_notify(event) {
-        send_notification(event, &input, &session);
+    // Send notification if applicable (errors are logged but don't fail the hook).
+    // Use default config if loading fails to avoid config errors blocking notifications.
+    let config = config::load_config().unwrap_or_default();
+    if should_notify(event, &config) {
+        send_notification(event, &input, &session, &config);
     }
 
     Ok(ProcessResult::SessionSaved)
@@ -443,16 +446,17 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
 }
 
 /// Checks if notifications are enabled via environment variable.
-fn is_notification_enabled() -> bool {
+fn is_notification_enabled(config: &Config) -> bool {
+    // Environment variable takes precedence over config for backward compatibility
     match env::var("ARMYKNIFE_CC_NOTIFY") {
         Ok(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
-        Err(_) => true, // enabled by default
+        Err(_) => config.notification.enabled,
     }
 }
 
 /// Determines if a notification should be sent for the given event.
-fn should_notify(event: HookEvent) -> bool {
-    is_notification_enabled() && is_notifiable_event(event)
+fn should_notify(event: HookEvent, config: &Config) -> bool {
+    is_notification_enabled(config) && is_notifiable_event(event)
 }
 
 /// Checks if the event type warrants a notification.
@@ -464,8 +468,8 @@ fn is_notifiable_event(event: HookEvent) -> bool {
 
 /// Sends a notification for the given event.
 /// Errors are printed to stderr but don't fail the hook.
-fn send_notification(event: HookEvent, input: &HookInput, session: &Session) {
-    let notification = build_notification(event, input, session);
+fn send_notification(event: HookEvent, input: &HookInput, session: &Session, config: &Config) {
+    let notification = build_notification(event, input, session, config);
 
     // Print notification errors to stderr without failing the hook
     if let Err(e) = crate::infra::notification::send(&notification) {
@@ -485,7 +489,12 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 }
 
 /// Builds a notification for the given event.
-fn build_notification(event: HookEvent, input: &HookInput, session: &Session) -> Notification {
+fn build_notification(
+    event: HookEvent,
+    input: &HookInput,
+    session: &Session,
+    config: &Config,
+) -> Notification {
     // Title: "Claude Code - Stopped" or "Claude Code - Waiting"
     let status_label = match session.status {
         SessionStatus::WaitingInput => "Waiting",
@@ -514,7 +523,11 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
             }),
     };
 
-    let mut notification = Notification::new(&title, message).with_sound("Glass");
+    let mut notification = Notification::new(&title, message);
+    // Use configured sound; empty string means silent
+    if !config.notification.sound.is_empty() {
+        notification = notification.with_sound(&config.notification.sound);
+    }
 
     if let Some(subtitle) = subtitle {
         notification = notification.with_subtitle(subtitle);
@@ -528,9 +541,12 @@ fn build_notification(event: HookEvent, input: &HookInput, session: &Session) ->
         && let Some(tmux_path) = find_command_path("tmux")
         && let Ok(tmux) = shlex::try_quote(&tmux_path.to_string_lossy())
     {
-        // Use tmux switch-client with the first available client
+        // Use tmux switch-client with the first available client, then focus the configured app
+        let focus_app_str = config.editor.focus_app();
+        let focus_app =
+            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
         let command = format!(
-            r#"client_name=$({tmux} list-clients -F '#{{client_name}}' | head -n1); {tmux} switch-client -c "$client_name" -t {}; open -a WezTerm"#,
+            r#"client_name=$({tmux} list-clients -F '#{{client_name}}' | head -n1); {tmux} switch-client -c "$client_name" -t {}; open -a {focus_app}"#,
             escaped_pane_id
         );
         notification = notification.with_action(NotificationAction::new(command));
@@ -674,7 +690,8 @@ mod tests {
         let input = create_test_input(None);
         let mut session = create_test_session(None);
         session.status = SessionStatus::Stopped;
-        let notification = build_notification(HookEvent::Stop, &input, &session);
+        let notification =
+            build_notification(HookEvent::Stop, &input, &session, &Config::default());
 
         // Title includes status
         assert_eq!(notification.title(), "Claude Code - Stopped");
@@ -703,7 +720,12 @@ mod tests {
         let input = create_test_input_with_tool(tool_name, tool_input_json);
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
+        let notification = build_notification(
+            HookEvent::PermissionRequest,
+            &input,
+            &session,
+            &Config::default(),
+        );
 
         assert_eq!(notification.title(), "Claude Code - Waiting");
         assert_eq!(notification.message(), expected_message);
@@ -716,7 +738,12 @@ mod tests {
         session.status = SessionStatus::WaitingInput;
         // Even when last_message exists, permission_request should use tool details
         session.last_message = Some("I'll clean up the temp files.".to_string());
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
+        let notification = build_notification(
+            HookEvent::PermissionRequest,
+            &input,
+            &session,
+            &Config::default(),
+        );
 
         // Should show tool details, not last assistant message
         assert_eq!(notification.message(), "Bash: rm -rf /tmp/test");
@@ -728,7 +755,12 @@ mod tests {
         let input = create_test_input(None);
         let mut session = create_test_session(None);
         session.status = SessionStatus::WaitingInput;
-        let notification = build_notification(HookEvent::PermissionRequest, &input, &session);
+        let notification = build_notification(
+            HookEvent::PermissionRequest,
+            &input,
+            &session,
+            &Config::default(),
+        );
 
         // Falls back to generic message
         assert_eq!(notification.message(), "Permission required");
@@ -740,7 +772,8 @@ mod tests {
         let mut session = create_test_session(None);
         session.status = SessionStatus::Stopped;
         session.last_message = Some("I've updated the code as requested.".to_string());
-        let notification = build_notification(HookEvent::Stop, &input, &session);
+        let notification =
+            build_notification(HookEvent::Stop, &input, &session, &Config::default());
 
         // Message uses last_message when available
         assert_eq!(
@@ -759,7 +792,8 @@ mod tests {
             pane_id: "%123".to_string(),
         }));
         session.status = SessionStatus::Stopped;
-        let notification = build_notification(HookEvent::Stop, &input, &session);
+        let notification =
+            build_notification(HookEvent::Stop, &input, &session, &Config::default());
 
         // Subtitle should contain session:window (no title since we can't mock Claude sessions)
         assert_eq!(notification.subtitle(), Some("main:dev"));
@@ -770,6 +804,75 @@ mod tests {
         assert!(action.command().contains("tmux switch-client"));
         assert!(action.command().contains("%123"));
         assert!(action.command().contains("list-clients"));
+    }
+
+    #[test]
+    fn test_build_notification_custom_sound() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Stopped;
+        let mut config = Config::default();
+        config.notification.sound = "Ping".to_string();
+        let notification = build_notification(HookEvent::Stop, &input, &session, &config);
+
+        assert_eq!(notification.sound(), Some("Ping"));
+    }
+
+    #[test]
+    fn test_build_notification_silent_sound() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Stopped;
+        let mut config = Config::default();
+        config.notification.sound = String::new();
+        let notification = build_notification(HookEvent::Stop, &input, &session, &config);
+
+        // Empty string means no sound
+        assert!(notification.sound().is_none());
+    }
+
+    #[test]
+    fn test_build_notification_custom_focus_app() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "dev".to_string(),
+            window_index: 1,
+            pane_id: "%123".to_string(),
+        }));
+        session.status = SessionStatus::Stopped;
+        let mut config = Config::default();
+        config.editor.focus_app = Some("Alacritty".to_string());
+        let notification = build_notification(HookEvent::Stop, &input, &session, &config);
+
+        // Action command should use the configured focus_app
+        assert!(notification.action().is_some());
+        let action = notification.action().expect("action present");
+        assert!(
+            action.command().contains("open -a Alacritty"),
+            "expected 'open -a Alacritty' in command, got: {}",
+            action.command()
+        );
+    }
+
+    #[test]
+    fn test_should_notify_respects_config_disabled() {
+        let mut config = Config::default();
+        config.notification.enabled = false;
+
+        assert!(!should_notify(HookEvent::Stop, &config));
+        assert!(!should_notify(HookEvent::PermissionRequest, &config));
+    }
+
+    #[test]
+    fn test_should_notify_respects_config_enabled() {
+        let config = Config::default();
+
+        // Default config has notifications enabled
+        assert!(should_notify(HookEvent::Stop, &config));
+        assert!(should_notify(HookEvent::PermissionRequest, &config));
+        // Non-notifiable events still return false
+        assert!(!should_notify(HookEvent::UserPromptSubmit, &config));
     }
 
     #[test]

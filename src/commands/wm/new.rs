@@ -6,13 +6,14 @@ use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::{
-    BRANCH_PREFIX, branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root,
-    local_branch_exists, remote_branch_exists,
+    branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root, local_branch_exists,
+    remote_branch_exists,
 };
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
 use crate::shared::cache;
+use crate::shared::config::{Config, load_config};
 
 /// Get the cache path for prompt recovery.
 fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
@@ -283,6 +284,7 @@ pub fn run(args: &NewArgs) -> Result<()> {
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
+    let config = load_config()?;
     let resolved = resolve_args(args)?;
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
@@ -296,7 +298,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         .transpose()?;
 
     // Run the actual worktree creation, cleaning up prompt cache on success
-    let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root);
+    let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root, &config);
 
     if result.is_ok() {
         delete_prompt_cache(&repo_root);
@@ -312,32 +314,34 @@ fn run_worktree_creation(
     name: &str,
     prompt: Option<&str>,
     repo_root: &str,
+    config: &Config,
 ) -> Result<()> {
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let branch_prefix = &config.wm.branch_prefix;
 
     // Determine worktree directory name from branch name
-    let worktree_name = branch_to_worktree_name(name);
-    let worktrees_dir = format!("{repo_root}/.worktrees");
+    let worktree_name = branch_to_worktree_name(name, branch_prefix);
+    let worktrees_dir = format!("{repo_root}/{}", config.wm.worktrees_dir);
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
-    // Ensure .worktrees directory exists
-    std::fs::create_dir_all(&worktrees_dir).context("Failed to create .worktrees directory")?;
+    // Ensure worktrees directory exists
+    std::fs::create_dir_all(&worktrees_dir).context("Failed to create worktrees directory")?;
 
     // Fetch with prune
     fetch_with_prune(&repo).context("Failed to fetch from remote")?;
 
-    // Remove BRANCH_PREFIX to avoid double prefix
-    let name_no_prefix = name.strip_prefix(BRANCH_PREFIX).unwrap_or(name);
+    // Remove branch prefix to avoid double prefix
+    let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
     // Determine action based on branch existence and flags
     if args.force {
-        // Force create new branch with BRANCH_PREFIX
+        // Force create new branch with prefix
         let main_branch = get_main_branch()?;
         let base_branch = args
             .from
             .clone()
             .unwrap_or_else(|| format!("origin/{main_branch}"));
-        let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
+        let branch = format!("{branch_prefix}{name_no_prefix}");
 
         git_worktree_add(
             &repo,
@@ -351,18 +355,18 @@ fn run_worktree_creation(
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
     } else {
-        let branch_with_prefix = format!("{BRANCH_PREFIX}{name_no_prefix}");
+        let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
-            // Branch exists with BRANCH_PREFIX
+            // Branch exists with prefix
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
         } else {
-            // Branch doesn't exist, create new one with BRANCH_PREFIX
+            // Branch doesn't exist, create new one with prefix
             let main_branch = get_main_branch()?;
             let base_branch = args
                 .from
                 .clone()
                 .unwrap_or_else(|| format!("origin/{main_branch}"));
-            let branch = format!("{BRANCH_PREFIX}{name_no_prefix}");
+            let branch = format!("{branch_prefix}{name_no_prefix}");
 
             git_worktree_add(
                 &repo,
@@ -375,12 +379,13 @@ fn run_worktree_creation(
         }
     }
 
-    // Setup tmux window with nvim + claude
+    // Setup tmux window using config layout
     setup_tmux_window(
         repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
         prompt,
+        config,
     )?;
 
     println!(
@@ -391,55 +396,26 @@ fn run_worktree_creation(
     Ok(())
 }
 
-/// Build the claude command, optionally with an initial prompt via temp file
-fn build_claude_command(prompt: Option<&str>) -> Result<String> {
-    let Some(prompt) = prompt else {
-        return Ok("claude".to_string());
-    };
-
-    // Write prompt to a temp file that persists until shell reads it
-    let prompt_file = tempfile::Builder::new()
-        .prefix("claude-prompt-")
-        .suffix(".txt")
-        .tempfile()
-        .context("Failed to create temp file")?;
-
-    std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt")?;
-
-    let prompt_path = prompt_file
-        .into_temp_path()
-        .keep()
-        .context("Failed to persist temp file")?;
-
-    let path_str = prompt_path.display().to_string();
-    let escaped_path = shlex::try_quote(&path_str).context("Failed to escape path")?;
-
-    // Command reads prompt, passes to claude, then deletes temp file
-    Ok(format!(
-        "claude \"$(cat {escaped_path})\" ; rm {escaped_path}"
-    ))
-}
-
-/// Setup a tmux window with split panes for nvim and claude
+/// Setup a tmux window using the configured layout.
 fn setup_tmux_window(
     repo_root: &str,
     worktree_dir: &str,
     worktree_name: &str,
     prompt: Option<&str>,
+    config: &Config,
 ) -> Result<()> {
-    let claude_cmd = build_claude_command(prompt)?;
-    let target_session = tmux::get_session_name(repo_root);
+    let target_session = tmux::get_session_name(repo_root, &config.wm.worktrees_dir);
 
     tmux::ensure_session(&target_session, repo_root).context("Failed to ensure tmux session")?;
 
-    tmux::create_split_window(
+    tmux::layout::build_layout(
         &target_session,
         worktree_dir,
         worktree_name,
-        "nvim",
-        &claude_cmd,
+        &config.wm.layout,
+        prompt,
     )
-    .context("Failed to create tmux split window")?;
+    .context("Failed to create tmux layout")?;
 
     tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
 
@@ -452,41 +428,6 @@ mod tests {
     use crate::shared::testing::TestRepo;
     use git2::Signature;
     use tempfile::TempDir;
-
-    #[test]
-    fn build_claude_command_without_prompt_returns_claude() {
-        let cmd = build_claude_command(None).unwrap();
-        assert_eq!(cmd, "claude");
-    }
-
-    #[test]
-    fn build_claude_command_with_prompt_creates_temp_file() {
-        let cmd = build_claude_command(Some("test prompt")).unwrap();
-
-        // Command format: claude "$(cat /path/to/claude-prompt-XXX.txt)" ; rm /path/to/claude-prompt-XXX.txt
-        // Extract the temp file path from the command
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-
-        // Verify command structure: ["claude", "\"$(cat", "<path>)\"", ";", "rm", "<path>"]
-        assert_eq!(parts.len(), 6);
-        assert_eq!(parts[0], "claude");
-        assert_eq!(parts[1], "\"$(cat");
-        assert_eq!(parts[3], ";");
-        assert_eq!(parts[4], "rm");
-
-        // Verify the temp file paths match and have expected structure
-        let cat_path = parts[2].trim_end_matches(")\"");
-        let rm_path = parts[5];
-        assert_eq!(cat_path, rm_path);
-
-        // Extract filename from path: /tmp/.tmpXXXXXX/claude-prompt-XXXXXX.txt
-        let filename = std::path::Path::new(cat_path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap();
-        assert!(filename.starts_with("claude-prompt-"));
-        assert!(filename.ends_with(".txt"));
-    }
 
     #[test]
     fn git_worktree_add_creates_worktree_with_new_branch() {

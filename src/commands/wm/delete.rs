@@ -10,6 +10,7 @@ use super::worktree::{
     get_worktree_branch,
 };
 use crate::infra::tmux;
+use crate::shared::config::load_config;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {
@@ -22,7 +23,12 @@ pub struct DeleteArgs {
 }
 
 pub async fn run(args: &DeleteArgs) -> Result<()> {
-    let worktree_path = resolve_worktree_path(args.worktree.as_deref())?;
+    let config = load_config()?;
+    let worktree_path = resolve_worktree_path(
+        args.worktree.as_deref(),
+        &config.wm.worktrees_dir,
+        &config.wm.branch_prefix,
+    )?;
 
     let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
@@ -77,7 +83,11 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
 }
 
 /// Resolve the worktree path from the argument or current directory
-fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
+fn resolve_worktree_path(
+    worktree_arg: Option<&str>,
+    worktrees_dir: &str,
+    branch_prefix: &str,
+) -> Result<String> {
     if let Some(arg) = worktree_arg {
         // First, try to treat the argument as an existing path
         if let Ok(path) = std::fs::canonicalize(arg) {
@@ -86,8 +96,8 @@ fn resolve_worktree_path(worktree_arg: Option<&str>) -> Result<String> {
 
         // Fall back to resolving the value as a branch/worktree name
         let repo_root = get_repo_root()?;
-        let worktree_name = branch_to_worktree_name(arg);
-        let candidate_path = format!("{repo_root}/.worktrees/{worktree_name}");
+        let worktree_name = branch_to_worktree_name(arg, branch_prefix);
+        let candidate_path = format!("{repo_root}/{worktrees_dir}/{worktree_name}");
 
         if std::path::Path::new(&candidate_path).exists() {
             let path = std::fs::canonicalize(&candidate_path)
@@ -116,21 +126,26 @@ mod tests {
         test_repo.create_worktree("feature");
 
         let wt_path = test_repo.worktree_path("feature");
-        let result = resolve_worktree_path(Some(wt_path.to_str().unwrap())).unwrap();
+        let result =
+            resolve_worktree_path(Some(wt_path.to_str().unwrap()), ".worktrees", "fohte/").unwrap();
 
         assert_eq!(result, wt_path.to_string_lossy().to_string());
     }
 
     #[test]
     fn resolve_worktree_path_with_nonexistent_returns_error() {
-        let result = resolve_worktree_path(Some("/nonexistent/path/to/worktree"));
+        let result = resolve_worktree_path(
+            Some("/nonexistent/path/to/worktree"),
+            ".worktrees",
+            "fohte/",
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn resolve_worktree_path_with_none_returns_current_dir() {
         let current = std::env::current_dir().unwrap();
-        let result = resolve_worktree_path(None).unwrap();
+        let result = resolve_worktree_path(None, ".worktrees", "fohte/").unwrap();
 
         assert_eq!(result, current.to_string_lossy().to_string());
     }

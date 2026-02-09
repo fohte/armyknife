@@ -14,13 +14,15 @@ mod lock;
 mod tmux;
 
 pub use document::{Document, DocumentSchema};
-pub use editor::{LaunchOptions, launch_wezterm, run_neovim};
+pub use editor::{LaunchOptions, launch_terminal, run_editor};
 pub use error::{HumanInTheLoopError, Result};
 pub use lock::{CleanupGuard, LockGuard};
 pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
 use std::path::Path;
+
+use crate::shared::config::EditorConfig;
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -47,15 +49,20 @@ pub trait ReviewHandler<S: DocumentSchema> {
     }
 }
 
-/// Start a review session by launching WezTerm with Neovim.
+/// Start a review session by launching a terminal with the configured editor.
 ///
 /// This function:
 /// 1. Checks for an existing lock (another editor open)
 /// 2. Creates a lock file
-/// 3. Launches WezTerm configured to run the review-complete command after Neovim exits
+/// 3. Launches the configured terminal to run the review-complete command after the editor exits
 ///
-/// The handler's `build_complete_args` is used to construct the command that WezTerm will run.
-pub fn start_review<S, H>(document_path: &Path, window_title: &str, handler: &H) -> Result<()>
+/// The handler's `build_complete_args` is used to construct the command that the terminal will run.
+pub fn start_review<S, H>(
+    document_path: &Path,
+    window_title: &str,
+    handler: &H,
+    editor_config: &EditorConfig,
+) -> Result<()>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -85,42 +92,43 @@ where
     let review_args =
         handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
 
-    // Launch WezTerm
+    // Launch terminal emulator
     let options = LaunchOptions {
         window_title: window_title.to_string(),
         ..Default::default()
     };
 
-    let status = launch_wezterm(&options, &exe_path, &review_args)?;
+    let status = launch_terminal(&editor_config.terminal, &options, &exe_path, &review_args)?;
 
     if !status.success() {
         return Err(HumanInTheLoopError::CommandFailed(format!(
-            "WezTerm exited with status: {status}"
+            "Terminal exited with status: {status}"
         )));
     }
 
-    // WezTerm launched successfully - disarm guard so lock file remains
+    // Terminal launched successfully - disarm guard so lock file remains
     // (review-complete will handle cleanup when it finishes)
     lock_guard.disarm();
 
     Ok(())
 }
 
-/// Complete a review session after the user closes Neovim.
+/// Complete a review session after the user closes the editor.
 ///
 /// This function:
 /// 1. Sets up cleanup guards for lock file and tmux restoration
-/// 2. Launches Neovim for the user to edit the document
-/// 3. After Neovim exits, parses the document and calls the handler's callback
+/// 2. Launches the configured editor for the user to edit the document
+/// 3. After the editor exits, parses the document and calls the handler's callback
 ///
-/// If `window_title` is provided, it will be displayed in Neovim's title bar.
+/// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
 ///
-/// This is typically called by the review-complete subcommand that WezTerm runs.
+/// This is typically called by the review-complete subcommand that the terminal runs.
 pub fn complete_review<S, H>(
     document_path: &Path,
     tmux_target: Option<&str>,
     window_title: Option<&str>,
     handler: &H,
+    editor_config: &EditorConfig,
 ) -> Result<()>
 where
     S: DocumentSchema,
@@ -129,15 +137,15 @@ where
     // Ensure cleanup happens even on panic
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
 
-    // Launch Neovim
-    let status = run_neovim(document_path, window_title)?;
+    // Launch editor
+    let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
 
     if !status.success() {
-        eprintln!("Neovim exited with non-zero status");
+        eprintln!("Editor exited with non-zero status");
         return Ok(());
     }
 
-    // After Neovim exits, parse the document and call the handler
+    // After editor exits, parse the document and call the handler
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
     handler.on_review_complete(&document)
 }
