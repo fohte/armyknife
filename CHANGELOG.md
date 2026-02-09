@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.87](https://github.com/fohte/armyknife/compare/v0.1.86...v0.1.87) (2026-02-09)
+
+
+### Features
+
+* support user configuration via config file ([#253](https://github.com/fohte/armyknife/issues/253)) ([f05eb2b](https://github.com/fohte/armyknife/commit/f05eb2b76947aae17544ced91a72c06d5be8d949))
+
 ## [0.1.86](https://github.com/fohte/armyknife/compare/v0.1.85...v0.1.86) (2026-02-07)
 
 
