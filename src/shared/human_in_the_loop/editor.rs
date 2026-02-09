@@ -140,24 +140,28 @@ fn launch_ghostty_linux(
     cmd.status()
 }
 
-/// Launch Ghostty on macOS via `open -nWa`.
+/// Launch Ghostty on macOS via `open -na`.
 ///
-/// Wraps the target command in a temporary shell script so that only a single
-/// path is passed after `-e`, avoiding the bug where `open` misroutes multiple
-/// arguments and triggers Ghostty's security dialog.
+/// Uses `--command` with a wrapper script instead of `-e` to bypass the
+/// security permission dialog introduced in Ghostty v1.2.0 (GHSA-q9fg-cpmh-c78x).
+/// The `-e` flag triggers an "Allow Ghostty to execute ...?" dialog on every
+/// invocation, leaks arguments into existing tmux sessions, and temporarily
+/// resizes tmux panes. The `--command` flag treats the command as a Ghostty
+/// config setting rather than an external execution request, avoiding all of
+/// these issues.
 fn launch_ghostty_macos(
     options: &LaunchOptions,
     command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
-    let wrapper = create_ghostty_wrapper_script(command, args)?;
-    let wrapper_path = wrapper.path().to_path_buf();
+    let wrapper_path = create_ghostty_wrapper_script(command, args)?;
 
     let width_flag = format!("--window-width={}", options.window_cols);
     let height_flag = format!("--window-height={}", options.window_rows);
     let title_flag = format!("--title={}", options.window_title);
+    let command_flag = format!("--command={}", wrapper_path.display());
 
-    let mut ghostty_args = vec![width_flag, height_flag, title_flag];
+    let mut ghostty_args = vec![width_flag, height_flag, title_flag, command_flag];
 
     // Center the window on screen if we can determine the display resolution
     if let Some((pos_x, pos_y)) =
@@ -167,39 +171,44 @@ fn launch_ghostty_macos(
         ghostty_args.push(format!("--window-position-y={pos_y}"));
     }
 
-    ghostty_args.push("-e".to_string());
-
     let mut cmd = Command::new("open");
-    // -n: new instance, -W: wait for exit, -a: application name
-    cmd.args(["-nWa", "Ghostty", "--args"]);
+    // -n: new instance, -a: application name
+    // NOTE: -W (wait) is intentionally omitted because it waits for the entire
+    // Ghostty *application* to exit, not just the spawned window, blocking
+    // indefinitely when another Ghostty instance is already running.
+    cmd.args(["-na", "Ghostty", "--args"]);
     cmd.args(&ghostty_args);
-    cmd.arg(&wrapper_path);
-    let status = cmd.status();
-
-    // Clean up the wrapper script (best-effort; tempfile also cleans on drop)
-    drop(wrapper);
-
-    status
+    cmd.status()
 }
 
 /// Create a temporary shell script that executes the given command with arguments.
 ///
-/// The script is marked executable and uses `exec` to replace the shell process
-/// so that Ghostty's exit tracking works correctly.
+/// The script is persisted to disk (not auto-deleted) because `open -na` returns
+/// immediately before Ghostty reads it. The script removes itself after execution.
 fn create_ghostty_wrapper_script(
     command: impl AsRef<OsStr>,
     args: &[OsString],
-) -> std::io::Result<tempfile::NamedTempFile> {
-    let mut wrapper = tempfile::Builder::new()
+) -> std::io::Result<std::path::PathBuf> {
+    let wrapper = tempfile::Builder::new()
         .prefix("armyknife-ghostty-")
         .suffix(".sh")
         .tempfile()?;
+
+    // Persist so the file survives after this function returns
+    let (mut file, path) = wrapper.keep().map_err(|e| e.error)?;
 
     let command_str = command.as_ref().to_string_lossy();
 
     let quoted_cmd = shlex::try_quote(&command_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let mut script = format!("#!/bin/bash\nexec {quoted_cmd}");
+
+    // Self-cleanup: the script removes itself via a trap after the command exits.
+    // `exec` is not used because it replaces the shell process and would discard
+    // the trap handler.
+    let self_path = path.display().to_string();
+    let quoted_self = shlex::try_quote(&self_path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let mut script = format!("#!/bin/bash\ntrap 'rm -f {quoted_self}' EXIT\n{quoted_cmd}");
     for arg in args {
         let arg_str = arg.to_string_lossy();
         let quoted_arg = shlex::try_quote(&arg_str)
@@ -209,20 +218,20 @@ fn create_ghostty_wrapper_script(
     }
     script.push('\n');
 
-    wrapper.write_all(script.as_bytes())?;
-    wrapper.flush()?;
+    file.write_all(script.as_bytes())?;
+    file.flush()?;
 
     // Make the wrapper script executable
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = wrapper.as_file().metadata()?;
+        let metadata = file.metadata()?;
         let mut perms = metadata.permissions();
         perms.set_mode(0o755);
-        wrapper.as_file().set_permissions(perms)?;
+        file.set_permissions(perms)?;
     }
 
-    Ok(wrapper)
+    Ok(path)
 }
 
 /// Compute window position to center a Ghostty window on the primary display.
@@ -301,34 +310,35 @@ mod tests {
     }
 
     #[rstest]
-    #[case::simple_command(
-        "/usr/bin/echo",
-        &[],
-        "#!/bin/bash\nexec /usr/bin/echo\n"
-    )]
+    #[case::simple_command("/usr/bin/echo", &[], "/usr/bin/echo\n")]
     #[case::command_with_args(
         "/usr/bin/env",
         &["bash", "-c", "echo hello"],
-        "#!/bin/bash\nexec /usr/bin/env bash -c 'echo hello'\n"
+        "/usr/bin/env bash -c 'echo hello'\n"
     )]
     #[case::args_with_special_chars(
         "/bin/bash",
         &["-c", "echo 'it works' && exit"],
-        "#!/bin/bash\nexec /bin/bash -c \"echo 'it works' && exit\"\n"
+        "/bin/bash -c \"echo 'it works' && exit\"\n"
     )]
     fn test_create_ghostty_wrapper_script(
         #[case] command: &str,
         #[case] args: &[&str],
-        #[case] expected_content: &str,
+        #[case] expected_cmd_line: &str,
     ) {
         let os_args: Vec<OsString> = args.iter().map(OsString::from).collect();
-        let wrapper = create_ghostty_wrapper_script(command, &os_args).unwrap();
+        let wrapper_path = create_ghostty_wrapper_script(command, &os_args).unwrap();
 
         let mut content = String::new();
-        let mut file = std::fs::File::open(wrapper.path()).unwrap();
+        let mut file = std::fs::File::open(&wrapper_path).unwrap();
         file.read_to_string(&mut content).unwrap();
 
-        assert_eq!(content, expected_content);
+        // Verify shebang and trap are present, and command line is correct
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "#!/bin/bash");
+        assert!(lines[1].starts_with("trap 'rm -f "));
+        assert!(lines[1].ends_with("' EXIT"));
+        assert_eq!(format!("{}\n", lines[2]), expected_cmd_line);
 
         // Verify the script is executable
         #[cfg(unix)]
@@ -337,5 +347,8 @@ mod tests {
             let mode = file.metadata().unwrap().permissions().mode();
             assert_eq!(mode & 0o755, 0o755);
         }
+
+        // Clean up persisted file
+        std::fs::remove_file(&wrapper_path).unwrap();
     }
 }
