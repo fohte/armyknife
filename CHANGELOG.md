@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.92](https://github.com/fohte/armyknife/compare/v0.1.91...v0.1.92) (2026-02-10)
+
+
+### Dependencies
+
+* update rust crate regex to v1.12.3 ([#267](https://github.com/fohte/armyknife/issues/267)) ([3481542](https://github.com/fohte/armyknife/commit/34815423c23052b590dd2ba6020747ad6d34c184))
+
 ## [0.1.91](https://github.com/fohte/armyknife/compare/v0.1.90...v0.1.91) (2026-02-10)
 
 
