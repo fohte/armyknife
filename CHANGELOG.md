@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.90](https://github.com/fohte/armyknife/compare/v0.1.89...v0.1.90) (2026-02-10)
+
+
+### Bug Fixes
+
+* resolve Ghostty permission dialog, window size, and tmux interference on macOS ([#264](https://github.com/fohte/armyknife/issues/264)) ([4da2212](https://github.com/fohte/armyknife/commit/4da22128b6c001540673a97f64275bd2645424ed))
+
+
+### Dependencies
+
+* update rust crate notify-rust to v4.12.0 ([#255](https://github.com/fohte/armyknife/issues/255)) ([4f5ceb8](https://github.com/fohte/armyknife/commit/4f5ceb8ece6ff0ffa9d6bff44767c947a4b4492d))
+
 ## [0.1.89](https://github.com/fohte/armyknife/compare/v0.1.88...v0.1.89) (2026-02-09)
 
 
