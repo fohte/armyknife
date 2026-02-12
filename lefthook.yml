@@ -12,4 +12,8 @@ pre-commit:
       run: sg test
     ast-grep-scan:
       glob: '*.rs'
+<<<<<<< before updating
       run: sg scan
+=======
+      run: ast-grep scan {staged_files}
+>>>>>>> after updating
