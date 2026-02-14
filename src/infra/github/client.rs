@@ -784,6 +784,7 @@ fn get_gh_token() -> Result<String> {
 mod tests {
     use crate::commands::gh::issue_agent::models::IssueTemplate;
     use crate::infra::github::mock::GitHubMockServer;
+    use indoc::indoc;
     use rstest::rstest;
 
     mod get_issue_templates_tests {
@@ -811,7 +812,13 @@ mod tests {
             let template = IssueTemplate {
                 name: "Bug Report".to_string(),
                 title: Some("[Bug]: ".to_string()),
-                body: Some("## Description\n\nDescribe the bug".to_string()),
+                body: Some(
+                    indoc! {"
+                        ## Description
+
+                        Describe the bug"}
+                    .to_string(),
+                ),
                 about: Some("File a bug report".to_string()),
                 filename: Some("bug_report.yml".to_string()),
                 labels: vec!["bug".to_string()],

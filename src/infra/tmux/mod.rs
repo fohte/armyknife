@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use indoc::writedoc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -37,7 +38,13 @@ impl fmt::Display for CommandFailedError {
         if let Some(stderr) = &self.stderr
             && !stderr.is_empty()
         {
-            write!(f, "\n-- stderr --\n{stderr}")?;
+            writedoc!(
+                f,
+                "
+
+                -- stderr --
+                {stderr}"
+            )?;
         }
         Ok(())
     }

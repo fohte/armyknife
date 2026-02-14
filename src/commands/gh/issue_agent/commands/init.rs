@@ -330,6 +330,7 @@ fn run_init_comment_with_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
 
@@ -350,7 +351,15 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert_eq!(
                 content,
-                "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
+                indoc! {r#"
+                    ---
+                    title: ""
+                    labels: []
+                    assignees: []
+                    ---
+
+                    Body
+                "#},
             );
         }
 
@@ -378,7 +387,16 @@ mod tests {
             let content = fs::read_to_string(&path).unwrap();
             assert_eq!(
                 content,
-                "---\ntitle: 'Bug: '\nlabels:\n- bug\nassignees: []\n---\n\nDescribe the bug\n"
+                indoc! {"
+                    ---
+                    title: 'Bug: '
+                    labels:
+                    - bug
+                    assignees: []
+                    ---
+
+                    Describe the bug
+                "},
             );
         }
 

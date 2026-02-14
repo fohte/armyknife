@@ -218,6 +218,7 @@ pub(super) fn author_login(review: &Review) -> &str {
 mod tests {
     use super::*;
     use crate::commands::gh::check_pr_review::models::Author;
+    use indoc::indoc;
     use rstest::rstest;
 
     mod test_helpers {
@@ -279,8 +280,19 @@ mod tests {
         "Before [▶ Click me] After"
     )]
     #[case::multiline(
-        "Text\n<details>\n<summary>Summary</summary>\nLots of\nhidden\nstuff\n</details>\nMore",
-        "Text\n[▶ Summary]\nMore"
+        indoc! {"
+            Text
+            <details>
+            <summary>Summary</summary>
+            Lots of
+            hidden
+            stuff
+            </details>
+            More"},
+        indoc! {"
+            Text
+            [▶ Summary]
+            More"},
     )]
     #[case::without_summary(
         "Before <details>Hidden content</details> After",
@@ -352,7 +364,10 @@ mod tests {
 
     #[rstest]
     fn test_render_markdown_code_block() {
-        let result = render_markdown("```rust\nlet x = 1;\n```");
+        let result = render_markdown(indoc! {"
+            ```rust
+            let x = 1;
+            ```"});
         // termimad adds ANSI codes; verify non-empty output is produced
         assert!(!result.is_empty());
     }

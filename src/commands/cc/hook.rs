@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
+use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
 use super::claude_sessions;
@@ -306,13 +307,23 @@ fn write_hook_log_to_dir(
 
     let status = if success { "success" } else { "error" };
     let error_section = match error_message {
-        Some(msg) => format!("\n\n=== Error Message ===\n{msg}"),
+        Some(msg) => formatdoc! {"
+
+
+            === Error Message ===
+            {msg}"},
         None => String::new(),
     };
 
-    let content = format!(
-        "=== Event ===\n{event}\n\n=== Status ===\n{status}{error_section}\n\n=== Raw Stdin ===\n{stdin_content}"
-    );
+    let content = formatdoc! {"
+        === Event ===
+        {event}
+
+        === Status ===
+        {status}{error_section}
+
+        === Raw Stdin ===
+        {stdin_content}"};
 
     match write_file_with_permissions(&log_path, &content) {
         Ok(()) => {
@@ -929,13 +940,28 @@ mod tests {
             let written = fs::read_to_string(&log_path).expect("should read log file");
 
             let expected = if let Some(msg) = error_message {
-                format!(
-                    "=== Event ===\n{event}\n\n=== Status ===\nerror\n\n=== Error Message ===\n{msg}\n\n=== Raw Stdin ===\n{stdin_content}"
-                )
+                formatdoc! {"
+                    === Event ===
+                    {event}
+
+                    === Status ===
+                    error
+
+                    === Error Message ===
+                    {msg}
+
+                    === Raw Stdin ===
+                    {stdin_content}"}
             } else {
-                format!(
-                    "=== Event ===\n{event}\n\n=== Status ===\nsuccess\n\n=== Raw Stdin ===\n{stdin_content}"
-                )
+                formatdoc! {"
+                    === Event ===
+                    {event}
+
+                    === Status ===
+                    success
+
+                    === Raw Stdin ===
+                    {stdin_content}"}
             };
             assert_eq!(written, expected);
         }

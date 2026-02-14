@@ -76,6 +76,7 @@ pub fn parse_frontmatter<S: DeserializeOwned + Default>(content: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use serde::Deserialize;
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -94,7 +95,12 @@ mod tests {
 
     #[test]
     fn test_parse_frontmatter_with_valid_yaml() {
-        let content = "---\ntitle: Test\napproved: true\n---\nBody content";
+        let content = indoc! {"
+            ---
+            title: Test
+            approved: true
+            ---
+            Body content"};
         let (schema, body): (TestSchema, _) = parse_frontmatter(content).unwrap();
         assert_eq!(schema.title, "Test");
         assert!(schema.approved);

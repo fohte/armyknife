@@ -21,6 +21,7 @@ pub fn indent_text(text: &str, indent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[test]
     fn test_single_line() {
@@ -29,7 +30,10 @@ mod tests {
 
     #[test]
     fn test_multiple_lines() {
-        let input = "line1\nline2\nline3";
+        let input = indoc! {"
+            line1
+            line2
+            line3"};
         let expected = "  line1\n  line2\n  line3";
         assert_eq!(indent_text(input, "  "), expected);
     }
@@ -52,7 +56,10 @@ mod tests {
 
     #[test]
     fn test_with_empty_lines() {
-        let input = "first\n\nthird";
+        let input = indoc! {"
+            first
+
+            third"};
         let expected = "  first\n  \n  third";
         assert_eq!(indent_text(input, "  "), expected);
     }
@@ -60,6 +67,15 @@ mod tests {
     #[test]
     fn test_trailing_newline() {
         assert_eq!(indent_text("hello\n", "  "), "  hello\n");
-        assert_eq!(indent_text("a\nb\n", "  "), "  a\n  b\n");
+        assert_eq!(
+            indent_text(
+                indoc! {"
+                    a
+                    b
+                "},
+                "  ",
+            ),
+            "  a\n  b\n",
+        );
     }
 }

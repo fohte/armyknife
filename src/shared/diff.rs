@@ -84,14 +84,38 @@ pub fn print_colored_line(prefix: &str, text: &str, color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     #[rstest]
     #[case::no_changes("a\n", "a\n", " a\n")]
-    #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
-    #[case::delete_line("a\nb\n", "a\n", " a\n-b\n")]
-    #[case::modify("old\n", "new\n", "-old\n+new\n")]
-    #[case::modify_middle("a\nold\nc\n", "a\nnew\nc\n", " a\n-old\n+new\n c\n")]
+    #[case::add_line("a\n", indoc! {"
+        a
+        b
+    "}, indoc! {"
+         a
+        +b
+    "})]
+    #[case::delete_line(indoc! {"
+        a
+        b
+    "}, "a\n", indoc! {"
+         a
+        -b
+    "})]
+    #[case::modify("old\n", "new\n", indoc! {"
+        -old
+        +new
+    "})]
+    #[case::modify_middle(indoc! {"
+        a
+        old
+        c
+    "}, indoc! {"
+        a
+        new
+        c
+    "}, " a\n-old\n+new\n c\n")]
     #[case::empty_both("", "", "")]
     fn test_write_diff_no_color(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
         let mut output = Vec::new();
@@ -101,8 +125,17 @@ mod tests {
 
     #[rstest]
     #[case::no_changes("a\n", "a\n", " a\n")]
-    #[case::add_line("a\n", "a\nb\n", " a\n+b\n")]
-    #[case::modify("old\n", "new\n", "-old\n+new\n")]
+    #[case::add_line("a\n", indoc! {"
+        a
+        b
+    "}, indoc! {"
+         a
+        +b
+    "})]
+    #[case::modify("old\n", "new\n", indoc! {"
+        -old
+        +new
+    "})]
     fn test_format_diff_no_color(#[case] old: &str, #[case] new: &str, #[case] expected: &str) {
         let result = format_diff(old, new, false);
         assert_eq!(result, expected);
@@ -116,7 +149,10 @@ mod tests {
         // Red = \x1b[38;5;9m, Green = \x1b[38;5;10m, Reset = \x1b[0m
         assert_eq!(
             result,
-            "\x1b[38;5;9m-old\n\x1b[0m\x1b[38;5;10m+new\n\x1b[0m"
+            indoc! {"
+                \x1b[38;5;9m-old
+                \x1b[0m\x1b[38;5;10m+new
+                \x1b[0m"}
         );
     }
 }

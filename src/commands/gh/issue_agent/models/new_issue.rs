@@ -113,7 +113,10 @@ mod tests {
             assert_eq!(result.title(), "Fix critical bug");
             assert_eq!(
                 result.body,
-                "This is the issue body.\n\nMultiple paragraphs are supported."
+                indoc! {"
+                    This is the issue body.
+
+                    Multiple paragraphs are supported."},
             );
             assert_eq!(
                 result.frontmatter.labels,
@@ -196,7 +199,10 @@ mod tests {
             assert_eq!(result.title(), "Issue Title");
             assert_eq!(
                 result.body,
-                "# Section Heading\n\nThis is the body with an H1 heading."
+                indoc! {"
+                    # Section Heading
+
+                    This is the body with an H1 heading."},
             );
         }
 

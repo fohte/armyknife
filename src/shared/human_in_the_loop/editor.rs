@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 
+use indoc::formatdoc;
+
 use crate::shared::config::Terminal;
 
 /// Approximate width of a terminal character cell in pixels.
@@ -214,8 +216,11 @@ fn create_ghostty_wrapper_script(
     let self_path = path.display().to_string();
     let quoted_self = shlex::try_quote(&self_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let mut script =
-        format!("#!/bin/bash\n_SELF={quoted_self}\ntrap 'rm -f \"$_SELF\"' EXIT\n{quoted_cmd}");
+    let mut script = formatdoc! {"
+        #!/bin/bash
+        _SELF={quoted_self}
+        trap 'rm -f \"$_SELF\"' EXIT
+        {quoted_cmd}"};
     for arg in args {
         let arg_str = arg.to_string_lossy();
         let quoted_arg = shlex::try_quote(&arg_str)

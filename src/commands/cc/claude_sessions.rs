@@ -628,7 +628,10 @@ mod tests {
     #[case::simple("hello world", "hello world")]
     #[case::with_newline("hello\nworld", "hello world")]
     #[case::with_crlf("hello\r\nworld", "hello world")]
-    #[case::with_multiple_newlines("line1\nline2\nline3", "line1 line2 line3")]
+    #[case::with_multiple_newlines(indoc! {"
+        line1
+        line2
+        line3"}, "line1 line2 line3")]
     #[case::with_leading_whitespace("  hello  ", "hello")]
     #[case::with_trailing_newline("hello\n", "hello")]
     #[case::with_ansi_color("\x1b[31mred text\x1b[0m", "red text")]

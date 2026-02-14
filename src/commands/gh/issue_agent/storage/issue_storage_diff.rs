@@ -235,10 +235,16 @@ mod tests {
     /// normalizes them via lines().join("\n").
     #[rstest]
     #[case::trailing_newline("Original comment", "Original comment\n")]
-    #[case::trailing_multiple_newlines("Original comment", "Original comment\n\n")]
+    #[case::trailing_multiple_newlines("Original comment", indoc! {"
+        Original comment
+
+    "})]
     #[case::trailing_spaces("Original comment", "Original comment  ")]
     #[case::leading_newline("Original comment", "\nOriginal comment")]
-    #[case::leading_multiple_newlines("Original comment", "\n\nOriginal comment")]
+    #[case::leading_multiple_newlines("Original comment", indoc! {"
+
+
+        Original comment"})]
     fn test_no_change_with_whitespace_difference(
         test_dir: TempDir,
         test_issue: Issue,
