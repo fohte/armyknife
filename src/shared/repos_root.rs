@@ -120,47 +120,40 @@ mod tests {
     use rstest::rstest;
     use tempfile::TempDir;
 
-    #[test]
-    fn resolve_repos_root_uses_config_value() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().to_str().unwrap();
-        let result = resolve_repos_root(Some(path)).unwrap();
-        assert_eq!(result, PathBuf::from(path));
-    }
-
-    #[test]
-    fn resolve_repos_root_expands_tilde_in_config() {
-        temp_env::with_vars([("HOME", Some("/test/home"))], || {
-            let result = resolve_repos_root(Some("~/repos")).unwrap();
-            assert_eq!(result, PathBuf::from("/test/home/repos"));
+    #[rstest]
+    #[case::absolute_path("/tmp/some/path", None, "/tmp/some/path")]
+    #[case::tilde_prefix("~/repos", Some("/test/home"), "/test/home/repos")]
+    #[case::bare_tilde("~", Some("/test/home"), "/test/home")]
+    #[case::no_tilde("/absolute/path", Some("/test/home"), "/absolute/path")]
+    fn expand_tilde_cases(#[case] input: &str, #[case] home: Option<&str>, #[case] expected: &str) {
+        let env_vars: Vec<(&str, Option<&str>)> = match home {
+            Some(h) => vec![("HOME", Some(h))],
+            None => vec![],
+        };
+        temp_env::with_vars(env_vars, || {
+            assert_eq!(expand_tilde(input), PathBuf::from(expected));
         });
     }
 
-    #[test]
-    fn resolve_repos_root_expands_bare_tilde_in_config() {
-        temp_env::with_vars([("HOME", Some("/test/home"))], || {
-            let result = resolve_repos_root(Some("~")).unwrap();
-            assert_eq!(result, PathBuf::from("/test/home"));
+    #[rstest]
+    #[case::config_value(Some("/custom/repos"), None, "/custom/repos")]
+    #[case::config_with_tilde(Some("~/repos"), None, "/test/home/repos")]
+    #[case::ghq_root_env(None, Some("/custom/ghq"), "/custom/ghq")]
+    #[case::colon_separated_ghq_root(None, Some("/first/ghq:/second/ghq"), "/first/ghq")]
+    fn resolve_repos_root_cases(
+        #[case] config: Option<&str>,
+        #[case] ghq_root: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let env_vars: Vec<(&str, Option<&str>)> =
+            vec![("HOME", Some("/test/home")), ("GHQ_ROOT", ghq_root)];
+        temp_env::with_vars(env_vars, || {
+            let result = resolve_repos_root(config).unwrap();
+            assert_eq!(result, PathBuf::from(expected));
         });
     }
 
-    #[test]
-    fn resolve_repos_root_uses_ghq_root_env() {
-        temp_env::with_vars([("GHQ_ROOT", Some("/custom/ghq"))], || {
-            let result = resolve_repos_root(None).unwrap();
-            assert_eq!(result, PathBuf::from("/custom/ghq"));
-        });
-    }
-
-    #[test]
-    fn resolve_repos_root_takes_first_from_colon_separated_ghq_root() {
-        temp_env::with_vars([("GHQ_ROOT", Some("/first/ghq:/second/ghq"))], || {
-            let result = resolve_repos_root(None).unwrap();
-            assert_eq!(result, PathBuf::from("/first/ghq"));
-        });
-    }
-
-    #[test]
+    #[rstest]
     fn resolve_repos_root_falls_back_when_no_config_or_env() {
         temp_env::with_vars(
             [("GHQ_ROOT", None::<&str>), ("HOME", Some("/test/home"))],
