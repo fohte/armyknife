@@ -1,4 +1,3 @@
-<<<<<<< before updating
 # armyknife
 
 Rust CLI toolkit for AI-assisted development workflows.
@@ -53,8 +52,6 @@ Generic framework for interactive document editing:
 ### Dependencies
 
 - Pin exact versions with `=` (e.g., `anyhow = "=1.0.100"`)
-=======
-# CLAUDE.md
 
 ## Test code rules
 
@@ -111,4 +108,3 @@ If the same assertion chain appears in 3+ tests, extract it into a helper.
 ### Do not write tests that only verify test helpers
 
 Tests must verify production code. Tests that only assert on test helpers, fixtures, or mocks are unnecessary. Remove them.
->>>>>>> after updating
