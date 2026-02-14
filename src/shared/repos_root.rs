@@ -51,7 +51,11 @@ fn ghq_root_from_gitconfig() -> Option<PathBuf> {
 
 /// Expand `~` prefix to the home directory.
 fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/")
+    if path == "~" {
+        if let Some(home) = super::dirs::home_dir() {
+            return home;
+        }
+    } else if let Some(rest) = path.strip_prefix("~/")
         && let Some(home) = super::dirs::home_dir()
     {
         return home.join(rest);
@@ -90,7 +94,10 @@ fn discover_recursive(
 
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            eprintln!("Warning: Failed to read directory {}: {e}", dir.display());
+            return;
+        }
     };
 
     for entry in entries.flatten() {
@@ -126,6 +133,14 @@ mod tests {
         temp_env::with_vars([("HOME", Some("/test/home"))], || {
             let result = resolve_repos_root(Some("~/repos")).unwrap();
             assert_eq!(result, PathBuf::from("/test/home/repos"));
+        });
+    }
+
+    #[test]
+    fn resolve_repos_root_expands_bare_tilde_in_config() {
+        temp_env::with_vars([("HOME", Some("/test/home"))], || {
+            let result = resolve_repos_root(Some("~")).unwrap();
+            assert_eq!(result, PathBuf::from("/test/home"));
         });
     }
 

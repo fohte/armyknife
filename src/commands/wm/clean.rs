@@ -278,49 +278,41 @@ fn delete_worktrees_single_repo(repo: &Repository, worktrees: &[CleanWorktreeInf
 }
 
 /// Delete worktrees across multiple repositories (--all mode).
-/// Groups worktrees by repo_name and opens each repository to perform deletions.
+/// Groups worktrees by repo_name to avoid reopening the same repository.
 fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
     let mut deleted_count = 0;
 
-    // Group by repo_name to batch deletions per repository
-    let mut current_repo_name: Option<&str> = None;
-    let mut current_repo: Option<Repository> = None;
-
+    // Group worktrees by repository so input order doesn't matter
+    let mut by_repo: std::collections::BTreeMap<&str, Vec<&CleanWorktreeInfo>> =
+        std::collections::BTreeMap::new();
     for info in worktrees {
         let repo_name = info.repo_name.as_deref().unwrap_or("");
+        by_repo.entry(repo_name).or_default().push(info);
+    }
 
-        // Open a new repository if repo changed
-        if current_repo_name != Some(repo_name) {
-            let repo_path = repos_root.join(repo_name);
-            match Repository::open(&repo_path) {
-                Ok(r) => {
-                    current_repo = Some(r);
-                    current_repo_name = Some(repo_name);
-                }
-                Err(e) => {
-                    eprintln!("Warning: Failed to open {repo_name}: {e}");
-                    current_repo = None;
-                    current_repo_name = None;
-                    continue;
-                }
+    for (repo_name, infos) in &by_repo {
+        let repo_path = repos_root.join(repo_name);
+        let repo = match Repository::open(&repo_path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Warning: Failed to open {repo_name}: {e}");
+                continue;
             }
-        }
-
-        let Some(ref repo) = current_repo else {
-            continue;
         };
 
-        if delete_worktree(repo, &info.wt.name)? {
-            println!("Deleted: {repo_name}/{}", info.wt.name);
-            deleted_count += 1;
+        for info in infos {
+            if delete_worktree(&repo, &info.wt.name)? {
+                println!("Deleted: {repo_name}/{}", info.wt.name);
+                deleted_count += 1;
 
-            if delete_branch_if_exists(repo, &info.wt.branch) {
-                println!("  Branch deleted: {}", info.wt.branch);
-            }
+                if delete_branch_if_exists(&repo, &info.wt.branch) {
+                    println!("  Branch deleted: {}", info.wt.branch);
+                }
 
-            for window_id in &info.window_ids {
-                if tmux::kill_window(window_id).is_ok() {
-                    println!("  Tmux window closed: {window_id}");
+                for window_id in &info.window_ids {
+                    if tmux::kill_window(window_id).is_ok() {
+                        println!("  Tmux window closed: {window_id}");
+                    }
                 }
             }
         }
