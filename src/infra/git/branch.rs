@@ -3,6 +3,7 @@
 use git2::{BranchType, Repository};
 
 use super::repo::{get_main_branch, open_repo};
+use crate::infra::github::{PrInfo, PrState};
 
 /// Check if a branch exists (local or remote)
 pub fn branch_exists(branch: &str) -> bool {
@@ -63,12 +64,6 @@ async fn find_base_branch_impl<C: crate::infra::github::RepoClient>(
     "main".to_string()
 }
 
-/// Check if `branch` is an ancestor of `base` (equivalent to `git merge-base --is-ancestor`)
-pub fn check_is_ancestor(branch: &str, base: &str) -> Option<bool> {
-    let repo = open_repo().ok()?;
-    check_is_ancestor_in_repo(&repo, branch, base)
-}
-
 /// Check if `branch` is an ancestor of `base` in a specific repository
 fn check_is_ancestor_in_repo(repo: &Repository, branch: &str, base: &str) -> Option<bool> {
     // Resolve branch to commit
@@ -109,54 +104,90 @@ impl MergeStatus {
     }
 }
 
-/// Check if a branch is merged (via PR or git merge-base)
-pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
-    use super::github::get_owner_repo;
-    use super::repo::get_main_branch;
-    use crate::infra::github::{OctocrabClient, PrClient, PrState};
+/// Convert PR information into merge status.
+///
+/// Extracts the PR number from the URL and maps the PR state
+/// to the corresponding merge status.
+pub fn merge_status_from_pr(pr_info: &PrInfo) -> MergeStatus {
+    // Fall back to pr_info.number if URL is empty or malformed
+    let pr_number = pr_info
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(|n| format!("#{n}"))
+        .unwrap_or_else(|| format!("#{}", pr_info.number));
 
-    // First, check PR status via GitHub API
-    if let Some((owner, repo)) = get_owner_repo()
-        && let Ok(client) = OctocrabClient::get()
-        && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
-    {
-        // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "#123")
-        // Fall back to pr_info.number if URL is empty or malformed
-        let pr_number = pr_info
-            .url
-            .rsplit('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .map(|n| format!("#{n}"))
-            .unwrap_or_else(|| format!("#{}", pr_info.number));
-
-        match pr_info.state {
-            PrState::Merged => {
-                return MergeStatus::Merged {
-                    reason: format!("{pr_number} merged"),
-                };
-            }
-            PrState::Open => {
-                return MergeStatus::NotMerged {
-                    reason: format!("{pr_number} open"),
-                };
-            }
-            PrState::Closed => {
-                return MergeStatus::Closed {
-                    reason: format!("{pr_number} closed"),
-                };
-            }
-        }
+    match pr_info.state {
+        PrState::Merged => MergeStatus::Merged {
+            reason: format!("{pr_number} merged"),
+        },
+        PrState::Open => MergeStatus::NotMerged {
+            reason: format!("{pr_number} open"),
+        },
+        PrState::Closed => MergeStatus::Closed {
+            reason: format!("{pr_number} closed"),
+        },
     }
+}
 
-    // Fallback: check using git2 merge-base
-    let main_branch = get_main_branch().unwrap_or_else(|_| "main".to_string());
+/// Check merge status using local git data (merge-base).
+///
+/// Requires that `fetch_with_prune` has been run for this repo
+/// so that remote tracking branches are up to date.
+pub fn merge_status_from_git(repo: &Repository, branch_name: &str) -> MergeStatus {
+    use super::repo::get_main_branch_for_repo;
+
+    let main_branch = get_main_branch_for_repo(repo).unwrap_or_else(|_| "main".to_string());
     let base_branch = format!("origin/{main_branch}");
 
-    if let Some(true) = check_is_ancestor(branch_name, &base_branch) {
+    if let Some(true) = check_is_ancestor_in_repo(repo, branch_name, &base_branch) {
         return MergeStatus::Merged {
             reason: "Merged (git)".to_string(),
         };
+    }
+
+    MergeStatus::NotMerged {
+        reason: "Not merged".to_string(),
+    }
+}
+
+/// Check if a branch is merged (via PR or git merge-base).
+///
+/// Uses the repository from the current working directory.
+/// For cross-repository operations, use [`get_merge_status_for_repo`] instead.
+pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
+    let repo = open_repo().ok();
+    get_merge_status_impl(repo.as_ref(), branch_name).await
+}
+
+/// Check if a branch is merged, using a specific repository.
+///
+/// Unlike [`get_merge_status`], this does not open a repository from the
+/// current working directory. Use this in cross-repository operations
+/// (e.g., `--all` mode) where the target repo differs from the CWD.
+pub async fn get_merge_status_for_repo(repo: &Repository, branch_name: &str) -> MergeStatus {
+    get_merge_status_impl(Some(repo), branch_name).await
+}
+
+async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> MergeStatus {
+    use super::github::github_owner_and_repo;
+    use crate::infra::github::{OctocrabClient, PrClient};
+
+    // First, check PR status via GitHub API
+    if let Some(repo) = repo
+        && let Ok((owner, repo_name)) = github_owner_and_repo(repo)
+        && let Ok(client) = OctocrabClient::get()
+        && let Ok(Some(pr_info)) = client
+            .get_pr_for_branch(&owner, &repo_name, branch_name)
+            .await
+    {
+        return merge_status_from_pr(&pr_info);
+    }
+
+    // Fallback: check using git2 merge-base
+    if let Some(repo) = repo {
+        return merge_status_from_git(repo, branch_name);
     }
 
     MergeStatus::NotMerged {

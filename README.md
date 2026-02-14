@@ -47,6 +47,7 @@ For editor autocompletion, add the following to the top of your config file:
 wm:
   worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
   branch_prefix: fohte/ # branch name prefix for `a wm new` (default: "fohte/")
+  repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
   layout: # tmux pane layout for `a wm new`
     direction: horizontal
     first:
@@ -278,6 +279,13 @@ Git worktree management with tmux integration.
 | `new <branch>`      | Create a new worktree and open tmux window |
 | `delete [worktree]` | Delete a worktree and its branch           |
 | `clean`             | Bulk delete merged worktrees               |
+
+`clean` options:
+
+| Option          | Description                                                |
+| --------------- | ---------------------------------------------------------- |
+| `-n, --dry-run` | Show what would be deleted without actually deleting       |
+| `--all`         | Clean worktrees across all repositories under `repos_root` |
 
 ### `a completions <shell>`
 

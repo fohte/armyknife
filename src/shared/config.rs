@@ -37,6 +37,12 @@ pub struct WmConfig {
     /// tmux pane layout definition.
     #[serde(default)]
     pub layout: LayoutNode,
+
+    /// Root directory containing git repositories.
+    /// Used by `wm clean --all` to discover repositories.
+    /// Falls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.
+    #[serde(default)]
+    pub repos_root: Option<String>,
 }
 
 impl Default for WmConfig {
@@ -45,6 +51,7 @@ impl Default for WmConfig {
             worktrees_dir: default_worktrees_dir(),
             branch_prefix: default_branch_prefix(),
             layout: LayoutNode::default(),
+            repos_root: None,
         }
     }
 }
