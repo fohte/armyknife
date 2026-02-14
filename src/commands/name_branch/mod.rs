@@ -125,6 +125,7 @@ fn validate_branch_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     #[rstest]
@@ -137,7 +138,10 @@ mod tests {
     #[case::leading_separator("/fix-login", "fix-login")]
     #[case::trailing_separator("fix-login/", "fix-login")]
     #[case::with_backticks("`fix-login`", "fix-login")]
-    #[case::code_block_style("```\nfix-login\n```", "fix-login")]
+    #[case::code_block_style(indoc! {"
+        ```
+        fix-login
+        ```"}, "fix-login")]
     fn test_sanitize_branch_name(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sanitize_branch_name(input), expected);
     }

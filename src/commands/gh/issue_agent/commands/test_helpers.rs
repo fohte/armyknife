@@ -4,6 +4,7 @@ use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 // Re-export for tests that import from test_helpers
 pub use crate::infra::github::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
+use indoc::formatdoc;
 use rstest::fixture;
 use std::fs;
 use std::path::Path;
@@ -46,10 +47,13 @@ pub fn create_comment_file(
     database_id: u64,
     body: &str,
 ) -> String {
-    format!(
-        "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}",
-        author, created_at, id, database_id, body
-    )
+    formatdoc! {"
+        <!-- author: {author} -->
+        <!-- createdAt: {created_at} -->
+        <!-- id: {id} -->
+        <!-- databaseId: {database_id} -->
+
+        {body}"}
 }
 
 /// Write a local comment file to the storage directory.

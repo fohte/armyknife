@@ -4,20 +4,22 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::Local;
+use indoc::indoc;
 
 use super::error::{Result, StorageError};
 use super::issue_storage::IssueStorage;
 use crate::commands::gh::issue_agent::models::IssueTemplate;
 
 /// Default content for a new issue file.
-const NEW_ISSUE_TEMPLATE: &str = r#"---
-title: ""
-labels: []
-assignees: []
----
+const NEW_ISSUE_TEMPLATE: &str = indoc! {r#"
+    ---
+    title: ""
+    labels: []
+    assignees: []
+    ---
 
-Body
-"#;
+    Body
+"#};
 
 /// Default content for a new comment file.
 const NEW_COMMENT_TEMPLATE: &str = "Comment body\n";
@@ -78,6 +80,7 @@ impl IssueStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
 
@@ -96,7 +99,15 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(
             content,
-            "---\ntitle: \"\"\nlabels: []\nassignees: []\n---\n\nBody\n"
+            indoc! {r#"
+                ---
+                title: ""
+                labels: []
+                assignees: []
+                ---
+
+                Body
+            "#}
         );
     }
 
@@ -124,7 +135,18 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(
             content,
-            "---\ntitle: 'Bug: '\nlabels:\n- bug\n- needs-triage\nassignees:\n- alice\n---\n\nDescribe the bug here\n"
+            indoc! {"
+                ---
+                title: 'Bug: '
+                labels:
+                - bug
+                - needs-triage
+                assignees:
+                - alice
+                ---
+
+                Describe the bug here
+            "}
         );
     }
 
