@@ -1,8 +1,11 @@
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use anyhow::Context;
 use clap::Args;
 use git2::Repository;
-use std::io::{self, Write};
-use std::path::Path;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use super::error::{Result, WmError};
 use super::worktree::{
@@ -11,6 +14,8 @@ use super::worktree::{
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
+use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
+use crate::infra::github::{BranchPrQuery, OctocrabClient};
 use crate::infra::tmux;
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -79,7 +84,22 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     Ok(())
 }
 
+/// Collected local data for a single repository (no network required).
+struct RepoWorktreeData {
+    repo_path: PathBuf,
+    repo_name: String,
+    /// GitHub owner/repo from remote URL. None if not a GitHub repo.
+    github_id: Option<(String, String)>,
+    worktrees: Vec<LinkedWorktree>,
+}
+
 /// Run clean across all repositories under repos_root.
+///
+/// Optimized flow:
+/// 1. Collect local data (worktrees, owner/repo) without network
+/// 2. Batch GraphQL query for all branch PR statuses in one call
+/// 3. Only fetch repos that have branches without a PR (for merge-base fallback)
+/// 4. Determine merge status from PR info or git merge-base
 async fn run_all(args: &CleanArgs) -> Result<()> {
     let config = load_config()?;
     let repos_root = resolve_repos_root(config.wm.repos_root.as_deref())
@@ -94,9 +114,8 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    let mut all_to_delete = Vec::new();
-    let mut all_to_keep = Vec::new();
-
+    // Phase 1: Collect local data (no network)
+    let mut repo_data: Vec<RepoWorktreeData> = Vec::new();
     for repo_path in &repo_paths {
         let repo_name = repo_path
             .strip_prefix(&repos_root)
@@ -112,15 +131,138 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
             }
         };
 
-        if let Err(e) = fetch_with_prune(&repo) {
-            eprintln!("Warning: Failed to fetch {repo_name}: {e}");
+        let worktrees: Vec<LinkedWorktree> = match list_linked_worktrees(&repo) {
+            Ok(wts) => wts
+                .into_iter()
+                .filter(|wt| !wt.branch.is_empty() && wt.branch != "(unknown)")
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: Failed to list worktrees for {repo_name}: {e}");
+                continue;
+            }
+        };
+
+        if worktrees.is_empty() {
             continue;
         }
 
-        let (to_delete, to_keep) = collect_worktrees(&repo, Some(&repo_name)).await?;
-        all_to_delete.extend(to_delete);
-        all_to_keep.extend(to_keep);
+        let github_id = github_owner_and_repo(&repo).ok();
+
+        repo_data.push(RepoWorktreeData {
+            repo_path: repo_path.clone(),
+            repo_name,
+            github_id,
+            worktrees,
+        });
     }
+
+    if repo_data.iter().all(|rd| rd.worktrees.is_empty()) {
+        println!("No worktrees found across all repositories.");
+        return Ok(());
+    }
+
+    // Phase 2: Batch GraphQL query for PR statuses
+    let spinner = create_spinner("Checking PR status...");
+
+    let queries: Vec<BranchPrQuery> = repo_data
+        .iter()
+        .filter_map(|rd| {
+            let (owner, repo) = rd.github_id.as_ref()?;
+            Some(rd.worktrees.iter().map(|wt| BranchPrQuery {
+                owner: owner.clone(),
+                repo: repo.clone(),
+                branch: wt.branch.clone(),
+            }))
+        })
+        .flatten()
+        .collect();
+
+    let pr_map = if !queries.is_empty() {
+        match OctocrabClient::get() {
+            Ok(client) => client.get_prs_for_branches_batch(&queries).await.ok(),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let pr_map = pr_map.unwrap_or_default();
+
+    // Phase 3: Selective fetch - only repos with branches missing from PR results
+    let repos_needing_fetch: Vec<&PathBuf> = repo_data
+        .iter()
+        .filter(|rd| {
+            rd.worktrees.iter().any(|wt| {
+                let has_pr = rd
+                    .github_id
+                    .as_ref()
+                    .and_then(|(owner, repo)| {
+                        pr_map.get(&(owner.clone(), repo.clone(), wt.branch.clone()))
+                    })
+                    .is_some_and(|pr| pr.is_some());
+                !has_pr
+            })
+        })
+        .map(|rd| &rd.repo_path)
+        .collect();
+
+    if !repos_needing_fetch.is_empty() {
+        spinner.set_message(format!(
+            "Fetching {} repo(s) for merge-base check...",
+            repos_needing_fetch.len()
+        ));
+        for repo_path in &repos_needing_fetch {
+            let repo = match Repository::open(repo_path) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if let Err(e) = fetch_with_prune(&repo) {
+                let name = repo_path
+                    .strip_prefix(&repos_root)
+                    .unwrap_or(repo_path)
+                    .display();
+                eprintln!("Warning: Failed to fetch {name}: {e}");
+            }
+        }
+    }
+
+    // Phase 4: Determine merge status
+    let mut all_to_delete = Vec::new();
+    let mut all_to_keep = Vec::new();
+
+    for rd in &repo_data {
+        let repo = match Repository::open(&rd.repo_path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        for wt in &rd.worktrees {
+            let status = if let Some((owner, repo_gh)) = &rd.github_id
+                && let Some(Some(pr_info)) =
+                    pr_map.get(&(owner.clone(), repo_gh.clone(), wt.branch.clone()))
+            {
+                merge_status_from_pr(pr_info)
+            } else {
+                merge_status_from_git(&repo, &wt.branch)
+            };
+
+            let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
+            let is_merged = status.is_merged();
+            let info = CleanWorktreeInfo {
+                wt: wt.clone(),
+                status,
+                window_ids,
+                repo_name: Some(rd.repo_name.clone()),
+            };
+
+            if is_merged {
+                all_to_delete.push(info);
+            } else {
+                all_to_keep.push(info);
+            }
+        }
+    }
+
+    spinner.finish_and_clear();
 
     if all_to_delete.is_empty() && all_to_keep.is_empty() {
         println!("No worktrees found across all repositories.");
@@ -150,6 +292,24 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     delete_worktrees_all_repos(&repos_root, &all_to_delete)?;
 
     Ok(())
+}
+
+/// Create a stderr spinner with braille animation for long-running operations.
+fn create_spinner(message: &str) -> ProgressBar {
+    if std::io::stderr().is_terminal() {
+        let s = ProgressBar::new_spinner();
+        s.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                .template("{spinner} {msg}")
+                .unwrap_or(ProgressStyle::default_spinner()),
+        );
+        s.set_message(message.to_string());
+        s.enable_steady_tick(Duration::from_millis(80));
+        s
+    } else {
+        ProgressBar::hidden()
+    }
 }
 
 /// Get the display color for a merge status (GitHub-style)

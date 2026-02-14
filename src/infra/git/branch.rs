@@ -3,6 +3,7 @@
 use git2::{BranchType, Repository};
 
 use super::repo::{get_main_branch, open_repo};
+use crate::infra::github::{PrInfo, PrState};
 
 /// Check if a branch exists (local or remote)
 pub fn branch_exists(branch: &str) -> bool {
@@ -103,6 +104,54 @@ impl MergeStatus {
     }
 }
 
+/// Convert PR information into merge status.
+///
+/// Extracts the PR number from the URL and maps the PR state
+/// to the corresponding merge status.
+pub fn merge_status_from_pr(pr_info: &PrInfo) -> MergeStatus {
+    // Fall back to pr_info.number if URL is empty or malformed
+    let pr_number = pr_info
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(|n| format!("#{n}"))
+        .unwrap_or_else(|| format!("#{}", pr_info.number));
+
+    match pr_info.state {
+        PrState::Merged => MergeStatus::Merged {
+            reason: format!("{pr_number} merged"),
+        },
+        PrState::Open => MergeStatus::NotMerged {
+            reason: format!("{pr_number} open"),
+        },
+        PrState::Closed => MergeStatus::Closed {
+            reason: format!("{pr_number} closed"),
+        },
+    }
+}
+
+/// Check merge status using local git data (merge-base).
+///
+/// Requires that `fetch_with_prune` has been run for this repo
+/// so that remote tracking branches are up to date.
+pub fn merge_status_from_git(repo: &Repository, branch_name: &str) -> MergeStatus {
+    use super::repo::get_main_branch_for_repo;
+
+    let main_branch = get_main_branch_for_repo(repo).unwrap_or_else(|_| "main".to_string());
+    let base_branch = format!("origin/{main_branch}");
+
+    if let Some(true) = check_is_ancestor_in_repo(repo, branch_name, &base_branch) {
+        return MergeStatus::Merged {
+            reason: "Merged (git)".to_string(),
+        };
+    }
+
+    MergeStatus::NotMerged {
+        reason: "Not merged".to_string(),
+    }
+}
+
 /// Check if a branch is merged (via PR or git merge-base).
 ///
 /// Uses the repository from the current working directory.
@@ -123,8 +172,7 @@ pub async fn get_merge_status_for_repo(repo: &Repository, branch_name: &str) -> 
 
 async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> MergeStatus {
     use super::github::github_owner_and_repo;
-    use super::repo::get_main_branch_for_repo;
-    use crate::infra::github::{OctocrabClient, PrClient, PrState};
+    use crate::infra::github::{OctocrabClient, PrClient};
 
     // First, check PR status via GitHub API
     if let Some(repo) = repo
@@ -134,45 +182,12 @@ async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> 
             .get_pr_for_branch(&owner, &repo_name, branch_name)
             .await
     {
-        // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "#123")
-        // Fall back to pr_info.number if URL is empty or malformed
-        let pr_number = pr_info
-            .url
-            .rsplit('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .map(|n| format!("#{n}"))
-            .unwrap_or_else(|| format!("#{}", pr_info.number));
-
-        match pr_info.state {
-            PrState::Merged => {
-                return MergeStatus::Merged {
-                    reason: format!("{pr_number} merged"),
-                };
-            }
-            PrState::Open => {
-                return MergeStatus::NotMerged {
-                    reason: format!("{pr_number} open"),
-                };
-            }
-            PrState::Closed => {
-                return MergeStatus::Closed {
-                    reason: format!("{pr_number} closed"),
-                };
-            }
-        }
+        return merge_status_from_pr(&pr_info);
     }
 
     // Fallback: check using git2 merge-base
     if let Some(repo) = repo {
-        let main_branch = get_main_branch_for_repo(repo).unwrap_or_else(|_| "main".to_string());
-        let base_branch = format!("origin/{main_branch}");
-
-        if let Some(true) = check_is_ancestor_in_repo(repo, branch_name, &base_branch) {
-            return MergeStatus::Merged {
-                reason: "Merged (git)".to_string(),
-            };
-        }
+        return merge_status_from_git(repo, branch_name);
     }
 
     MergeStatus::NotMerged {

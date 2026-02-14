@@ -12,7 +12,7 @@ pub mod test_utils;
 
 pub use branch::{
     MergeStatus, branch_exists, find_base_branch, get_merge_status, get_merge_status_for_repo,
-    local_branch_exists, remote_branch_exists,
+    local_branch_exists, merge_status_from_git, merge_status_from_pr, remote_branch_exists,
 };
 pub use error::GitError;
 pub use github::{get_owner_repo, github_owner_and_repo};
