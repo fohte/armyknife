@@ -159,6 +159,14 @@
           "description": "tmux pane layout definition.",
           "$ref": "#/$defs/LayoutNode"
         },
+        "repos_root": {
+          "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "worktrees_dir": {
           "description": "Worktree directory name (default: \".worktrees\").",
           "type": "string",
