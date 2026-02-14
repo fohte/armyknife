@@ -4,6 +4,7 @@ pub mod config;
 pub mod diff;
 pub mod dirs;
 pub mod human_in_the_loop;
+pub mod repos_root;
 pub mod table;
 #[cfg(test)]
 pub mod testing;
