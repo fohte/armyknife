@@ -197,6 +197,9 @@ impl OctocrabClient {
     }
 
     /// Build and execute a single batched GraphQL query for a chunk of branch queries.
+    ///
+    /// Uses GraphQL variables for all user-supplied strings (owner, repo, branch)
+    /// to avoid injection risks from string interpolation.
     async fn execute_batch_query(
         &self,
         queries: &[BranchPrQuery],
@@ -210,7 +213,9 @@ impl OctocrabClient {
                 .push((i, q.branch.clone()));
         }
 
-        // Build the GraphQL query with aliases
+        // Build the GraphQL query with aliases and variables
+        let mut variable_defs = Vec::new();
+        let mut variables = serde_json::Map::new();
         let mut query_parts = Vec::new();
         // Track alias -> (owner, repo, branch) for response parsing
         let mut alias_map: HashMap<String, HashMap<String, (String, String, String)>> =
@@ -218,33 +223,50 @@ impl OctocrabClient {
 
         for (repo_idx, ((owner, repo), branches)) in repo_branches.iter().enumerate() {
             let repo_alias = format!("repo{repo_idx}");
+            let owner_var = format!("owner_{repo_idx}");
+            let repo_var = format!("repoName_{repo_idx}");
+
+            variable_defs.push(format!("${owner_var}: String!"));
+            variable_defs.push(format!("${repo_var}: String!"));
+            variables.insert(owner_var.clone(), serde_json::Value::String(owner.clone()));
+            variables.insert(repo_var.clone(), serde_json::Value::String(repo.clone()));
+
             let mut branch_parts = Vec::new();
             let mut branch_alias_map = HashMap::new();
 
             for (branch_idx, (_, branch)) in branches.iter().enumerate() {
                 let branch_alias = format!("branch{branch_idx}");
-                let escaped_branch = escape_graphql_string(branch);
+                let branch_var = format!("branch{repo_idx}_{branch_idx}");
+
+                variable_defs.push(format!("${branch_var}: String!"));
+                variables.insert(
+                    branch_var.clone(),
+                    serde_json::Value::String(branch.clone()),
+                );
+
                 branch_parts.push(format!(
-                    "{branch_alias}: pullRequests(headRefName: \"{escaped_branch}\", states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number state url mergedAt }} }}"
+                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number state url mergedAt }} }}"
                 ));
                 branch_alias_map
                     .insert(branch_alias, (owner.clone(), repo.clone(), branch.clone()));
             }
 
             let branch_query = branch_parts.join("\n    ");
-            let escaped_owner = escape_graphql_string(owner);
-            let escaped_repo = escape_graphql_string(repo);
             query_parts.push(format!(
-                "{repo_alias}: repository(owner: \"{escaped_owner}\", name: \"{escaped_repo}\") {{\n    {branch_query}\n  }}"
+                "{repo_alias}: repository(owner: ${owner_var}, name: ${repo_var}) {{\n    {branch_query}\n  }}"
             ));
             alias_map.insert(repo_alias, branch_alias_map);
         }
 
-        let query = format!("{{\n  {}\n}}", query_parts.join("\n  "));
+        let query = format!(
+            "query({}) {{\n  {}\n}}",
+            variable_defs.join(", "),
+            query_parts.join("\n  ")
+        );
 
         // Execute and parse. Use serde_json::Value since response structure is dynamic.
         let response: serde_json::Value = match self
-            .graphql::<serde_json::Value>(&query, serde_json::json!({}))
+            .graphql::<serde_json::Value>(&query, serde_json::Value::Object(variables))
             .await
         {
             Ok(data) => data,
@@ -283,11 +305,6 @@ impl OctocrabClient {
 
         Ok(results)
     }
-}
-
-/// Escape a string for use inside a GraphQL double-quoted string literal.
-fn escape_graphql_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Parse a single PR node from the GraphQL response into PrInfo.
