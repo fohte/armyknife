@@ -1,5 +1,6 @@
 //! Models for GitHub Issue Templates.
 
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 
 /// GitHub Issue Template fetched from the API.
@@ -51,17 +52,31 @@ impl IssueTemplate {
         };
 
         // serde_yaml::to_string is safe for the struct above and won't fail
-        let frontmatter_yaml = serde_yaml::to_string(&frontmatter)
-            .unwrap_or_else(|_| "title: \"\"\nlabels: []\nassignees: []".to_string());
+        let frontmatter_yaml = serde_yaml::to_string(&frontmatter).unwrap_or_else(|_| {
+            indoc! {r#"
+                    title: ""
+                    labels: []
+                    assignees: []"#}
+            .to_string()
+        });
         let body = self.body.as_deref().unwrap_or("Body");
 
-        format!("---\n{}---\n\n{}\n", frontmatter_yaml, body)
+        format!(
+            indoc! {"
+                ---
+                {}---
+
+                {}
+            "},
+            frontmatter_yaml, body,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     fn create_template(
@@ -95,7 +110,19 @@ mod tests {
         let content = template.to_issue_content();
         assert_eq!(
             content,
-            "---\ntitle: 'Bug: '\nlabels:\n- bug\n- needs-triage\nassignees:\n- alice\n- bob\n---\n\nDescribe the bug here\n"
+            indoc! {"
+                ---
+                title: 'Bug: '
+                labels:
+                - bug
+                - needs-triage
+                assignees:
+                - alice
+                - bob
+                ---
+
+                Describe the bug here
+            "},
         );
     }
 
@@ -106,7 +133,15 @@ mod tests {
         let content = template.to_issue_content();
         assert_eq!(
             content,
-            "---\ntitle: ''\nlabels: []\nassignees: []\n---\n\nBody\n"
+            indoc! {"
+                ---
+                title: ''
+                labels: []
+                assignees: []
+                ---
+
+                Body
+            "},
         );
     }
 
@@ -123,19 +158,47 @@ mod tests {
         let content = template.to_issue_content();
         assert_eq!(
             content,
-            "---\ntitle: 'Feature: '\nlabels:\n- enhancement\nassignees: []\n---\n\nBody\n"
+            indoc! {"
+                ---
+                title: 'Feature: '
+                labels:
+                - enhancement
+                assignees: []
+                ---
+
+                Body
+            "},
         );
     }
 
     #[rstest]
     fn test_to_issue_content_preserves_body_content() {
-        let body = "## Steps to reproduce\n\n1. First step\n2. Second step\n\n## Expected behavior";
+        let body = indoc! {"
+            ## Steps to reproduce
+
+            1. First step
+            2. Second step
+
+            ## Expected behavior"};
         let template = create_template("Bug", None, Some(body), vec![], vec![]);
 
         let content = template.to_issue_content();
         assert_eq!(
             content,
-            "---\ntitle: ''\nlabels: []\nassignees: []\n---\n\n## Steps to reproduce\n\n1. First step\n2. Second step\n\n## Expected behavior\n"
+            indoc! {"
+                ---
+                title: ''
+                labels: []
+                assignees: []
+                ---
+
+                ## Steps to reproduce
+
+                1. First step
+                2. Second step
+
+                ## Expected behavior
+            "},
         );
     }
 }

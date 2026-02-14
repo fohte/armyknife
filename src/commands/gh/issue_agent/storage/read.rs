@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use indoc::formatdoc;
+
 use super::error::{Result, StorageError};
 use crate::commands::gh::issue_agent::models::Comment;
 
@@ -113,15 +115,15 @@ impl LocalComment {
         let created_at = comment.created_at.to_rfc3339();
         let updated_at = comment.updated_at.to_rfc3339();
 
-        format!(
-            "<!-- author: {} -->\n<!-- createdAt: {} -->\n<!-- updatedAt: {} -->\n<!-- id: {} -->\n<!-- databaseId: {} -->\n\n{}\n",
-            author,
-            created_at,
-            updated_at,
-            comment.id,
-            comment.database_id,
-            comment.body.trim()
-        )
+        formatdoc! {"
+            <!-- author: {} -->
+            <!-- createdAt: {} -->
+            <!-- updatedAt: {} -->
+            <!-- id: {} -->
+            <!-- databaseId: {} -->
+
+            {}
+        ", author, created_at, updated_at, comment.id, comment.database_id, comment.body.trim()}
     }
 }
 

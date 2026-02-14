@@ -377,6 +377,7 @@ mod tests {
     use super::*;
     use crate::commands::gh::issue_agent::models::IssueMetadata;
     use crate::commands::gh::issue_agent::testing::factories;
+    use indoc::indoc;
     use rstest::rstest;
 
     mod check_can_edit_comment_tests {
@@ -580,10 +581,16 @@ mod tests {
         /// normalizes them via lines().join("\n").
         #[rstest]
         #[case::trailing_newline("body", "body\n")]
-        #[case::trailing_multiple_newlines("body", "body\n\n")]
+        #[case::trailing_multiple_newlines("body", indoc! {"
+            body
+
+        "})]
         #[case::trailing_spaces("body", "body  ")]
         #[case::leading_newline("body", "\nbody")]
-        #[case::leading_multiple_newlines("body", "\n\nbody")]
+        #[case::leading_multiple_newlines("body", indoc! {"
+
+
+            body"})]
         fn test_no_change_with_whitespace_difference(
             #[case] local_body: &str,
             #[case] remote_body: &str,

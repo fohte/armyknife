@@ -203,6 +203,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
 
@@ -305,7 +306,13 @@ mod tests {
         // Write a file with some malformed lines
         fs::write(
             &state_file,
-            "main:0.1\tabc-123\nmalformed line\n\nwork:2.0\tdef-456\nextra\ttabs\there\n",
+            indoc! {"
+                main:0.1\tabc-123
+                malformed line
+
+                work:2.0\tdef-456
+                extra\ttabs\there
+            "},
         )
         .expect("should write file");
 

@@ -1,5 +1,7 @@
 use std::fs;
 
+use indoc::formatdoc;
+
 use super::error::Result;
 use super::issue_storage::IssueStorage;
 use super::read::LocalComment;
@@ -127,7 +129,12 @@ impl IssueStorage {
 fn format_issue_md(frontmatter: &IssueFrontmatter, body: &str) -> String {
     let yaml = serde_yaml::to_string(frontmatter).unwrap_or_default();
     // serde_yaml adds a trailing newline, so we just need the delimiters
-    format!("---\n{}---\n\n{}\n", yaml, body)
+    formatdoc! {"
+        ---
+        {}---
+
+        {}
+    ", yaml, body}
 }
 
 #[cfg(test)]
@@ -135,6 +142,7 @@ mod tests {
     use super::*;
     use crate::commands::gh::issue_agent::models::ReadonlyMetadata;
     use crate::commands::gh::issue_agent::testing::factories;
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
 
@@ -351,6 +359,12 @@ mod tests {
         assert_eq!(parsed, frontmatter);
 
         // Verify body ends correctly
-        assert_eq!(parts[2], "\nBody text\n");
+        assert_eq!(
+            parts[2],
+            indoc! {"
+
+                Body text
+            "}
+        );
     }
 }

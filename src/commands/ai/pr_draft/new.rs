@@ -84,6 +84,7 @@ mod tests {
     use crate::infra::git::test_utils::TempRepo;
     use crate::infra::github::GitHubMockServer;
     use crate::shared::diff::format_diff;
+    use indoc::indoc;
     use rstest::rstest;
     use std::fs;
     use std::path::Path;
@@ -258,9 +259,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::line_changed("old line\n", "new line\n", "-old line\n+new line\n")]
-    #[case::line_added("line1\n", "line1\nline2\n", " line1\n+line2\n")]
-    #[case::line_removed("line1\nline2\n", "line1\n", " line1\n-line2\n")]
+    #[case::line_changed("old line\n", "new line\n", indoc! {"
+        -old line
+        +new line
+    "})]
+    #[case::line_added("line1\n", indoc! {"
+        line1
+        line2
+    "}, indoc! {"
+         line1
+        +line2
+    "})]
+    #[case::line_removed(indoc! {"
+        line1
+        line2
+    "}, "line1\n", indoc! {"
+         line1
+        -line2
+    "})]
     #[case::identical("same\n", "same\n", " same\n")]
     fn format_diff_generates_unified_diff(
         #[case] old: &str,
@@ -278,7 +294,10 @@ mod tests {
         // Uses 256-color mode (38;5;9 for red, 38;5;10 for green)
         assert_eq!(
             result,
-            "\x1b[38;5;9m-old\n\x1b[0m\x1b[38;5;10m+new\n\x1b[0m"
+            indoc! {"
+                \x1b[38;5;9m-old
+                \x1b[0m\x1b[38;5;10m+new
+                \x1b[0m"}
         );
     }
 
