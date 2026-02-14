@@ -223,8 +223,7 @@ impl OctocrabClient {
 
             for (branch_idx, (_, branch)) in branches.iter().enumerate() {
                 let branch_alias = format!("branch{branch_idx}");
-                // Escape branch name for GraphQL string literal
-                let escaped_branch = branch.replace('\\', "\\\\").replace('"', "\\\"");
+                let escaped_branch = escape_graphql_string(branch);
                 branch_parts.push(format!(
                     "{branch_alias}: pullRequests(headRefName: \"{escaped_branch}\", states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number state url mergedAt }} }}"
                 ));
@@ -233,8 +232,10 @@ impl OctocrabClient {
             }
 
             let branch_query = branch_parts.join("\n    ");
+            let escaped_owner = escape_graphql_string(owner);
+            let escaped_repo = escape_graphql_string(repo);
             query_parts.push(format!(
-                "{repo_alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{\n    {branch_query}\n  }}"
+                "{repo_alias}: repository(owner: \"{escaped_owner}\", name: \"{escaped_repo}\") {{\n    {branch_query}\n  }}"
             ));
             alias_map.insert(repo_alias, branch_alias_map);
         }
@@ -282,6 +283,11 @@ impl OctocrabClient {
 
         Ok(results)
     }
+}
+
+/// Escape a string for use inside a GraphQL double-quoted string literal.
+fn escape_graphql_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Parse a single PR node from the GraphQL response into PrInfo.
