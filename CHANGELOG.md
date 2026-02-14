@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.95](https://github.com/fohte/armyknife/compare/v0.1.94...v0.1.95) (2026-02-14)
+
+
+### Features
+
+* **wm:** support cleaning worktrees across all repositories with `--all` flag ([#275](https://github.com/fohte/armyknife/issues/275)) ([03539ae](https://github.com/fohte/armyknife/commit/03539aef08e5418fd86700276eff98350bd9e290))
+
 ## [0.1.94](https://github.com/fohte/armyknife/compare/v0.1.93...v0.1.94) (2026-02-12)
 
 
