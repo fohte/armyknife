@@ -5,12 +5,12 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use super::error::{Result, WmError};
-use super::git::get_merge_status;
 use super::worktree::{
     LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
 };
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
+use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::tmux;
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -337,7 +337,7 @@ async fn collect_worktrees(
             continue;
         }
 
-        let status = get_merge_status(&wt.branch).await;
+        let status = get_merge_status_for_repo(repo, &wt.branch).await;
         // Collect tmux window IDs while the worktree path still exists
         let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
         let is_merged = status.is_merged();

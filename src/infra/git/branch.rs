@@ -63,12 +63,6 @@ async fn find_base_branch_impl<C: crate::infra::github::RepoClient>(
     "main".to_string()
 }
 
-/// Check if `branch` is an ancestor of `base` (equivalent to `git merge-base --is-ancestor`)
-pub fn check_is_ancestor(branch: &str, base: &str) -> Option<bool> {
-    let repo = open_repo().ok()?;
-    check_is_ancestor_in_repo(&repo, branch, base)
-}
-
 /// Check if `branch` is an ancestor of `base` in a specific repository
 fn check_is_ancestor_in_repo(repo: &Repository, branch: &str, base: &str) -> Option<bool> {
     // Resolve branch to commit
@@ -109,16 +103,36 @@ impl MergeStatus {
     }
 }
 
-/// Check if a branch is merged (via PR or git merge-base)
+/// Check if a branch is merged (via PR or git merge-base).
+///
+/// Uses the repository from the current working directory.
+/// For cross-repository operations, use [`get_merge_status_for_repo`] instead.
 pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
-    use super::github::get_owner_repo;
-    use super::repo::get_main_branch;
+    let repo = open_repo().ok();
+    get_merge_status_impl(repo.as_ref(), branch_name).await
+}
+
+/// Check if a branch is merged, using a specific repository.
+///
+/// Unlike [`get_merge_status`], this does not open a repository from the
+/// current working directory. Use this in cross-repository operations
+/// (e.g., `--all` mode) where the target repo differs from the CWD.
+pub async fn get_merge_status_for_repo(repo: &Repository, branch_name: &str) -> MergeStatus {
+    get_merge_status_impl(Some(repo), branch_name).await
+}
+
+async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> MergeStatus {
+    use super::github::github_owner_and_repo;
+    use super::repo::get_main_branch_for_repo;
     use crate::infra::github::{OctocrabClient, PrClient, PrState};
 
     // First, check PR status via GitHub API
-    if let Some((owner, repo)) = get_owner_repo()
+    if let Some(repo) = repo
+        && let Ok((owner, repo_name)) = github_owner_and_repo(repo)
         && let Ok(client) = OctocrabClient::get()
-        && let Ok(Some(pr_info)) = client.get_pr_for_branch(&owner, &repo, branch_name).await
+        && let Ok(Some(pr_info)) = client
+            .get_pr_for_branch(&owner, &repo_name, branch_name)
+            .await
     {
         // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "#123")
         // Fall back to pr_info.number if URL is empty or malformed
@@ -150,13 +164,15 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
     }
 
     // Fallback: check using git2 merge-base
-    let main_branch = get_main_branch().unwrap_or_else(|_| "main".to_string());
-    let base_branch = format!("origin/{main_branch}");
+    if let Some(repo) = repo {
+        let main_branch = get_main_branch_for_repo(repo).unwrap_or_else(|_| "main".to_string());
+        let base_branch = format!("origin/{main_branch}");
 
-    if let Some(true) = check_is_ancestor(branch_name, &base_branch) {
-        return MergeStatus::Merged {
-            reason: "Merged (git)".to_string(),
-        };
+        if let Some(true) = check_is_ancestor_in_repo(repo, branch_name, &base_branch) {
+            return MergeStatus::Merged {
+                reason: "Merged (git)".to_string(),
+            };
+        }
     }
 
     MergeStatus::NotMerged {
