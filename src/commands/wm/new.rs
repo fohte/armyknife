@@ -228,6 +228,43 @@ pub struct NewArgs {
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
     pub prompt: Option<String>,
+
+    /// Mark this invocation as coming from another Claude Code session.
+    /// Wraps the prompt with delegation context (branch, base, directories).
+    #[arg(long)]
+    pub agent: bool,
+}
+
+/// Context information injected into the prompt when --agent is used
+struct DelegationContext<'a> {
+    branch: &'a str,
+    base: &'a str,
+    delegator_cwd: &'a str,
+    worktree_cwd: &'a str,
+}
+
+/// Build a delegated prompt by wrapping the original prompt with context XML
+fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
+    format!(
+        "\
+<delegated-task>
+<context>
+- Source: Delegated from another Claude Code session
+- Branch: {branch}
+- Base: {base}
+- Delegator CWD: {delegator_cwd}
+- Worktree CWD: {worktree_cwd}
+</context>
+<instructions>
+{prompt}
+</instructions>
+</delegated-task>",
+        branch = ctx.branch,
+        base = ctx.base,
+        delegator_cwd = ctx.delegator_cwd,
+        worktree_cwd = ctx.worktree_cwd,
+        prompt = prompt,
+    )
 }
 
 /// Resolved branch name and prompt information
@@ -333,7 +370,10 @@ fn run_worktree_creation(
     // Remove branch prefix to avoid double prefix
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
-    // Determine action based on branch existence and flags
+    // Determine action based on branch existence and flags.
+    // Track the resolved branch/base for --agent context injection.
+    let (actual_branch, actual_base);
+
     if args.force {
         // Force create new branch with prefix
         let main_branch = get_main_branch()?;
@@ -351,14 +391,25 @@ fn run_worktree_creation(
                 base: &base_branch,
             },
         )?;
+
+        actual_branch = branch;
+        actual_base = base_branch;
     } else if branch_exists(name) {
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
+
+        let main_branch = get_main_branch()?;
+        actual_branch = name.to_string();
+        actual_base = format!("origin/{main_branch}");
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
             // Branch exists with prefix
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
+
+            let main_branch = get_main_branch()?;
+            actual_branch = branch_with_prefix;
+            actual_base = format!("origin/{main_branch}");
         } else {
             // Branch doesn't exist, create new one with prefix
             let main_branch = get_main_branch()?;
@@ -376,15 +427,43 @@ fn run_worktree_creation(
                     base: &base_branch,
                 },
             )?;
+
+            actual_branch = branch;
+            actual_base = base_branch;
         }
     }
+
+    // Wrap prompt with delegation context when --agent is used
+    let final_prompt = match (args.agent, prompt) {
+        (true, Some(p)) => {
+            let delegator_cwd = std::env::current_dir()
+                .context("Failed to get current directory")?
+                .to_string_lossy()
+                .to_string();
+            let worktree_cwd = worktree_dir
+                .to_str()
+                .context("Invalid worktree path")?
+                .to_string();
+
+            Some(build_delegated_prompt(
+                p,
+                &DelegationContext {
+                    branch: &actual_branch,
+                    base: &actual_base,
+                    delegator_cwd: &delegator_cwd,
+                    worktree_cwd: &worktree_cwd,
+                },
+            ))
+        }
+        (_, p) => p.map(String::from),
+    };
 
     // Setup tmux window using config layout
     setup_tmux_window(
         repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
-        prompt,
+        final_prompt.as_deref(),
         config,
     )?;
 
@@ -558,6 +637,7 @@ mod tests {
             from: None,
             force: false,
             prompt: prompt.map(String::from),
+            agent: false,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -585,6 +665,7 @@ mod tests {
             from: None,
             force: false,
             prompt: None,
+            agent: false,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -670,5 +751,79 @@ mod tests {
 
         // Should not panic or error
         delete_prompt_cache(repo_root.to_str().unwrap());
+    }
+
+    #[rstest]
+    fn build_delegated_prompt_wraps_with_xml() {
+        use indoc::indoc;
+
+        let ctx = DelegationContext {
+            branch: "fohte/fix-auth-bug",
+            base: "origin/master",
+            delegator_cwd: "/home/user/repo",
+            worktree_cwd: "/home/user/repo/.worktrees/fix-auth-bug",
+        };
+        let result = build_delegated_prompt("Fix the auth bug", &ctx);
+
+        let expected = indoc! {"
+            <delegated-task>
+            <context>
+            - Source: Delegated from another Claude Code session
+            - Branch: fohte/fix-auth-bug
+            - Base: origin/master
+            - Delegator CWD: /home/user/repo
+            - Worktree CWD: /home/user/repo/.worktrees/fix-auth-bug
+            </context>
+            <instructions>
+            Fix the auth bug
+            </instructions>
+            </delegated-task>"
+        }
+        .trim_start();
+
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn build_delegated_prompt_preserves_multiline_prompt() {
+        use indoc::indoc;
+
+        let ctx = DelegationContext {
+            branch: "fohte/feature-x",
+            base: "origin/main",
+            delegator_cwd: "/tmp/repo",
+            worktree_cwd: "/tmp/repo/.worktrees/feature-x",
+        };
+        let prompt = indoc! {"
+            ## Background
+            Some context
+
+            ## Goal
+            Implement feature X"
+        }
+        .trim_start();
+        let result = build_delegated_prompt(prompt, &ctx);
+
+        let expected = indoc! {"
+            <delegated-task>
+            <context>
+            - Source: Delegated from another Claude Code session
+            - Branch: fohte/feature-x
+            - Base: origin/main
+            - Delegator CWD: /tmp/repo
+            - Worktree CWD: /tmp/repo/.worktrees/feature-x
+            </context>
+            <instructions>
+            ## Background
+            Some context
+
+            ## Goal
+            Implement feature X
+            </instructions>
+            </delegated-task>"
+        }
+        .trim_start();
+
+        assert_eq!(result, expected);
     }
 }
