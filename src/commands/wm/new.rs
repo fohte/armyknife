@@ -243,6 +243,30 @@ struct DelegationContext<'a> {
     worktree_cwd: &'a str,
 }
 
+/// Resolve the final prompt, optionally wrapping it with delegation context.
+/// When `agent` is true, wraps the prompt in a `<delegated-task>` XML envelope.
+fn resolve_prompt(
+    agent: bool,
+    prompt: Option<&str>,
+    branch: &str,
+    base: &str,
+    delegator_cwd: &str,
+    worktree_cwd: &str,
+) -> Option<String> {
+    match (agent, prompt) {
+        (true, Some(p)) => Some(build_delegated_prompt(
+            p,
+            &DelegationContext {
+                branch,
+                base,
+                delegator_cwd,
+                worktree_cwd,
+            },
+        )),
+        (_, p) => p.map(String::from),
+    }
+}
+
 /// Build a delegated prompt by wrapping the original prompt with context XML
 fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
     indoc::formatdoc! {"
@@ -435,29 +459,30 @@ fn run_worktree_creation(
     }
 
     // Wrap prompt with delegation context when --agent is used
-    let final_prompt = match (args.agent, prompt) {
-        (true, Some(p)) => {
-            let delegator_cwd = std::env::current_dir()
-                .context("Failed to get current directory")?
-                .to_string_lossy()
-                .to_string();
-            let worktree_cwd = worktree_dir
-                .to_str()
-                .context("Invalid worktree path")?
-                .to_string();
+    let delegator_cwd;
+    let worktree_cwd_str;
+    if args.agent {
+        delegator_cwd = std::env::current_dir()
+            .context("Failed to get current directory")?
+            .to_string_lossy()
+            .to_string();
+        worktree_cwd_str = worktree_dir
+            .to_str()
+            .context("Invalid worktree path")?
+            .to_string();
+    } else {
+        delegator_cwd = String::new();
+        worktree_cwd_str = String::new();
+    }
 
-            Some(build_delegated_prompt(
-                p,
-                &DelegationContext {
-                    branch: &actual_branch,
-                    base: &actual_base,
-                    delegator_cwd: &delegator_cwd,
-                    worktree_cwd: &worktree_cwd,
-                },
-            ))
-        }
-        (_, p) => p.map(String::from),
-    };
+    let final_prompt = resolve_prompt(
+        args.agent,
+        prompt,
+        &actual_branch,
+        &actual_base,
+        &delegator_cwd,
+        &worktree_cwd_str,
+    );
 
     // Setup tmux window using config layout
     setup_tmux_window(
@@ -822,5 +847,44 @@ mod tests {
         let result = build_delegated_prompt(prompt.trim_start(), &ctx);
 
         assert_eq!(result, expected.trim_start());
+    }
+
+    #[rstest]
+    #[case::agent_wraps_prompt(true, Some("do something"), true)]
+    #[case::no_agent_passes_through(false, Some("do something"), false)]
+    #[case::agent_without_prompt(true, None, false)]
+    #[case::no_agent_no_prompt(false, None, false)]
+    fn resolve_prompt_wraps_only_when_agent_and_prompt(
+        #[case] agent: bool,
+        #[case] prompt: Option<&str>,
+        #[case] expect_wrapped: bool,
+    ) {
+        let result = resolve_prompt(
+            agent,
+            prompt,
+            "fohte/test",
+            "origin/main",
+            "/cwd",
+            "/worktree",
+        );
+
+        match (prompt, expect_wrapped) {
+            (None, _) => assert_eq!(result, None),
+            (Some(p), true) => {
+                let expected = build_delegated_prompt(
+                    p,
+                    &DelegationContext {
+                        branch: "fohte/test",
+                        base: "origin/main",
+                        delegator_cwd: "/cwd",
+                        worktree_cwd: "/worktree",
+                    },
+                );
+                assert_eq!(result, Some(expected));
+            }
+            (Some(p), false) => {
+                assert_eq!(result, Some(p.to_string()));
+            }
+        }
     }
 }
