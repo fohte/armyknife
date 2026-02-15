@@ -395,22 +395,17 @@ fn run_worktree_creation(
     // Remove branch prefix to avoid double prefix
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
-    // Resolve main branch and base before worktree creation to avoid
-    // partial state (worktree created but tmux not set up) on failure.
-    let main_branch = get_main_branch()?;
-    let default_base = || {
-        args.from
-            .clone()
-            .unwrap_or_else(|| format!("origin/{main_branch}"))
-    };
-
     // Determine action based on branch existence and flags.
     // Track the resolved branch/base for --agent context injection.
     let (actual_branch, actual_base);
 
     if args.force {
         // Force create new branch with prefix
-        let base_branch = default_base();
+        let main_branch = get_main_branch()?;
+        let base_branch = args
+            .from
+            .clone()
+            .unwrap_or_else(|| format!("origin/{main_branch}"));
         let branch = format!("{branch_prefix}{name_no_prefix}");
 
         git_worktree_add(
@@ -429,7 +424,13 @@ fn run_worktree_creation(
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
         actual_branch = name.to_string();
-        actual_base = format!("origin/{main_branch}");
+        // actual_base is only used when --agent is set
+        actual_base = if args.agent {
+            let main_branch = get_main_branch()?;
+            format!("origin/{main_branch}")
+        } else {
+            String::new()
+        };
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
@@ -437,10 +438,19 @@ fn run_worktree_creation(
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
 
             actual_branch = branch_with_prefix;
-            actual_base = format!("origin/{main_branch}");
+            actual_base = if args.agent {
+                let main_branch = get_main_branch()?;
+                format!("origin/{main_branch}")
+            } else {
+                String::new()
+            };
         } else {
             // Branch doesn't exist, create new one with prefix
-            let base_branch = default_base();
+            let main_branch = get_main_branch()?;
+            let base_branch = args
+                .from
+                .clone()
+                .unwrap_or_else(|| format!("origin/{main_branch}"));
             let branch = format!("{branch_prefix}{name_no_prefix}");
 
             git_worktree_add(
@@ -458,30 +468,27 @@ fn run_worktree_creation(
     }
 
     // Wrap prompt with delegation context when --agent is used
-    let delegator_cwd;
-    let worktree_cwd_str;
-    if args.agent {
-        delegator_cwd = std::env::current_dir()
+    let final_prompt = if args.agent {
+        let delegator_cwd = std::env::current_dir()
             .context("Failed to get current directory")?
             .to_string_lossy()
             .to_string();
-        worktree_cwd_str = worktree_dir
+        let worktree_cwd_str = worktree_dir
             .to_str()
             .context("Invalid worktree path")?
             .to_string();
-    } else {
-        delegator_cwd = String::new();
-        worktree_cwd_str = String::new();
-    }
 
-    let final_prompt = resolve_prompt(
-        args.agent,
-        prompt,
-        &actual_branch,
-        &actual_base,
-        &delegator_cwd,
-        &worktree_cwd_str,
-    );
+        resolve_prompt(
+            true,
+            prompt,
+            &actual_branch,
+            &actual_base,
+            &delegator_cwd,
+            &worktree_cwd_str,
+        )
+    } else {
+        prompt.map(String::from)
+    };
 
     // Setup tmux window using config layout
     setup_tmux_window(
