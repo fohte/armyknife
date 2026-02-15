@@ -228,6 +228,68 @@ pub struct NewArgs {
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
     pub prompt: Option<String>,
+
+    /// Mark this invocation as coming from another Claude Code session.
+    /// Wraps the prompt with delegation context (branch, base, directories).
+    #[arg(long)]
+    pub agent: bool,
+}
+
+/// Context information injected into the prompt when --agent is used
+struct DelegationContext<'a> {
+    branch: &'a str,
+    base: &'a str,
+    delegator_cwd: &'a str,
+    worktree_cwd: &'a str,
+}
+
+/// Resolve the final prompt, optionally wrapping it with delegation context.
+/// When `agent` is true, wraps the prompt in a `<delegated-task>` XML envelope.
+fn resolve_prompt(
+    agent: bool,
+    prompt: Option<&str>,
+    branch: &str,
+    base: &str,
+    delegator_cwd: &str,
+    worktree_cwd: &str,
+) -> Option<String> {
+    match (agent, prompt) {
+        (true, Some(p)) => Some(build_delegated_prompt(
+            p,
+            &DelegationContext {
+                branch,
+                base,
+                delegator_cwd,
+                worktree_cwd,
+            },
+        )),
+        (_, p) => p.map(String::from),
+    }
+}
+
+/// Build a delegated prompt by wrapping the original prompt with context XML
+fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
+    indoc::formatdoc! {"
+        <delegated-task>
+        <context>
+        - Source: Delegated from another Claude Code session
+        - Branch: {branch}
+        - Base: {base}
+        - Delegator CWD: {delegator_cwd}
+        - Worktree CWD: {worktree_cwd}
+        </context>
+        <instructions>
+        {prompt}
+        </instructions>
+        </delegated-task>",
+        branch = ctx.branch,
+        base = ctx.base,
+        delegator_cwd = ctx.delegator_cwd,
+        worktree_cwd = ctx.worktree_cwd,
+        prompt = prompt,
+    }
+    .trim_start()
+    .to_string()
 }
 
 /// Resolved branch name and prompt information
@@ -333,7 +395,10 @@ fn run_worktree_creation(
     // Remove branch prefix to avoid double prefix
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
-    // Determine action based on branch existence and flags
+    // Determine action based on branch existence and flags.
+    // Track the resolved branch/base for --agent context injection.
+    let (actual_branch, actual_base);
+
     if args.force {
         // Force create new branch with prefix
         let main_branch = get_main_branch()?;
@@ -351,14 +416,34 @@ fn run_worktree_creation(
                 base: &base_branch,
             },
         )?;
+
+        actual_branch = branch;
+        actual_base = base_branch;
     } else if branch_exists(name) {
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
+
+        actual_branch = name.to_string();
+        // actual_base is only used when --agent is set
+        actual_base = if args.agent {
+            let main_branch = get_main_branch()?;
+            format!("origin/{main_branch}")
+        } else {
+            String::new()
+        };
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
         if branch_exists(&branch_with_prefix) {
             // Branch exists with prefix
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
+
+            actual_branch = branch_with_prefix;
+            actual_base = if args.agent {
+                let main_branch = get_main_branch()?;
+                format!("origin/{main_branch}")
+            } else {
+                String::new()
+            };
         } else {
             // Branch doesn't exist, create new one with prefix
             let main_branch = get_main_branch()?;
@@ -376,15 +461,41 @@ fn run_worktree_creation(
                     base: &base_branch,
                 },
             )?;
+
+            actual_branch = branch;
+            actual_base = base_branch;
         }
     }
+
+    // Wrap prompt with delegation context when --agent is used
+    let final_prompt = if args.agent {
+        let delegator_cwd = std::env::current_dir()
+            .context("Failed to get current directory")?
+            .to_string_lossy()
+            .to_string();
+        let worktree_cwd_str = worktree_dir
+            .to_str()
+            .context("Invalid worktree path")?
+            .to_string();
+
+        resolve_prompt(
+            true,
+            prompt,
+            &actual_branch,
+            &actual_base,
+            &delegator_cwd,
+            &worktree_cwd_str,
+        )
+    } else {
+        prompt.map(String::from)
+    };
 
     // Setup tmux window using config layout
     setup_tmux_window(
         repo_root,
         worktree_dir.to_str().unwrap_or(&worktree_name),
         &worktree_name,
-        prompt,
+        final_prompt.as_deref(),
         config,
     )?;
 
@@ -427,6 +538,7 @@ mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
     use git2::Signature;
+    use indoc::indoc;
     use tempfile::TempDir;
 
     #[test]
@@ -558,6 +670,7 @@ mod tests {
             from: None,
             force: false,
             prompt: prompt.map(String::from),
+            agent: false,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -585,6 +698,7 @@ mod tests {
             from: None,
             force: false,
             prompt: None,
+            agent: false,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -670,5 +784,113 @@ mod tests {
 
         // Should not panic or error
         delete_prompt_cache(repo_root.to_str().unwrap());
+    }
+
+    #[rstest]
+    #[case::single_line(
+        "fohte/fix-auth-bug",
+        "origin/master",
+        "/home/user/repo",
+        "/home/user/repo/.worktrees/fix-auth-bug",
+        "Fix the auth bug",
+        indoc! {"
+            <delegated-task>
+            <context>
+            - Source: Delegated from another Claude Code session
+            - Branch: fohte/fix-auth-bug
+            - Base: origin/master
+            - Delegator CWD: /home/user/repo
+            - Worktree CWD: /home/user/repo/.worktrees/fix-auth-bug
+            </context>
+            <instructions>
+            Fix the auth bug
+            </instructions>
+            </delegated-task>"},
+    )]
+    #[case::multiline_prompt(
+        "fohte/feature-x",
+        "origin/main",
+        "/tmp/repo",
+        "/tmp/repo/.worktrees/feature-x",
+        indoc! {"
+            ## Background
+            Some context
+
+            ## Goal
+            Implement feature X"},
+        indoc! {"
+            <delegated-task>
+            <context>
+            - Source: Delegated from another Claude Code session
+            - Branch: fohte/feature-x
+            - Base: origin/main
+            - Delegator CWD: /tmp/repo
+            - Worktree CWD: /tmp/repo/.worktrees/feature-x
+            </context>
+            <instructions>
+            ## Background
+            Some context
+
+            ## Goal
+            Implement feature X
+            </instructions>
+            </delegated-task>"},
+    )]
+    fn build_delegated_prompt_wraps_with_xml(
+        #[case] branch: &str,
+        #[case] base: &str,
+        #[case] delegator_cwd: &str,
+        #[case] worktree_cwd: &str,
+        #[case] prompt: &str,
+        #[case] expected: &str,
+    ) {
+        let ctx = DelegationContext {
+            branch,
+            base,
+            delegator_cwd,
+            worktree_cwd,
+        };
+        let result = build_delegated_prompt(prompt.trim_start(), &ctx);
+
+        assert_eq!(result, expected.trim_start());
+    }
+
+    #[rstest]
+    #[case::agent_wraps_prompt(true, Some("do something"), true)]
+    #[case::no_agent_passes_through(false, Some("do something"), false)]
+    #[case::agent_without_prompt(true, None, false)]
+    #[case::no_agent_no_prompt(false, None, false)]
+    fn resolve_prompt_wraps_only_when_agent_and_prompt(
+        #[case] agent: bool,
+        #[case] prompt: Option<&str>,
+        #[case] expect_wrapped: bool,
+    ) {
+        let result = resolve_prompt(
+            agent,
+            prompt,
+            "fohte/test",
+            "origin/main",
+            "/cwd",
+            "/worktree",
+        );
+
+        match (prompt, expect_wrapped) {
+            (None, _) => assert_eq!(result, None),
+            (Some(p), true) => {
+                let expected = build_delegated_prompt(
+                    p,
+                    &DelegationContext {
+                        branch: "fohte/test",
+                        base: "origin/main",
+                        delegator_cwd: "/cwd",
+                        worktree_cwd: "/worktree",
+                    },
+                );
+                assert_eq!(result, Some(expected));
+            }
+            (Some(p), false) => {
+                assert_eq!(result, Some(p.to_string()));
+            }
+        }
     }
 }
