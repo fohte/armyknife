@@ -245,26 +245,27 @@ struct DelegationContext<'a> {
 
 /// Build a delegated prompt by wrapping the original prompt with context XML
 fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
-    format!(
-        "\
-<delegated-task>
-<context>
-- Source: Delegated from another Claude Code session
-- Branch: {branch}
-- Base: {base}
-- Delegator CWD: {delegator_cwd}
-- Worktree CWD: {worktree_cwd}
-</context>
-<instructions>
-{prompt}
-</instructions>
-</delegated-task>",
+    indoc::formatdoc! {"
+        <delegated-task>
+        <context>
+        - Source: Delegated from another Claude Code session
+        - Branch: {branch}
+        - Base: {base}
+        - Delegator CWD: {delegator_cwd}
+        - Worktree CWD: {worktree_cwd}
+        </context>
+        <instructions>
+        {prompt}
+        </instructions>
+        </delegated-task>",
         branch = ctx.branch,
         base = ctx.base,
         delegator_cwd = ctx.delegator_cwd,
         worktree_cwd = ctx.worktree_cwd,
         prompt = prompt,
-    )
+    }
+    .trim_start()
+    .to_string()
 }
 
 /// Resolved branch name and prompt information
@@ -506,6 +507,7 @@ mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
     use git2::Signature;
+    use indoc::indoc;
     use tempfile::TempDir;
 
     #[test]
@@ -754,18 +756,13 @@ mod tests {
     }
 
     #[rstest]
-    fn build_delegated_prompt_wraps_with_xml() {
-        use indoc::indoc;
-
-        let ctx = DelegationContext {
-            branch: "fohte/fix-auth-bug",
-            base: "origin/master",
-            delegator_cwd: "/home/user/repo",
-            worktree_cwd: "/home/user/repo/.worktrees/fix-auth-bug",
-        };
-        let result = build_delegated_prompt("Fix the auth bug", &ctx);
-
-        let expected = indoc! {"
+    #[case::single_line(
+        "fohte/fix-auth-bug",
+        "origin/master",
+        "/home/user/repo",
+        "/home/user/repo/.worktrees/fix-auth-bug",
+        "Fix the auth bug",
+        indoc! {"
             <delegated-task>
             <context>
             - Source: Delegated from another Claude Code session
@@ -777,34 +774,20 @@ mod tests {
             <instructions>
             Fix the auth bug
             </instructions>
-            </delegated-task>"
-        }
-        .trim_start();
-
-        assert_eq!(result, expected);
-    }
-
-    #[rstest]
-    fn build_delegated_prompt_preserves_multiline_prompt() {
-        use indoc::indoc;
-
-        let ctx = DelegationContext {
-            branch: "fohte/feature-x",
-            base: "origin/main",
-            delegator_cwd: "/tmp/repo",
-            worktree_cwd: "/tmp/repo/.worktrees/feature-x",
-        };
-        let prompt = indoc! {"
+            </delegated-task>"},
+    )]
+    #[case::multiline_prompt(
+        "fohte/feature-x",
+        "origin/main",
+        "/tmp/repo",
+        "/tmp/repo/.worktrees/feature-x",
+        indoc! {"
             ## Background
             Some context
 
             ## Goal
-            Implement feature X"
-        }
-        .trim_start();
-        let result = build_delegated_prompt(prompt, &ctx);
-
-        let expected = indoc! {"
+            Implement feature X"},
+        indoc! {"
             <delegated-task>
             <context>
             - Source: Delegated from another Claude Code session
@@ -820,10 +803,24 @@ mod tests {
             ## Goal
             Implement feature X
             </instructions>
-            </delegated-task>"
-        }
-        .trim_start();
+            </delegated-task>"},
+    )]
+    fn build_delegated_prompt_wraps_with_xml(
+        #[case] branch: &str,
+        #[case] base: &str,
+        #[case] delegator_cwd: &str,
+        #[case] worktree_cwd: &str,
+        #[case] prompt: &str,
+        #[case] expected: &str,
+    ) {
+        let ctx = DelegationContext {
+            branch,
+            base,
+            delegator_cwd,
+            worktree_cwd,
+        };
+        let result = build_delegated_prompt(prompt.trim_start(), &ctx);
 
-        assert_eq!(result, expected);
+        assert_eq!(result, expected.trim_start());
     }
 }
