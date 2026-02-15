@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.96](https://github.com/fohte/armyknife/compare/v0.1.95...v0.1.96) (2026-02-15)
+
+
+### Features
+
+* **wm:** add `--agent` flag to `wm new` for delegation context injection ([#279](https://github.com/fohte/armyknife/issues/279)) ([8a6e6b9](https://github.com/fohte/armyknife/commit/8a6e6b9071863f9c4a9652a8a892efa5e31c0734))
+
 ## [0.1.95](https://github.com/fohte/armyknife/compare/v0.1.94...v0.1.95) (2026-02-14)
 
 
