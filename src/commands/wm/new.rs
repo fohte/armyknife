@@ -395,17 +395,22 @@ fn run_worktree_creation(
     // Remove branch prefix to avoid double prefix
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
+    // Resolve main branch and base before worktree creation to avoid
+    // partial state (worktree created but tmux not set up) on failure.
+    let main_branch = get_main_branch()?;
+    let default_base = || {
+        args.from
+            .clone()
+            .unwrap_or_else(|| format!("origin/{main_branch}"))
+    };
+
     // Determine action based on branch existence and flags.
     // Track the resolved branch/base for --agent context injection.
     let (actual_branch, actual_base);
 
     if args.force {
         // Force create new branch with prefix
-        let main_branch = get_main_branch()?;
-        let base_branch = args
-            .from
-            .clone()
-            .unwrap_or_else(|| format!("origin/{main_branch}"));
+        let base_branch = default_base();
         let branch = format!("{branch_prefix}{name_no_prefix}");
 
         git_worktree_add(
@@ -423,7 +428,6 @@ fn run_worktree_creation(
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
-        let main_branch = get_main_branch()?;
         actual_branch = name.to_string();
         actual_base = format!("origin/{main_branch}");
     } else {
@@ -432,16 +436,11 @@ fn run_worktree_creation(
             // Branch exists with prefix
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
 
-            let main_branch = get_main_branch()?;
             actual_branch = branch_with_prefix;
             actual_base = format!("origin/{main_branch}");
         } else {
             // Branch doesn't exist, create new one with prefix
-            let main_branch = get_main_branch()?;
-            let base_branch = args
-                .from
-                .clone()
-                .unwrap_or_else(|| format!("origin/{main_branch}"));
+            let base_branch = default_base();
             let branch = format!("{branch_prefix}{name_no_prefix}");
 
             git_worktree_add(
