@@ -14,6 +14,7 @@ use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{Config, load_config};
+use crate::shared::hooks;
 
 /// Get the cache path for prompt recovery.
 fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
@@ -489,6 +490,20 @@ fn run_worktree_creation(
     } else {
         prompt.map(String::from)
     };
+
+    // Run post-worktree-create hook
+    let worktree_abs =
+        std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
+    if let Err(e) = hooks::run_hook(
+        "post-worktree-create",
+        &[
+            ("ARMYKNIFE_WORKTREE_PATH", &worktree_abs.to_string_lossy()),
+            ("ARMYKNIFE_BRANCH_NAME", &actual_branch),
+            ("ARMYKNIFE_REPO_ROOT", repo_root),
+        ],
+    ) {
+        eprintln!("warning: post-worktree-create hook error: {e}");
+    }
 
     // Setup tmux window using config layout
     setup_tmux_window(

@@ -287,6 +287,34 @@ Git worktree management with tmux integration.
 | `-n, --dry-run` | Show what would be deleted without actually deleting       |
 | `--all`         | Clean worktrees across all repositories under `repos_root` |
 
+#### Hooks
+
+armyknife supports git-style hooks for worktree lifecycle events. Place executable scripts in `~/.config/armyknife/hooks/` (or `$XDG_CONFIG_HOME/armyknife/hooks/`).
+
+| Hook                   | Trigger                             |
+| ---------------------- | ----------------------------------- |
+| `post-worktree-create` | After `a wm new` creates a worktree |
+
+The following environment variables are available in hook scripts:
+
+| Variable                  | Description                           |
+| ------------------------- | ------------------------------------- |
+| `ARMYKNIFE_WORKTREE_PATH` | Absolute path to the created worktree |
+| `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree           |
+| `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository    |
+
+Hook failures (non-zero exit or missing execute permission) produce a warning but do not block the main operation.
+
+**Example**: Auto-trust worktrees for Claude Code
+
+```sh
+#!/bin/sh
+# ~/.config/armyknife/hooks/post-worktree-create
+jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
+  '.projects[$path].hasTrustDialogAccepted = true' \
+  ~/.claude.json | sponge ~/.claude.json
+```
+
 ### `a completions <shell>`
 
 Generate shell completion scripts.
