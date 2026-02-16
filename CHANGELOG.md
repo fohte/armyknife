@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.97](https://github.com/fohte/armyknife/compare/v0.1.96...v0.1.97) (2026-02-16)
+
+
+### Features
+
+* **wm:** support `post-worktree-create` hook for `wm new` ([#283](https://github.com/fohte/armyknife/issues/283)) ([2c39ef4](https://github.com/fohte/armyknife/commit/2c39ef4daa77d7ba40a16b5a2b3382191ecfd340))
+
 ## [0.1.96](https://github.com/fohte/armyknife/compare/v0.1.95...v0.1.96) (2026-02-15)
 
 
