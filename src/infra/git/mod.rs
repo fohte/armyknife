@@ -18,9 +18,9 @@ pub use error::GitError;
 pub use github::{get_owner_repo, github_owner_and_repo};
 pub use repo::{
     current_branch, fetch_with_prune, get_main_branch, get_repo_owner_and_name, get_repo_root,
-    open_repo, parse_repo,
+    get_repo_root_in, open_repo, parse_repo,
 };
 
 // Re-export for test utilities
 #[cfg(test)]
-pub use repo::{get_repo_root_in, open_repo_at};
+pub use repo::open_repo_at;

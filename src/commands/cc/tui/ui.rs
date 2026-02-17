@@ -383,14 +383,29 @@ fn create_session_item(
     ListItem::new(vec![line1, line2, line3, line4])
 }
 
-/// Extracts the repository name from the session's cwd (last path component).
+/// Extracts the repository name from the session's cwd.
+/// Uses `get_repo_root_in` to resolve the main worktree root (handles
+/// git worktrees correctly), then takes its last path component.
+/// Falls back to cwd's last component on error.
 fn get_repo_name(session: &Session) -> String {
-    session
-        .cwd
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(String::from)
-        .unwrap_or_else(|| session.cwd.display().to_string())
+    use crate::infra::git::get_repo_root_in;
+    use std::path::Path;
+
+    let root = get_repo_root_in(&session.cwd).ok().and_then(|r| {
+        Path::new(&r)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+    });
+
+    root.unwrap_or_else(|| {
+        session
+            .cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| session.cwd.display().to_string())
+    })
 }
 
 /// Returns a deterministic color for a repository name by hashing it.
