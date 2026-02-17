@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.98](https://github.com/fohte/armyknife/compare/v0.1.97...v0.1.98) (2026-02-17)
+
+
+### Features
+
+* **cc/tui:** fade session colors based on time since last update ([#286](https://github.com/fohte/armyknife/issues/286)) ([39e5347](https://github.com/fohte/armyknife/commit/39e534794e547407a79ef61db9a521302befd519))
+
 ## [0.1.97](https://github.com/fohte/armyknife/compare/v0.1.96...v0.1.97) (2026-02-16)
 
 
