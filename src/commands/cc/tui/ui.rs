@@ -270,11 +270,6 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 
     let is_search_mode = app.mode == AppMode::Search;
 
-    // Build status filter badge
-    let status_badge = app
-        .status_filter
-        .map_or(String::new(), |s| format!("[{}] ", s.display_name()));
-
     // Use different query based on mode
     let query = if is_search_mode {
         &app.search_query
@@ -286,29 +281,18 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let prefix = "  /";
     let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
-    let fixed_width = prefix.len() + status_badge.len() + cursor_str.len() + count_width + 2; // +2 for spacing
+    let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
     let query_max_width = term_width.saturating_sub(fixed_width);
 
     // Truncate query if needed
     let display_query = truncate(query, query_max_width);
 
     // Calculate padding to right-align the count
-    let content_width =
-        prefix.len() + status_badge.len() + display_query.width() + cursor_str.len();
+    let content_width = prefix.len() + display_query.width() + cursor_str.len();
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
     let mut spans = vec![Span::styled(prefix, Style::default().fg(Color::Yellow))];
-
-    // Show status filter badge if active
-    if !status_badge.is_empty() {
-        spans.push(Span::styled(
-            status_badge.to_string(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
 
     spans.push(Span::styled(display_query, Style::default()));
 
