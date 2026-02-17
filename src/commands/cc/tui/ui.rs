@@ -24,6 +24,11 @@ const MIN_SESSION_INFO_WIDTH: usize = 20;
 /// Minimum width for title
 const MIN_TITLE_WIDTH: usize = 20;
 
+/// Number of distinct hue slots for repo label colors.
+/// Using a prime number helps avoid systematic collisions with
+/// common string patterns.
+const REPO_LABEL_HUE_SLOTS: u64 = 31;
+
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let now = Utc::now();
@@ -177,19 +182,33 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 
     let term_width = area.width as usize;
 
-    // Determine the active search query for highlighting
+    // Determine the active search query for highlighting.
+    // Clone to avoid borrowing app across the mutable cache update.
     let query = if app.mode == AppMode::Search {
-        &app.search_query
+        app.search_query.clone()
     } else {
-        &app.confirmed_query
+        app.confirmed_query.clone()
     };
+
+    // Pre-compute repo names for filtered sessions. Populate cache
+    // to avoid calling get_repo_root_in (filesystem I/O) on every
+    // render frame. Must drop filtered_sessions first to release
+    // the immutable borrow on app before mutating the cache.
+    {
+        let cwds: Vec<std::path::PathBuf> =
+            filtered_sessions.iter().map(|s| s.cwd.clone()).collect();
+        drop(filtered_sessions);
+        app.ensure_repo_names_resolved(&cwds);
+    }
+    let filtered_sessions: Vec<&Session> = app.filtered_sessions();
 
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(i, session, cached_title, now, term_width, query)
+            let repo_name = app.get_cached_repo_name(&session.cwd).unwrap_or("");
+            create_session_item(i, session, cached_title, now, term_width, &query, repo_name)
         })
         .collect();
 
@@ -342,6 +361,7 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
+    repo_name: &str,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -351,19 +371,23 @@ fn create_session_item(
         .unwrap_or_else(|| get_title_display_name_fallback(session));
     let time_ago = format_relative_time(session.updated_at, now);
 
+    let repo_color = repo_label_color(repo_name);
+    let bar = Span::styled("▎", Style::default().fg(repo_color));
+
     let session_info_width = calculate_session_info_width(term_width);
     let title_width = calculate_title_width(term_width);
 
     let fade = fadeout_color(session.updated_at, now);
 
-    // First line: [number] status session:window time
+    // First line: ▎ [number] status session:window time
     let truncated_info = truncate(&session_info, session_info_width);
     let info_style = fade
         .map_or(Style::default(), |color| Style::default().fg(color))
         .add_modifier(Modifier::BOLD);
     let prefix_style = fade.map_or(Style::default(), |color| Style::default().fg(color));
     let mut line1_spans = vec![
-        Span::styled(format!("  [{}] ", index + 1), prefix_style),
+        bar.clone(),
+        Span::styled(format!(" [{}] ", index + 1), prefix_style),
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
     ];
@@ -372,16 +396,16 @@ fn create_session_item(
     line1_spans.push(Span::styled(time_ago, Style::default().fg(Color::DarkGray)));
     let line1 = Line::from(line1_spans);
 
-    // Second line: title (from Claude Code session)
+    // Second line: ▎     title
     let truncated_title = truncate(&title, title_width);
     let title_style = fade.map_or(Style::default().fg(Color::Gray), |color| {
         Style::default().fg(color)
     });
-    let mut line2_spans = vec![Span::raw("      ")];
+    let mut line2_spans = vec![bar.clone(), Span::raw("     ")];
     line2_spans.extend(highlight_matches(&truncated_title, query, title_style));
     let line2 = Line::from(line2_spans);
 
-    // Third line: current tool (if running) or last assistant message
+    // Third line: ▎     current tool or last message
     let line3_content = session
         .current_tool
         .as_deref()
@@ -391,7 +415,7 @@ fn create_session_item(
     let line3_style = fade.map_or(Style::default().add_modifier(Modifier::DIM), |color| {
         Style::default().fg(color)
     });
-    let mut line3_spans = vec![Span::raw("      ")];
+    let mut line3_spans = vec![bar.clone(), Span::raw("     ")];
     line3_spans.extend(highlight_matches(&truncated_line3, query, line3_style));
     let line3 = Line::from(line3_spans);
 
@@ -399,6 +423,46 @@ fn create_session_item(
     let line4 = Line::from("");
 
     ListItem::new(vec![line1, line2, line3, line4])
+}
+
+/// Returns a deterministic color for a repository name.
+/// Uses FNV-1a hash for good distribution, then maps to a hue on the
+/// HSL color wheel with fixed saturation and lightness for terminal
+/// readability.
+fn repo_label_color(repo_name: &str) -> Color {
+    // FNV-1a hash for better distribution than simple multiply-add
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001B3;
+    // FNV-1a: XOR first, then multiply
+    let hash = repo_name.bytes().fold(FNV_OFFSET, |acc, b| {
+        (acc ^ (b as u64)).wrapping_mul(FNV_PRIME)
+    });
+
+    let slot = (hash % REPO_LABEL_HUE_SLOTS) as f64;
+    let hue = (slot / REPO_LABEL_HUE_SLOTS as f64) * 360.0;
+    let (r, g, b) = hsl_to_rgb(hue, 0.65, 0.45);
+    Color::Rgb(r, g, b)
+}
+
+/// Converts HSL color to RGB (each component 0-255).
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0) as u8,
+        ((g1 + m) * 255.0) as u8,
+        ((b1 + m) * 255.0) as u8,
+    )
 }
 
 /// Returns the color for a session status.
@@ -724,7 +788,12 @@ fn render_session_list_internal(
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(i, session, Some(&title), now, term_width, "")
+            let repo_name = session
+                .cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            create_session_item(i, session, Some(&title), now, term_width, "", repo_name)
         })
         .collect();
 
@@ -938,23 +1007,23 @@ mod tests {
         // Height increased to accommodate 4 lines per session (info + title + last_message + spacing)
         let output = render_to_string(&sessions, Some(0), now, 80, 20);
 
-        // Note: ratatui's highlight_symbol ">" adds an extra space before it
+        // Note: ratatui's highlight_symbol ">" prepends to the first line of each item
         // ListItem with 4 lines: info + title + last_message (empty) + spacing
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1                    │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
-                   webapp:dev
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
+             ▎ [2] ◐ api:test  5m ago
+             ▎     api:test
+             ▎
 
-               [2] ◐ api:test  5m ago
-                   api:test
-
-
-               [3] ○ /home/user/docs  1h ago
-                   docs
-
+             ▎ [3] ○ /home/user/docs  1h ago
+             ▎     docs
+             ▎
 
 
 
@@ -1008,9 +1077,9 @@ mod tests {
             ┌──────────────────────────────────────┐
             │  Claude Code Sessions                │
             └──────────────────────────────────────┘
-            >  [1] ● very-long-session...  just now
-                   very-long-session-name:window
-
+            >▎ [1] ● very-long-session...  just now
+             ▎     very-long-session-name:window
+             ▎
 
               j/k: move  Enter/f: focus  1-9: quick"
         };
@@ -1051,13 +1120,13 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0                    │
             └──────────────────────────────────────────────────────────────────────────────┘
-               [1] ● webapp:dev  just now
-                   webapp:dev
+             ▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
-
-            >  [2] ◐ api:test  5m ago
-                   api:test
-
+            >▎ [2] ◐ api:test  5m ago
+             ▎     api:test
+             ▎
 
 
 
@@ -1095,9 +1164,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
-                   webapp:dev
-                   I've updated the code as requested.
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎     I've updated the code as requested.
 
 
 
@@ -1135,9 +1204,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
-                   webapp:dev
-                   This is a very long message that should be truncated when displayed in ..
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎     This is a very long message that should be truncated when displayed in ..
 
 
 
@@ -1171,9 +1240,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
-                   webapp:dev
-
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
 
 
@@ -1214,6 +1283,36 @@ mod tests {
         for (span, &(content, is_highlighted)) in spans.iter().zip(expected) {
             assert_eq!(span.content, content);
             assert_eq!(span.style, if is_highlighted { highlight } else { base });
+        }
+    }
+
+    // =========================================================================
+    // Repo label tests
+    // =========================================================================
+
+    #[test]
+    fn test_repo_label_color_is_deterministic() {
+        let color1 = repo_label_color("armyknife");
+        let color2 = repo_label_color("armyknife");
+        assert_eq!(color1, color2);
+    }
+
+    #[test]
+    fn test_repo_label_color_differs_for_different_names() {
+        let color1 = repo_label_color("armyknife");
+        let color2 = repo_label_color("specs");
+        assert_ne!(color1, color2);
+    }
+
+    #[test]
+    fn test_repo_label_color_returns_rgb() {
+        let names = ["armyknife", "webapp", "api", "docs", "infra", "tools"];
+        for name in names {
+            let color = repo_label_color(name);
+            assert!(
+                matches!(color, Color::Rgb(_, _, _)),
+                "{name} got {color:?}, expected Rgb"
+            );
         }
     }
 }
