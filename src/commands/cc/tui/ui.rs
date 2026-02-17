@@ -171,26 +171,12 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         &app.confirmed_query
     };
 
-    let max_repo_name_width = filtered_sessions
-        .iter()
-        .map(|s| get_repo_name(s).width())
-        .max()
-        .unwrap_or(0);
-
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(
-                i,
-                session,
-                cached_title,
-                now,
-                term_width,
-                query,
-                max_repo_name_width,
-            )
+            create_session_item(i, session, cached_title, now, term_width, query)
         })
         .collect();
 
@@ -338,7 +324,6 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
-    max_repo_name_width: usize,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -348,16 +333,11 @@ fn create_session_item(
         .unwrap_or_else(|| get_title_display_name_fallback(session));
     let time_ago = format_relative_time(session.updated_at, now);
 
-    // Repo label: "[repo_name]" with padding for alignment
-    // Label width = "[" + max_repo_name_width + "]" + " " = max_repo_name_width + 3
     let repo_name = get_repo_name(session);
     let repo_color = repo_label_color(&repo_name);
-    let label_display_width = max_repo_name_width + 2; // "[" + padded_name + "]"
-    let repo_name_display_width = repo_name.width();
-    let padding = " ".repeat(max_repo_name_width.saturating_sub(repo_name_display_width));
-    let label_text = format!("[{}{}]", repo_name, padding);
-    // Extra width on line 1: label + space separator
-    let label_total_width = label_display_width + 1;
+    let label_text = format!("[{}]", repo_name);
+    // Extra width on line 1: "[" + repo_name + "]" + " "
+    let label_total_width = repo_name.width() + 3;
 
     let session_info_width =
         calculate_session_info_width(term_width.saturating_sub(label_total_width));
@@ -715,26 +695,13 @@ fn render_session_list_internal(
     }
 
     let term_width = area.width as usize;
-    let max_repo_name_width = sessions
-        .iter()
-        .map(|s| get_repo_name(s).width())
-        .max()
-        .unwrap_or(0);
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(
-                i,
-                session,
-                Some(&title),
-                now,
-                term_width,
-                "",
-                max_repo_name_width,
-            )
+            create_session_item(i, session, Some(&title), now, term_width, "")
         })
         .collect();
 
@@ -941,7 +908,7 @@ mod tests {
                    api:test
 
 
-               [3] ○ [docs   ] /home/user/docs  1h ago
+               [3] ○ [docs] /home/user/docs  1h ago
                    docs
 
 
