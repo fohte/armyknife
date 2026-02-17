@@ -10,6 +10,7 @@ use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode};
 use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChangeType};
+use crate::commands::cc::types::SessionStatus;
 use crate::infra::tmux;
 
 /// Runs the TUI application.
@@ -200,6 +201,17 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         // Focus on selected session's tmux pane
         KeyCode::Enter | KeyCode::Char('f') => {
             focus_selected_session(app);
+        }
+
+        // Status filters (toggle)
+        KeyCode::Char('w') => {
+            app.toggle_status_filter(SessionStatus::WaitingInput);
+        }
+        KeyCode::Char('s') => {
+            app.toggle_status_filter(SessionStatus::Stopped);
+        }
+        KeyCode::Char('r') => {
+            app.toggle_status_filter(SessionStatus::Running);
         }
 
         // Quick select (1-9)
@@ -423,6 +435,97 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Esc));
         assert!(app.should_quit);
+    }
+
+    // =========================================================================
+    // Status filter key binding tests
+    // =========================================================================
+
+    fn create_test_app_with_statuses() -> App {
+        let sessions: Vec<Session> = vec![
+            Session {
+                session_id: "session-running".to_string(),
+                cwd: PathBuf::from("/project/running"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+            },
+            Session {
+                session_id: "session-waiting".to_string(),
+                cwd: PathBuf::from("/project/waiting"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::WaitingInput,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+            },
+            Session {
+                session_id: "session-stopped".to_string(),
+                cwd: PathBuf::from("/project/stopped"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Stopped,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+            },
+        ];
+        App::with_sessions(sessions)
+    }
+
+    #[rstest]
+    #[case::w_toggles_waiting('w', SessionStatus::WaitingInput)]
+    #[case::s_toggles_stopped('s', SessionStatus::Stopped)]
+    #[case::r_toggles_running('r', SessionStatus::Running)]
+    fn test_handle_key_status_filter(#[case] c: char, #[case] expected_status: SessionStatus) {
+        let mut app = create_test_app_with_statuses();
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+
+        assert_eq!(app.status_filter, Some(expected_status));
+        // All filtered sessions should have the expected status
+        for session in app.filtered_sessions() {
+            assert_eq!(session.status, expected_status);
+        }
+    }
+
+    #[test]
+    fn test_status_filter_toggle_off() {
+        let mut app = create_test_app_with_statuses();
+
+        // Press 'w' to set WaitingInput filter
+        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        assert_eq!(app.status_filter, Some(SessionStatus::WaitingInput));
+        assert_eq!(app.filtered_sessions().len(), 1);
+
+        // Press 'w' again to clear the filter
+        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        assert!(app.status_filter.is_none());
+        assert_eq!(app.filtered_sessions().len(), 3);
+    }
+
+    #[test]
+    fn test_esc_clears_status_filter() {
+        let mut app = create_test_app_with_statuses();
+
+        // Set status filter
+        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        assert!(app.has_filter());
+
+        // Press Esc to clear filter (should not quit because filter is active)
+        handle_key_event(&mut app, key(KeyCode::Esc));
+        assert!(!app.has_filter());
+        assert!(app.status_filter.is_none());
+        assert!(!app.should_quit);
     }
 
     // =========================================================================
