@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.99](https://github.com/fohte/armyknife/compare/v0.1.98...v0.1.99) (2026-02-17)
+
+
+### Features
+
+* **cc:** add status filter to `cc watch` ([#287](https://github.com/fohte/armyknife/issues/287)) ([50ce6f2](https://github.com/fohte/armyknife/commit/50ce6f253127489e00cc92e321723bcd3a5b831c))
+
 ## [0.1.98](https://github.com/fohte/armyknife/compare/v0.1.97...v0.1.98) (2026-02-17)
 
 
