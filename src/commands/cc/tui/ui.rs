@@ -32,7 +32,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Determine layout based on mode and error state
     let has_error = app.error_message.is_some();
     let is_search_mode = app.mode == AppMode::Search;
-    let show_search_bar = is_search_mode || app.has_filter();
+    // Show search bar only when text search is involved (search mode or confirmed query).
+    // Status-only filter uses header highlighting, so no search bar needed.
+    let has_text_filter = !app.confirmed_query.is_empty();
+    let show_search_bar = is_search_mode || has_text_filter;
 
     let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
         (true, true) => vec![
@@ -63,7 +66,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let areas = Layout::vertical(layouts).split(area);
 
-    render_header(frame, areas[0], &app.sessions);
+    render_header(frame, areas[0], app);
 
     match (show_search_bar, has_error) {
         (true, true) => {
@@ -89,9 +92,29 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Returns the style for a status indicator, highlighted when it matches the active filter.
+fn get_status_style(
+    base_color: Color,
+    status: SessionStatus,
+    active_filter: Option<SessionStatus>,
+) -> Style {
+    let style = Style::default().fg(base_color);
+    if active_filter == Some(status) {
+        style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    } else {
+        style
+    }
+}
+
 /// Renders the header with status counts.
-fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
-    let (running, waiting, stopped) = count_statuses(sessions);
+/// When a status filter is active, the matching status is visually highlighted.
+fn render_header(frame: &mut Frame, area: Rect, app: &App) {
+    let (running, waiting, stopped) = count_statuses(&app.sessions);
+    let status_filter = app.status_filter;
+
+    let running_style = get_status_style(Color::Green, SessionStatus::Running, status_filter);
+    let waiting_style = get_status_style(Color::Yellow, SessionStatus::WaitingInput, status_filter);
+    let stopped_style = get_status_style(Color::DarkGray, SessionStatus::Stopped, status_filter);
 
     let status_line = Line::from(vec![
         Span::styled(
@@ -101,7 +124,7 @@ fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
         Span::raw("                       "),
         Span::styled(
             format!("{} {}", SessionStatus::Running.display_symbol(), running),
-            Style::default().fg(Color::Green),
+            running_style,
         ),
         Span::raw("  "),
         Span::styled(
@@ -110,12 +133,12 @@ fn render_header(frame: &mut Frame, area: Rect, sessions: &[Session]) {
                 SessionStatus::WaitingInput.display_symbol(),
                 waiting
             ),
-            Style::default().fg(Color::Yellow),
+            waiting_style,
         ),
         Span::raw("  "),
         Span::styled(
             format!("{} {}", SessionStatus::Stopped.display_symbol(), stopped),
-            Style::default().fg(Color::DarkGray),
+            stopped_style,
         ),
     ]);
 
@@ -136,7 +159,14 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         let message = if app.mode == AppMode::Search {
             format!("  No sessions match \"{}\"", app.search_query)
         } else if app.has_filter() {
-            format!("  No sessions match \"{}\"", app.confirmed_query)
+            let mut parts = Vec::new();
+            if let Some(status) = app.status_filter {
+                parts.push(format!("status:{}", status.display_name()));
+            }
+            if !app.confirmed_query.is_empty() {
+                parts.push(format!("\"{}\"", app.confirmed_query));
+            }
+            format!("  No sessions match {}", parts.join(" + "))
         } else {
             "  No active Claude Code sessions.".to_string()
         };
@@ -172,37 +202,43 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 
 /// Renders the help bar at the bottom.
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+
     let help_text = match app.mode {
         AppMode::Search => Line::from(vec![
-            Span::styled("  C-n/C-p", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("  C-n/C-p", bold),
             Span::raw(": move  "),
-            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Enter", bold),
             Span::raw(": focus  "),
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Esc", bold),
             Span::raw(": cancel"),
         ]),
         AppMode::Normal if app.has_filter() => Line::from(vec![
-            Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("  j/k", bold),
             Span::raw(": move  "),
-            Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Enter/f", bold),
             Span::raw(": focus  "),
-            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("/", bold),
             Span::raw(": edit  "),
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("r/w/s", bold),
+            Span::raw(": filter  "),
+            Span::styled("Esc", bold),
             Span::raw(": clear  "),
-            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("q", bold),
             Span::raw(": quit"),
         ]),
         AppMode::Normal => Line::from(vec![
-            Span::styled("  j/k", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("  j/k", bold),
             Span::raw(": move  "),
-            Span::styled("Enter/f", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Enter/f", bold),
             Span::raw(": focus  "),
-            Span::styled("1-9", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("1-9", bold),
             Span::raw(": quick  "),
-            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("/", bold),
             Span::raw(": search  "),
-            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("r/w/s", bold),
+            Span::raw(": filter  "),
+            Span::styled("q", bold),
             Span::raw(": quit"),
         ]),
     };
@@ -256,10 +292,9 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
-    let mut spans = vec![
-        Span::styled(prefix, Style::default().fg(Color::Yellow)),
-        Span::styled(display_query, Style::default()),
-    ];
+    let mut spans = vec![Span::styled(prefix, Style::default().fg(Color::Yellow))];
+
+    spans.push(Span::styled(display_query, Style::default()));
 
     // Only show cursor in search mode
     if is_search_mode {
@@ -636,7 +671,7 @@ fn render_to_string(
             ])
             .split(area);
 
-            render_header(frame, areas[0], &app.sessions);
+            render_header(frame, areas[0], &app);
             render_session_list_internal(frame, areas[1], sessions, &mut app.list_state, now);
             render_help(frame, areas[2], &app);
         })
@@ -901,14 +936,14 @@ mod tests {
 
         let sessions = vec![session1, session2, session3];
         // Height increased to accommodate 4 lines per session (info + title + last_message + spacing)
-        let output = render_to_string(&sessions, Some(0), now, 60, 20);
+        let output = render_to_string(&sessions, Some(0), now, 80, 20);
 
         // Note: ratatui's highlight_symbol ">" adds an extra space before it
         // ListItem with 4 lines: info + title + last_message (empty) + spacing
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
             >  [1] ● webapp:dev  just now
                    webapp:dev
 
@@ -925,7 +960,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -935,17 +970,17 @@ mod tests {
     fn test_render_full_screen_empty_sessions() {
         let now = Utc::now();
         let sessions: Vec<Session> = vec![];
-        let output = render_to_string(&sessions, None, now, 60, 8);
+        let output = render_to_string(&sessions, None, now, 80, 8);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 0│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
               No active Claude Code sessions.
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -1010,12 +1045,12 @@ mod tests {
         let sessions = vec![session1, session2];
         // Select the second session (index 1)
         // Height increased to accommodate 4 lines per session
-        let output = render_to_string(&sessions, Some(1), now, 60, 15);
+        let output = render_to_string(&sessions, Some(1), now, 80, 15);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
                [1] ● webapp:dev  just now
                    webapp:dev
 
@@ -1027,7 +1062,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -1053,20 +1088,20 @@ mod tests {
         session.last_message = Some("I've updated the code as requested.".to_string());
 
         let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(0), now, 60, 10);
+        let output = render_to_string(&sessions, Some(0), now, 80, 10);
 
         // The third line should contain the last_message
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
             >  [1] ● webapp:dev  just now
                    webapp:dev
                    I've updated the code as requested.
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -1092,22 +1127,22 @@ mod tests {
 
         let sessions = vec![session];
         // Use wider terminal to show full truncation
-        let output = render_to_string(&sessions, Some(0), now, 60, 11);
+        let output = render_to_string(&sessions, Some(0), now, 80, 11);
 
-        // Verify the last_message line is truncated with ".."
-        // title_width = 60 - 6 = 54, so the message is truncated to 52 chars + ".."
+        // Verify the last_message line is truncated with "..."
+        // title_width = 80 - 6 = 74, so the message is truncated to 71 chars + "..."
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
             >  [1] ● webapp:dev  just now
                    webapp:dev
-                   This is a very long message that should be truncate..
+                   This is a very long message that should be truncated when displayed in ..
 
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
@@ -1129,20 +1164,20 @@ mod tests {
         session.last_message = None; // No last_message
 
         let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(0), now, 60, 10);
+        let output = render_to_string(&sessions, Some(0), now, 80, 10);
 
         // When no last_message, the third line should be empty
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
-            └──────────────────────────────────────────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
             >  [1] ● webapp:dev  just now
                    webapp:dev
 
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  q: quit"
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"
         };
 
         assert_eq!(output, expected.trim_end());
