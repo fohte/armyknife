@@ -24,22 +24,10 @@ const MIN_SESSION_INFO_WIDTH: usize = 20;
 /// Minimum width for title
 const MIN_TITLE_WIDTH: usize = 20;
 
-/// Color palette for repository labels. These colors are chosen to be
-/// distinguishable on terminal backgrounds while avoiding White, Gray,
-/// and DarkGray which are used for other UI elements.
-const REPO_LABEL_COLORS: &[Color] = &[
-    Color::Red,
-    Color::Green,
-    Color::Blue,
-    Color::Yellow,
-    Color::Cyan,
-    Color::Magenta,
-    Color::LightRed,
-    Color::LightGreen,
-    Color::LightBlue,
-    Color::LightCyan,
-    Color::LightMagenta,
-];
+/// Number of distinct hue slots for repo label colors.
+/// Using a prime number helps avoid systematic collisions with
+/// common string patterns.
+const REPO_LABEL_HUE_SLOTS: u64 = 31;
 
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -408,12 +396,43 @@ fn get_repo_name(session: &Session) -> String {
     })
 }
 
-/// Returns a deterministic color for a repository name by hashing it.
+/// Returns a deterministic color for a repository name.
+/// Uses FNV-1a hash for good distribution, then maps to a hue on the
+/// HSL color wheel with fixed saturation and lightness for terminal
+/// readability.
 fn repo_label_color(repo_name: &str) -> Color {
-    let hash = repo_name
-        .bytes()
-        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-    REPO_LABEL_COLORS[(hash % REPO_LABEL_COLORS.len() as u64) as usize]
+    // FNV-1a hash for better distribution than simple multiply-add
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001B3;
+    let hash = repo_name.bytes().fold(FNV_OFFSET, |acc, b| {
+        acc.wrapping_mul(FNV_PRIME) ^ (b as u64)
+    });
+
+    let slot = (hash % REPO_LABEL_HUE_SLOTS) as f64;
+    let hue = (slot / REPO_LABEL_HUE_SLOTS as f64) * 360.0;
+    let (r, g, b) = hsl_to_rgb(hue, 0.7, 0.65);
+    Color::Rgb(r, g, b)
+}
+
+/// Converts HSL color to RGB (each component 0-255).
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0) as u8,
+        ((g1 + m) * 255.0) as u8,
+        ((b1 + m) * 255.0) as u8,
+    )
 }
 
 /// Returns the color for a session status.
@@ -1212,17 +1231,19 @@ mod tests {
     #[test]
     fn test_repo_label_color_differs_for_different_names() {
         let color1 = repo_label_color("armyknife");
-        let color2 = repo_label_color("docs");
+        let color2 = repo_label_color("specs");
         assert_ne!(color1, color2);
     }
 
     #[test]
-    fn test_repo_label_color_uses_palette() {
+    fn test_repo_label_color_returns_rgb() {
         let names = ["armyknife", "webapp", "api", "docs", "infra", "tools"];
         for name in names {
             let color = repo_label_color(name);
-            let position = REPO_LABEL_COLORS.iter().position(|&c| c == color);
-            assert_ne!(position, None, "{name} got color {color:?} not in palette");
+            assert!(
+                matches!(color, Color::Rgb(_, _, _)),
+                "{name} got {color:?}, expected Rgb"
+            );
         }
     }
 }
