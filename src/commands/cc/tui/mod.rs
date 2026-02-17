@@ -238,7 +238,7 @@ mod tests {
     use crate::commands::cc::tui::app::AppMode;
     use crate::commands::cc::types::{Session, SessionStatus};
     use chrono::Utc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     fn create_test_app_with_sessions(count: usize) -> App {
@@ -441,7 +441,8 @@ mod tests {
     // Status filter key binding tests
     // =========================================================================
 
-    fn create_test_app_with_statuses() -> App {
+    #[fixture]
+    fn app_with_statuses() -> App {
         let sessions: Vec<Session> = vec![
             Session {
                 session_id: "session-running".to_string(),
@@ -487,8 +488,12 @@ mod tests {
     #[case::w_toggles_waiting('w', SessionStatus::WaitingInput)]
     #[case::s_toggles_stopped('s', SessionStatus::Stopped)]
     #[case::r_toggles_running('r', SessionStatus::Running)]
-    fn test_handle_key_status_filter(#[case] c: char, #[case] expected_status: SessionStatus) {
-        let mut app = create_test_app_with_statuses();
+    fn test_handle_key_status_filter(
+        app_with_statuses: App,
+        #[case] c: char,
+        #[case] expected_status: SessionStatus,
+    ) {
+        let mut app = app_with_statuses;
         handle_key_event(&mut app, key(KeyCode::Char(c)));
 
         assert_eq!(app.status_filter, Some(expected_status));
@@ -498,9 +503,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_status_filter_toggle_off() {
-        let mut app = create_test_app_with_statuses();
+    #[rstest]
+    fn test_status_filter_toggle_off(app_with_statuses: App) {
+        let mut app = app_with_statuses;
 
         // Press 'w' to set WaitingInput filter
         handle_key_event(&mut app, key(KeyCode::Char('w')));
@@ -513,9 +518,9 @@ mod tests {
         assert_eq!(app.filtered_sessions().len(), 3);
     }
 
-    #[test]
-    fn test_esc_clears_status_filter() {
-        let mut app = create_test_app_with_statuses();
+    #[rstest]
+    fn test_esc_clears_status_filter(app_with_statuses: App) {
+        let mut app = app_with_statuses;
 
         // Set status filter
         handle_key_event(&mut app, key(KeyCode::Char('w')));

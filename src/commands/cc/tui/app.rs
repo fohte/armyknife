@@ -632,7 +632,7 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::{SessionStatus, TmuxInfo};
     use chrono::Utc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     fn create_test_session(id: &str) -> Session {
@@ -905,6 +905,16 @@ mod tests {
         session
     }
 
+    #[fixture]
+    fn app_with_mixed_statuses() -> App {
+        create_test_app(vec![
+            create_session_with_status("running-1", SessionStatus::Running),
+            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
+            create_session_with_status("stopped-1", SessionStatus::Stopped),
+            create_session_with_status("waiting-2", SessionStatus::WaitingInput),
+        ])
+    }
+
     #[rstest]
     #[case::waiting_filter(
         SessionStatus::WaitingInput,
@@ -918,17 +928,14 @@ mod tests {
         SessionStatus::Running,
         vec!["running-1"]
     )]
-    fn test_toggle_status_filter(#[case] status: SessionStatus, #[case] expected_ids: Vec<&str>) {
-        let mut app = create_test_app(vec![
-            create_session_with_status("running-1", SessionStatus::Running),
-            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
-            create_session_with_status("stopped-1", SessionStatus::Stopped),
-            create_session_with_status("waiting-2", SessionStatus::WaitingInput),
-        ]);
+    fn test_toggle_status_filter(
+        mut app_with_mixed_statuses: App,
+        #[case] status: SessionStatus,
+        #[case] expected_ids: Vec<&str>,
+    ) {
+        app_with_mixed_statuses.toggle_status_filter(status);
 
-        app.toggle_status_filter(status);
-
-        let filtered: Vec<&str> = app
+        let filtered: Vec<&str> = app_with_mixed_statuses
             .filtered_sessions()
             .iter()
             .map(|s| s.session_id.as_str())
@@ -936,22 +943,16 @@ mod tests {
         assert_eq!(filtered, expected_ids);
     }
 
-    #[test]
-    fn test_toggle_status_filter_off() {
-        let mut app = create_test_app(vec![
-            create_session_with_status("running-1", SessionStatus::Running),
-            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
-            create_session_with_status("stopped-1", SessionStatus::Stopped),
-        ]);
-
+    #[rstest]
+    fn test_toggle_status_filter_off(mut app_with_mixed_statuses: App) {
         // Toggle on
-        app.toggle_status_filter(SessionStatus::WaitingInput);
-        assert_eq!(app.filtered_sessions().len(), 1);
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::WaitingInput);
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 2);
 
         // Toggle off (same status again)
-        app.toggle_status_filter(SessionStatus::WaitingInput);
-        assert!(app.status_filter.is_none());
-        assert_eq!(app.filtered_sessions().len(), 3);
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::WaitingInput);
+        assert!(app_with_mixed_statuses.status_filter.is_none());
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 4);
     }
 
     #[test]
@@ -986,35 +987,24 @@ mod tests {
         assert_eq!(filtered, vec!["waiting-1"]);
     }
 
-    #[test]
-    fn test_has_filter_with_status_only() {
-        let mut app = create_test_app(vec![
-            create_session_with_status("running-1", SessionStatus::Running),
-            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
-        ]);
+    #[rstest]
+    fn test_has_filter_with_status_only(mut app_with_mixed_statuses: App) {
+        assert!(!app_with_mixed_statuses.has_filter());
 
-        assert!(!app.has_filter());
-
-        app.toggle_status_filter(SessionStatus::Running);
-        assert!(app.has_filter());
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::Running);
+        assert!(app_with_mixed_statuses.has_filter());
     }
 
-    #[test]
-    fn test_clear_filter_clears_status() {
-        let mut app = create_test_app(vec![
-            create_session_with_status("running-1", SessionStatus::Running),
-            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
-            create_session_with_status("stopped-1", SessionStatus::Stopped),
-        ]);
+    #[rstest]
+    fn test_clear_filter_clears_status(mut app_with_mixed_statuses: App) {
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::Stopped);
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 1);
 
-        app.toggle_status_filter(SessionStatus::Stopped);
-        assert_eq!(app.filtered_sessions().len(), 1);
+        app_with_mixed_statuses.clear_filter();
 
-        app.clear_filter();
-
-        assert!(app.status_filter.is_none());
-        assert!(!app.has_filter());
-        assert_eq!(app.filtered_sessions().len(), 3);
+        assert!(app_with_mixed_statuses.status_filter.is_none());
+        assert!(!app_with_mixed_statuses.has_filter());
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 4);
     }
 
     #[rstest]

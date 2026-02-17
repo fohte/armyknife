@@ -32,7 +32,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Determine layout based on mode and error state
     let has_error = app.error_message.is_some();
     let is_search_mode = app.mode == AppMode::Search;
-    let show_search_bar = is_search_mode || app.has_filter();
+    // Show search bar only when text search is involved (search mode or confirmed query).
+    // Status-only filter uses header highlighting, so no search bar needed.
+    let has_text_filter = !app.confirmed_query.is_empty();
+    let show_search_bar = is_search_mode || has_text_filter;
 
     let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
         (true, true) => vec![
@@ -89,34 +92,29 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Returns the style for a status indicator, highlighted when it matches the active filter.
+fn get_status_style(
+    base_color: Color,
+    status: SessionStatus,
+    active_filter: Option<SessionStatus>,
+) -> Style {
+    let style = Style::default().fg(base_color);
+    if active_filter == Some(status) {
+        style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    } else {
+        style
+    }
+}
+
 /// Renders the header with status counts.
 /// When a status filter is active, the matching status is visually highlighted.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let (running, waiting, stopped) = count_statuses(&app.sessions);
     let status_filter = app.status_filter;
 
-    // Highlight active filter with underline + brighter color
-    let running_style = if status_filter == Some(SessionStatus::Running) {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-    let waiting_style = if status_filter == Some(SessionStatus::WaitingInput) {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-    } else {
-        Style::default().fg(Color::Yellow)
-    };
-    let stopped_style = if status_filter == Some(SessionStatus::Stopped) {
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    let running_style = get_status_style(Color::Green, SessionStatus::Running, status_filter);
+    let waiting_style = get_status_style(Color::Yellow, SessionStatus::WaitingInput, status_filter);
+    let stopped_style = get_status_style(Color::DarkGray, SessionStatus::Stopped, status_filter);
 
     let status_line = Line::from(vec![
         Span::styled(
@@ -275,8 +273,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     // Build status filter badge
     let status_badge = app
         .status_filter
-        .map(|s| format!("[{}] ", s.display_name()));
-    let status_badge_str = status_badge.as_deref().unwrap_or("");
+        .map_or(String::new(), |s| format!("[{}] ", s.display_name()));
 
     // Use different query based on mode
     let query = if is_search_mode {
@@ -289,7 +286,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let prefix = "  /";
     let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
-    let fixed_width = prefix.len() + status_badge_str.len() + cursor_str.len() + count_width + 2; // +2 for spacing
+    let fixed_width = prefix.len() + status_badge.len() + cursor_str.len() + count_width + 2; // +2 for spacing
     let query_max_width = term_width.saturating_sub(fixed_width);
 
     // Truncate query if needed
@@ -297,16 +294,16 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 
     // Calculate padding to right-align the count
     let content_width =
-        prefix.len() + status_badge_str.len() + display_query.width() + cursor_str.len();
+        prefix.len() + status_badge.len() + display_query.width() + cursor_str.len();
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
     let mut spans = vec![Span::styled(prefix, Style::default().fg(Color::Yellow))];
 
     // Show status filter badge if active
-    if !status_badge_str.is_empty() {
+    if !status_badge.is_empty() {
         spans.push(Span::styled(
-            status_badge_str.to_string(),
+            status_badge.to_string(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
