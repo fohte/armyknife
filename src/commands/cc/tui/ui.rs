@@ -29,6 +29,14 @@ const MIN_TITLE_WIDTH: usize = 20;
 /// common string patterns.
 const REPO_LABEL_HUE_SLOTS: u64 = 31;
 
+// Green-to-gray gradient for the "time ago" label
+const TIME_AGO_BRIGHT_GREEN: Color = Color::Indexed(82);
+const TIME_AGO_GREEN: Color = Color::Indexed(78);
+const TIME_AGO_DARK_GREEN: Color = Color::Indexed(72);
+const TIME_AGO_DARKER_GREEN: Color = Color::Indexed(65);
+const TIME_AGO_LIGHT_GRAY: Color = Color::Indexed(245);
+const TIME_AGO_DARK_GRAY: Color = Color::Indexed(241);
+
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let now = Utc::now();
@@ -478,17 +486,17 @@ fn time_ago_color(updated_at: DateTime<Utc>, now: DateTime<Utc>) -> Color {
 
     match minutes {
         // < 1 minute: bright green
-        0 => Color::Indexed(82),
+        0 => TIME_AGO_BRIGHT_GREEN,
         // 1-5 minutes: green
-        1..=5 => Color::Indexed(78),
-        // 5-30 minutes: slightly darker green
-        6..=30 => Color::Indexed(72),
-        // 30-60 minutes: dark green
-        31..=60 => Color::Indexed(65),
+        1..=5 => TIME_AGO_GREEN,
+        // 6-30 minutes: slightly darker green
+        6..=30 => TIME_AGO_DARK_GREEN,
+        // 31-60 minutes: dark green
+        31..=60 => TIME_AGO_DARKER_GREEN,
         // 1-6 hours: light gray
-        61..=360 => Color::Indexed(245),
+        61..=360 => TIME_AGO_LIGHT_GRAY,
         // 6+ hours: darker gray (floor)
-        _ => Color::Indexed(241),
+        _ => TIME_AGO_DARK_GRAY,
     }
 }
 
