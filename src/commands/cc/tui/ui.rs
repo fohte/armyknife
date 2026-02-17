@@ -159,18 +159,26 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         &app.confirmed_query
     };
 
+    let selected = app.list_state.selected();
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(i, session, cached_title, now, term_width, query)
+            let is_selected = selected == Some(i);
+            create_session_item(
+                i,
+                session,
+                cached_title,
+                now,
+                term_width,
+                query,
+                is_selected,
+            )
         })
         .collect();
 
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
+    let list = List::new(items).highlight_symbol(">");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -312,6 +320,7 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
+    is_selected: bool,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -373,7 +382,14 @@ fn create_session_item(
     // Empty line for spacing
     let line4 = Line::from("");
 
-    ListItem::new(vec![line1, line2, line3, line4])
+    let mut lines = vec![line1, line2, line3, line4];
+    if is_selected {
+        let sel_style = Style::default().bg(Color::DarkGray);
+        for line in &mut lines {
+            line.style = sel_style;
+        }
+    }
+    ListItem::new(lines)
 }
 
 /// Extracts the repository name from the session's cwd.
@@ -428,7 +444,7 @@ fn contrast_fg_color(bg: Color) -> Color {
     };
     // W3C relative luminance
     let luminance = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if luminance > 150.0 {
+    if luminance > 180.0 {
         Color::Black
     } else {
         Color::White
@@ -750,19 +766,19 @@ fn render_session_list_internal(
     }
 
     let term_width = area.width as usize;
+    let selected = list_state.selected();
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(i, session, Some(&title), now, term_width, "")
+            let is_selected = selected == Some(i);
+            create_session_item(i, session, Some(&title), now, term_width, "", is_selected)
         })
         .collect();
 
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
+    let list = List::new(items).highlight_symbol(">");
 
     frame.render_stateful_widget(list, area, list_state);
 }
