@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.101](https://github.com/fohte/armyknife/compare/v0.1.100...v0.1.101) (2026-02-17)
+
+
+### Features
+
+* **cc:** apply freshness color only to time ago label in `cc watch` ([#292](https://github.com/fohte/armyknife/issues/292)) ([f4cc045](https://github.com/fohte/armyknife/commit/f4cc045765845a657561bad568fcb998b8b12583))
+
 ## [0.1.100](https://github.com/fohte/armyknife/compare/v0.1.99...v0.1.100) (2026-02-17)
 
 
