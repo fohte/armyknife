@@ -159,26 +159,18 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         &app.confirmed_query
     };
 
-    let selected = app.list_state.selected();
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            let is_selected = selected == Some(i);
-            create_session_item(
-                i,
-                session,
-                cached_title,
-                now,
-                term_width,
-                query,
-                is_selected,
-            )
+            create_session_item(i, session, cached_title, now, term_width, query)
         })
         .collect();
 
-    let list = List::new(items).highlight_symbol(">");
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -320,7 +312,6 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
-    is_selected: bool,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -332,27 +323,18 @@ fn create_session_item(
 
     let repo_name = get_repo_name(session);
     let repo_color = repo_label_color(&repo_name);
-    let label_text = format!("[{}]", repo_name);
-    // Extra width on line 1: "[" + repo_name + "]" + " "
-    let label_total_width = repo_name.width() + 3;
+    let bar = Span::styled("▎", Style::default().fg(repo_color));
 
-    let session_info_width =
-        calculate_session_info_width(term_width.saturating_sub(label_total_width));
+    let session_info_width = calculate_session_info_width(term_width);
     let title_width = calculate_title_width(term_width);
 
-    // First line: [number] status [repo_label] session:window time
+    // First line: ▎ [number] status session:window time
     let truncated_info = truncate(&session_info, session_info_width);
     let info_style = Style::default().add_modifier(Modifier::BOLD);
     let mut line1_spans = vec![
-        Span::raw(format!("  [{}] ", index + 1)),
+        bar.clone(),
+        Span::raw(format!(" [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
-        Span::raw(" "),
-        Span::styled(
-            label_text,
-            Style::default()
-                .bg(repo_color)
-                .fg(contrast_fg_color(repo_color)),
-        ),
         Span::raw(" "),
     ];
     line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
@@ -360,14 +342,14 @@ fn create_session_item(
     line1_spans.push(Span::styled(time_ago, Style::default().fg(Color::DarkGray)));
     let line1 = Line::from(line1_spans);
 
-    // Second line: title (from Claude Code session)
+    // Second line: ▎     title
     let truncated_title = truncate(&title, title_width);
     let title_style = Style::default().fg(Color::Gray);
-    let mut line2_spans = vec![Span::raw("      ")];
+    let mut line2_spans = vec![bar.clone(), Span::raw("     ")];
     line2_spans.extend(highlight_matches(&truncated_title, query, title_style));
     let line2 = Line::from(line2_spans);
 
-    // Third line: current tool (if running) or last assistant message
+    // Third line: ▎     current tool or last message
     let line3_content = session
         .current_tool
         .as_deref()
@@ -375,21 +357,14 @@ fn create_session_item(
         .unwrap_or("");
     let truncated_line3 = truncate(line3_content, title_width);
     let line3_style = Style::default().add_modifier(Modifier::DIM);
-    let mut line3_spans = vec![Span::raw("      ")];
+    let mut line3_spans = vec![bar.clone(), Span::raw("     ")];
     line3_spans.extend(highlight_matches(&truncated_line3, query, line3_style));
     let line3 = Line::from(line3_spans);
 
     // Empty line for spacing
     let line4 = Line::from("");
 
-    let mut lines = vec![line1, line2, line3, line4];
-    if is_selected {
-        let sel_style = Style::default().bg(Color::DarkGray);
-        for line in &mut lines {
-            line.style = sel_style;
-        }
-    }
-    ListItem::new(lines)
+    ListItem::new(vec![line1, line2, line3, line4])
 }
 
 /// Extracts the repository name from the session's cwd.
@@ -433,22 +408,6 @@ fn repo_label_color(repo_name: &str) -> Color {
     let hue = (slot / REPO_LABEL_HUE_SLOTS as f64) * 360.0;
     let (r, g, b) = hsl_to_rgb(hue, 0.65, 0.45);
     Color::Rgb(r, g, b)
-}
-
-/// Returns black or white foreground color for readable contrast against
-/// the given background color, using the W3C relative luminance formula.
-fn contrast_fg_color(bg: Color) -> Color {
-    let (r, g, b) = match bg {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => return Color::White,
-    };
-    // W3C relative luminance
-    let luminance = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if luminance > 180.0 {
-        Color::Black
-    } else {
-        Color::White
-    }
 }
 
 /// Converts HSL color to RGB (each component 0-255).
@@ -766,19 +725,19 @@ fn render_session_list_internal(
     }
 
     let term_width = area.width as usize;
-    let selected = list_state.selected();
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            let is_selected = selected == Some(i);
-            create_session_item(i, session, Some(&title), now, term_width, "", is_selected)
+            create_session_item(i, session, Some(&title), now, term_width, "")
         })
         .collect();
 
-    let list = List::new(items).highlight_symbol(">");
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
 
     frame.render_stateful_widget(list, area, list_state);
 }
@@ -965,23 +924,23 @@ mod tests {
         // Height increased to accommodate 4 lines per session (info + title + last_message + spacing)
         let output = render_to_string(&sessions, Some(0), now, 60, 20);
 
-        // Note: ratatui's highlight_symbol ">" adds an extra space before it
+        // Note: ratatui's highlight_symbol ">" prepends to the first line of each item
         // ListItem with 4 lines: info + title + last_message (empty) + spacing
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● [project] webapp:dev  just now
-                   webapp:dev
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
+             ▎ [2] ◐ api:test  5m ago
+             ▎     api:test
+             ▎
 
-               [2] ◐ [project] api:test  5m ago
-                   api:test
-
-
-               [3] ○ [docs] /home/user/docs  1h ago
-                   docs
-
+             ▎ [3] ○ /home/user/docs  1h ago
+             ▎     docs
+             ▎
 
 
 
@@ -1035,9 +994,9 @@ mod tests {
             ┌──────────────────────────────────────┐
             │  Claude Code Sessions                │
             └──────────────────────────────────────┘
-            >  [1] ● [project] very-long-session...
-                   very-long-session-name:window
-
+            >▎ [1] ● very-long-session...  just now
+             ▎     very-long-session-name:window
+             ▎
 
               j/k: move  Enter/f: focus  1-9: quick"
         };
@@ -1078,13 +1037,13 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0│
             └──────────────────────────────────────────────────────────┘
-               [1] ● [project] webapp:dev  just now
-                   webapp:dev
+             ▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
-
-            >  [2] ◐ [project] api:test  5m ago
-                   api:test
-
+            >▎ [2] ◐ api:test  5m ago
+             ▎     api:test
+             ▎
 
 
 
@@ -1122,9 +1081,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● [project] webapp:dev  just now
-                   webapp:dev
-                   I've updated the code as requested.
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎     I've updated the code as requested.
 
 
 
@@ -1162,9 +1121,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● [project] webapp:dev  just now
-                   webapp:dev
-                   This is a very long message that should be truncate..
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎     This is a very long message that should be truncate..
 
 
 
@@ -1198,9 +1157,9 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● [project] webapp:dev  just now
-                   webapp:dev
-
+            >▎ [1] ● webapp:dev  just now
+             ▎     webapp:dev
+             ▎
 
 
 
