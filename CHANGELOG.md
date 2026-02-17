@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.100](https://github.com/fohte/armyknife/compare/v0.1.99...v0.1.100) (2026-02-17)
+
+
+### Features
+
+* **cc:** add colored left border bar to `cc watch` sessions for repo identification ([#289](https://github.com/fohte/armyknife/issues/289)) ([ccc4153](https://github.com/fohte/armyknife/commit/ccc41530bac37c8fbadc25bac1481b4232c98668))
+
 ## [0.1.99](https://github.com/fohte/armyknife/compare/v0.1.98...v0.1.99) (2026-02-17)
 
 
