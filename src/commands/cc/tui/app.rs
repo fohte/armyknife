@@ -6,6 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::event::{SessionChange, SessionChangeType};
 
@@ -46,6 +47,9 @@ pub struct App {
     /// Cache of session titles for display (keyed by session_id).
     /// Built on load/reload for fast UI rendering.
     title_cache: HashMap<String, String>,
+    /// Cache of repository names (keyed by cwd path).
+    /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
+    repo_name_cache: HashMap<PathBuf, String>,
 }
 
 impl App {
@@ -93,6 +97,7 @@ impl App {
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             title_cache,
+            repo_name_cache: HashMap::new(),
         }
     }
 
@@ -328,6 +333,22 @@ impl App {
     /// Returns the cached title for a session, if available.
     pub fn get_cached_title(&self, session_id: &str) -> Option<&str> {
         self.title_cache.get(session_id).map(String::as_str)
+    }
+
+    /// Ensures repo names are cached for the given cwd paths.
+    /// Only resolves (via git I/O) for paths not already in the cache.
+    pub fn ensure_repo_names_resolved(&mut self, cwds: &[PathBuf]) {
+        for cwd in cwds {
+            if !self.repo_name_cache.contains_key(cwd) {
+                let name = resolve_repo_name_for_path(cwd);
+                self.repo_name_cache.insert(cwd.clone(), name);
+            }
+        }
+    }
+
+    /// Returns the cached repository name for a given cwd path.
+    pub fn get_cached_repo_name(&self, cwd: &std::path::Path) -> Option<&str> {
+        self.repo_name_cache.get(cwd).map(String::as_str)
     }
 
     /// Exits search mode, confirming the search.
@@ -619,6 +640,28 @@ fn build_searchable_text(session: &Session) -> String {
     }
 
     parts.join(" ")
+}
+
+/// Resolves the repository name for a given cwd path.
+/// Uses `get_repo_root_in` to find the git worktree root, then takes its
+/// last path component. Falls back to cwd's last component on error.
+fn resolve_repo_name_for_path(cwd: &std::path::Path) -> String {
+    use crate::infra::git::get_repo_root_in;
+    use std::path::Path;
+
+    let root = get_repo_root_in(cwd).ok().and_then(|r| {
+        Path::new(&r)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+    });
+
+    root.unwrap_or_else(|| {
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| cwd.display().to_string())
+    })
 }
 
 /// Loads sessions from disk with cleanup.
@@ -1049,5 +1092,45 @@ mod tests {
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("3")
         );
+    }
+
+    // =========================================================================
+    // resolve_repo_name tests
+    // =========================================================================
+
+    #[rstest]
+    #[case::normal_path("/home/user/project", "project")]
+    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife")]
+    #[case::root_path("/", "/")]
+    fn test_resolve_repo_name_fallback(#[case] cwd: &str, #[case] expected: &str) {
+        assert_eq!(resolve_repo_name_for_path(&PathBuf::from(cwd)), expected);
+    }
+
+    #[test]
+    fn test_resolve_repo_name_from_git_repo() {
+        // Create a temp directory with a known repo name subdirectory,
+        // so get_repo_root_in returns a path whose file_name is "my-repo".
+        let parent = tempfile::TempDir::new().unwrap();
+        let repo_dir = parent.path().join("my-repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        git2::Repository::init(&repo_dir).unwrap();
+
+        let subdir = repo_dir.join("some").join("subdir");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        assert_eq!(resolve_repo_name_for_path(&subdir), "my-repo");
+    }
+
+    #[test]
+    fn test_ensure_repo_names_resolved() {
+        let mut app = create_test_app(vec![]);
+        let cwd = PathBuf::from("/home/user/project");
+
+        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
+        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
+
+        // Second call should not change the cache
+        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
+        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
     }
 }

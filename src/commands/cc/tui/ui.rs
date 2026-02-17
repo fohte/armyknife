@@ -182,19 +182,33 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 
     let term_width = area.width as usize;
 
-    // Determine the active search query for highlighting
+    // Determine the active search query for highlighting.
+    // Clone to avoid borrowing app across the mutable cache update.
     let query = if app.mode == AppMode::Search {
-        &app.search_query
+        app.search_query.clone()
     } else {
-        &app.confirmed_query
+        app.confirmed_query.clone()
     };
+
+    // Pre-compute repo names for filtered sessions. Populate cache
+    // to avoid calling get_repo_root_in (filesystem I/O) on every
+    // render frame. Must drop filtered_sessions first to release
+    // the immutable borrow on app before mutating the cache.
+    {
+        let cwds: Vec<std::path::PathBuf> =
+            filtered_sessions.iter().map(|s| s.cwd.clone()).collect();
+        drop(filtered_sessions);
+        app.ensure_repo_names_resolved(&cwds);
+    }
+    let filtered_sessions: Vec<&Session> = app.filtered_sessions();
 
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(i, session, cached_title, now, term_width, query)
+            let repo_name = app.get_cached_repo_name(&session.cwd).unwrap_or("");
+            create_session_item(i, session, cached_title, now, term_width, &query, repo_name)
         })
         .collect();
 
@@ -347,6 +361,7 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
+    repo_name: &str,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -356,8 +371,7 @@ fn create_session_item(
         .unwrap_or_else(|| get_title_display_name_fallback(session));
     let time_ago = format_relative_time(session.updated_at, now);
 
-    let repo_name = get_repo_name(session);
-    let repo_color = repo_label_color(&repo_name);
+    let repo_color = repo_label_color(repo_name);
     let bar = Span::styled("▎", Style::default().fg(repo_color));
 
     let session_info_width = calculate_session_info_width(term_width);
@@ -411,31 +425,6 @@ fn create_session_item(
     ListItem::new(vec![line1, line2, line3, line4])
 }
 
-/// Extracts the repository name from the session's cwd.
-/// Uses `get_repo_root_in` to resolve the main worktree root (handles
-/// git worktrees correctly), then takes its last path component.
-/// Falls back to cwd's last component on error.
-fn get_repo_name(session: &Session) -> String {
-    use crate::infra::git::get_repo_root_in;
-    use std::path::Path;
-
-    let root = get_repo_root_in(&session.cwd).ok().and_then(|r| {
-        Path::new(&r)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-    });
-
-    root.unwrap_or_else(|| {
-        session
-            .cwd
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-            .unwrap_or_else(|| session.cwd.display().to_string())
-    })
-}
-
 /// Returns a deterministic color for a repository name.
 /// Uses FNV-1a hash for good distribution, then maps to a hue on the
 /// HSL color wheel with fixed saturation and lightness for terminal
@@ -444,8 +433,9 @@ fn repo_label_color(repo_name: &str) -> Color {
     // FNV-1a hash for better distribution than simple multiply-add
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x00000100000001B3;
+    // FNV-1a: XOR first, then multiply
     let hash = repo_name.bytes().fold(FNV_OFFSET, |acc, b| {
-        acc.wrapping_mul(FNV_PRIME) ^ (b as u64)
+        (acc ^ (b as u64)).wrapping_mul(FNV_PRIME)
     });
 
     let slot = (hash % REPO_LABEL_HUE_SLOTS) as f64;
@@ -798,7 +788,12 @@ fn render_session_list_internal(
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(i, session, Some(&title), now, term_width, "")
+            let repo_name = session
+                .cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            create_session_item(i, session, Some(&title), now, term_width, "", repo_name)
         })
         .collect();
 
@@ -1294,16 +1289,6 @@ mod tests {
     // =========================================================================
     // Repo label tests
     // =========================================================================
-
-    #[rstest]
-    #[case::normal_path("/home/user/project", "project")]
-    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife")]
-    #[case::root_path("/", "/")]
-    fn test_get_repo_name(#[case] cwd: &str, #[case] expected: &str) {
-        let mut session = create_test_session("test");
-        session.cwd = PathBuf::from(cwd);
-        assert_eq!(get_repo_name(&session), expected);
-    }
 
     #[test]
     fn test_repo_label_color_is_deterministic() {
