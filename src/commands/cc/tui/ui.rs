@@ -338,7 +338,12 @@ fn create_session_item(
         Span::raw(format!("  [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw(" "),
-        Span::styled(label_text, Style::default().fg(repo_color)),
+        Span::styled(
+            label_text,
+            Style::default()
+                .bg(repo_color)
+                .fg(contrast_fg_color(repo_color)),
+        ),
         Span::raw(" "),
     ];
     line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
@@ -410,8 +415,24 @@ fn repo_label_color(repo_name: &str) -> Color {
 
     let slot = (hash % REPO_LABEL_HUE_SLOTS) as f64;
     let hue = (slot / REPO_LABEL_HUE_SLOTS as f64) * 360.0;
-    let (r, g, b) = hsl_to_rgb(hue, 0.7, 0.65);
+    let (r, g, b) = hsl_to_rgb(hue, 0.65, 0.45);
     Color::Rgb(r, g, b)
+}
+
+/// Returns black or white foreground color for readable contrast against
+/// the given background color, using the W3C relative luminance formula.
+fn contrast_fg_color(bg: Color) -> Color {
+    let (r, g, b) = match bg {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => return Color::White,
+    };
+    // W3C relative luminance
+    let luminance = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
+    if luminance > 150.0 {
+        Color::Black
+    } else {
+        Color::White
+    }
 }
 
 /// Converts HSL color to RGB (each component 0-255).
