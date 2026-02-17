@@ -1,6 +1,6 @@
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::store;
-use crate::commands::cc::types::Session;
+use crate::commands::cc::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -37,6 +37,8 @@ pub struct App {
     pub filtered_indices: Vec<usize>,
     /// Selection index before entering search mode (for restoration on cancel).
     pub pre_search_selection: Option<usize>,
+    /// Status filter: when set, only sessions with this status are shown.
+    pub status_filter: Option<SessionStatus>,
     /// Cache of searchable text for each session (keyed by session_id).
     /// Lazily built when search mode is first entered.
     /// Stores (searchable_text, updated_at) for incremental updates.
@@ -87,6 +89,7 @@ impl App {
             confirmed_query: String::new(),
             filtered_indices,
             pre_search_selection: None,
+            status_filter: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             title_cache,
@@ -291,7 +294,7 @@ impl App {
 
     /// Returns whether a filter is currently active.
     pub fn has_filter(&self) -> bool {
-        !self.confirmed_query.is_empty()
+        !self.confirmed_query.is_empty() || self.status_filter.is_some()
     }
 
     /// Signals that the application should quit.
@@ -361,6 +364,7 @@ impl App {
     pub fn clear_filter(&mut self) {
         self.search_query.clear();
         self.confirmed_query.clear();
+        self.status_filter = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
@@ -369,13 +373,23 @@ impl App {
         }
     }
 
+    /// Toggles a status filter. If the same status is already active, clears it.
+    pub fn toggle_status_filter(&mut self, status: SessionStatus) {
+        if self.status_filter == Some(status) {
+            self.status_filter = None;
+        } else {
+            self.status_filter = Some(status);
+        }
+        self.apply_filter();
+    }
+
     /// Updates the search query and re-applies the filter.
     pub fn update_search_query(&mut self, query: String) {
         self.search_query = query;
         self.apply_filter();
     }
 
-    /// Applies the current search query to filter sessions.
+    /// Applies the current search query and status filter to filter sessions.
     fn apply_filter(&mut self) {
         let query = if self.mode == AppMode::Search {
             &self.search_query
@@ -383,20 +397,31 @@ impl App {
             &self.confirmed_query
         };
 
-        if query.is_empty() {
-            self.filtered_indices = (0..self.sessions.len()).collect();
-        } else if let Some(ref cache) = self.searchable_text_cache {
-            self.filtered_indices = self
-                .sessions
-                .iter()
-                .enumerate()
-                .filter(|(_, session)| session_matches_cached(session, query, cache))
-                .map(|(i, _)| i)
-                .collect();
-        } else {
-            // Cache not built yet, show all sessions
-            self.filtered_indices = (0..self.sessions.len()).collect();
-        }
+        let status_filter = self.status_filter;
+
+        self.filtered_indices = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| {
+                // Status filter (AND with text search)
+                if let Some(status) = status_filter
+                    && session.status != status
+                {
+                    return false;
+                }
+
+                // Text search filter
+                if !query.is_empty()
+                    && let Some(ref cache) = self.searchable_text_cache
+                {
+                    return session_matches_cached(session, query, cache);
+                }
+
+                true
+            })
+            .map(|(i, _)| i)
+            .collect();
 
         // Reset selection to first item or none
         if self.filtered_indices.is_empty() {
@@ -607,7 +632,7 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::{SessionStatus, TmuxInfo};
     use chrono::Utc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     fn create_test_session(id: &str) -> Session {
@@ -867,6 +892,119 @@ mod tests {
 
         app.select_next();
         assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    // =========================================================================
+    // Status filter tests
+    // =========================================================================
+
+    /// Helper to create a session with a specific status.
+    fn create_session_with_status(id: &str, status: SessionStatus) -> Session {
+        let mut session = create_test_session(id);
+        session.status = status;
+        session
+    }
+
+    #[fixture]
+    fn app_with_mixed_statuses() -> App {
+        create_test_app(vec![
+            create_session_with_status("running-1", SessionStatus::Running),
+            create_session_with_status("waiting-1", SessionStatus::WaitingInput),
+            create_session_with_status("stopped-1", SessionStatus::Stopped),
+            create_session_with_status("waiting-2", SessionStatus::WaitingInput),
+        ])
+    }
+
+    #[rstest]
+    #[case::waiting_filter(
+        SessionStatus::WaitingInput,
+        vec!["waiting-1", "waiting-2"]
+    )]
+    #[case::stopped_filter(
+        SessionStatus::Stopped,
+        vec!["stopped-1"]
+    )]
+    #[case::running_filter(
+        SessionStatus::Running,
+        vec!["running-1"]
+    )]
+    fn test_toggle_status_filter(
+        mut app_with_mixed_statuses: App,
+        #[case] status: SessionStatus,
+        #[case] expected_ids: Vec<&str>,
+    ) {
+        app_with_mixed_statuses.toggle_status_filter(status);
+
+        let filtered: Vec<&str> = app_with_mixed_statuses
+            .filtered_sessions()
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(filtered, expected_ids);
+    }
+
+    #[rstest]
+    fn test_toggle_status_filter_off(mut app_with_mixed_statuses: App) {
+        // Toggle on
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::WaitingInput);
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 2);
+
+        // Toggle off (same status again)
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::WaitingInput);
+        assert!(app_with_mixed_statuses.status_filter.is_none());
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 4);
+    }
+
+    #[test]
+    fn test_status_filter_with_text_search() {
+        let mut session_running = create_session_with_status("running-1", SessionStatus::Running);
+        session_running.cwd = PathBuf::from("/home/user/webapp");
+
+        let mut session_waiting =
+            create_session_with_status("waiting-1", SessionStatus::WaitingInput);
+        session_waiting.cwd = PathBuf::from("/home/user/webapp");
+
+        let mut session_other =
+            create_session_with_status("waiting-2", SessionStatus::WaitingInput);
+        session_other.cwd = PathBuf::from("/home/user/api");
+
+        let mut app = create_test_app(vec![session_running, session_waiting, session_other]);
+
+        // Set status filter to WaitingInput
+        app.toggle_status_filter(SessionStatus::WaitingInput);
+
+        // Enter search mode and search for "webapp"
+        app.enter_search_mode();
+        app.update_search_query("webapp".to_string());
+        app.confirm_search();
+
+        // Only the WaitingInput session with "webapp" in cwd should match (AND logic)
+        let filtered: Vec<&str> = app
+            .filtered_sessions()
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(filtered, vec!["waiting-1"]);
+    }
+
+    #[rstest]
+    fn test_has_filter_with_status_only(mut app_with_mixed_statuses: App) {
+        assert!(!app_with_mixed_statuses.has_filter());
+
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::Running);
+        assert!(app_with_mixed_statuses.has_filter());
+    }
+
+    #[rstest]
+    fn test_clear_filter_clears_status(mut app_with_mixed_statuses: App) {
+        app_with_mixed_statuses.toggle_status_filter(SessionStatus::Stopped);
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 1);
+
+        app_with_mixed_statuses.clear_filter();
+
+        assert!(app_with_mixed_statuses.status_filter.is_none());
+        assert!(!app_with_mixed_statuses.has_filter());
+        assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 4);
     }
 
     #[rstest]
