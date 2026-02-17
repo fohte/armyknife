@@ -323,14 +323,10 @@ fn create_session_item(
 
     // First line: [number] status session:window time
     let truncated_info = truncate(&session_info, session_info_width);
-    let info_style = match fade {
-        Some(color) => Style::default().fg(color).add_modifier(Modifier::BOLD),
-        None => Style::default().add_modifier(Modifier::BOLD),
-    };
-    let prefix_style = match fade {
-        Some(color) => Style::default().fg(color),
-        None => Style::default(),
-    };
+    let info_style = fade
+        .map_or(Style::default(), |color| Style::default().fg(color))
+        .add_modifier(Modifier::BOLD);
+    let prefix_style = fade.map_or(Style::default(), |color| Style::default().fg(color));
     let mut line1_spans = vec![
         Span::styled(format!("  [{}] ", index + 1), prefix_style),
         Span::styled(status_symbol, Style::default().fg(status_color)),
@@ -343,10 +339,9 @@ fn create_session_item(
 
     // Second line: title (from Claude Code session)
     let truncated_title = truncate(&title, title_width);
-    let title_style = match fade {
-        Some(color) => Style::default().fg(color),
-        None => Style::default().fg(Color::Gray),
-    };
+    let title_style = fade.map_or(Style::default().fg(Color::Gray), |color| {
+        Style::default().fg(color)
+    });
     let mut line2_spans = vec![Span::raw("      ")];
     line2_spans.extend(highlight_matches(&truncated_title, query, title_style));
     let line2 = Line::from(line2_spans);
@@ -358,10 +353,9 @@ fn create_session_item(
         .or(session.last_message.as_deref())
         .unwrap_or("");
     let truncated_line3 = truncate(line3_content, title_width);
-    let line3_style = match fade {
-        Some(color) => Style::default().fg(color),
-        None => Style::default().add_modifier(Modifier::DIM),
-    };
+    let line3_style = fade.map_or(Style::default().add_modifier(Modifier::DIM), |color| {
+        Style::default().fg(color)
+    });
     let mut line3_spans = vec![Span::raw("      ")];
     line3_spans.extend(highlight_matches(&truncated_line3, query, line3_style));
     let line3 = Line::from(line3_spans);
@@ -390,21 +384,17 @@ fn fadeout_color(updated_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<Color>
     let seconds = now.signed_duration_since(updated_at).num_seconds().max(0);
     let minutes = seconds / 60;
 
-    if minutes < 1 {
+    match minutes {
         // Less than 1 minute: brightest
-        Some(Color::White)
-    } else if minutes < 5 {
+        0 => Some(Color::White),
         // 1-5 minutes: normal (no override)
-        None
-    } else if minutes < 30 {
+        1..=4 => None,
         // 5-30 minutes: slightly faded (ANSI 256-color grayscale 249)
-        Some(Color::Indexed(249))
-    } else if minutes < 60 {
+        5..=29 => Some(Color::Indexed(249)),
         // 30-60 minutes: more faded (ANSI 256-color grayscale 243)
-        Some(Color::Indexed(243))
-    } else {
+        30..=59 => Some(Color::Indexed(243)),
         // 1 hour+: most faded
-        Some(Color::DarkGray)
+        _ => Some(Color::DarkGray),
     }
 }
 
@@ -835,12 +825,16 @@ mod tests {
     #[rstest]
     #[case::just_now(0, Some(Color::White))]
     #[case::thirty_seconds(30, Some(Color::White))]
+    #[case::almost_one_minute(59, Some(Color::White))]
     #[case::one_minute(60, None)]
     #[case::three_minutes(180, None)]
+    #[case::almost_five_minutes(299, None)]
     #[case::five_minutes(300, Some(Color::Indexed(249)))]
     #[case::fifteen_minutes(900, Some(Color::Indexed(249)))]
+    #[case::almost_thirty_minutes(1799, Some(Color::Indexed(249)))]
     #[case::thirty_minutes(1800, Some(Color::Indexed(243)))]
     #[case::forty_five_minutes(2700, Some(Color::Indexed(243)))]
+    #[case::almost_one_hour(3599, Some(Color::Indexed(243)))]
     #[case::one_hour(3600, Some(Color::DarkGray))]
     #[case::two_hours(7200, Some(Color::DarkGray))]
     fn test_fadeout_color(#[case] seconds_ago: i64, #[case] expected: Option<Color>) {
