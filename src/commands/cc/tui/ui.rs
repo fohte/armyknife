@@ -24,6 +24,23 @@ const MIN_SESSION_INFO_WIDTH: usize = 20;
 /// Minimum width for title
 const MIN_TITLE_WIDTH: usize = 20;
 
+/// Color palette for repository labels. These colors are chosen to be
+/// distinguishable on terminal backgrounds while avoiding White, Gray,
+/// and DarkGray which are used for other UI elements.
+const REPO_LABEL_COLORS: &[Color] = &[
+    Color::Red,
+    Color::Green,
+    Color::Blue,
+    Color::Yellow,
+    Color::Cyan,
+    Color::Magenta,
+    Color::LightRed,
+    Color::LightGreen,
+    Color::LightBlue,
+    Color::LightCyan,
+    Color::LightMagenta,
+];
+
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let now = Utc::now();
@@ -154,12 +171,26 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         &app.confirmed_query
     };
 
+    let max_repo_name_width = filtered_sessions
+        .iter()
+        .map(|s| get_repo_name(s).width())
+        .max()
+        .unwrap_or(0);
+
     let items: Vec<ListItem> = filtered_sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             let cached_title = app.get_cached_title(&session.session_id);
-            create_session_item(i, session, cached_title, now, term_width, query)
+            create_session_item(
+                i,
+                session,
+                cached_title,
+                now,
+                term_width,
+                query,
+                max_repo_name_width,
+            )
         })
         .collect();
 
@@ -307,6 +338,7 @@ fn create_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
+    max_repo_name_width: usize,
 ) -> ListItem<'static> {
     let status_symbol = session.status.display_symbol();
     let status_color = status_color(session.status);
@@ -316,15 +348,29 @@ fn create_session_item(
         .unwrap_or_else(|| get_title_display_name_fallback(session));
     let time_ago = format_relative_time(session.updated_at, now);
 
-    let session_info_width = calculate_session_info_width(term_width);
+    // Repo label: "[repo_name]" with padding for alignment
+    // Label width = "[" + max_repo_name_width + "]" + " " = max_repo_name_width + 3
+    let repo_name = get_repo_name(session);
+    let repo_color = repo_label_color(&repo_name);
+    let label_display_width = max_repo_name_width + 2; // "[" + padded_name + "]"
+    let repo_name_display_width = repo_name.width();
+    let padding = " ".repeat(max_repo_name_width.saturating_sub(repo_name_display_width));
+    let label_text = format!("[{}{}]", repo_name, padding);
+    // Extra width on line 1: label + space separator
+    let label_total_width = label_display_width + 1;
+
+    let session_info_width =
+        calculate_session_info_width(term_width.saturating_sub(label_total_width));
     let title_width = calculate_title_width(term_width);
 
-    // First line: [number] status session:window time
+    // First line: [number] status [repo_label] session:window time
     let truncated_info = truncate(&session_info, session_info_width);
     let info_style = Style::default().add_modifier(Modifier::BOLD);
     let mut line1_spans = vec![
         Span::raw(format!("  [{}] ", index + 1)),
         Span::styled(status_symbol, Style::default().fg(status_color)),
+        Span::raw(" "),
+        Span::styled(label_text, Style::default().fg(repo_color)),
         Span::raw(" "),
     ];
     line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
@@ -355,6 +401,24 @@ fn create_session_item(
     let line4 = Line::from("");
 
     ListItem::new(vec![line1, line2, line3, line4])
+}
+
+/// Extracts the repository name from the session's cwd (last path component).
+fn get_repo_name(session: &Session) -> String {
+    session
+        .cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(String::from)
+        .unwrap_or_else(|| session.cwd.display().to_string())
+}
+
+/// Returns a deterministic color for a repository name by hashing it.
+fn repo_label_color(repo_name: &str) -> Color {
+    let hash = repo_name
+        .bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+    REPO_LABEL_COLORS[(hash % REPO_LABEL_COLORS.len() as u64) as usize]
 }
 
 /// Returns the color for a session status.
@@ -651,13 +715,26 @@ fn render_session_list_internal(
     }
 
     let term_width = area.width as usize;
+    let max_repo_name_width = sessions
+        .iter()
+        .map(|s| get_repo_name(s).width())
+        .max()
+        .unwrap_or(0);
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
         .map(|(i, session)| {
             // Use fallback for tests (no cache available), no highlight
             let title = get_title_display_name_fallback(session);
-            create_session_item(i, session, Some(&title), now, term_width, "")
+            create_session_item(
+                i,
+                session,
+                Some(&title),
+                now,
+                term_width,
+                "",
+                max_repo_name_width,
+            )
         })
         .collect();
 
@@ -856,15 +933,15 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 1│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
+            >  [1] ● [project] webapp:dev  just now
                    webapp:dev
 
 
-               [2] ◐ api:test  5m ago
+               [2] ◐ [project] api:test  5m ago
                    api:test
 
 
-               [3] ○ /home/user/docs  1h ago
+               [3] ○ [docs   ] /home/user/docs  1h ago
                    docs
 
 
@@ -920,7 +997,7 @@ mod tests {
             ┌──────────────────────────────────────┐
             │  Claude Code Sessions                │
             └──────────────────────────────────────┘
-            >  [1] ● very-long-session...  just now
+            >  [1] ● [project] very-long-session...
                    very-long-session-name:window
 
 
@@ -963,11 +1040,11 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0│
             └──────────────────────────────────────────────────────────┘
-               [1] ● webapp:dev  just now
+               [1] ● [project] webapp:dev  just now
                    webapp:dev
 
 
-            >  [2] ◐ api:test  5m ago
+            >  [2] ◐ [project] api:test  5m ago
                    api:test
 
 
@@ -1007,7 +1084,7 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
+            >  [1] ● [project] webapp:dev  just now
                    webapp:dev
                    I've updated the code as requested.
 
@@ -1047,7 +1124,7 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
+            >  [1] ● [project] webapp:dev  just now
                    webapp:dev
                    This is a very long message that should be truncate..
 
@@ -1083,7 +1160,7 @@ mod tests {
             ┌──────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0│
             └──────────────────────────────────────────────────────────┘
-            >  [1] ● webapp:dev  just now
+            >  [1] ● [project] webapp:dev  just now
                    webapp:dev
 
 
@@ -1126,6 +1203,44 @@ mod tests {
         for (span, &(content, is_highlighted)) in spans.iter().zip(expected) {
             assert_eq!(span.content, content);
             assert_eq!(span.style, if is_highlighted { highlight } else { base });
+        }
+    }
+
+    // =========================================================================
+    // Repo label tests
+    // =========================================================================
+
+    #[rstest]
+    #[case::normal_path("/home/user/project", "project")]
+    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife")]
+    #[case::root_path("/", "/")]
+    fn test_get_repo_name(#[case] cwd: &str, #[case] expected: &str) {
+        let mut session = create_test_session("test");
+        session.cwd = PathBuf::from(cwd);
+        assert_eq!(get_repo_name(&session), expected);
+    }
+
+    #[test]
+    fn test_repo_label_color_is_deterministic() {
+        let color1 = repo_label_color("armyknife");
+        let color2 = repo_label_color("armyknife");
+        assert_eq!(color1, color2);
+    }
+
+    #[test]
+    fn test_repo_label_color_differs_for_different_names() {
+        let color1 = repo_label_color("armyknife");
+        let color2 = repo_label_color("docs");
+        assert_ne!(color1, color2);
+    }
+
+    #[test]
+    fn test_repo_label_color_uses_palette() {
+        let names = ["armyknife", "webapp", "api", "docs", "infra", "tools"];
+        for name in names {
+            let color = repo_label_color(name);
+            let position = REPO_LABEL_COLORS.iter().position(|&c| c == color);
+            assert_ne!(position, None, "{name} got color {color:?} not in palette");
         }
     }
 }
