@@ -16,7 +16,7 @@ anyhow = "=1.0.101"
 async-trait = "=0.1.89"
 chrono = "=0.4.43"
 clap = { version = "=4.5.58", features = ["derive"] }
-clap_complete = "=4.5.65"
+clap_complete = "=4.5.66"
 git2 = { version = "=0.20.4", default-features = false, features = ["vendored-libgit2", "https"] }
 http = "=1.4.0"
 octocrab = "=0.49.5"
