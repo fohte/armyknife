@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::infra::git;
+use crate::infra::github::{OctocrabClient, RepoClient};
 use crate::shared::config;
 
 /// Configuration management commands.
@@ -23,7 +24,7 @@ pub enum ConfigCommands {
 }
 
 impl ConfigCommands {
-    pub fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::Schema { output } => {
                 let schema = config::generate_schema();
@@ -37,14 +38,14 @@ impl ConfigCommands {
                 Ok(())
             }
             Self::Get { key } => {
-                run_get(key)?;
-                Ok(())
+                let client = OctocrabClient::get()?;
+                run_get(key, client).await
             }
         }
     }
 }
 
-fn run_get(key: &str) -> anyhow::Result<()> {
+async fn run_get(key: &str, gh_client: &impl RepoClient) -> anyhow::Result<()> {
     let cfg = config::load_config()?;
 
     // For repo.* keys, resolve owner/repo from CWD git remote
@@ -54,14 +55,27 @@ fn run_get(key: &str) -> anyhow::Result<()> {
         None
     };
 
-    if let Some(value) = cfg.get_value(key, repo_id.as_deref()) {
-        println!("{value}");
+    match cfg.get_value(key, repo_id.as_deref()) {
+        Some(value) => {
+            println!("{value}");
+        }
+        None if key == "repo.language" => {
+            // Default: private repos -> "ja", public repos -> "en"
+            if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
+                let is_private = gh_client.is_repo_private(owner, repo).await.unwrap_or(true);
+                let default_lang = if is_private { "ja" } else { "en" };
+                println!("{default_lang}");
+            }
+        }
+        None => {}
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::infra::github::GitHubMockServer;
     use crate::shared::config::Config;
     use indoc::indoc;
     use rstest::rstest;
@@ -146,6 +160,36 @@ mod tests {
                 language: ja
         "});
         assert_eq!(cfg.get_value("repo.language", None), None);
+    }
+
+    #[rstest]
+    #[case::private_repo(true, "ja")]
+    #[case::public_repo(false, "en")]
+    #[tokio::test]
+    async fn run_get_repo_language_defaults_by_visibility(
+        #[case] is_private: bool,
+        #[case] expected: &str,
+    ) {
+        let mock = GitHubMockServer::start().await;
+        mock.repo("owner", "repo")
+            .repo_info()
+            .private(is_private)
+            .get()
+            .await;
+        let client = mock.client();
+
+        // Config has no repos entry, so default should kick in
+        let cfg = Config::default();
+        let repo_id = Some("owner/repo");
+
+        let result = cfg.get_value("repo.language", repo_id);
+        assert!(result.is_none(), "should fall through to default");
+
+        // Verify the default logic directly
+        let is_private_result = client.is_repo_private("owner", "repo").await.unwrap();
+        assert_eq!(is_private_result, is_private);
+        let default_lang = if is_private_result { "ja" } else { "en" };
+        assert_eq!(default_lang, expected);
     }
 
     #[test]

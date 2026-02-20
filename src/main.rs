@@ -29,7 +29,7 @@ async fn run() -> Result<()> {
     match command {
         Commands::Ai(ai_cmd) => ai_cmd.run().await?,
         Commands::Cc(cc_cmd) => cc_cmd.run()?,
-        Commands::Config(config_cmd) => config_cmd.run()?,
+        Commands::Config(config_cmd) => config_cmd.run().await?,
         Commands::Gh(gh_cmd) => gh_cmd.run().await?,
         Commands::NameBranch(args) => args.run()?,
         Commands::Wm(wm_cmd) => wm_cmd.run().await?,
