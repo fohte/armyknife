@@ -13,6 +13,7 @@ use lazy_regex::regex_replace_all;
 
 use super::claude_sessions;
 use super::error::CcError;
+use super::generate_label;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
@@ -132,17 +133,31 @@ fn process_hook_event_impl(
     // Load existing session or create new one
     let now = Utc::now();
     let mut session =
-        store::load_session_from(sessions_dir, &input.session_id)?.unwrap_or_else(|| Session {
-            session_id: input.session_id.clone(),
-            cwd: input.cwd.clone(),
-            transcript_path: input.transcript_path.clone(),
-            tty: None,
-            tmux_info: tmux_info.clone(),
-            status,
-            created_at: now,
-            updated_at: now,
-            last_message: None,
-            current_tool: None,
+        store::load_session_from(sessions_dir, &input.session_id)?.unwrap_or_else(|| {
+            // Read label and ancestor chain from environment variables (set by `wm new`)
+            let label = env::var("ARMYKNIFE_SESSION_LABEL")
+                .ok()
+                .filter(|s| !s.is_empty());
+            let ancestor_session_ids = env::var("ARMYKNIFE_ANCESTOR_SESSION_IDS")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
+                .unwrap_or_default();
+
+            Session {
+                session_id: input.session_id.clone(),
+                cwd: input.cwd.clone(),
+                transcript_path: input.transcript_path.clone(),
+                tty: None,
+                tmux_info: tmux_info.clone(),
+                status,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+                current_tool: None,
+                label,
+                ancestor_session_ids,
+            }
         });
 
     // Update session fields
@@ -183,6 +198,15 @@ fn process_hook_event_impl(
 
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
+
+    // Auto-generate label for root sessions on first user prompt.
+    // Spawns a background process to avoid blocking the hook.
+    if event == HookEvent::UserPromptSubmit
+        && session.label.is_none()
+        && let Some(prompt) = get_first_user_prompt(&session.cwd, &session.session_id)
+    {
+        generate_label::spawn_label_generation(sessions_dir, &session.session_id, &prompt);
+    }
 
     // Refresh tmux status bar so `#()` commands pick up the state change immediately.
     // Silently ignore errors (e.g., not in tmux, tmux not installed).
@@ -437,6 +461,14 @@ where
     unreachable!()
 }
 
+/// Retrieves the first user prompt for label generation.
+///
+/// Uses `get_session_title` which reads firstPrompt from sessions-index.json
+/// or falls back to the first user message in the .jsonl transcript.
+fn get_first_user_prompt(cwd: &Path, session_id: &str) -> Option<String> {
+    claude_sessions::get_session_title(cwd, session_id)
+}
+
 /// Determines the session status based on the event and input.
 /// Note: SessionEnd is handled separately in run() before this function is called.
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
@@ -572,8 +604,11 @@ fn build_subtitle(session: &Session) -> Option<String> {
     let tmux_info = session.tmux_info.as_ref()?;
     let tmux_part = format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
 
-    // Get session title from Claude Code's metadata
-    let session_title = claude_sessions::get_session_title(&session.cwd, &session.session_id);
+    // Get session title: label (armyknife) > firstPrompt (Claude Code)
+    let session_title = session
+        .label
+        .clone()
+        .or_else(|| claude_sessions::get_session_title(&session.cwd, &session.session_id));
 
     // Build full subtitle first, then truncate once to avoid double-truncation issues
     let subtitle = match session_title {
@@ -913,6 +948,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 

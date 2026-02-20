@@ -544,11 +544,15 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 }
 
 /// Gets the title display name for a session.
-/// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > tmux session:window > cwd.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
+    // Prefer armyknife's own label (set via env var or auto-generated)
+    if let Some(ref label) = session.label {
+        return claude_sessions::normalize_title(label);
+    }
+
     if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
-        // Already sanitized by claude_sessions::normalize_title
         return title;
     }
 
@@ -690,6 +694,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 

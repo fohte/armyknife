@@ -36,7 +36,6 @@ pub struct SessionEntry {
     pub session_id: String,
     #[serde(rename = "firstPrompt")]
     pub first_prompt: Option<String>,
-    pub summary: Option<String>,
 }
 
 /// User message entry in .jsonl files
@@ -120,13 +119,14 @@ pub fn normalize_title(s: &str) -> String {
     stripped.trim().replace('\n', " ").replace('\r', "")
 }
 
-/// Retrieves the session title from Claude Code's sessions-index.json.
+/// Retrieves the session title from Claude Code's metadata.
 ///
-/// Returns the summary if available, otherwise the first ~50 characters of firstPrompt.
-/// Falls back to reading the first user prompt from the .jsonl file if sessions-index.json
-/// doesn't exist or doesn't contain the session.
+/// Returns firstPrompt from sessions-index.json if available,
+/// otherwise reads the first user prompt from the .jsonl file.
+/// Note: sessions-index.json summary is excluded because Claude Code v2.x
+/// no longer updates it reliably.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
-    // First, try to get from sessions-index.json
+    // First, try to get firstPrompt from sessions-index.json
     if let Some(title) = get_title_from_index(project_path, session_id) {
         return Some(title);
     }
@@ -148,14 +148,9 @@ fn get_title_from_index(project_path: &Path, session_id: &str) -> Option<String>
 
     for entry in index.entries {
         if entry.session_id == session_id {
-            // Prefer summary over firstPrompt
-            if let Some(summary) = entry.summary
-                && !summary.is_empty()
-            {
-                return Some(normalize_title(&summary));
-            }
+            // Only use firstPrompt; summary is excluded because Claude Code v2.x
+            // no longer updates sessions-index.json reliably.
             if let Some(first_prompt) = entry.first_prompt {
-                // Truncation is handled by the display layer
                 return Some(normalize_title(&first_prompt));
             }
             return None;

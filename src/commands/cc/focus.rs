@@ -52,6 +52,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 

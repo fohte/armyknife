@@ -254,6 +254,8 @@ mod tests {
                 updated_at: Utc::now(),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             })
             .collect();
 
@@ -455,6 +457,8 @@ mod tests {
                 updated_at: Utc::now(),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "session-waiting".to_string(),
@@ -467,6 +471,8 @@ mod tests {
                 updated_at: Utc::now(),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "session-stopped".to_string(),
@@ -479,6 +485,8 @@ mod tests {
                 updated_at: Utc::now(),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
         ];
         App::with_sessions(sessions)

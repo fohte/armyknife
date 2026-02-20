@@ -26,6 +26,14 @@ pub struct Session {
     /// Currently executing tool name (e.g., "Bash", "Read", "Edit")
     #[serde(default)]
     pub current_tool: Option<String>,
+    /// Short title for session identification (set via env var or auto-generated)
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Ancestor session IDs from root to immediate parent.
+    /// Used to build tree view: if intermediate sessions are deleted,
+    /// child sessions can still find their nearest living ancestor.
+    #[serde(default)]
+    pub ancestor_session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

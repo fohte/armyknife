@@ -157,8 +157,11 @@ fn render_session_row<W: Write>(
 }
 
 /// Gets the title display name for a session.
-/// Fetches from Claude Code's sessions-index.json, returns "-" if not found.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > "-".
 fn get_title_display_name(session: &Session) -> String {
+    if let Some(ref label) = session.label {
+        return claude_sessions::normalize_title(label);
+    }
     claude_sessions::get_session_title(&session.cwd, &session.session_id)
         .unwrap_or_else(|| "-".to_string())
 }
@@ -248,6 +251,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 
@@ -387,6 +392,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s2".to_string(),
@@ -399,6 +406,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s3".to_string(),
@@ -411,6 +420,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
         ];
 
@@ -674,6 +685,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s2".to_string(),
@@ -691,6 +704,8 @@ mod tests {
                 updated_at: now - Duration::minutes(5),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s3".to_string(),
@@ -703,6 +718,8 @@ mod tests {
                 updated_at: now - Duration::hours(1),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
         ];
 
