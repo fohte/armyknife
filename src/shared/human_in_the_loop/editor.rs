@@ -168,7 +168,16 @@ fn launch_ghostty_macos(
     let title_flag = format!("--title={}", options.window_title);
     let command_flag = format!("--command={}", wrapper_path.display());
 
-    let mut ghostty_args = vec![width_flag, height_flag, title_flag, command_flag];
+    let mut ghostty_args = vec![
+        width_flag,
+        height_flag,
+        title_flag,
+        command_flag,
+        // Terminate the Ghostty process when its last window closes. Without
+        // this, `open -na` spawns a new app instance that stays alive (PPID=1)
+        // after the user finishes editing, leaving zombie-like processes behind.
+        "--quit-after-last-window-closed=true".to_string(),
+    ];
 
     // Center the window on screen if we can determine the display resolution
     if let Some((pos_x, pos_y)) =
