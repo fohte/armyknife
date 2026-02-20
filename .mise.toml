@@ -16,7 +16,7 @@ shellcheck = "0.11.0"
 shfmt = "3.12.0"
 
 # sandbox runtime for tests
-"npm:@anthropic-ai/sandbox-runtime" = "0.0.34"
+"npm:@anthropic-ai/sandbox-runtime" = "0.0.37"
 
 [settings]
 npm.bun = true
