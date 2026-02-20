@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.103](https://github.com/fohte/armyknife/compare/v0.1.102...v0.1.103) (2026-02-20)
+
+
+### Bug Fixes
+
+* **editor:** pass `quit-after-last-window-closed` to Ghostty to prevent orphaned processes ([#300](https://github.com/fohte/armyknife/issues/300)) ([cb35910](https://github.com/fohte/armyknife/commit/cb3591081f29b6814d695cf4793281a19201a795))
+
 ## [0.1.102](https://github.com/fohte/armyknife/compare/v0.1.101...v0.1.102) (2026-02-18)
 
 
