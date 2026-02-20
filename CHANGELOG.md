@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.104](https://github.com/fohte/armyknife/compare/v0.1.103...v0.1.104) (2026-02-20)
+
+
+### Features
+
+* **config:** add `config get` subcommand and per-repository language setting ([#302](https://github.com/fohte/armyknife/issues/302)) ([8784020](https://github.com/fohte/armyknife/commit/87840201cc2d2c5672d878006c6853914a1fd97c))
+
 ## [0.1.103](https://github.com/fohte/armyknife/compare/v0.1.102...v0.1.103) (2026-02-20)
 
 
