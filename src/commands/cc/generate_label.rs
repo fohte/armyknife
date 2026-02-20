@@ -43,7 +43,7 @@ fn generate_label_via_claude(prompt: &str) -> Result<String> {
         Output ONLY the title text, nothing else. No quotes, no punctuation at the end.";
 
     let output = Command::new("claude")
-        .args(["-p", "--model", "haiku", system_prompt])
+        .args(["-p", "--model", "haiku", "--system-prompt", system_prompt])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

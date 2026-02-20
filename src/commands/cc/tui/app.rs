@@ -50,6 +50,10 @@ pub struct App {
     /// Cache of repository names (keyed by cwd path).
     /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
     repo_name_cache: HashMap<PathBuf, String>,
+    /// Tree-ordered indices into `sessions`.
+    /// Updated each render by the UI layer after building the session tree.
+    /// Maps display position (list_state index) to sessions index.
+    tree_ordered_indices: Vec<usize>,
 }
 
 impl App {
@@ -83,6 +87,8 @@ impl App {
             list_state.select(Some(0));
         }
 
+        let tree_ordered_indices = filtered_indices.clone();
+
         Self {
             sessions,
             list_state,
@@ -96,6 +102,7 @@ impl App {
             status_filter: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
+            tree_ordered_indices,
             title_cache,
             repo_name_cache: HashMap::new(),
         }
@@ -202,23 +209,26 @@ impl App {
 
     /// Restores selection by session_id if possible, otherwise adjusts.
     fn restore_selection(&mut self, session_id: Option<&str>) {
+        // Reset tree order to match filtered order until next render
+        self.tree_ordered_indices = self.filtered_indices.clone();
+
         if let Some(id) = session_id
-            && let Some(filtered_pos) = self
-                .filtered_indices
+            && let Some(pos) = self
+                .tree_ordered_indices
                 .iter()
                 .position(|&i| self.sessions.get(i).is_some_and(|s| s.session_id == id))
         {
-            self.list_state.select(Some(filtered_pos));
+            self.list_state.select(Some(pos));
             return;
         }
 
         // Fallback: adjust selection if needed
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             self.list_state.select(None);
         } else if let Some(selected) = self.list_state.selected() {
-            if selected >= self.filtered_indices.len() {
+            if selected >= self.tree_ordered_indices.len() {
                 self.list_state
-                    .select(Some(self.filtered_indices.len() - 1));
+                    .select(Some(self.tree_ordered_indices.len() - 1));
             }
         } else {
             self.list_state.select(Some(0));
@@ -233,15 +243,15 @@ impl App {
         }
     }
 
-    /// Moves selection to the next item in filtered list.
+    /// Moves selection to the next item in the displayed list.
     pub fn select_next(&mut self) {
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             return;
         }
 
         let i = match self.list_state.selected() {
             Some(i) => {
-                if i >= self.filtered_indices.len() - 1 {
+                if i >= self.tree_ordered_indices.len() - 1 {
                     0
                 } else {
                     i + 1
@@ -253,16 +263,16 @@ impl App {
         self.persist_selection();
     }
 
-    /// Moves selection to the previous item in filtered list.
+    /// Moves selection to the previous item in the displayed list.
     pub fn select_previous(&mut self) {
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             return;
         }
 
         let i = match self.list_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.filtered_indices.len() - 1
+                    self.tree_ordered_indices.len() - 1
                 } else {
                     i - 1
                 }
@@ -273,19 +283,21 @@ impl App {
         self.persist_selection();
     }
 
-    /// Selects a session by its 1-indexed number (1-9) within filtered list.
+    /// Selects a session by its 1-indexed number (1-9) within the displayed list.
     pub fn select_by_number(&mut self, num: usize) {
-        if num > 0 && num <= self.filtered_indices.len() {
+        if num > 0 && num <= self.tree_ordered_indices.len() {
             self.list_state.select(Some(num - 1));
             self.persist_selection();
         }
     }
 
     /// Returns the currently selected session, if any.
+    /// Uses tree-ordered indices which reflect the actual display order
+    /// after tree view reordering.
     pub fn selected_session(&self) -> Option<&Session> {
         self.list_state
             .selected()
-            .and_then(|i| self.filtered_indices.get(i))
+            .and_then(|i| self.tree_ordered_indices.get(i))
             .and_then(|&session_idx| self.sessions.get(session_idx))
     }
 
@@ -295,6 +307,16 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect()
+    }
+
+    /// Updates tree-ordered indices from display-ordered session IDs.
+    /// Called by the UI layer after building the session tree to keep
+    /// the selection mapping in sync with the rendered list order.
+    pub fn update_tree_order(&mut self, session_ids: &[&str]) {
+        self.tree_ordered_indices = session_ids
+            .iter()
+            .filter_map(|id| self.sessions.iter().position(|s| s.session_id == *id))
+            .collect();
     }
 
     /// Returns whether a filter is currently active.
@@ -443,6 +465,9 @@ impl App {
             })
             .map(|(i, _)| i)
             .collect();
+
+        // Reset tree order to match filtered order until next render
+        self.tree_ordered_indices = self.filtered_indices.clone();
 
         // Reset selection to first item or none
         if self.filtered_indices.is_empty() {

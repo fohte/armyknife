@@ -461,11 +461,14 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
     // Build tree structure from sessions
     let tree_entries = build_session_tree(&filtered_sessions);
 
+    // Collect tree-ordered session IDs and build list items, then drop
+    // tree_entries (which borrows filtered_sessions/app) before mutating app.
+    let mut tree_session_ids: Vec<String> = Vec::with_capacity(tree_entries.len());
     let items: Vec<ListItem> = tree_entries
         .iter()
         .enumerate()
         .map(|(i, entry)| {
-            // Determine if the next entry is a sibling or from a different tree group
+            tree_session_ids.push(entry.session.session_id.clone());
             let next_entry = tree_entries.get(i + 1);
             let cached_title = app.get_cached_title(&entry.session.session_id);
             let repo_name = app.get_cached_repo_name(&entry.session.cwd).unwrap_or("");
@@ -480,6 +483,12 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
             )
         })
         .collect();
+    drop(tree_entries);
+    drop(filtered_sessions);
+
+    // Sync tree-ordered indices so selection maps to the correct session
+    let tree_id_refs: Vec<&str> = tree_session_ids.iter().map(|s| s.as_str()).collect();
+    app.update_tree_order(&tree_id_refs);
 
     let list = List::new(items)
         .highlight_style(Style::default().bg(Color::DarkGray))
