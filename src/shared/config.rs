@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -18,6 +19,10 @@ pub struct Config {
     /// Notification settings.
     #[serde(default)]
     pub notification: NotificationConfig,
+
+    /// Per-repository configuration, keyed by "owner/repo".
+    #[serde(default)]
+    pub repos: HashMap<String, RepoConfig>,
 }
 
 /// Worktree management configuration.
@@ -199,6 +204,15 @@ impl Default for NotificationConfig {
     }
 }
 
+/// Per-repository configuration.
+#[derive(Debug, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RepoConfig {
+    /// Language for commit messages and PR content (e.g., "ja", "en").
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
 fn default_worktrees_dir() -> String {
     ".worktrees".to_string()
 }
@@ -314,6 +328,7 @@ mod tests {
         assert_eq!(config.editor.focus_app(), "WezTerm");
         assert!(config.notification.enabled);
         assert_eq!(config.notification.sound, "Glass");
+        assert!(config.repos.is_empty());
     }
 
     #[test]
@@ -533,6 +548,52 @@ mod tests {
                 })),
             })
         );
+    }
+
+    #[test]
+    fn parse_repos_config() {
+        let yaml = indoc! {"
+            repos:
+              fohte/t-rader:
+                language: ja
+              fohte/armyknife:
+                language: en
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(config.repos.len(), 2);
+        assert_eq!(
+            config.repos["fohte/t-rader"].language,
+            Some("ja".to_string())
+        );
+        assert_eq!(
+            config.repos["fohte/armyknife"].language,
+            Some("en".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_repos_config_without_language() {
+        let yaml = indoc! {"
+            repos:
+              fohte/some-repo: {}
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(config.repos.len(), 1);
+        assert_eq!(config.repos["fohte/some-repo"].language, None);
+    }
+
+    #[test]
+    fn repos_config_denies_unknown_fields() {
+        let yaml = indoc! {"
+            repos:
+              fohte/repo:
+                unknown_key: value
+        "};
+        let result: Result<Config, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown field"));
     }
 
     #[rstest]

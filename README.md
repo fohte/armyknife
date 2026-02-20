@@ -338,6 +338,30 @@ Print JSON Schema for the configuration file.
 | --------------------- | -------------------------------------- |
 | `-o, --output <path>` | Write schema to file instead of stdout |
 
+#### `a config get <key>`
+
+Get a configuration value by key. Currently supports `repo.*` keys, which look up per-repository settings using the current directory's git remote.
+
+| Key             | Description                                 |
+| --------------- | ------------------------------------------- |
+| `repo.language` | Language setting for the current repository |
+
+The repository is identified by `owner/repo` from the origin remote URL. If the key has a value, it is printed to stdout. If not configured, nothing is printed (exit 0). For unsupported keys, exit 1.
+
+Example `config.yaml`:
+
+```yaml
+repos:
+  fohte/t-rader:
+    language: ja
+```
+
+```sh
+$ cd ~/ghq/github.com/fohte/t-rader
+$ a config get repo.language
+ja
+```
+
 ## License
 
 [MIT](LICENSE)

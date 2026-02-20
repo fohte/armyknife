@@ -3,6 +3,7 @@ use std::fs;
 
 use super::common::{
     DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
+    repo_allows_japanese,
 };
 use crate::infra::github::{OctocrabClient, RepoClient};
 use crate::shared::diff::eprint_diff;
@@ -54,8 +55,10 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
         }
     };
 
+    let allows_japanese = is_private || repo_allows_japanese(&repo_info.owner, &repo_info.repo);
+
     let title = args.title.as_deref().unwrap_or("");
-    let frontmatter = generate_frontmatter(title, is_private);
+    let frontmatter = generate_frontmatter(title, allows_japanese);
 
     let body = read_stdin_if_available().unwrap_or_default();
     let content = format!("{frontmatter}{body}");
