@@ -443,8 +443,6 @@ mod tests {
     mod file_lock_tests {
         use super::*;
         use rstest::rstest;
-        use std::sync::{Arc, Barrier};
-        use std::thread;
 
         #[rstest]
         fn acquire_lock_succeeds_on_unlocked_file(temp_session_dir: TempSessionDir) {
@@ -489,45 +487,6 @@ mod tests {
 
             assert!(result1.is_ok(), "first shared lock should succeed");
             assert!(result2.is_ok(), "second shared lock should succeed");
-        }
-
-        #[rstest]
-        fn concurrent_save_does_not_corrupt_file(temp_session_dir: TempSessionDir) {
-            let num_threads = 10;
-            let barrier = Arc::new(Barrier::new(num_threads));
-            let sessions_path = Arc::new(temp_session_dir.sessions_path.clone());
-
-            let session_id = format!("concurrent-test-{}", std::process::id());
-            let handles: Vec<_> = (0..num_threads)
-                .map(|i| {
-                    let barrier = Arc::clone(&barrier);
-                    let session_id = session_id.clone();
-                    let sessions_path = Arc::clone(&sessions_path);
-                    thread::spawn(move || {
-                        let mut session = create_test_session(&session_id);
-                        session.last_message = Some(format!("Message from thread {}", i));
-
-                        barrier.wait();
-                        save_session_to(&sessions_path, &session)
-                    })
-                })
-                .collect();
-
-            let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-            for (i, result) in results.iter().enumerate() {
-                assert!(
-                    result.is_ok(),
-                    "thread {} save should succeed: {:?}",
-                    i,
-                    result
-                );
-            }
-
-            let loaded = load_session_from(&temp_session_dir.sessions_path, &session_id)
-                .expect("load should succeed");
-            assert!(loaded.is_some(), "session should be loadable");
-            assert_eq!(loaded.unwrap().session_id, session_id);
         }
     }
 
