@@ -338,6 +338,24 @@ Print JSON Schema for the configuration file.
 | --------------------- | -------------------------------------- |
 | `-o, --output <path>` | Write schema to file instead of stdout |
 
+#### `a config get <key>`
+
+Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). If the key has a value, it is printed to stdout. If not found, nothing is printed (exit 0).
+
+For `repo.*` keys, the current directory's git remote is used to identify the repository (`owner/repo`).
+
+```sh
+$ a config get wm.branch_prefix
+fohte/
+
+$ a config get notification.sound
+Glass
+
+$ cd ~/ghq/github.com/fohte/t-rader
+$ a config get repo.language
+ja
+```
+
 ## License
 
 [MIT](LICENSE)

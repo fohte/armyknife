@@ -6,15 +6,48 @@
   "properties": {
     "editor": {
       "description": "Terminal/editor settings for human-in-the-loop reviews.",
-      "$ref": "#/$defs/EditorConfig"
+      "$ref": "#/$defs/EditorConfig",
+      "default": {
+        "editor_command": "nvim",
+        "focus_app": null,
+        "terminal": "wezterm"
+      }
     },
     "notification": {
       "description": "Notification settings.",
-      "$ref": "#/$defs/NotificationConfig"
+      "$ref": "#/$defs/NotificationConfig",
+      "default": {
+        "enabled": true,
+        "sound": "Glass"
+      }
+    },
+    "repos": {
+      "description": "Per-repository configuration, keyed by \"owner/repo\".",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RepoConfig"
+      },
+      "default": {}
     },
     "wm": {
       "description": "Worktree management settings.",
-      "$ref": "#/$defs/WmConfig"
+      "$ref": "#/$defs/WmConfig",
+      "default": {
+        "branch_prefix": "fohte/",
+        "layout": {
+          "direction": "horizontal",
+          "first": {
+            "command": "nvim",
+            "focus": true
+          },
+          "second": {
+            "command": "claude",
+            "focus": false
+          }
+        },
+        "repos_root": null,
+        "worktrees_dir": ".worktrees"
+      }
     }
   },
   "additionalProperties": false,
@@ -38,7 +71,8 @@
         },
         "terminal": {
           "description": "Terminal emulator (default: \"wezterm\").",
-          "$ref": "#/$defs/Terminal"
+          "$ref": "#/$defs/Terminal",
+          "default": "wezterm"
         }
       },
       "additionalProperties": false
@@ -91,6 +125,21 @@
       "required": [
         "command"
       ]
+    },
+    "RepoConfig": {
+      "description": "Per-repository configuration.",
+      "type": "object",
+      "properties": {
+        "language": {
+          "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
     },
     "SplitConfig": {
       "description": "Split configuration with direction and two child nodes.",
@@ -157,7 +206,18 @@
         },
         "layout": {
           "description": "tmux pane layout definition.",
-          "$ref": "#/$defs/LayoutNode"
+          "$ref": "#/$defs/LayoutNode",
+          "default": {
+            "direction": "horizontal",
+            "first": {
+              "command": "nvim",
+              "focus": true
+            },
+            "second": {
+              "command": "claude",
+              "focus": false
+            }
+          }
         },
         "repos_root": {
           "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",

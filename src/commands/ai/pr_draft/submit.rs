@@ -1,7 +1,7 @@
 use clap::Args;
 use std::path::PathBuf;
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese};
+use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use crate::infra::github::{
     CreatePrParams, OctocrabClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
@@ -84,8 +84,9 @@ async fn run_impl(
         return Err(PrDraftError::EmptyTitle.into());
     }
 
-    // For public repos, check for Japanese characters
-    if !is_private {
+    // For public repos without Japanese language config, check for Japanese characters
+    let allows_japanese = is_private || repo_allows_japanese(&target.owner, &target.repo);
+    if !allows_japanese {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(PrDraftError::JapaneseInTitle.into());
         }

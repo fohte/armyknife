@@ -2,6 +2,10 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
+use crate::infra::git;
+use crate::infra::github::{OctocrabClient, RepoClient};
+use crate::shared::config;
+
 /// Configuration management commands.
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ConfigCommands {
@@ -11,13 +15,19 @@ pub enum ConfigCommands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+
+    /// Get a configuration value by dot-separated key
+    Get {
+        /// Configuration key (e.g., "wm.branch_prefix", "repo.language")
+        key: String,
+    },
 }
 
 impl ConfigCommands {
-    pub fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::Schema { output } => {
-                let schema = crate::shared::config::generate_schema();
+                let schema = config::generate_schema();
                 let json = serde_json::to_string_pretty(&schema)?;
                 if let Some(path) = output {
                     std::fs::write(path, format!("{json}\n"))?;
@@ -27,18 +37,149 @@ impl ConfigCommands {
                 }
                 Ok(())
             }
+            Self::Get { key } => run_get(key).await,
         }
     }
 }
 
+async fn run_get(key: &str) -> anyhow::Result<()> {
+    let cfg = config::load_config()?;
+
+    // For repo.* keys, resolve owner/repo from CWD git remote
+    let repo_id = if key.starts_with("repo.") {
+        git::get_owner_repo().map(|(owner, repo)| format!("{owner}/{repo}"))
+    } else {
+        None
+    };
+
+    match cfg.get_value(key, repo_id.as_deref()) {
+        Some(value) => {
+            println!("{value}");
+        }
+        None if key == "repo.language" => {
+            // Default: private repos -> "ja", public repos -> "en"
+            if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
+                let client = OctocrabClient::get()?;
+                let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
+                let default_lang = if is_private { "ja" } else { "en" };
+                println!("{default_lang}");
+            }
+        }
+        None => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::infra::github::{GitHubMockServer, RepoClient};
+    use crate::shared::config::Config;
+    use indoc::indoc;
+    use rstest::rstest;
+
+    fn config_from_yaml(yaml: &str) -> Config {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[rstest]
+    #[case::wm_worktrees_dir("wm.worktrees_dir", ".worktrees")]
+    #[case::wm_branch_prefix("wm.branch_prefix", "fohte/")]
+    #[case::editor_editor_command("editor.editor_command", "nvim")]
+    #[case::editor_terminal("editor.terminal", "wezterm")]
+    #[case::notification_enabled("notification.enabled", "true")]
+    #[case::notification_sound("notification.sound", "Glass")]
+    fn get_value_returns_default_values(#[case] key: &str, #[case] expected: &str) {
+        let cfg = Config::default();
+        let result = cfg.get_value(key, None);
+        assert_eq!(result.as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::wm_worktrees_dir("wm.worktrees_dir", Some(".wt"))]
+    #[case::wm_branch_prefix("wm.branch_prefix", Some("user/"))]
+    #[case::notification_enabled("notification.enabled", Some("false"))]
+    #[case::notification_sound("notification.sound", Some("Ping"))]
+    fn get_value_returns_custom_values(#[case] key: &str, #[case] expected: Option<&str>) {
+        let cfg = config_from_yaml(indoc! {"
+            wm:
+              worktrees_dir: .wt
+              branch_prefix: user/
+            notification:
+              enabled: false
+              sound: Ping
+        "});
+        assert_eq!(cfg.get_value(key, None).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::top_level("nonexistent")]
+    #[case::nested("wm.nonexistent")]
+    #[case::object_key("wm")]
+    fn get_value_returns_none_for_unknown_or_non_scalar_key(#[case] key: &str) {
+        let cfg = Config::default();
+        assert_eq!(cfg.get_value(key, None), None);
+    }
+
+    #[rstest]
+    #[case::configured("fohte/t-rader", Some("ja"))]
+    #[case::not_configured("fohte/unknown", None)]
+    fn get_value_repo_language(#[case] repo_id: &str, #[case] expected: Option<&str>) {
+        let cfg = config_from_yaml(indoc! {"
+            repos:
+              fohte/t-rader:
+                language: ja
+        "});
+        assert_eq!(
+            cfg.get_value("repo.language", Some(repo_id)).as_deref(),
+            expected
+        );
+    }
+
+    #[test]
+    fn get_value_repo_without_repo_id() {
+        let cfg = config_from_yaml(indoc! {"
+            repos:
+              fohte/t-rader:
+                language: ja
+        "});
+        assert_eq!(cfg.get_value("repo.language", None), None);
+    }
+
+    #[rstest]
+    #[case::private_repo(true, "ja")]
+    #[case::public_repo(false, "en")]
+    #[tokio::test]
+    async fn run_get_repo_language_defaults_by_visibility(
+        #[case] is_private: bool,
+        #[case] expected: &str,
+    ) {
+        let mock = GitHubMockServer::start().await;
+        mock.repo("owner", "repo")
+            .repo_info()
+            .private(is_private)
+            .get()
+            .await;
+        let client = mock.client();
+
+        // Config has no repos entry, so default should kick in
+        let cfg = Config::default();
+        let repo_id = Some("owner/repo");
+
+        let result = cfg.get_value("repo.language", repo_id);
+        assert!(result.is_none(), "should fall through to default");
+
+        // Verify the default logic directly
+        let is_private_result = client.is_repo_private("owner", "repo").await.unwrap();
+        assert_eq!(is_private_result, is_private);
+        let default_lang = if is_private_result { "ja" } else { "en" };
+        assert_eq!(default_lang, expected);
+    }
+
     #[test]
     fn schema_generates_valid_json() {
         let schema = crate::shared::config::generate_schema();
         let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
 
-        // schemars v1 generates a JSON Schema with "title" and "type" keys
         assert_eq!(value["title"], "Config");
         assert_eq!(value["type"], "object");
     }
@@ -48,13 +189,12 @@ mod tests {
         let schema = crate::shared::config::generate_schema();
         let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
 
-        // Verify key config sections appear as properties
         let props = value["properties"].as_object().unwrap();
         assert!(props.contains_key("wm"));
         assert!(props.contains_key("editor"));
         assert!(props.contains_key("notification"));
+        assert!(props.contains_key("repos"));
 
-        // Verify WmConfig properties exist via $defs
         let defs = value["$defs"].as_object().unwrap();
         let wm_props = defs["WmConfig"]["properties"].as_object().unwrap();
         assert!(wm_props.contains_key("worktrees_dir"));

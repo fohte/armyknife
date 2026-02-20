@@ -305,6 +305,19 @@ pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
     }
 }
 
+/// Check if the repo's config language allows Japanese content.
+pub fn repo_allows_japanese(owner: &str, repo: &str) -> bool {
+    let Ok(config) = crate::shared::config::load_config() else {
+        return false;
+    };
+    let repo_id = format!("{owner}/{repo}");
+    config
+        .repos
+        .get(&repo_id)
+        .and_then(|r| r.language.as_deref())
+        == Some("ja")
+}
+
 pub fn contains_japanese(text: &str) -> bool {
     regex_is_match!(r"[\p{Hiragana}\p{Katakana}\p{Han}]", text)
 }
