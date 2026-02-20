@@ -12,6 +12,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
 
     env:
       SCCACHE_GHA_ENABLED: 'true'
@@ -53,6 +56,11 @@ jobs:
       # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+<<<<<<< before updating
+=======
+
+      - uses: jdx/mise-action@v3
+>>>>>>> after updating
 
       - uses: jdx/mise-action@v3
         with:
@@ -88,6 +96,9 @@ jobs:
 
   unit-test:
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
 
     env:
       SCCACHE_GHA_ENABLED: 'true'
@@ -104,8 +115,11 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: jdx/mise-action@v3
+<<<<<<< before updating
         with:
           cache: true
+=======
+>>>>>>> after updating
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
