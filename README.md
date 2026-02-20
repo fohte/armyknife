@@ -340,23 +340,17 @@ Print JSON Schema for the configuration file.
 
 #### `a config get <key>`
 
-Get a configuration value by key. Currently supports `repo.*` keys, which look up per-repository settings using the current directory's git remote.
+Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). If the key has a value, it is printed to stdout. If not found, nothing is printed (exit 0).
 
-| Key             | Description                                 |
-| --------------- | ------------------------------------------- |
-| `repo.language` | Language setting for the current repository |
-
-The repository is identified by `owner/repo` from the origin remote URL. If the key has a value, it is printed to stdout. If not configured, nothing is printed (exit 0). For unsupported keys, exit 1.
-
-Example `config.yaml`:
-
-```yaml
-repos:
-  fohte/t-rader:
-    language: ja
-```
+For `repo.*` keys, the current directory's git remote is used to identify the repository (`owner/repo`).
 
 ```sh
+$ a config get wm.branch_prefix
+fohte/
+
+$ a config get notification.sound
+Glass
+
 $ cd ~/ghq/github.com/fohte/t-rader
 $ a config get repo.language
 ja

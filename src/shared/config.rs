@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Top-level configuration for armyknife.
-#[derive(Debug, Default, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Worktree management settings.
@@ -25,8 +25,41 @@ pub struct Config {
     pub repos: HashMap<String, RepoConfig>,
 }
 
+impl Config {
+    /// Look up a config value by dot-separated key path.
+    /// For `repo.*` keys, `repo_id` (e.g. "owner/repo") selects which repo entry to use.
+    /// Returns the value as a string, or None if not found.
+    pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<String> {
+        if let Some(repo_key) = key.strip_prefix("repo.") {
+            let repo_id = repo_id?;
+            let repo_config = self.repos.get(repo_id)?;
+            let value = serde_json::to_value(repo_config).ok()?;
+            resolve_json_path(&value, repo_key)
+        } else {
+            let value = serde_json::to_value(self).ok()?;
+            resolve_json_path(&value, key)
+        }
+    }
+}
+
+/// Resolve a dot-separated path against a JSON value, returning a string representation.
+fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<String> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    match current {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Null => None,
+        // For objects/arrays, output as JSON
+        other => Some(other.to_string()),
+    }
+}
+
 /// Worktree management configuration.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WmConfig {
     /// Worktree directory name (default: ".worktrees").
@@ -62,7 +95,7 @@ impl Default for WmConfig {
 }
 
 /// Layout tree node: either a single pane (leaf) or a split (internal node).
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(untagged)]
 pub enum LayoutNode {
     /// Split node with two children.
@@ -88,7 +121,7 @@ impl Default for LayoutNode {
 }
 
 /// Split configuration with direction and two child nodes.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SplitConfig {
     /// Split direction ("horizontal" or "vertical").
@@ -100,7 +133,7 @@ pub struct SplitConfig {
 }
 
 /// Split direction.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     /// Horizontal split (tmux split-window -h).
@@ -110,7 +143,7 @@ pub enum SplitDirection {
 }
 
 /// Configuration for a single tmux pane.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PaneConfig {
     /// Command to run in the pane.
@@ -121,7 +154,7 @@ pub struct PaneConfig {
 }
 
 /// Terminal emulator to use for human-in-the-loop reviews.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Terminal {
     /// WezTerm terminal emulator.
@@ -142,7 +175,7 @@ impl Terminal {
 }
 
 /// Terminal/editor configuration for human-in-the-loop reviews.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EditorConfig {
     /// Terminal emulator (default: "wezterm").
@@ -181,7 +214,7 @@ impl Default for EditorConfig {
 }
 
 /// Notification configuration.
-#[derive(Debug, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationConfig {
     /// Whether notifications are enabled (default: true).
@@ -205,7 +238,7 @@ impl Default for NotificationConfig {
 }
 
 /// Per-repository configuration.
-#[derive(Debug, Default, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RepoConfig {
     /// Language for commit messages and PR content (e.g., "ja", "en").
