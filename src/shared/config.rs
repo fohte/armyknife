@@ -52,9 +52,8 @@ fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<String> {
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Bool(b) => Some(b.to_string()),
         serde_json::Value::Number(n) => Some(n.to_string()),
-        serde_json::Value::Null => None,
-        // For objects/arrays, output as JSON
-        other => Some(other.to_string()),
+        // Non-scalar values (objects, arrays, null) are not leaf config values
+        _ => None,
     }
 }
 
@@ -583,38 +582,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_repos_config() {
-        let yaml = indoc! {"
-            repos:
-              fohte/t-rader:
-                language: ja
-              fohte/armyknife:
-                language: en
-        "};
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-
-        assert_eq!(config.repos.len(), 2);
-        assert_eq!(
-            config.repos["fohte/t-rader"].language,
-            Some("ja".to_string())
-        );
-        assert_eq!(
-            config.repos["fohte/armyknife"].language,
-            Some("en".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_repos_config_without_language() {
-        let yaml = indoc! {"
-            repos:
-              fohte/some-repo: {}
-        "};
+    #[rstest]
+    #[case::with_language("fohte/t-rader", "repos:\n  fohte/t-rader:\n    language: ja\n", Some("ja".to_string()))]
+    #[case::without_language("fohte/some-repo", "repos:\n  fohte/some-repo: {}\n", None)]
+    fn parse_repos_config(
+        #[case] repo_id: &str,
+        #[case] yaml: &str,
+        #[case] expected_language: Option<String>,
+    ) {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.repos.len(), 1);
-        assert_eq!(config.repos["fohte/some-repo"].language, None);
+        assert_eq!(config.repos[repo_id].language, expected_language);
     }
 
     #[test]

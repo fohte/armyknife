@@ -37,15 +37,12 @@ impl ConfigCommands {
                 }
                 Ok(())
             }
-            Self::Get { key } => {
-                let client = OctocrabClient::get()?;
-                run_get(key, client).await
-            }
+            Self::Get { key } => run_get(key).await,
         }
     }
 }
 
-async fn run_get(key: &str, gh_client: &impl RepoClient) -> anyhow::Result<()> {
+async fn run_get(key: &str) -> anyhow::Result<()> {
     let cfg = config::load_config()?;
 
     // For repo.* keys, resolve owner/repo from CWD git remote
@@ -62,7 +59,8 @@ async fn run_get(key: &str, gh_client: &impl RepoClient) -> anyhow::Result<()> {
         None if key == "repo.language" => {
             // Default: private repos -> "ja", public repos -> "en"
             if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
-                let is_private = gh_client.is_repo_private(owner, repo).await.unwrap_or(true);
+                let client = OctocrabClient::get()?;
+                let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
                 let default_lang = if is_private { "ja" } else { "en" };
                 println!("{default_lang}");
             }
@@ -74,8 +72,7 @@ async fn run_get(key: &str, gh_client: &impl RepoClient) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::infra::github::GitHubMockServer;
+    use crate::infra::github::{GitHubMockServer, RepoClient};
     use crate::shared::config::Config;
     use indoc::indoc;
     use rstest::rstest;
@@ -97,8 +94,12 @@ mod tests {
         assert_eq!(result.as_deref(), Some(expected));
     }
 
-    #[test]
-    fn get_value_returns_custom_values() {
+    #[rstest]
+    #[case::wm_worktrees_dir("wm.worktrees_dir", Some(".wt"))]
+    #[case::wm_branch_prefix("wm.branch_prefix", Some("user/"))]
+    #[case::notification_enabled("notification.enabled", Some("false"))]
+    #[case::notification_sound("notification.sound", Some("Ping"))]
+    fn get_value_returns_custom_values(#[case] key: &str, #[case] expected: Option<&str>) {
         let cfg = config_from_yaml(indoc! {"
             wm:
               worktrees_dir: .wt
@@ -107,49 +108,31 @@ mod tests {
               enabled: false
               sound: Ping
         "});
-        assert_eq!(
-            cfg.get_value("wm.worktrees_dir", None).as_deref(),
-            Some(".wt")
-        );
-        assert_eq!(
-            cfg.get_value("wm.branch_prefix", None).as_deref(),
-            Some("user/")
-        );
-        assert_eq!(
-            cfg.get_value("notification.enabled", None).as_deref(),
-            Some("false")
-        );
-        assert_eq!(
-            cfg.get_value("notification.sound", None).as_deref(),
-            Some("Ping")
-        );
+        assert_eq!(cfg.get_value(key, None).as_deref(), expected);
     }
 
-    #[test]
-    fn get_value_returns_none_for_unknown_key() {
+    #[rstest]
+    #[case::top_level("nonexistent")]
+    #[case::nested("wm.nonexistent")]
+    #[case::object_key("wm")]
+    fn get_value_returns_none_for_unknown_or_non_scalar_key(#[case] key: &str) {
         let cfg = Config::default();
-        assert_eq!(cfg.get_value("nonexistent", None), None);
-        assert_eq!(cfg.get_value("wm.nonexistent", None), None);
+        assert_eq!(cfg.get_value(key, None), None);
     }
 
-    #[test]
-    fn get_value_repo_language() {
+    #[rstest]
+    #[case::configured("fohte/t-rader", Some("ja"))]
+    #[case::not_configured("fohte/unknown", None)]
+    fn get_value_repo_language(#[case] repo_id: &str, #[case] expected: Option<&str>) {
         let cfg = config_from_yaml(indoc! {"
             repos:
               fohte/t-rader:
                 language: ja
         "});
         assert_eq!(
-            cfg.get_value("repo.language", Some("fohte/t-rader"))
-                .as_deref(),
-            Some("ja")
+            cfg.get_value("repo.language", Some(repo_id)).as_deref(),
+            expected
         );
-    }
-
-    #[test]
-    fn get_value_repo_not_configured() {
-        let cfg = Config::default();
-        assert_eq!(cfg.get_value("repo.language", Some("fohte/unknown")), None);
     }
 
     #[test]
