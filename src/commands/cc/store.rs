@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{TimeDelta, Utc};
 
 use super::error::CcError;
-use super::types::Session;
+use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
 
@@ -24,6 +25,11 @@ const LOCK_RETRY_COUNT: u32 = 10;
 
 /// Delay between lock retry attempts.
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Retention period for ended sessions before garbage collection.
+/// Ended sessions are kept so that `claude -c` resume can restore
+/// label and ancestor chain, then cleaned up after this period.
+const ENDED_SESSION_RETENTION_DAYS: i64 = 7;
 
 /// Returns the directory for storing Claude Code session data.
 /// Path: ~/.cache/armyknife/cc/sessions/
@@ -269,8 +275,8 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Lists all sessions from disk.
-/// Reads all .json files in the sessions directory.
+/// Lists all active sessions from disk.
+/// Reads all .json files in the sessions directory, excluding ended sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
 
@@ -287,6 +293,7 @@ pub fn list_sessions() -> Result<Vec<Session>> {
         if path.extension().is_some_and(|ext| ext == "json")
             && let Ok(content) = fs::read_to_string(&path)
             && let Ok(session) = serde_json::from_str::<Session>(&content)
+            && session.status != SessionStatus::Ended
         {
             sessions.push(session);
         }
@@ -322,6 +329,9 @@ where
         return Ok(());
     }
 
+    let now = Utc::now();
+    let retention = TimeDelta::days(ENDED_SESSION_RETENTION_DAYS);
+
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -338,14 +348,16 @@ where
             continue;
         };
 
-        let should_remove = session
+        let stale_pane = session
             .tmux_info
             .as_ref()
             .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
-        if should_remove {
+        let expired_ended =
+            session.status == SessionStatus::Ended && now - session.updated_at > retention;
+
+        if stale_pane || expired_ended {
             let _ = fs::remove_file(&path);
-            // Also clean up the lock file if it exists
             let lock_path = path.with_extension("json.lock");
             let _ = fs::remove_file(&lock_path);
         }

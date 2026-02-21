@@ -50,22 +50,32 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
+    /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
+    /// resume can restore label and ancestor chain. Garbage-collected after
+    /// a retention period by `cleanup_stale_sessions`.
+    Ended,
 }
 
 impl SessionStatus {
+    /// Returns the display symbol for active session statuses.
+    /// Panics on `Ended` because ended sessions are filtered out before display.
     pub fn display_symbol(&self) -> &'static str {
         match self {
             Self::Running => "●",
             Self::WaitingInput => "◐",
             Self::Stopped => "○",
+            Self::Ended => unreachable!("ended sessions are filtered out before display"),
         }
     }
 
+    /// Returns the display name for active session statuses.
+    /// Panics on `Ended` because ended sessions are filtered out before display.
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::WaitingInput => "waiting",
             Self::Stopped => "stopped",
+            Self::Ended => unreachable!("ended sessions are filtered out before display"),
         }
     }
 }

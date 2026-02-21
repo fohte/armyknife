@@ -77,8 +77,8 @@ pub fn run(args: &HookArgs) -> Result<()> {
 enum ProcessResult {
     /// Session was created or updated
     SessionSaved,
-    /// Session was deleted (session-end event)
-    SessionDeleted,
+    /// Session was marked as ended (session-end event)
+    SessionEnded,
     /// Event was skipped (e.g., resume session-start)
     Skipped,
 }
@@ -99,14 +99,20 @@ fn process_hook_event_impl(
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
-    // Handle session end by clearing pane option and deleting the session file
+    // Handle session end: mark as ended instead of deleting so that
+    // `claude -c` resume can restore label and ancestor chain.
+    // Ended sessions are garbage-collected by cleanup_stale_sessions.
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
-        store::delete_session_from(sessions_dir, &input.session_id)?;
+        if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
+            session.status = SessionStatus::Ended;
+            session.updated_at = Utc::now();
+            store::save_session_to(sessions_dir, &session)?;
+        }
         let _ = tmux::refresh_status();
-        return Ok(ProcessResult::SessionDeleted);
+        return Ok(ProcessResult::SessionEnded);
     }
 
     // Handle session start: skip "startup" events to avoid creating empty sessions.
@@ -572,6 +578,7 @@ fn build_notification(
         SessionStatus::WaitingInput => "Waiting",
         SessionStatus::Stopped => "Stopped",
         SessionStatus::Running => "Running",
+        SessionStatus::Ended => "Ended",
     };
     let title = format!("Claude Code - {}", status_label);
 
