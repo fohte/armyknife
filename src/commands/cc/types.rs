@@ -57,25 +57,20 @@ pub enum SessionStatus {
 }
 
 impl SessionStatus {
-    /// Returns the display symbol for active session statuses.
-    /// Panics on `Ended` because ended sessions are filtered out before display.
     pub fn display_symbol(&self) -> &'static str {
         match self {
             Self::Running => "●",
             Self::WaitingInput => "◐",
-            Self::Stopped => "○",
-            Self::Ended => unreachable!("ended sessions are filtered out before display"),
+            Self::Stopped | Self::Ended => "○",
         }
     }
 
-    /// Returns the display name for active session statuses.
-    /// Panics on `Ended` because ended sessions are filtered out before display.
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::WaitingInput => "waiting",
             Self::Stopped => "stopped",
-            Self::Ended => unreachable!("ended sessions are filtered out before display"),
+            Self::Ended => "ended",
         }
     }
 }

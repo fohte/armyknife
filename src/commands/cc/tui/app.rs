@@ -156,6 +156,9 @@ impl App {
                         if is_session_stale(&session) {
                             self.remove_session(&change.session_id);
                             store::delete_session(&change.session_id)?;
+                        } else if session.status == SessionStatus::Ended {
+                            // Ended sessions are not displayed; remove from list
+                            self.remove_session(&change.session_id);
                         } else {
                             self.upsert_session(session);
                         }
