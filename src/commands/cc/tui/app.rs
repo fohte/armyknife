@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::event::{SessionChange, SessionChangeType};
+use super::session_tree::build_session_tree;
 
 /// Application mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,6 +51,10 @@ pub struct App {
     /// Cache of repository names (keyed by cwd path).
     /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
     repo_name_cache: HashMap<PathBuf, String>,
+    /// Tree-ordered indices into `sessions`.
+    /// Updated each render by the UI layer after building the session tree.
+    /// Maps display position (list_state index) to sessions index.
+    tree_ordered_indices: Vec<usize>,
 }
 
 impl App {
@@ -83,7 +88,7 @@ impl App {
             list_state.select(Some(0));
         }
 
-        Self {
+        let mut app = Self {
             sessions,
             list_state,
             should_quit: false,
@@ -96,9 +101,12 @@ impl App {
             status_filter: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
+            tree_ordered_indices: Vec::new(),
             title_cache,
             repo_name_cache: HashMap::new(),
-        }
+        };
+        app.rebuild_tree_order();
+        app
     }
 
     /// Reloads sessions from disk.
@@ -148,6 +156,9 @@ impl App {
                         if is_session_stale(&session) {
                             self.remove_session(&change.session_id);
                             store::delete_session(&change.session_id)?;
+                        } else if session.status == SessionStatus::Ended {
+                            // Ended sessions are not displayed; remove from list
+                            self.remove_session(&change.session_id);
                         } else {
                             self.upsert_session(session);
                         }
@@ -200,25 +211,52 @@ impl App {
         }
     }
 
+    /// Rebuilds `tree_ordered_indices` from the current `filtered_indices`.
+    ///
+    /// Runs the same DFS tree-building logic that the render layer uses,
+    /// so that cursor positions always match the displayed order.
+    fn rebuild_tree_order(&mut self) {
+        let filtered: Vec<&Session> = self
+            .filtered_indices
+            .iter()
+            .filter_map(|&i| self.sessions.get(i))
+            .collect();
+        let tree_entries = build_session_tree(&filtered);
+        self.tree_ordered_indices = tree_entries
+            .iter()
+            .filter_map(|entry| {
+                self.sessions
+                    .iter()
+                    .position(|s| s.session_id == entry.session.session_id)
+            })
+            .collect();
+    }
+
     /// Restores selection by session_id if possible, otherwise adjusts.
+    ///
+    /// Rebuilds the tree order from the current filtered sessions so that
+    /// the cursor position is resolved against the actual display order,
+    /// not the flat `updated_at` sort order.
     fn restore_selection(&mut self, session_id: Option<&str>) {
+        self.rebuild_tree_order();
+
         if let Some(id) = session_id
-            && let Some(filtered_pos) = self
-                .filtered_indices
+            && let Some(pos) = self
+                .tree_ordered_indices
                 .iter()
                 .position(|&i| self.sessions.get(i).is_some_and(|s| s.session_id == id))
         {
-            self.list_state.select(Some(filtered_pos));
+            self.list_state.select(Some(pos));
             return;
         }
 
         // Fallback: adjust selection if needed
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             self.list_state.select(None);
         } else if let Some(selected) = self.list_state.selected() {
-            if selected >= self.filtered_indices.len() {
+            if selected >= self.tree_ordered_indices.len() {
                 self.list_state
-                    .select(Some(self.filtered_indices.len() - 1));
+                    .select(Some(self.tree_ordered_indices.len() - 1));
             }
         } else {
             self.list_state.select(Some(0));
@@ -233,15 +271,15 @@ impl App {
         }
     }
 
-    /// Moves selection to the next item in filtered list.
+    /// Moves selection to the next item in the displayed list.
     pub fn select_next(&mut self) {
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             return;
         }
 
         let i = match self.list_state.selected() {
             Some(i) => {
-                if i >= self.filtered_indices.len() - 1 {
+                if i >= self.tree_ordered_indices.len() - 1 {
                     0
                 } else {
                     i + 1
@@ -253,16 +291,16 @@ impl App {
         self.persist_selection();
     }
 
-    /// Moves selection to the previous item in filtered list.
+    /// Moves selection to the previous item in the displayed list.
     pub fn select_previous(&mut self) {
-        if self.filtered_indices.is_empty() {
+        if self.tree_ordered_indices.is_empty() {
             return;
         }
 
         let i = match self.list_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.filtered_indices.len() - 1
+                    self.tree_ordered_indices.len() - 1
                 } else {
                     i - 1
                 }
@@ -273,19 +311,21 @@ impl App {
         self.persist_selection();
     }
 
-    /// Selects a session by its 1-indexed number (1-9) within filtered list.
+    /// Selects a session by its 1-indexed number (1-9) within the displayed list.
     pub fn select_by_number(&mut self, num: usize) {
-        if num > 0 && num <= self.filtered_indices.len() {
+        if num > 0 && num <= self.tree_ordered_indices.len() {
             self.list_state.select(Some(num - 1));
             self.persist_selection();
         }
     }
 
     /// Returns the currently selected session, if any.
+    /// Uses tree-ordered indices which reflect the actual display order
+    /// after tree view reordering.
     pub fn selected_session(&self) -> Option<&Session> {
         self.list_state
             .selected()
-            .and_then(|i| self.filtered_indices.get(i))
+            .and_then(|i| self.tree_ordered_indices.get(i))
             .and_then(|&session_idx| self.sessions.get(session_idx))
     }
 
@@ -295,6 +335,16 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect()
+    }
+
+    /// Updates tree-ordered indices from display-ordered session IDs.
+    /// Called by the UI layer after building the session tree to keep
+    /// the selection mapping in sync with the rendered list order.
+    pub fn update_tree_order(&mut self, session_ids: &[&str]) {
+        self.tree_ordered_indices = session_ids
+            .iter()
+            .filter_map(|id| self.sessions.iter().position(|s| s.session_id == *id))
+            .collect();
     }
 
     /// Returns whether a filter is currently active.
@@ -387,6 +437,7 @@ impl App {
         self.confirmed_query.clear();
         self.status_filter = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
+        self.rebuild_tree_order();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         } else {
@@ -443,6 +494,8 @@ impl App {
             })
             .map(|(i, _)| i)
             .collect();
+
+        self.rebuild_tree_order();
 
         // Reset selection to first item or none
         if self.filtered_indices.is_empty() {
@@ -544,11 +597,15 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 }
 
 /// Gets the title display name for a session.
-/// Fetches from Claude Code's sessions-index.json, falls back to tmux session:window or cwd.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > tmux session:window > cwd.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
+    // Prefer armyknife's own label (set via env var or auto-generated)
+    if let Some(ref label) = session.label {
+        return claude_sessions::normalize_title(label);
+    }
+
     if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
-        // Already sanitized by claude_sessions::normalize_title
         return title;
     }
 
@@ -690,6 +747,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 

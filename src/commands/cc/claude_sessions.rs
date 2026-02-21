@@ -1,14 +1,11 @@
 //! Claude Code session information reader.
 //!
-//! This module reads session metadata from Claude Code's sessions-index.json files
-//! located at ~/.claude/projects/{encoded-path}/sessions-index.json
-//!
-//! Falls back to reading the first user prompt from .jsonl files when
-//! sessions-index.json is not available.
+//! Reads session metadata from Claude Code's .jsonl transcript files
+//! located at ~/.claude/projects/{encoded-path}/{session-id}.jsonl
 
 use lazy_regex::regex_replace_all;
 use serde::Deserialize;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -20,24 +17,6 @@ const MAX_READ_SIZE: usize = 64 * 1024;
 
 /// Maximum number of lines to scan from the end before giving up
 const MAX_LINES_TO_SCAN: usize = 20;
-
-/// Claude Code sessions-index.json structure
-#[derive(Debug, Deserialize)]
-pub struct SessionsIndex {
-    #[expect(dead_code, reason = "field exists in JSON but not used")]
-    pub version: u32,
-    pub entries: Vec<SessionEntry>,
-}
-
-/// Individual session entry in sessions-index.json
-#[derive(Debug, Deserialize)]
-pub struct SessionEntry {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    #[serde(rename = "firstPrompt")]
-    pub first_prompt: Option<String>,
-    pub summary: Option<String>,
-}
 
 /// User message entry in .jsonl files
 #[derive(Debug, Deserialize)]
@@ -95,13 +74,6 @@ fn project_dir(project_path: &Path) -> Option<PathBuf> {
     Some(home.join(".claude").join("projects").join(encoded))
 }
 
-/// Returns the path to Claude Code's sessions-index.json for a project.
-///
-/// Path format: ~/.claude/projects/{encoded-path}/sessions-index.json
-pub fn sessions_index_path(project_path: &Path) -> Option<PathBuf> {
-    Some(project_dir(project_path)?.join("sessions-index.json"))
-}
-
 /// Returns the path to a session's .jsonl file.
 ///
 /// Path format: ~/.claude/projects/{encoded-path}/{session_id}.jsonl
@@ -120,49 +92,9 @@ pub fn normalize_title(s: &str) -> String {
     stripped.trim().replace('\n', " ").replace('\r', "")
 }
 
-/// Retrieves the session title from Claude Code's sessions-index.json.
-///
-/// Returns the summary if available, otherwise the first ~50 characters of firstPrompt.
-/// Falls back to reading the first user prompt from the .jsonl file if sessions-index.json
-/// doesn't exist or doesn't contain the session.
+/// Retrieves the session title by reading the first user prompt from the .jsonl file.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
-    // First, try to get from sessions-index.json
-    if let Some(title) = get_title_from_index(project_path, session_id) {
-        return Some(title);
-    }
-
-    // Fall back to reading from .jsonl file directly
     get_title_from_jsonl(project_path, session_id)
-}
-
-/// Tries to get session title from sessions-index.json.
-fn get_title_from_index(project_path: &Path, session_id: &str) -> Option<String> {
-    let index_path = sessions_index_path(project_path)?;
-
-    if !index_path.exists() {
-        return None;
-    }
-
-    let content = fs::read_to_string(&index_path).ok()?;
-    let index: SessionsIndex = serde_json::from_str(&content).ok()?;
-
-    for entry in index.entries {
-        if entry.session_id == session_id {
-            // Prefer summary over firstPrompt
-            if let Some(summary) = entry.summary
-                && !summary.is_empty()
-            {
-                return Some(normalize_title(&summary));
-            }
-            if let Some(first_prompt) = entry.first_prompt {
-                // Truncation is handled by the display layer
-                return Some(normalize_title(&first_prompt));
-            }
-            return None;
-        }
-    }
-
-    None
 }
 
 /// Reads the first user prompt from a session's .jsonl file.
@@ -459,7 +391,7 @@ mod tests {
     ) {
         let encoded = encode_project_path(Path::new(project_path));
         let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
-        fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
 
         let jsonl_path = project_dir.join(format!("{session_id}.jsonl"));
         let mut file = File::create(&jsonl_path).unwrap();
@@ -600,21 +532,6 @@ mod tests {
     fn test_encode_project_path(#[case] input: &str, #[case] expected: &str) {
         let path = Path::new(input);
         assert_eq!(encode_project_path(path), expected);
-    }
-
-    #[test]
-    fn test_sessions_index_path() {
-        let path = Path::new("/Users/test/project");
-        let result = sessions_index_path(path);
-
-        assert!(result.is_some());
-        let result_path = result.unwrap();
-        assert!(result_path.to_string_lossy().contains(".claude/projects"));
-        assert!(
-            result_path
-                .to_string_lossy()
-                .ends_with("sessions-index.json")
-        );
     }
 
     #[test]

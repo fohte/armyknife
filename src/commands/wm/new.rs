@@ -9,11 +9,13 @@ use super::git::{
     branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root, local_branch_exists,
     remote_branch_exists,
 };
+use crate::commands::cc::store as cc_store;
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{Config, load_config};
+use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
 /// Get the cache path for prompt recovery.
@@ -234,6 +236,17 @@ pub struct NewArgs {
     /// Wraps the prompt with delegation context (branch, base, directories).
     #[arg(long)]
     pub agent: bool,
+
+    /// Label for the new session (displayed in cc watch).
+    /// When not specified, the session will get its label via the
+    /// user-prompt-submit hook (auto-generation from prompt).
+    #[arg(long)]
+    pub label: Option<String>,
+
+    /// Parent session ID for tree view hierarchy.
+    /// Sets ARMYKNIFE_ANCESTOR_SESSION_IDS for the child session.
+    #[arg(long)]
+    pub parent_session_id: Option<String>,
 }
 
 /// Context information injected into the prompt when --agent is used
@@ -291,6 +304,25 @@ fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
     }
     .trim_start()
     .to_string()
+}
+
+/// Build comma-separated ancestor chain for a child session.
+///
+/// Loads the parent session from the store and prepends its own ancestor chain,
+/// producing: `grandparent_id,parent_id` (root-to-immediate-parent order).
+/// Falls back to just the parent_session_id if the parent session cannot be loaded.
+fn build_ancestor_chain(parent_session_id: &str) -> Result<String> {
+    match cc_store::load_session(parent_session_id) {
+        Ok(Some(parent)) => {
+            let mut ancestors = parent.ancestor_session_ids;
+            ancestors.push(parent_session_id.to_string());
+            Ok(ancestors.join(","))
+        }
+        _ => {
+            // Parent session not found or load error; use parent_id alone
+            Ok(parent_session_id.to_string())
+        }
+    }
 }
 
 /// Resolved branch name and prompt information
@@ -497,13 +529,40 @@ fn run_worktree_creation(
     if let Err(e) = hooks::run_hook(
         "post-worktree-create",
         &[
-            ("ARMYKNIFE_WORKTREE_PATH", &worktree_abs.to_string_lossy()),
-            ("ARMYKNIFE_BRANCH_NAME", &actual_branch),
-            ("ARMYKNIFE_REPO_ROOT", repo_root),
+            (
+                EnvVars::worktree_path_name(),
+                &worktree_abs.to_string_lossy(),
+            ),
+            (EnvVars::branch_name_name(), &actual_branch),
+            (EnvVars::repo_root_name(), repo_root),
         ],
     ) {
         eprintln!("warning: post-worktree-create hook error: {e}");
     }
+
+    // Build environment variables for child session
+    let mut env_vars: Vec<(String, String)> = Vec::new();
+    if let Some(ref label) = args.label {
+        env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
+    }
+    // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
+    // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
+    // so `a wm new` called from a Claude Code Bash tool automatically inherits
+    // the parent session ID without requiring --parent-session-id.
+    let env = EnvVars::load();
+    let parent_id = args.parent_session_id.clone().or(env.session_id);
+    if let Some(ref parent_id) = parent_id {
+        let ancestor_chain = build_ancestor_chain(parent_id)?;
+        env_vars.push((
+            EnvVars::ancestor_session_ids_name().to_string(),
+            ancestor_chain,
+        ));
+    }
+
+    let env_refs: Vec<(&str, &str)> = env_vars
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
 
     // Setup tmux window using config layout
     setup_tmux_window(
@@ -512,6 +571,7 @@ fn run_worktree_creation(
         &worktree_name,
         final_prompt.as_deref(),
         config,
+        &env_refs,
     )?;
 
     println!(
@@ -529,6 +589,7 @@ fn setup_tmux_window(
     worktree_name: &str,
     prompt: Option<&str>,
     config: &Config,
+    env_vars: &[(&str, &str)],
 ) -> Result<()> {
     let target_session = tmux::get_session_name(repo_root, &config.wm.worktrees_dir);
 
@@ -540,6 +601,7 @@ fn setup_tmux_window(
         worktree_name,
         &config.wm.layout,
         prompt,
+        env_vars,
     )
     .context("Failed to create tmux layout")?;
 
@@ -686,6 +748,8 @@ mod tests {
             force: false,
             prompt: prompt.map(String::from),
             agent: false,
+            label: None,
+            parent_session_id: None,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -714,6 +778,8 @@ mod tests {
             force: false,
             prompt: None,
             agent: false,
+            label: None,
+            parent_session_id: None,
         };
         let result = resolve_args_with_deps(
             &args,

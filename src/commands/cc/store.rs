@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{TimeDelta, Utc};
 
 use super::error::CcError;
-use super::types::Session;
+use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
 
@@ -25,8 +26,13 @@ const LOCK_RETRY_COUNT: u32 = 10;
 /// Delay between lock retry attempts.
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// Retention period for ended sessions before garbage collection.
+/// Ended sessions are kept so that `claude -c` resume can restore
+/// label and ancestor chain, then cleaned up after this period.
+const ENDED_SESSION_RETENTION_DAYS: i64 = 7;
+
 /// Returns the directory for storing Claude Code session data.
-/// Path: ~/Library/Caches/armyknife/cc/sessions/ (macOS) or ~/.cache/armyknife/cc/sessions/ (Linux)
+/// Path: ~/.cache/armyknife/cc/sessions/
 pub fn sessions_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("sessions"))
@@ -34,8 +40,7 @@ pub fn sessions_dir() -> Result<PathBuf> {
 }
 
 /// Returns the file path for storing the last selected session ID.
-/// Path: ~/Library/Caches/armyknife/cc/last_selected_session (macOS)
-///       ~/.cache/armyknife/cc/last_selected_session (Linux)
+/// Path: ~/.cache/armyknife/cc/last_selected_session
 pub fn last_selected_session_file() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("last_selected_session"))
@@ -93,8 +98,7 @@ fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
 }
 
 /// Returns the file path for a specific session.
-/// Path: ~/Library/Caches/armyknife/cc/sessions/<session_id>.json (macOS)
-///       ~/.cache/armyknife/cc/sessions/<session_id>.json (Linux)
+/// Path: ~/.cache/armyknife/cc/sessions/<session_id>.json
 ///
 /// Validates that session_id does not contain path separators to prevent
 /// path traversal attacks.
@@ -238,6 +242,62 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
+/// Atomically reads a session, applies a mutation, and writes it back
+/// under a single exclusive lock. Prevents TOCTOU races where separate
+/// load/save calls could overwrite concurrent hook updates.
+///
+/// Returns `Ok(false)` if the session file does not exist.
+/// Returns `Ok(true)` if the mutation was applied and saved.
+pub(crate) fn update_session_atomic(
+    sessions_dir: &Path,
+    session_id: &str,
+    mutate: impl FnOnce(&mut Session) -> bool,
+) -> Result<bool> {
+    let path = session_file_in(sessions_dir, session_id)?;
+
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    // Hold exclusive lock for the entire read-modify-write cycle
+    acquire_lock(&lock_file)?;
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut session: Session = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+
+    if !mutate(&mut session) {
+        return Ok(false);
+    }
+
+    let new_content = serde_json::to_string_pretty(&session)?;
+    let temp_path = path.with_extension("json.tmp");
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(new_content.as_bytes())?;
+    temp_file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
+
+    Ok(true)
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
@@ -271,8 +331,8 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Lists all sessions from disk.
-/// Reads all .json files in the sessions directory.
+/// Lists all active sessions from disk.
+/// Reads all .json files in the sessions directory, excluding ended sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
 
@@ -289,6 +349,7 @@ pub fn list_sessions() -> Result<Vec<Session>> {
         if path.extension().is_some_and(|ext| ext == "json")
             && let Ok(content) = fs::read_to_string(&path)
             && let Ok(session) = serde_json::from_str::<Session>(&content)
+            && session.status != SessionStatus::Ended
         {
             sessions.push(session);
         }
@@ -324,6 +385,9 @@ where
         return Ok(());
     }
 
+    let now = Utc::now();
+    let retention = TimeDelta::days(ENDED_SESSION_RETENTION_DAYS);
+
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -340,14 +404,19 @@ where
             continue;
         };
 
-        let should_remove = session
-            .tmux_info
-            .as_ref()
-            .is_some_and(|info| !is_pane_alive(&info.pane_id));
+        // Ended sessions are retained for resume; only expire them via the
+        // 7-day retention check below, not the stale-pane heuristic.
+        let stale_pane = session.status != SessionStatus::Ended
+            && session
+                .tmux_info
+                .as_ref()
+                .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
-        if should_remove {
+        let expired_ended =
+            session.status == SessionStatus::Ended && now - session.updated_at > retention;
+
+        if stale_pane || expired_ended {
             let _ = fs::remove_file(&path);
-            // Also clean up the lock file if it exists
             let lock_path = path.with_extension("json.lock");
             let _ = fs::remove_file(&lock_path);
         }
@@ -393,6 +462,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 
@@ -719,6 +790,8 @@ mod tests {
                 updated_at,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             }
         }
 

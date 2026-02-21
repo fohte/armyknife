@@ -30,15 +30,30 @@ struct PaneEntry {
 /// The first command creates a new window, subsequent commands split panes.
 /// If `prompt_file` is provided, claude pane commands will read the prompt
 /// from the file at shell execution time and delete it afterward.
+/// `env_vars` are set as tmux session-level environment variables so that
+/// all panes in the window inherit them.
 pub fn build_layout_commands(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
     prompt_file: Option<&Path>,
+    env_vars: &[(&str, &str)],
 ) -> Vec<TmuxCommand> {
     let mut commands = Vec::new();
     let mut pane_entries: Vec<PaneEntry> = Vec::new();
+
+    // Set session-level environment variables before creating the window so
+    // all spawned panes inherit them via tmux's update-environment mechanism.
+    for (key, value) in env_vars {
+        commands.push(TmuxCommand::new(&[
+            "set-environment",
+            "-t",
+            session,
+            key,
+            value,
+        ]));
+    }
 
     // Create new window (first pane is created automatically)
     commands.push(TmuxCommand::new(&[
@@ -84,6 +99,18 @@ pub fn build_layout_commands(
     if let Some(idx) = focus_pane_index {
         let pane_target = format!("{}", idx + 1);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
+    }
+
+    // Unset session-level env vars after all panes have been created to
+    // prevent leaking into subsequent windows in the same tmux session.
+    for (key, _) in env_vars {
+        commands.push(TmuxCommand::new(&[
+            "set-environment",
+            "-u",
+            "-t",
+            session,
+            key,
+        ]));
     }
 
     commands
@@ -179,16 +206,19 @@ fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>, cleanup: bo
 /// If prompt is provided, writes it to a temp file and passes the path to
 /// claude pane commands. The temp file is read and deleted by the shell
 /// command at execution time.
+/// `env_vars` are forwarded to `build_layout_commands` as tmux session-level
+/// environment variables.
 pub fn build_layout(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
     prompt: Option<&str>,
+    env_vars: &[(&str, &str)],
 ) -> anyhow::Result<()> {
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
-    let commands = build_layout_commands(session, cwd, window_name, layout, prompt_path);
+    let commands = build_layout_commands(session, cwd, window_name, layout, prompt_path, env_vars);
     execute_commands(&commands)?;
     Ok(())
 }
@@ -231,6 +261,7 @@ fn execute_commands(commands: &[TmuxCommand]) -> super::Result<()> {
 mod tests {
     use super::*;
     use crate::shared::config::{PaneConfig, SplitConfig, SplitDirection};
+    use crate::shared::env_var::EnvVars;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -294,7 +325,7 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[]);
 
         assert_eq!(
             commands,
@@ -326,7 +357,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
 
         assert_eq!(
             commands,
@@ -362,7 +393,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[]);
 
         assert_eq!(
             commands,
@@ -406,7 +437,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
 
         assert_eq!(
             commands,
@@ -447,7 +478,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path));
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
 
         assert_eq!(
             commands,
@@ -489,7 +521,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
 
         // The last select-pane should target pane 2 (the last focused pane)
         let last_cmd = commands.last().unwrap();
@@ -511,7 +543,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
 
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
@@ -546,7 +578,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
 
         assert_eq!(
             commands,
@@ -591,7 +623,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path));
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
 
         assert_eq!(
             commands,
@@ -618,6 +651,73 @@ mod tests {
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
             ]
+        );
+    }
+
+    // =========================================================================
+    // build_layout_commands: env_vars inject set-environment before new-window
+    // =========================================================================
+
+    #[test]
+    fn env_vars_prepended_as_set_environment() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let label_key = EnvVars::session_label_name();
+        let ancestors_key = EnvVars::ancestor_session_ids_name();
+        let env_vars = [
+            (label_key, "my-label"),
+            (ancestors_key, "parent-1,parent-2"),
+        ];
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars);
+
+        // set-environment commands should come before new-window
+        assert_eq!(
+            commands[0],
+            cmd(&["set-environment", "-t", "sess", label_key, "my-label"])
+        );
+        assert_eq!(
+            commands[1],
+            cmd(&[
+                "set-environment",
+                "-t",
+                "sess",
+                ancestors_key,
+                "parent-1,parent-2",
+            ])
+        );
+        assert_eq!(
+            commands[2],
+            cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // Unset commands should come at the end to prevent leaking
+        let n = commands.len();
+        assert_eq!(
+            commands[n - 2],
+            cmd(&["set-environment", "-u", "-t", "sess", label_key])
+        );
+        assert_eq!(
+            commands[n - 1],
+            cmd(&["set-environment", "-u", "-t", "sess", ancestors_key])
+        );
+    }
+
+    #[test]
+    fn empty_env_vars_no_set_environment() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+
+        // First command should be new-window, not set-environment
+        assert_eq!(
+            commands[0],
+            cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
         );
     }
 }

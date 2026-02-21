@@ -26,6 +26,14 @@ pub struct Session {
     /// Currently executing tool name (e.g., "Bash", "Read", "Edit")
     #[serde(default)]
     pub current_tool: Option<String>,
+    /// Short title for session identification (set via env var or auto-generated)
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Ancestor session IDs from root to immediate parent.
+    /// Used to build tree view: if intermediate sessions are deleted,
+    /// child sessions can still find their nearest living ancestor.
+    #[serde(default)]
+    pub ancestor_session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +50,10 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
+    /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
+    /// resume can restore label and ancestor chain. Garbage-collected after
+    /// a retention period by `cleanup_stale_sessions`.
+    Ended,
 }
 
 impl SessionStatus {
@@ -49,7 +61,7 @@ impl SessionStatus {
         match self {
             Self::Running => "●",
             Self::WaitingInput => "◐",
-            Self::Stopped => "○",
+            Self::Stopped | Self::Ended => "○",
         }
     }
 
@@ -58,6 +70,7 @@ impl SessionStatus {
             Self::Running => "running",
             Self::WaitingInput => "waiting",
             Self::Stopped => "stopped",
+            Self::Ended => "ended",
         }
     }
 }
@@ -79,6 +92,13 @@ pub struct HookInput {
     // Notification event fields
     #[serde(default)]
     pub notification_type: Option<String>,
+
+    // UserPromptSubmit event fields
+    /// User's submitted prompt text (available in UserPromptSubmit events).
+    /// Used for auto-generating session labels without reading from transcript files,
+    /// which may not be written yet when the hook fires.
+    #[serde(default)]
+    pub prompt: Option<String>,
 
     // Pre-tool-use / Post-tool-use / PermissionRequest event fields
     #[serde(default)]

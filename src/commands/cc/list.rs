@@ -157,8 +157,11 @@ fn render_session_row<W: Write>(
 }
 
 /// Gets the title display name for a session.
-/// Fetches from Claude Code's sessions-index.json, returns "-" if not found.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > "-".
 fn get_title_display_name(session: &Session) -> String {
+    if let Some(ref label) = session.label {
+        return claude_sessions::normalize_title(label);
+    }
     claude_sessions::get_session_title(&session.cwd, &session.session_id)
         .unwrap_or_else(|| "-".to_string())
 }
@@ -198,7 +201,7 @@ fn format_status(status: SessionStatus) -> String {
     let (col, reset) = match status {
         SessionStatus::Running => (color::GREEN, color::RESET),
         SessionStatus::WaitingInput => (color::YELLOW, color::RESET),
-        SessionStatus::Stopped => (color::GRAY, color::RESET),
+        SessionStatus::Stopped | SessionStatus::Ended => (color::GRAY, color::RESET),
     };
     format!("{col}{name:<8}{reset}")
 }
@@ -248,6 +251,8 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
         }
     }
 
@@ -387,6 +392,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s2".to_string(),
@@ -399,6 +406,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s3".to_string(),
@@ -411,6 +420,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
         ];
 
@@ -419,7 +430,7 @@ mod tests {
             .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // Title is fetched from Claude Code's sessions-index.json, returns "-" for test paths
+        // Title is fetched from Claude Code's .jsonl, returns "-" for test paths
         assert_eq!(
             result,
             indoc! {"
@@ -448,7 +459,7 @@ mod tests {
             .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // Title returns "-" (no sessions-index.json), session/window names are truncated
+        // Title returns "-" (no .jsonl), session/window names are truncated
         assert_eq!(
             result,
             indoc! {"
@@ -480,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_get_title_display_name_without_sessions_index() {
-        // When sessions-index.json doesn't exist, returns "-"
+        // When .jsonl doesn't exist, returns "-"
         let session = create_test_session();
         assert_eq!(get_title_display_name(&session), "-");
     }
@@ -674,6 +685,8 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s2".to_string(),
@@ -691,6 +704,8 @@ mod tests {
                 updated_at: now - Duration::minutes(5),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
             Session {
                 session_id: "s3".to_string(),
@@ -703,6 +718,8 @@ mod tests {
                 updated_at: now - Duration::hours(1),
                 last_message: None,
                 current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
             },
         ];
 
