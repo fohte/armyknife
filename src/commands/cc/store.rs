@@ -404,10 +404,13 @@ where
             continue;
         };
 
-        let stale_pane = session
-            .tmux_info
-            .as_ref()
-            .is_some_and(|info| !is_pane_alive(&info.pane_id));
+        // Ended sessions are retained for resume; only expire them via the
+        // 7-day retention check below, not the stale-pane heuristic.
+        let stale_pane = session.status != SessionStatus::Ended
+            && session
+                .tmux_info
+                .as_ref()
+                .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
         let expired_ended =
             session.status == SessionStatus::Ended && now - session.updated_at > retention;
