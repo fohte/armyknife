@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.105](https://github.com/fohte/armyknife/compare/v0.1.104...v0.1.105) (2026-02-21)
+
+
+### Features
+
+* **cc:** support session tree view with labels and ancestor tracking ([#306](https://github.com/fohte/armyknife/issues/306)) ([da5c6c2](https://github.com/fohte/armyknife/commit/da5c6c2d20c3fd2ef7a8470d5521ba2c19050148))
+
 ## [0.1.104](https://github.com/fohte/armyknife/compare/v0.1.103...v0.1.104) (2026-02-20)
 
 
