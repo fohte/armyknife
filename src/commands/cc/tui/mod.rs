@@ -1,5 +1,6 @@
 mod app;
 mod event;
+mod session_tree;
 mod ui;
 
 use std::collections::HashMap;
