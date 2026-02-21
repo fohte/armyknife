@@ -1145,6 +1145,7 @@ mod tests {
     use super::*;
     use crate::commands::cc::types::TmuxInfo;
     use chrono::Duration;
+    use indoc::indoc;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -1291,19 +1292,6 @@ mod tests {
     // Full-screen integration tests using TestBackend (tree view)
     // =========================================================================
 
-    /// Helper to check that rendered output contains expected substrings.
-    /// Each expected string must appear as a substring within some line of the output.
-    fn assert_output_contains(output: &str, expected_substrings: &[&str]) {
-        for expected in expected_substrings {
-            assert!(
-                output.lines().any(|line| line.contains(expected)),
-                "Expected substring not found in any line:\n  expected: {:?}\n  output:\n{}",
-                expected,
-                output
-            );
-        }
-    }
-
     #[test]
     fn test_render_flat_sessions_tree_view() {
         let now = Utc::now();
@@ -1331,13 +1319,20 @@ mod tests {
         let sessions = vec![session1, session2];
         let output = render_to_string(&sessions, Some(0), now, 80, 12);
 
-        // Flat sessions (no parent-child): each is a root
-        // Line format: "{status} ▎ {session_info}  {time_ago}"
-        // Label is omitted when equal to session_info
-        assert_output_contains(
-            &output,
-            &[">● ▎ webapp:dev  just now", "◐ ▎ api:test  5m ago"],
-        );
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >● ▎ webapp:dev  just now
+               ▎
+
+             ◐ ▎ api:test  5m ago
+               ▎
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -1346,7 +1341,16 @@ mod tests {
         let sessions: Vec<Session> = vec![];
         let output = render_to_string(&sessions, None, now, 80, 8);
 
-        assert_output_contains(&output, &["No active Claude Code sessions."]);
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+              No active Claude Code sessions.
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -1367,14 +1371,16 @@ mod tests {
         let sessions = vec![session];
         let output = render_to_string(&sessions, Some(0), now, 80, 8);
 
-        // Line 2 should contain the last_message after the bar
-        assert_output_contains(
-            &output,
-            &[
-                ">● ▎ webapp:dev  just now",
-                "▎ I've updated the code as requested.",
-            ],
-        );
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >● ▎ webapp:dev  just now
+               ▎ I've updated the code as requested.
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -1394,18 +1400,16 @@ mod tests {
         let sessions = vec![session];
         let output = render_to_string(&sessions, Some(0), now, 80, 8);
 
-        // Line 1 should have status + bar + session_info
-        assert_output_contains(&output, &[">● ▎ webapp:dev  just now"]);
-        // Line 2 should have only the bar (no content)
-        let output_lines: Vec<&str> = output.lines().collect();
-        // Find a line that is just whitespace + ▎ (the continuation line)
-        assert!(
-            output_lines.iter().any(|line| {
-                let trimmed = line.trim();
-                trimmed == "▎"
-            }),
-            "Expected a line with only the bar character"
-        );
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >● ▎ webapp:dev  just now
+               ▎
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -1422,7 +1426,16 @@ mod tests {
         let sessions = vec![session];
         let output = render_to_string(&sessions, Some(0), now, 80, 8);
 
-        assert_output_contains(&output, &["○ ▎ /home/user/docs  docs"]);
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 1                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >○ ▎ /home/user/docs  docs  just now
+               ▎
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     // =========================================================================
@@ -1617,17 +1630,20 @@ mod tests {
         let sessions = vec![parent, child];
         let output = render_to_string(&sessions, Some(0), now, 80, 12);
 
-        // Parent should show without tree prefix (root)
-        // Child should show with tree prefix (└── )
-        assert_output_contains(
-            &output,
-            &[
-                ">● ▎ app:main  just now",
-                "▎ Bash(cargo build)",
-                "└── ● ▎ app:test  2m ago",
-                "▎ Bash(cargo test)",
-            ],
-        );
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 2  ◐ 0  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >● ▎ app:main  just now
+               ▎ Bash(cargo build)
+             │
+             └── ● ▎ app:test  2m ago
+                   ▎ Bash(cargo test)
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -1667,15 +1683,23 @@ mod tests {
         let sessions = vec![parent, child1, child2];
         let output = render_to_string(&sessions, Some(0), now, 80, 15);
 
-        // First child should have ├── , last child should have └──
-        assert_output_contains(
-            &output,
-            &[
-                ">● ▎ app:main  just now",
-                "├── ● ▎ app:test  1m ago",
-                "└── ◐ ▎ app:review  3m ago",
-            ],
-        );
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Claude Code Sessions                       ● 2  ◐ 1  ○ 0                    │
+            └──────────────────────────────────────────────────────────────────────────────┘
+            >● ▎ app:main  just now
+               ▎
+             │
+             ├── ● ▎ app:test  1m ago
+             │     ▎
+             │
+             └── ◐ ▎ app:review  3m ago
+                   ▎
+
+
+
+              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+        assert_eq!(output, expected);
     }
 
     // =========================================================================
