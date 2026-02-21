@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::event::{SessionChange, SessionChangeType};
+use super::session_tree::build_session_tree;
 
 /// Application mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -87,9 +88,7 @@ impl App {
             list_state.select(Some(0));
         }
 
-        let tree_ordered_indices = filtered_indices.clone();
-
-        Self {
+        let mut app = Self {
             sessions,
             list_state,
             should_quit: false,
@@ -102,10 +101,12 @@ impl App {
             status_filter: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
-            tree_ordered_indices,
+            tree_ordered_indices: Vec::new(),
             title_cache,
             repo_name_cache: HashMap::new(),
-        }
+        };
+        app.rebuild_tree_order();
+        app
     }
 
     /// Reloads sessions from disk.
@@ -207,10 +208,34 @@ impl App {
         }
     }
 
+    /// Rebuilds `tree_ordered_indices` from the current `filtered_indices`.
+    ///
+    /// Runs the same DFS tree-building logic that the render layer uses,
+    /// so that cursor positions always match the displayed order.
+    fn rebuild_tree_order(&mut self) {
+        let filtered: Vec<&Session> = self
+            .filtered_indices
+            .iter()
+            .filter_map(|&i| self.sessions.get(i))
+            .collect();
+        let tree_entries = build_session_tree(&filtered);
+        self.tree_ordered_indices = tree_entries
+            .iter()
+            .filter_map(|entry| {
+                self.sessions
+                    .iter()
+                    .position(|s| s.session_id == entry.session.session_id)
+            })
+            .collect();
+    }
+
     /// Restores selection by session_id if possible, otherwise adjusts.
+    ///
+    /// Rebuilds the tree order from the current filtered sessions so that
+    /// the cursor position is resolved against the actual display order,
+    /// not the flat `updated_at` sort order.
     fn restore_selection(&mut self, session_id: Option<&str>) {
-        // Reset tree order to match filtered order until next render
-        self.tree_ordered_indices = self.filtered_indices.clone();
+        self.rebuild_tree_order();
 
         if let Some(id) = session_id
             && let Some(pos) = self
@@ -409,8 +434,7 @@ impl App {
         self.confirmed_query.clear();
         self.status_filter = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
-        // Reset tree order to match filtered order until next render
-        self.tree_ordered_indices = self.filtered_indices.clone();
+        self.rebuild_tree_order();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         } else {
@@ -468,8 +492,7 @@ impl App {
             .map(|(i, _)| i)
             .collect();
 
-        // Reset tree order to match filtered order until next render
-        self.tree_ordered_indices = self.filtered_indices.clone();
+        self.rebuild_tree_order();
 
         // Reset selection to first item or none
         if self.filtered_indices.is_empty() {
