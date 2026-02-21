@@ -10,7 +10,15 @@ use crate::shared::env_var::EnvVars;
 /// Returns the trimmed stdout output.
 /// Tools are disabled (`--tools ""`) to prevent the model from attempting
 /// tool calls (e.g., Edit) that produce permission prompts in stdout.
-pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Result<String> {
+///
+/// `max_output_tokens` sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on the child
+/// process, causing Claude Code to reject responses that exceed the limit.
+pub fn run_print_mode(
+    model: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    max_output_tokens: Option<u32>,
+) -> Result<String> {
     let (skip_key, skip_val) = EnvVars::skip_hooks_pair();
     let mut cmd = Command::new("claude");
     cmd.args(["-p", "--model", model, "--tools", ""]);
@@ -20,6 +28,9 @@ pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Re
     // Prevent hooks from firing in the child claude process,
     // which would cause infinite recursion (hook → claude -p → hook → ...).
     cmd.env(skip_key, skip_val);
+    if let Some(tokens) = max_output_tokens {
+        cmd.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", tokens.to_string());
+    }
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -31,6 +42,12 @@ pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Re
     }
 
     let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        let msg = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        bail!("claude exited with {}: {msg}", output.status);
+    }
+
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     if text.is_empty() {

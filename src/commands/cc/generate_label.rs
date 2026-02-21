@@ -38,23 +38,49 @@ pub fn run(args: &GenerateLabelArgs) -> Result<()> {
     Ok(())
 }
 
+const MAX_RETRIES: u32 = 2;
+const MAX_OUTPUT_TOKENS: u32 = 50;
+
 /// Calls `claude -p --model haiku` to generate a short label from a prompt.
+/// Retries up to `MAX_RETRIES` times on failure (e.g., output token limit exceeded).
 fn generate_label_via_claude(prompt: &str) -> Result<String> {
     let full_prompt = formatdoc! {r#"
-        Task: Convert the following user prompt to a very short Japanese title.
+        Task: Generate a short Japanese title from the user prompt below.
+        The title is shown in a session list to help the user quickly recall what they were working on.
 
         Requirements:
         - 2-5 words in Japanese
+        - Include specific identifiers (PR numbers, file names, feature names, error names) when present
         - No quotes, no punctuation at the end
+
+        Examples:
+        - "PR #40 の CI を直して" → "PR #40 CI 修正"
+        - "セッション一覧の TUI を作りたい" → "セッション一覧 TUI 実装"
+        - "ラベル生成のプロンプトがうまく動かない" → "ラベル生成プロンプト改善"
+        - "renovate.json5 の設定をデバッグしたい" → "Renovate 設定デバッグ"
 
         <user-prompt>
         {prompt}
         </user-prompt>
 
-        IMPORTANT: Output ONLY the title text. Do not analyze, explain, or investigate the task. Just generate the title."#
+        Output ONLY the title text."#
     };
 
-    claude::run_print_mode("haiku", "", &full_prompt)
+    let system_prompt = "You are a title generator. You ONLY output short Japanese titles. You never explain, analyze, or respond conversationally.";
+
+    let mut last_err = anyhow::anyhow!("label generation failed");
+    for _ in 0..=MAX_RETRIES {
+        match claude::run_print_mode(
+            "haiku",
+            system_prompt,
+            &full_prompt,
+            Some(MAX_OUTPUT_TOKENS),
+        ) {
+            Ok(label) => return Ok(label),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }
 
 /// Updates the session JSON file with the generated label.
