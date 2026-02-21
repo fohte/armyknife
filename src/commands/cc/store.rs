@@ -242,6 +242,62 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
+/// Atomically reads a session, applies a mutation, and writes it back
+/// under a single exclusive lock. Prevents TOCTOU races where separate
+/// load/save calls could overwrite concurrent hook updates.
+///
+/// Returns `Ok(false)` if the session file does not exist.
+/// Returns `Ok(true)` if the mutation was applied and saved.
+pub(crate) fn update_session_atomic(
+    sessions_dir: &Path,
+    session_id: &str,
+    mutate: impl FnOnce(&mut Session) -> bool,
+) -> Result<bool> {
+    let path = session_file_in(sessions_dir, session_id)?;
+
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    // Hold exclusive lock for the entire read-modify-write cycle
+    acquire_lock(&lock_file)?;
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut session: Session = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+
+    if !mutate(&mut session) {
+        return Ok(false);
+    }
+
+    let new_content = serde_json::to_string_pretty(&session)?;
+    let temp_path = path.with_extension("json.tmp");
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(new_content.as_bytes())?;
+    temp_file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
+
+    Ok(true)
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {

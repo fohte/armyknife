@@ -86,23 +86,26 @@ fn generate_label_via_claude(prompt: &str) -> Result<String> {
 /// Updates the session JSON file with the generated label.
 /// Only sets the label if the session still has no label (avoids overwriting
 /// a label that was set by other means between spawn and completion).
+///
+/// Uses `update_session_atomic` to hold an exclusive lock for the entire
+/// read-modify-write cycle, preventing concurrent hook updates from being
+/// overwritten.
 fn update_session_label(
     sessions_dir: &std::path::Path,
     session_id: &str,
     label: &str,
 ) -> Result<()> {
-    let mut session = store::load_session_from(sessions_dir, session_id)?
-        .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?;
-
-    // Only update if label is unset or is the placeholder set by the hook.
-    // Skip if a real label was set by other means (e.g., --label flag).
-    let dominated_by_existing = session.label.as_ref().is_some_and(|l| l != "...");
-    if dominated_by_existing {
-        return Ok(());
-    }
-
-    session.label = Some(label.to_string());
-    store::save_session_to(sessions_dir, &session)?;
+    let label = label.to_string();
+    store::update_session_atomic(sessions_dir, session_id, |session| {
+        // Only update if label is unset or is the placeholder set by the hook.
+        // Skip if a real label was set by other means (e.g., --label flag).
+        let dominated_by_existing = session.label.as_ref().is_some_and(|l| l != "...");
+        if dominated_by_existing {
+            return false;
+        }
+        session.label = Some(label);
+        true
+    })?;
 
     Ok(())
 }
@@ -189,11 +192,12 @@ mod tests {
     }
 
     #[rstest]
-    fn update_session_label_errors_when_session_not_found() {
+    fn update_session_label_noop_when_session_not_found() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
 
+        // Non-existent session is a no-op (background process; session may have been deleted)
         let result = update_session_label(sessions_dir, "nonexistent", "Label");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }
