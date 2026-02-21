@@ -26,7 +26,7 @@ const LOCK_RETRY_COUNT: u32 = 10;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Returns the directory for storing Claude Code session data.
-/// Path: ~/Library/Caches/armyknife/cc/sessions/ (macOS) or ~/.cache/armyknife/cc/sessions/ (Linux)
+/// Path: ~/.cache/armyknife/cc/sessions/
 pub fn sessions_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("sessions"))
@@ -34,8 +34,7 @@ pub fn sessions_dir() -> Result<PathBuf> {
 }
 
 /// Returns the file path for storing the last selected session ID.
-/// Path: ~/Library/Caches/armyknife/cc/last_selected_session (macOS)
-///       ~/.cache/armyknife/cc/last_selected_session (Linux)
+/// Path: ~/.cache/armyknife/cc/last_selected_session
 pub fn last_selected_session_file() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("last_selected_session"))
@@ -93,8 +92,7 @@ fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
 }
 
 /// Returns the file path for a specific session.
-/// Path: ~/Library/Caches/armyknife/cc/sessions/<session_id>.json (macOS)
-///       ~/.cache/armyknife/cc/sessions/<session_id>.json (Linux)
+/// Path: ~/.cache/armyknife/cc/sessions/<session_id>.json
 ///
 /// Validates that session_id does not contain path separators to prevent
 /// path traversal attacks.
