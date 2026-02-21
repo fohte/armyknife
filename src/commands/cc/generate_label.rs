@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use clap::Args;
 
 use super::store;
+use crate::infra::claude;
 
 /// Arguments for the hidden `generate-label` subcommand.
 ///
@@ -42,28 +42,7 @@ fn generate_label_via_claude(prompt: &str) -> Result<String> {
     let system_prompt = "Generate a very short (2-5 word) title for this task. \
         Output ONLY the title text, nothing else. No quotes, no punctuation at the end.";
 
-    let output = Command::new("claude")
-        .args(["-p", "--model", "haiku", "--system-prompt", system_prompt])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .and_then(|mut child| {
-            // Write the user prompt to stdin
-            if let Some(ref mut stdin) = child.stdin {
-                use std::io::Write;
-                let _ = stdin.write_all(prompt.as_bytes());
-            }
-            child.wait_with_output()
-        })?;
-
-    let label = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    if label.is_empty() {
-        return Err(anyhow::anyhow!("claude returned empty label"));
-    }
-
-    Ok(label)
+    claude::run_print_mode("haiku", system_prompt, prompt)
 }
 
 /// Updates the session JSON file with the generated label.
@@ -94,30 +73,18 @@ fn update_session_label(
 /// for a session that has no label. The background process runs independently
 /// so the hook returns immediately without blocking Claude Code.
 pub fn spawn_label_generation(sessions_dir: &std::path::Path, session_id: &str, prompt: &str) {
-    // Use the current binary to run the generate-label subcommand
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(_) => return, // Best-effort: silently skip if we can't find ourselves
-    };
-
     let sessions_dir_str = sessions_dir.to_string_lossy().to_string();
 
-    // Spawn as a fully detached background process
-    let _ = Command::new(exe)
-        .args([
-            "cc",
-            "generate-label",
-            "--session-id",
-            session_id,
-            "--prompt",
-            prompt,
-            "--sessions-dir",
-            &sessions_dir_str,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn(); // Ignore errors: label generation is best-effort
+    claude::spawn_self_detached(&[
+        "cc",
+        "generate-label",
+        "--session-id",
+        session_id,
+        "--prompt",
+        prompt,
+        "--sessions-dir",
+        &sessions_dir_str,
+    ]);
 }
 
 #[cfg(test)]
