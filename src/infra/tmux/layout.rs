@@ -101,6 +101,18 @@ pub fn build_layout_commands(
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
     }
 
+    // Unset session-level env vars after all panes have been created to
+    // prevent leaking into subsequent windows in the same tmux session.
+    for (key, _) in env_vars {
+        commands.push(TmuxCommand::new(&[
+            "set-environment",
+            "-u",
+            "-t",
+            session,
+            key,
+        ]));
+    }
+
     commands
 }
 
@@ -682,6 +694,29 @@ mod tests {
         assert_eq!(
             commands[2],
             cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // Unset commands should come at the end to prevent leaking
+        let n = commands.len();
+        assert_eq!(
+            commands[n - 2],
+            cmd(&[
+                "set-environment",
+                "-u",
+                "-t",
+                "sess",
+                "ARMYKNIFE_SESSION_LABEL",
+            ])
+        );
+        assert_eq!(
+            commands[n - 1],
+            cmd(&[
+                "set-environment",
+                "-u",
+                "-t",
+                "sess",
+                "ARMYKNIFE_ANCESTOR_SESSION_IDS",
+            ])
         );
     }
 

@@ -409,6 +409,8 @@ impl App {
         self.confirmed_query.clear();
         self.status_filter = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
+        // Reset tree order to match filtered order until next render
+        self.tree_ordered_indices = self.filtered_indices.clone();
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(0));
         } else {
