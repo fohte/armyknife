@@ -41,10 +41,10 @@ pub fn run(args: &GenerateLabelArgs) -> Result<()> {
 /// Calls `claude -p --model haiku` to generate a short label from a prompt.
 fn generate_label_via_claude(prompt: &str) -> Result<String> {
     let system_prompt = indoc::indoc! {"
-        Task: Generate a very short (2-5 word) title for the user prompt below.
+        Task: Generate a very short (2-5 word) Japanese title for the user prompt below.
 
         Requirements:
-        - 2-5 words
+        - 2-5 words in Japanese
         - No quotes, no punctuation at the end
 
         IMPORTANT: Output ONLY the title text. Do not analyze, explain, or investigate the task. Just generate the title."
