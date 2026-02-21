@@ -3,12 +3,15 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Result, bail};
 
+use crate::shared::env_var::EnvVars;
+
 /// Runs `claude -p` with a system prompt and user prompt piped to stdin.
 ///
 /// Returns the trimmed stdout output.
 /// Tools are disabled (`--tools ""`) to prevent the model from attempting
 /// tool calls (e.g., Edit) that produce permission prompts in stdout.
 pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Result<String> {
+    let (skip_key, skip_val) = EnvVars::skip_hooks_pair();
     let mut child = Command::new("claude")
         .args([
             "-p",
@@ -19,6 +22,9 @@ pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Re
             "--tools",
             "",
         ])
+        // Prevent hooks from firing in the child claude process,
+        // which would cause infinite recursion (hook → claude -p → hook → ...).
+        .env(skip_key, skip_val)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

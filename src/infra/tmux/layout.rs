@@ -261,6 +261,7 @@ fn execute_commands(commands: &[TmuxCommand]) -> super::Result<()> {
 mod tests {
     use super::*;
     use crate::shared::config::{PaneConfig, SplitConfig, SplitDirection};
+    use crate::shared::env_var::EnvVars;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -664,22 +665,18 @@ mod tests {
             focus: true,
         });
 
+        let label_key = EnvVars::session_label_name();
+        let ancestors_key = EnvVars::ancestor_session_ids_name();
         let env_vars = [
-            ("ARMYKNIFE_SESSION_LABEL", "my-label"),
-            ("ARMYKNIFE_ANCESTOR_SESSION_IDS", "parent-1,parent-2"),
+            (label_key, "my-label"),
+            (ancestors_key, "parent-1,parent-2"),
         ];
         let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars);
 
         // set-environment commands should come before new-window
         assert_eq!(
             commands[0],
-            cmd(&[
-                "set-environment",
-                "-t",
-                "sess",
-                "ARMYKNIFE_SESSION_LABEL",
-                "my-label",
-            ])
+            cmd(&["set-environment", "-t", "sess", label_key, "my-label"])
         );
         assert_eq!(
             commands[1],
@@ -687,7 +684,7 @@ mod tests {
                 "set-environment",
                 "-t",
                 "sess",
-                "ARMYKNIFE_ANCESTOR_SESSION_IDS",
+                ancestors_key,
                 "parent-1,parent-2",
             ])
         );
@@ -700,23 +697,11 @@ mod tests {
         let n = commands.len();
         assert_eq!(
             commands[n - 2],
-            cmd(&[
-                "set-environment",
-                "-u",
-                "-t",
-                "sess",
-                "ARMYKNIFE_SESSION_LABEL",
-            ])
+            cmd(&["set-environment", "-u", "-t", "sess", label_key])
         );
         assert_eq!(
             commands[n - 1],
-            cmd(&[
-                "set-environment",
-                "-u",
-                "-t",
-                "sess",
-                "ARMYKNIFE_ANCESTOR_SESSION_IDS",
-            ])
+            cmd(&["set-environment", "-u", "-t", "sess", ancestors_key])
         );
     }
 

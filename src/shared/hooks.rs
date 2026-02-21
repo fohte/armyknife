@@ -60,6 +60,7 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::env_var::EnvVars;
     use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
@@ -107,8 +108,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let output_file = dir.path().join("output.txt");
 
+        let wt_name = EnvVars::worktree_path_name();
+        let br_name = EnvVars::branch_name_name();
         let script = format!(
-            "#!/bin/sh\necho \"$ARMYKNIFE_WORKTREE_PATH:$ARMYKNIFE_BRANCH_NAME\" > {}",
+            "#!/bin/sh\necho \"${wt_name}:${br_name}\" > {}",
             output_file.display()
         );
         setup_hook(&dir, "post-worktree-create", &script, true);
@@ -119,8 +122,8 @@ mod tests {
                 let result = run_hook(
                     "post-worktree-create",
                     &[
-                        ("ARMYKNIFE_WORKTREE_PATH", "/tmp/test-worktree"),
-                        ("ARMYKNIFE_BRANCH_NAME", "feature/test"),
+                        (EnvVars::worktree_path_name(), "/tmp/test-worktree"),
+                        (EnvVars::branch_name_name(), "feature/test"),
                     ],
                 );
                 assert!(result.is_ok());

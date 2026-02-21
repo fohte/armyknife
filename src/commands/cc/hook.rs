@@ -21,6 +21,7 @@ use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::command::find_command_path;
 use crate::shared::config::{self, Config};
+use crate::shared::env_var::EnvVars;
 
 /// Delay between retries when waiting for transcript to be updated.
 const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -37,6 +38,12 @@ pub struct HookArgs {
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
+    // Skip hooks when called from armyknife's own claude -p invocations
+    // to prevent infinite recursion (hook → claude -p → hook → ...).
+    if EnvVars::load().skip_hooks {
+        return Ok(());
+    }
+
     // Read raw stdin first for debug logging
     let raw_stdin = read_raw_stdin()?;
 
@@ -90,6 +97,8 @@ fn process_hook_event_impl(
     input: HookInput,
     sessions_dir: &Path,
 ) -> Result<ProcessResult> {
+    let env = EnvVars::load();
+
     // Handle session end by clearing pane option and deleting the session file
     if event == HookEvent::SessionEnd {
         if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
@@ -141,12 +150,9 @@ fn process_hook_event_impl(
     let mut session =
         store::load_session_from(sessions_dir, &input.session_id)?.unwrap_or_else(|| {
             // Read label and ancestor chain from environment variables (set by `wm new`)
-            let label = env::var("ARMYKNIFE_SESSION_LABEL")
-                .ok()
-                .filter(|s| !s.is_empty());
-            let ancestor_session_ids = env::var("ARMYKNIFE_ANCESTOR_SESSION_IDS")
-                .ok()
-                .filter(|s| !s.is_empty())
+            let ancestor_session_ids = env
+                .ancestor_session_ids
+                .as_ref()
                 .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
                 .unwrap_or_default();
 
@@ -161,7 +167,7 @@ fn process_hook_event_impl(
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
-                label,
+                label: env.session_label.clone(),
                 ancestor_session_ids,
             }
         });
@@ -209,10 +215,15 @@ fn process_hook_event_impl(
     // Uses the prompt field from UserPromptSubmit stdin JSON directly, because
     // transcript files (.jsonl / sessions-index.json) are not yet written when the hook fires.
     // Spawns a background process to avoid blocking the hook.
+    // Sets a placeholder label before spawning to prevent duplicate spawns
+    // when multiple UserPromptSubmit events arrive before generation completes.
     if event == HookEvent::UserPromptSubmit
         && session.label.is_none()
         && let Some(prompt) = &input.prompt
     {
+        session.label = Some("...".to_string());
+        store::save_session_to(sessions_dir, &session)?;
+
         generate_label::spawn_label_generation(sessions_dir, &session.session_id, prompt);
     }
 
@@ -310,7 +321,7 @@ impl LogLevel {
 
 /// Gets the log level from environment variable.
 fn get_log_level() -> LogLevel {
-    LogLevel::from_str(env::var("ARMYKNIFE_CC_HOOK_LOG").ok().as_deref())
+    LogLevel::from_str(EnvVars::load().cc_hook_log.as_deref())
 }
 
 /// Writes a hook log with stdin content, event type, and processing result.
@@ -477,7 +488,7 @@ where
 /// available in all subsequent Bash tool executions within the session.
 fn export_session_id_to_env_file(session_id: &str) {
     if let Ok(env_file) = env::var("CLAUDE_ENV_FILE") {
-        let export_line = format!("export ARMYKNIFE_SESSION_ID={}\n", session_id);
+        let export_line = format!("export {}={}\n", EnvVars::session_id_name(), session_id);
         // Append to preserve variables set by other hooks
         let _ = fs::OpenOptions::new()
             .create(true)
@@ -509,9 +520,9 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
 /// Checks if notifications are enabled via environment variable.
 fn is_notification_enabled(config: &Config) -> bool {
     // Environment variable takes precedence over config for backward compatibility
-    match env::var("ARMYKNIFE_CC_NOTIFY") {
-        Ok(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
-        Err(_) => config.notification.enabled,
+    match EnvVars::load().cc_notify {
+        Some(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
+        None => config.notification.enabled,
     }
 }
 

@@ -56,8 +56,10 @@ fn update_session_label(
     let mut session = store::load_session_from(sessions_dir, session_id)?
         .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?;
 
-    // Only update if label is still unset to avoid race conditions
-    if session.label.is_some() {
+    // Only update if label is unset or is the placeholder set by the hook.
+    // Skip if a real label was set by other means (e.g., --label flag).
+    let dominated_by_existing = session.label.as_ref().is_some_and(|l| l != "...");
+    if dominated_by_existing {
         return Ok(());
     }
 

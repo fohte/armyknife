@@ -15,6 +15,7 @@ use crate::infra::git::fetch_with_prune;
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{Config, load_config};
+use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
 /// Get the cache path for prompt recovery.
@@ -528,9 +529,12 @@ fn run_worktree_creation(
     if let Err(e) = hooks::run_hook(
         "post-worktree-create",
         &[
-            ("ARMYKNIFE_WORKTREE_PATH", &worktree_abs.to_string_lossy()),
-            ("ARMYKNIFE_BRANCH_NAME", &actual_branch),
-            ("ARMYKNIFE_REPO_ROOT", repo_root),
+            (
+                EnvVars::worktree_path_name(),
+                &worktree_abs.to_string_lossy(),
+            ),
+            (EnvVars::branch_name_name(), &actual_branch),
+            (EnvVars::repo_root_name(), repo_root),
         ],
     ) {
         eprintln!("warning: post-worktree-create hook error: {e}");
@@ -539,20 +543,20 @@ fn run_worktree_creation(
     // Build environment variables for child session
     let mut env_vars: Vec<(String, String)> = Vec::new();
     if let Some(ref label) = args.label {
-        env_vars.push(("ARMYKNIFE_SESSION_LABEL".to_string(), label.clone()));
+        env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
     }
     // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
     // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
     // so `a wm new` called from a Claude Code Bash tool automatically inherits
     // the parent session ID without requiring --parent-session-id.
-    let parent_id = args.parent_session_id.clone().or_else(|| {
-        std::env::var("ARMYKNIFE_SESSION_ID")
-            .ok()
-            .filter(|s| !s.is_empty())
-    });
+    let env = EnvVars::load();
+    let parent_id = args.parent_session_id.clone().or(env.session_id);
     if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;
-        env_vars.push(("ARMYKNIFE_ANCESTOR_SESSION_IDS".to_string(), ancestor_chain));
+        env_vars.push((
+            EnvVars::ancestor_session_ids_name().to_string(),
+            ancestor_chain,
+        ));
     }
 
     let env_refs: Vec<(&str, &str)> = env_vars
