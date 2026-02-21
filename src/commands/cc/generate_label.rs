@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Args;
+use indoc::formatdoc;
 
 use super::store;
 use crate::infra::claude;
@@ -39,10 +40,23 @@ pub fn run(args: &GenerateLabelArgs) -> Result<()> {
 
 /// Calls `claude -p --model haiku` to generate a short label from a prompt.
 fn generate_label_via_claude(prompt: &str) -> Result<String> {
-    let system_prompt = "Generate a very short (2-5 word) title for this task. \
-        Output ONLY the title text, nothing else. No quotes, no punctuation at the end.";
+    let system_prompt = indoc::indoc! {"
+        Task: Generate a very short (2-5 word) title for the user prompt below.
 
-    claude::run_print_mode("haiku", system_prompt, prompt)
+        Requirements:
+        - 2-5 words
+        - No quotes, no punctuation at the end
+
+        IMPORTANT: Output ONLY the title text. Do not analyze, explain, or investigate the task. Just generate the title."
+    };
+
+    let user_prompt = formatdoc! {"
+        <user-prompt>
+        {prompt}
+        </user-prompt>"
+    };
+
+    claude::run_print_mode("haiku", system_prompt, &user_prompt)
 }
 
 /// Updates the session JSON file with the generated label.
