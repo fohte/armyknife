@@ -494,7 +494,7 @@ where
 /// available in all subsequent Bash tool executions within the session.
 fn export_session_id_to_env_file(session_id: &str) {
     if let Ok(env_file) = env::var("CLAUDE_ENV_FILE") {
-        let export_line = format!("export {}={}\n", EnvVars::session_id_name(), session_id);
+        let export_line = format!("export {}=\"{}\"\n", EnvVars::session_id_name(), session_id);
         // Append to preserve variables set by other hooks
         let _ = fs::OpenOptions::new()
             .create(true)
