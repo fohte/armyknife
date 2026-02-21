@@ -6,9 +6,19 @@ use anyhow::{Result, bail};
 /// Runs `claude -p` with a system prompt and user prompt piped to stdin.
 ///
 /// Returns the trimmed stdout output.
+/// Tools are disabled (`--tools ""`) to prevent the model from attempting
+/// tool calls (e.g., Edit) that produce permission prompts in stdout.
 pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Result<String> {
     let mut child = Command::new("claude")
-        .args(["-p", "--model", model, "--system-prompt", system_prompt])
+        .args([
+            "-p",
+            "--model",
+            model,
+            "--system-prompt",
+            system_prompt,
+            "--tools",
+            "",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

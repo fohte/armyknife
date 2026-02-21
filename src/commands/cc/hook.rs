@@ -107,6 +107,12 @@ fn process_hook_event_impl(
     // By skipping "startup", we only create sessions for "resume" events (restored sessions)
     // or when source is absent (backward compatibility / other cases).
     if event == HookEvent::SessionStart {
+        // Export session ID to CLAUDE_ENV_FILE so that subsequent Bash commands
+        // (e.g., `a wm new`) can automatically discover the parent session ID.
+        // This must run for ALL SessionStart events (including "startup") because
+        // CLAUDE_ENV_FILE is only writable during SessionStart hooks.
+        export_session_id_to_env_file(&input.session_id);
+
         // Skip "startup" events before setting pane option to avoid setting wrong session_id
         if input.source.as_deref() == Some("startup") {
             return Ok(ProcessResult::Skipped);
@@ -200,12 +206,14 @@ fn process_hook_event_impl(
     store::save_session_to(sessions_dir, &session)?;
 
     // Auto-generate label for root sessions on first user prompt.
+    // Uses the prompt field from UserPromptSubmit stdin JSON directly, because
+    // transcript files (.jsonl / sessions-index.json) are not yet written when the hook fires.
     // Spawns a background process to avoid blocking the hook.
     if event == HookEvent::UserPromptSubmit
         && session.label.is_none()
-        && let Some(prompt) = get_first_user_prompt(&session.cwd, &session.session_id)
+        && let Some(prompt) = &input.prompt
     {
-        generate_label::spawn_label_generation(sessions_dir, &session.session_id, &prompt);
+        generate_label::spawn_label_generation(sessions_dir, &session.session_id, prompt);
     }
 
     // Refresh tmux status bar so `#()` commands pick up the state change immediately.
@@ -461,12 +469,22 @@ where
     unreachable!()
 }
 
-/// Retrieves the first user prompt for label generation.
+/// Exports the session ID to Claude Code's env file so that subsequent Bash commands
+/// can access it as `$ARMYKNIFE_SESSION_ID`.
 ///
-/// Uses `get_session_title` which reads firstPrompt from sessions-index.json
-/// or falls back to the first user message in the .jsonl transcript.
-fn get_first_user_prompt(cwd: &Path, session_id: &str) -> Option<String> {
-    claude_sessions::get_session_title(cwd, session_id)
+/// Claude Code provides `CLAUDE_ENV_FILE` only during SessionStart hooks.
+/// Writing `export ARMYKNIFE_SESSION_ID=...` to this file makes the variable
+/// available in all subsequent Bash tool executions within the session.
+fn export_session_id_to_env_file(session_id: &str) {
+    if let Ok(env_file) = env::var("CLAUDE_ENV_FILE") {
+        let export_line = format!("export ARMYKNIFE_SESSION_ID={}\n", session_id);
+        // Append to preserve variables set by other hooks
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(env_file)
+            .and_then(|mut f| f.write_all(export_line.as_bytes()));
+    }
 }
 
 /// Determines the session status based on the event and input.

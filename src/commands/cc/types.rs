@@ -88,6 +88,13 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
+    // UserPromptSubmit event fields
+    /// User's submitted prompt text (available in UserPromptSubmit events).
+    /// Used for auto-generating session labels without reading from transcript files,
+    /// which may not be written yet when the hook fires.
+    #[serde(default)]
+    pub prompt: Option<String>,
+
     // Pre-tool-use / Post-tool-use / PermissionRequest event fields
     #[serde(default)]
     pub tool_name: Option<String>,

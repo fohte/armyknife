@@ -541,7 +541,16 @@ fn run_worktree_creation(
     if let Some(ref label) = args.label {
         env_vars.push(("ARMYKNIFE_SESSION_LABEL".to_string(), label.clone()));
     }
-    if let Some(ref parent_id) = args.parent_session_id {
+    // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
+    // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
+    // so `a wm new` called from a Claude Code Bash tool automatically inherits
+    // the parent session ID without requiring --parent-session-id.
+    let parent_id = args.parent_session_id.clone().or_else(|| {
+        std::env::var("ARMYKNIFE_SESSION_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+    });
+    if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;
         env_vars.push(("ARMYKNIFE_ANCESTOR_SESSION_IDS".to_string(), ancestor_chain));
     }
