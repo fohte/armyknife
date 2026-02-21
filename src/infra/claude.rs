@@ -12,19 +12,15 @@ use crate::shared::env_var::EnvVars;
 /// tool calls (e.g., Edit) that produce permission prompts in stdout.
 pub fn run_print_mode(model: &str, system_prompt: &str, user_prompt: &str) -> Result<String> {
     let (skip_key, skip_val) = EnvVars::skip_hooks_pair();
-    let mut child = Command::new("claude")
-        .args([
-            "-p",
-            "--model",
-            model,
-            "--system-prompt",
-            system_prompt,
-            "--tools",
-            "",
-        ])
-        // Prevent hooks from firing in the child claude process,
-        // which would cause infinite recursion (hook → claude -p → hook → ...).
-        .env(skip_key, skip_val)
+    let mut cmd = Command::new("claude");
+    cmd.args(["-p", "--model", model, "--tools", ""]);
+    if !system_prompt.is_empty() {
+        cmd.args(["--system-prompt", system_prompt]);
+    }
+    // Prevent hooks from firing in the child claude process,
+    // which would cause infinite recursion (hook → claude -p → hook → ...).
+    cmd.env(skip_key, skip_val);
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
