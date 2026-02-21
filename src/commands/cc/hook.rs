@@ -213,7 +213,7 @@ fn process_hook_event_impl(
 
     // Auto-generate label for root sessions on first user prompt.
     // Uses the prompt field from UserPromptSubmit stdin JSON directly, because
-    // transcript files (.jsonl / sessions-index.json) are not yet written when the hook fires.
+    // transcript files (.jsonl) are not yet written when the hook fires.
     // Spawns a background process to avoid blocking the hook.
     // Sets a placeholder label before spawning to prevent duplicate spawns
     // when multiple UserPromptSubmit events arrive before generation completes.

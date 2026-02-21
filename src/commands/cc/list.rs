@@ -430,7 +430,7 @@ mod tests {
             .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // Title is fetched from Claude Code's sessions-index.json, returns "-" for test paths
+        // Title is fetched from Claude Code's .jsonl, returns "-" for test paths
         assert_eq!(
             result,
             indoc! {"
@@ -459,7 +459,7 @@ mod tests {
             .expect("render should succeed");
 
         let result = String::from_utf8(output).expect("valid utf8");
-        // Title returns "-" (no sessions-index.json), session/window names are truncated
+        // Title returns "-" (no .jsonl), session/window names are truncated
         assert_eq!(
             result,
             indoc! {"
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_get_title_display_name_without_sessions_index() {
-        // When sessions-index.json doesn't exist, returns "-"
+        // When .jsonl doesn't exist, returns "-"
         let session = create_test_session();
         assert_eq!(get_title_display_name(&session), "-");
     }
