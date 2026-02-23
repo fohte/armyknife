@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.107](https://github.com/fohte/armyknife/compare/v0.1.106...v0.1.107) (2026-02-23)
+
+
+### Features
+
+* **cc/watch:** sort session tree by subtree maximum `updated_at` ([#311](https://github.com/fohte/armyknife/issues/311)) ([b46f7a9](https://github.com/fohte/armyknife/commit/b46f7a9ff8d5d5886e00fe66ac5f82cb9d9dcc8d))
+
 ## [0.1.106](https://github.com/fohte/armyknife/compare/v0.1.105...v0.1.106) (2026-02-21)
 
 
