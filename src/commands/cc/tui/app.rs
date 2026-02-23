@@ -731,11 +731,19 @@ fn load_sessions() -> Result<Vec<Session>> {
 mod tests {
     use super::*;
     use crate::commands::cc::types::{SessionStatus, TmuxInfo};
-    use chrono::Utc;
+    use chrono::{TimeDelta, Utc};
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
+    /// Counter to assign distinct timestamps to test sessions.
+    /// Each call returns a progressively older timestamp, so sessions
+    /// created first sort first (most recent updated_at).
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static TEST_SESSION_COUNTER: AtomicI64 = AtomicI64::new(0);
+
     fn create_test_session(id: &str) -> Session {
+        let offset = TEST_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let now = Utc::now();
         Session {
             session_id: id.to_string(),
             cwd: PathBuf::from("/tmp/test"),
@@ -743,8 +751,8 @@ mod tests {
             tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: now - TimeDelta::seconds(offset),
+            updated_at: now - TimeDelta::seconds(offset),
             last_message: None,
             current_tool: None,
             label: None,

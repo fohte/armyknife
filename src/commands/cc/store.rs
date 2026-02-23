@@ -14,7 +14,7 @@ use crate::shared::cache;
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,
 /// preventing rapid reordering during concurrent agent execution.
-const SORT_STABILITY_THRESHOLD_SECS: i64 = 30;
+pub(crate) const SORT_STABILITY_THRESHOLD_SECS: i64 = 30;
 
 /// Lock timeout for file operations.
 /// Short timeout to minimize performance impact while preventing race conditions.
