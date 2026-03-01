@@ -4,7 +4,7 @@ CARGO_TARGET_DIR = "{{config_root}}/target"
 
 [tools]
 lefthook = "2.1.0"
-"cargo:ast-grep" = "0.40.5"
+"cargo:ast-grep" = "0.41.0"
 
 # lefthook hooks
 actionlint = "1.7.10"
