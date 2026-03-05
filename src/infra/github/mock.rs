@@ -147,6 +147,26 @@ fn mock_issue_with_labels(
     })
 }
 
+/// Create a mock issue JSON object with a specific internal ID.
+/// Used for get_issue_id endpoint testing.
+fn mock_issue_with_id(
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    issue_id: u64,
+) -> serde_json::Value {
+    let mut issue = mock_issue(
+        owner,
+        repo,
+        issue_number,
+        "Test Issue",
+        "Test body",
+        "2024-01-02T00:00:00Z",
+    );
+    issue["id"] = json!(issue_id);
+    issue
+}
+
 /// Create a mock repository JSON object for octocrab Repository model.
 fn mock_repository(
     owner: &str,
@@ -213,6 +233,15 @@ fn mock_pull_request(
             "sha": "def456"
         }
     })
+}
+
+/// Remote sub-issue definition for test setup.
+#[derive(Clone)]
+pub struct RemoteSubIssue<'a> {
+    pub id: u64,
+    pub number: i64,
+    pub owner: &'a str,
+    pub repo: &'a str,
 }
 
 /// Remote comment definition for test setup.
@@ -438,12 +467,81 @@ impl<'a> MockRepoContext<'a> {
 
     /// Mock REST endpoint for listing sub-issues (returns empty list by default).
     pub async fn sub_issues_empty(&self, issue_number: u64) {
+        self.sub_issues(issue_number, &[]).await;
+    }
+
+    /// Mock REST endpoint for listing sub-issues with specified data.
+    pub async fn sub_issues(&self, issue_number: u64, sub_issues: &[RemoteSubIssue<'_>]) {
+        let body: Vec<serde_json::Value> = sub_issues
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "number": s.number,
+                    "repository_url": format!(
+                        "https://api.github.com/repos/{}/{}",
+                        s.owner, s.repo
+                    )
+                })
+            })
+            .collect();
+
         Mock::given(method("GET"))
             .and(path(format!(
                 "/repos/{}/{}/issues/{}/sub_issues",
                 self.owner, self.repo, issue_number
             )))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(body)))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock REST endpoint for adding a sub-issue (POST).
+    pub async fn add_sub_issue(&self, issue_number: u64) {
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/repos/{}/{}/issues/{}/sub_issues",
+                self.owner, self.repo, issue_number
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "id": 1,
+                "number": issue_number,
+                "title": "Sub Issue"
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock REST endpoint for removing a sub-issue (DELETE).
+    /// Note: endpoint uses singular "sub_issue" for DELETE.
+    pub async fn remove_sub_issue(&self, issue_number: u64) {
+        Mock::given(method("DELETE"))
+            .and(path(format!(
+                "/repos/{}/{}/issues/{}/sub_issue",
+                self.owner, self.repo, issue_number
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": 1,
+                "number": issue_number,
+                "title": "Sub Issue"
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock REST endpoint for getting an issue's ID (GET /repos/{owner}/{repo}/issues/{number}).
+    pub async fn get_issue_id(&self, issue_number: u64, issue_id: u64) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/{}/{}/issues/{}",
+                self.owner, self.repo, issue_number
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue_with_id(
+                self.owner,
+                self.repo,
+                issue_number,
+                issue_id,
+            )))
             .mount(self.server)
             .await;
     }

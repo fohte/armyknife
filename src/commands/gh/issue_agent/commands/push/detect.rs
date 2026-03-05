@@ -702,4 +702,192 @@ mod tests {
             assert!(matches!(&changes[0], CommentChange::Updated { .. }));
         }
     }
+
+    mod detect_sub_issue_change_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::SubIssueRef;
+
+        fn metadata_with_sub_issues(refs: &[&str]) -> IssueMetadata {
+            IssueMetadata {
+                number: 1,
+                title: "Test".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                last_edited_at: None,
+                parent_issue: None,
+                sub_issues: refs.iter().map(|s| s.to_string()).collect(),
+            }
+        }
+
+        fn sub_issue_ref(owner: &str, repo: &str, number: i64) -> SubIssueRef {
+            SubIssueRef {
+                id: number as u64,
+                number,
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+            }
+        }
+
+        fn issue_with_sub_issues(refs: Vec<SubIssueRef>) -> Issue {
+            factories::issue_with(|i| {
+                i.sub_issues = refs;
+            })
+        }
+
+        #[rstest]
+        #[case::same_single_sub_issue(
+            vec!["org/repo#10"],
+            vec![sub_issue_ref("org", "repo", 10)],
+        )]
+        #[case::same_multiple_sub_issues(
+            vec!["org/repo#10", "org/repo#20"],
+            vec![sub_issue_ref("org", "repo", 10), sub_issue_ref("org", "repo", 20)],
+        )]
+        #[case::both_empty(vec![], vec![])]
+        fn test_returns_none_when_no_changes(
+            #[case] local: Vec<&str>,
+            #[case] remote: Vec<SubIssueRef>,
+        ) {
+            let metadata = metadata_with_sub_issues(&local);
+            let issue = issue_with_sub_issues(remote);
+            assert!(detect_sub_issue_change(&metadata, &issue).is_none());
+        }
+
+        #[rstest]
+        #[case::add_one(
+            vec!["org/repo#10", "org/repo#20"],
+            vec![sub_issue_ref("org", "repo", 10)],
+            vec!["org/repo#20"],
+            vec![],
+        )]
+        #[case::remove_one(
+            vec!["org/repo#10"],
+            vec![sub_issue_ref("org", "repo", 10), sub_issue_ref("org", "repo", 20)],
+            vec![],
+            vec!["org/repo#20"],
+        )]
+        #[case::add_and_remove(
+            vec!["org/repo#30"],
+            vec![sub_issue_ref("org", "repo", 10)],
+            vec!["org/repo#30"],
+            vec!["org/repo#10"],
+        )]
+        #[case::add_from_empty(
+            vec!["org/repo#10"],
+            vec![],
+            vec!["org/repo#10"],
+            vec![],
+        )]
+        #[case::remove_all(
+            vec![],
+            vec![sub_issue_ref("org", "repo", 10)],
+            vec![],
+            vec!["org/repo#10"],
+        )]
+        fn test_detects_sub_issue_changes(
+            #[case] local: Vec<&str>,
+            #[case] remote: Vec<SubIssueRef>,
+            #[case] expected_add: Vec<&str>,
+            #[case] expected_remove: Vec<&str>,
+        ) {
+            let metadata = metadata_with_sub_issues(&local);
+            let issue = issue_with_sub_issues(remote);
+
+            let change =
+                detect_sub_issue_change(&metadata, &issue).expect("Expected sub-issue changes");
+
+            let mut to_add = change.to_add.clone();
+            to_add.sort();
+            let mut to_remove = change.to_remove.clone();
+            to_remove.sort();
+            let mut expected_add: Vec<String> =
+                expected_add.iter().map(|s| s.to_string()).collect();
+            let mut expected_remove: Vec<String> =
+                expected_remove.iter().map(|s| s.to_string()).collect();
+            expected_add.sort();
+            expected_remove.sort();
+
+            assert_eq!(to_add, expected_add);
+            assert_eq!(to_remove, expected_remove);
+        }
+    }
+
+    mod detect_parent_issue_change_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::SubIssueRef;
+
+        fn metadata_with_parent(parent: Option<&str>) -> IssueMetadata {
+            IssueMetadata {
+                number: 1,
+                title: "Test".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                last_edited_at: None,
+                parent_issue: parent.map(|s| s.to_string()),
+                sub_issues: vec![],
+            }
+        }
+
+        fn parent_ref(owner: &str, repo: &str, number: i64) -> SubIssueRef {
+            SubIssueRef {
+                id: number as u64,
+                number,
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+            }
+        }
+
+        fn issue_with_parent(parent: Option<SubIssueRef>) -> Issue {
+            factories::issue_with(|i| {
+                i.parent_issue = parent;
+            })
+        }
+
+        #[rstest]
+        #[case::same_parent(Some("org/repo#5"), Some(parent_ref("org", "repo", 5)))]
+        #[case::both_none(None, None)]
+        fn test_returns_none_when_no_changes(
+            #[case] local: Option<&str>,
+            #[case] remote: Option<SubIssueRef>,
+        ) {
+            let metadata = metadata_with_parent(local);
+            let issue = issue_with_parent(remote);
+            assert!(detect_parent_issue_change(&metadata, &issue).is_none());
+        }
+
+        #[rstest]
+        #[case::parent_added(Some("org/repo#5"), None, Some("org/repo#5"), None)]
+        #[case::parent_removed(None, Some(parent_ref("org", "repo", 5)), None, Some("org/repo#5"))]
+        #[case::parent_changed(
+            Some("org/repo#10"),
+            Some(parent_ref("org", "repo", 5)),
+            Some("org/repo#10"),
+            Some("org/repo#5")
+        )]
+        fn test_detects_parent_issue_changes(
+            #[case] local: Option<&str>,
+            #[case] remote: Option<SubIssueRef>,
+            #[case] expected_local: Option<&str>,
+            #[case] expected_remote: Option<&str>,
+        ) {
+            let metadata = metadata_with_parent(local);
+            let issue = issue_with_parent(remote);
+
+            let change = detect_parent_issue_change(&metadata, &issue)
+                .expect("Expected parent issue change");
+
+            assert_eq!(change.local.as_deref(), expected_local);
+            assert_eq!(change.remote.as_deref(), expected_remote);
+        }
+    }
 }

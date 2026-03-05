@@ -105,3 +105,38 @@ impl From<octocrab::models::issues::Issue> for Issue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    mod sub_issue_ref_to_ref_string {
+        use super::*;
+
+        fn sub_issue_ref(owner: &str, repo: &str, number: i64) -> SubIssueRef {
+            SubIssueRef {
+                id: 1,
+                number,
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+            }
+        }
+
+        #[rstest]
+        #[case::typical("octocat", "hello-world", 42, "octocat/hello-world#42")]
+        #[case::single_digit_number("owner", "repo", 1, "owner/repo#1")]
+        #[case::large_number("org", "project", 99999, "org/project#99999")]
+        #[case::hyphenated_names("my-org", "my-repo", 123, "my-org/my-repo#123")]
+        #[case::underscore_names("org_name", "repo_name", 7, "org_name/repo_name#7")]
+        fn test_to_ref_string(
+            #[case] owner: &str,
+            #[case] repo: &str,
+            #[case] number: i64,
+            #[case] expected: &str,
+        ) {
+            let ref_ = sub_issue_ref(owner, repo, number);
+            assert_eq!(ref_.to_ref_string(), expected);
+        }
+    }
+}

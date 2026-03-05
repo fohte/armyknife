@@ -350,3 +350,181 @@ fn parse_issue_ref(ref_str: &str) -> Option<(String, String, u64)> {
     let number = number_str.parse::<u64>().ok()?;
     Some((owner.to_string(), repo.to_string(), number))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Build an empty ChangeSet (no changes).
+    fn empty_changeset<'a>() -> ChangeSet<'a> {
+        ChangeSet {
+            body: None,
+            title: None,
+            labels: None,
+            sub_issues: None,
+            parent_issue: None,
+            comments: vec![],
+        }
+    }
+
+    mod display_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_display_empty_changeset() {
+            let cs = empty_changeset();
+            assert!(!cs.has_changes());
+            // display() should succeed even with no changes
+            cs.display()
+                .expect("display() should not error on empty changeset");
+        }
+
+        #[rstest]
+        #[case::add_sub_issues(
+            vec!["owner/repo#10".to_string(), "owner/repo#20".to_string()],
+            vec![],
+            vec!["owner/repo#10".to_string(), "owner/repo#20".to_string()],
+            vec![]
+        )]
+        #[case::remove_sub_issues(
+            vec![],
+            vec!["org/proj#5".to_string()],
+            vec![],
+            vec!["org/proj#5".to_string()]
+        )]
+        #[case::add_and_remove_sub_issues(
+            vec!["a/b#1".to_string()],
+            vec!["c/d#2".to_string()],
+            vec!["a/b#1".to_string()],
+            vec!["c/d#2".to_string()]
+        )]
+        fn test_display_with_sub_issues(
+            #[case] local_sorted: Vec<String>,
+            #[case] remote_sorted: Vec<String>,
+            #[case] to_add: Vec<String>,
+            #[case] to_remove: Vec<String>,
+        ) {
+            let mut cs = empty_changeset();
+            cs.sub_issues = Some(SubIssueChange {
+                to_add,
+                to_remove,
+                local_sorted,
+                remote_sorted,
+            });
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with sub_issues change");
+        }
+
+        #[rstest]
+        #[case::set_parent(Some("owner/repo#1".to_string()), None)]
+        #[case::remove_parent(None, Some("owner/repo#1".to_string()))]
+        #[case::change_parent(
+            Some("new-owner/new-repo#2".to_string()),
+            Some("old-owner/old-repo#1".to_string())
+        )]
+        fn test_display_with_parent_issue(
+            #[case] local: Option<String>,
+            #[case] remote: Option<String>,
+        ) {
+            let mut cs = empty_changeset();
+            cs.parent_issue = Some(ParentIssueChange { local, remote });
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with parent_issue change");
+        }
+
+        #[rstest]
+        fn test_display_with_all_change_types() {
+            let body_local = "new body";
+            let body_remote = "old body";
+            let title_local = "new title";
+            let title_remote = "old title";
+
+            let cs = ChangeSet {
+                body: Some(BodyChange {
+                    local: body_local,
+                    remote: body_remote,
+                }),
+                title: Some(TitleChange {
+                    local: title_local,
+                    remote: title_remote,
+                }),
+                labels: Some(LabelChange {
+                    to_add: vec!["new-label".to_string()],
+                    to_remove: vec!["old-label".to_string()],
+                    local_sorted: vec!["new-label".to_string()],
+                    remote_sorted: vec!["old-label".to_string()],
+                }),
+                sub_issues: Some(SubIssueChange {
+                    to_add: vec!["owner/repo#10".to_string()],
+                    to_remove: vec!["owner/repo#5".to_string()],
+                    local_sorted: vec!["owner/repo#10".to_string()],
+                    remote_sorted: vec!["owner/repo#5".to_string()],
+                }),
+                parent_issue: Some(ParentIssueChange {
+                    local: Some("new-owner/new-repo#2".to_string()),
+                    remote: Some("old-owner/old-repo#1".to_string()),
+                }),
+                comments: vec![],
+            };
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with all change types");
+        }
+    }
+
+    mod parse_issue_ref_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid("owner/repo#123", Some(("owner".to_string(), "repo".to_string(), 123)))]
+        #[case::large_number("org/project#99999", Some(("org".to_string(), "project".to_string(), 99999)))]
+        #[case::missing_hash("owner/repo", None)]
+        #[case::missing_slash("ownerrepo#1", None)]
+        #[case::non_numeric_number("owner/repo#abc", None)]
+        #[case::empty_string("", None)]
+        fn test_parse_issue_ref(
+            #[case] input: &str,
+            #[case] expected: Option<(String, String, u64)>,
+        ) {
+            assert_eq!(parse_issue_ref(input), expected);
+        }
+    }
+
+    mod has_changes_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_no_changes() {
+            let cs = empty_changeset();
+            assert!(!cs.has_changes());
+        }
+
+        #[rstest]
+        fn test_sub_issues_counts_as_change() {
+            let mut cs = empty_changeset();
+            cs.sub_issues = Some(SubIssueChange {
+                to_add: vec!["a/b#1".to_string()],
+                to_remove: vec![],
+                local_sorted: vec!["a/b#1".to_string()],
+                remote_sorted: vec![],
+            });
+            assert!(cs.has_changes());
+        }
+
+        #[rstest]
+        fn test_parent_issue_counts_as_change() {
+            let mut cs = empty_changeset();
+            cs.parent_issue = Some(ParentIssueChange {
+                local: Some("a/b#1".to_string()),
+                remote: None,
+            });
+            assert!(cs.has_changes());
+        }
+    }
+}

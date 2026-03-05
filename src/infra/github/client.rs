@@ -921,8 +921,9 @@ fn get_gh_token() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_repository_url;
     use crate::commands::gh::issue_agent::models::IssueTemplate;
-    use crate::infra::github::mock::GitHubMockServer;
+    use crate::infra::github::mock::{GitHubMockServer, RemoteSubIssue};
     use indoc::indoc;
     use rstest::rstest;
 
@@ -1095,6 +1096,179 @@ mod tests {
                 .await;
 
             assert!(result.is_ok());
+        }
+    }
+
+    mod parse_repository_url_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid_url(
+            "https://api.github.com/repos/octocat/hello-world",
+            ("octocat", "hello-world")
+        )]
+        #[case::trailing_slash(
+            "https://api.github.com/repos/owner/repo/",
+            ("unknown", "unknown")
+        )]
+        #[case::empty_string("", ("unknown", "unknown"))]
+        #[case::single_segment("foobar", ("unknown", "unknown"))]
+        #[case::slash_only("/", ("unknown", "unknown"))]
+        #[case::different_base_url(
+            "https://example.com/some/path/my-org/my-repo",
+            ("my-org", "my-repo")
+        )]
+        fn test_parse_repository_url(#[case] input: &str, #[case] expected: (&str, &str)) {
+            let (owner, repo) = parse_repository_url(input);
+            assert_eq!(owner, expected.0);
+            assert_eq!(repo, expected.1);
+        }
+    }
+
+    mod get_sub_issues_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_empty_when_no_sub_issues() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").sub_issues_empty(1).await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_single_sub_issue() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .sub_issues(
+                    1,
+                    &[RemoteSubIssue {
+                        id: 100,
+                        number: 5,
+                        owner: "owner",
+                        repo: "repo",
+                    }],
+                )
+                .await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            let subs = result.unwrap();
+            assert_eq!(subs.len(), 1);
+            assert_eq!(subs[0].id, 100);
+            assert_eq!(subs[0].number, 5);
+            assert_eq!(subs[0].owner, "owner");
+            assert_eq!(subs[0].repo, "repo");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_multiple_sub_issues() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .sub_issues(
+                    1,
+                    &[
+                        RemoteSubIssue {
+                            id: 100,
+                            number: 5,
+                            owner: "owner",
+                            repo: "repo",
+                        },
+                        RemoteSubIssue {
+                            id: 200,
+                            number: 10,
+                            owner: "other-org",
+                            repo: "other-repo",
+                        },
+                    ],
+                )
+                .await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            let subs = result.unwrap();
+            assert_eq!(subs.len(), 2);
+            assert_eq!(subs[0].id, 100);
+            assert_eq!(subs[0].number, 5);
+            assert_eq!(subs[1].id, 200);
+            assert_eq!(subs[1].number, 10);
+            assert_eq!(subs[1].owner, "other-org");
+            assert_eq!(subs[1].repo, "other-repo");
+        }
+    }
+
+    mod add_sub_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_add_sub_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").add_sub_issue(1).await;
+
+            let client = mock.client();
+            let result = client.add_sub_issue("owner", "repo", 1, 999).await;
+
+            assert!(result.is_ok());
+        }
+    }
+
+    mod remove_sub_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_remove_sub_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").remove_sub_issue(1).await;
+
+            let client = mock.client();
+            let result = client.remove_sub_issue("owner", "repo", 1, 999).await;
+
+            assert!(result.is_ok());
+        }
+    }
+
+    mod get_issue_id_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_issue_id() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").get_issue_id(42, 123456).await;
+
+            let client = mock.client();
+            let result = client.get_issue_id("owner", "repo", 42).await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 123456);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_large_issue_id() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .get_issue_id(1, 9_999_999_999)
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_id("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 9_999_999_999);
         }
     }
 }
