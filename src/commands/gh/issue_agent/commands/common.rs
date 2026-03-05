@@ -54,6 +54,22 @@ pub struct LocalData {
     pub comments: Vec<LocalComment>,
 }
 
+/// Fetch an issue and its sub-issues in parallel, merging the results.
+pub async fn fetch_issue_with_sub_issues(
+    client: &OctocrabClient,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+) -> anyhow::Result<Issue> {
+    let (issue, sub_issues) = tokio::try_join!(
+        client.get_issue(owner, repo, issue_number),
+        client.get_sub_issues(owner, repo, issue_number),
+    )?;
+    let mut issue = issue;
+    issue.sub_issues = sub_issues;
+    Ok(issue)
+}
+
 impl IssueContext {
     /// Initialize context from IssueArgs, validating inputs and fetching current user.
     pub async fn from_args(args: &IssueArgs) -> anyhow::Result<(Self, &'static OctocrabClient)> {
@@ -92,13 +108,10 @@ impl IssueContext {
 
     /// Fetch remote state from GitHub.
     pub async fn fetch_remote(&self, client: &OctocrabClient) -> anyhow::Result<RemoteData> {
-        let (issue, comments, sub_issues) = tokio::try_join!(
-            client.get_issue(&self.owner, &self.repo_name, self.issue_number),
+        let (issue, comments) = tokio::try_join!(
+            fetch_issue_with_sub_issues(client, &self.owner, &self.repo_name, self.issue_number),
             client.get_comments(&self.owner, &self.repo_name, self.issue_number),
-            client.get_sub_issues(&self.owner, &self.repo_name, self.issue_number),
         )?;
-        let mut issue = issue;
-        issue.sub_issues = sub_issues;
         Ok(RemoteData { issue, comments })
     }
 

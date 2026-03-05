@@ -3,7 +3,10 @@ use std::io::{self, Write};
 
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success, write_diff};
+use super::common::{
+    fetch_issue_with_sub_issues, get_repo_from_arg_or_git, parse_repo, print_fetch_success,
+    write_diff,
+};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueFrontmatter};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
 use crate::infra::github::OctocrabClient;
@@ -56,13 +59,10 @@ async fn run_with_client_and_storage(
     let (owner, repo_name) = parse_repo(&repo)?;
 
     // Fetch issue, comments, and sub-issues from GitHub
-    let (issue, comments, sub_issues) = tokio::try_join!(
-        client.get_issue(&owner, &repo_name, issue_number),
+    let (issue, comments) = tokio::try_join!(
+        fetch_issue_with_sub_issues(client, &owner, &repo_name, issue_number),
         client.get_comments(&owner, &repo_name, issue_number),
-        client.get_sub_issues(&owner, &repo_name, issue_number),
     )?;
-    let mut issue = issue;
-    issue.sub_issues = sub_issues;
 
     // Check for local changes before overwriting
     if storage.dir().exists() {

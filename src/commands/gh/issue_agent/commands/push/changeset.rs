@@ -320,11 +320,11 @@ impl<'a> ChangeSet<'a> {
         if let Some(change) = &self.parent_issue {
             println!();
             println!("Updating parent issue...");
+            let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
             // Remove old parent relationship
             if let Some(old_parent_ref) = &change.remote
                 && let Some((ref_owner, ref_repo, ref_number)) = parse_issue_ref(old_parent_ref)
             {
-                let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
                 client
                     .remove_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
                     .await?;
@@ -333,7 +333,6 @@ impl<'a> ChangeSet<'a> {
             if let Some(new_parent_ref) = &change.local
                 && let Some((ref_owner, ref_repo, ref_number)) = parse_issue_ref(new_parent_ref)
             {
-                let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
                 client
                     .add_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
                     .await?;

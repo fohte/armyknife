@@ -91,11 +91,8 @@ pub(super) fn detect_sub_issue_change(
         .map(|s| s.as_str())
         .collect();
 
-    if remote_refs
-        .iter()
-        .map(|s| s.as_str())
-        .collect::<HashSet<&str>>()
-        == local_refs
+    if remote_refs.len() == local_refs.len()
+        && remote_refs.iter().all(|r| local_refs.contains(r.as_str()))
     {
         return None;
     }

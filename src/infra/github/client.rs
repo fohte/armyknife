@@ -873,11 +873,12 @@ impl OctocrabClient {
 /// Input: "https://api.github.com/repos/{owner}/{repo}"
 /// Returns: (owner, repo)
 fn parse_repository_url(url: &str) -> (String, String) {
-    let parts: Vec<&str> = url.rsplitn(3, '/').collect();
-    if parts.len() >= 2 {
-        (parts[1].to_string(), parts[0].to_string())
-    } else {
-        ("unknown".to_string(), "unknown".to_string())
+    let mut parts = url.rsplitn(3, '/');
+    match (parts.next(), parts.next()) {
+        (Some(repo), Some(owner)) if !repo.is_empty() && !owner.is_empty() => {
+            (owner.to_string(), repo.to_string())
+        }
+        _ => ("unknown".to_string(), "unknown".to_string()),
     }
 }
 

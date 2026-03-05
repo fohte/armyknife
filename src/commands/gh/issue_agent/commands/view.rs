@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo};
+use super::common::{fetch_issue_with_sub_issues, get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, TimelineItem};
 use crate::infra::github::OctocrabClient;
@@ -40,14 +40,11 @@ where
     let (owner, repo) = parse_repo(&repo_str)?;
     let issue_number = args.issue.issue_number;
 
-    let (issue, comments, timeline_events, sub_issues) = tokio::try_join!(
-        client.get_issue(&owner, &repo, issue_number),
+    let (issue, comments, timeline_events) = tokio::try_join!(
+        fetch_issue_with_sub_issues(client, &owner, &repo, issue_number),
         client.get_comments(&owner, &repo, issue_number),
         client.get_timeline_events(&owner, &repo, issue_number),
-        client.get_sub_issues(&owner, &repo, issue_number),
     )?;
-    let mut issue = issue;
-    issue.sub_issues = sub_issues;
 
     Ok(format_issue_view_with(
         &issue,
