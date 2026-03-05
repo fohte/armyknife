@@ -44,6 +44,8 @@ mod tests {
         assert_eq!(notification.title(), "Test Title");
         assert_eq!(notification.message(), "Test Message");
         assert!(notification.action().is_none());
+        assert!(notification.group().is_none());
+        assert!(notification.app_icon().is_none());
     }
 
     #[test]
@@ -56,5 +58,17 @@ mod tests {
             notification.action().as_ref().map(|a| a.command()),
             Some(action.command())
         );
+    }
+
+    #[test]
+    fn test_notification_with_group() {
+        let notification = Notification::new("Title", "Message").with_group("session-123");
+        assert_eq!(notification.group(), Some("session-123"));
+    }
+
+    #[test]
+    fn test_notification_with_app_icon() {
+        let notification = Notification::new("Title", "Message").with_app_icon("/tmp/icon.png");
+        assert_eq!(notification.app_icon(), Some("/tmp/icon.png"));
     }
 }

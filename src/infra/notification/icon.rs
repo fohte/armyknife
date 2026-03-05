@@ -35,3 +35,73 @@ fn short_hash(data: &[u8]) -> String {
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_hash_returns_8_hex_chars() {
+        let hash = short_hash(b"hello");
+        assert_eq!(hash.len(), 8);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn short_hash_is_deterministic() {
+        assert_eq!(short_hash(b"test"), short_hash(b"test"));
+    }
+
+    #[test]
+    fn short_hash_differs_for_different_input() {
+        assert_ne!(short_hash(b"aaa"), short_hash(b"bbb"));
+    }
+
+    #[test]
+    fn hex_encode_produces_lowercase_hex() {
+        assert_eq!(hex_encode(&[0x00, 0xff, 0x0a]), "00ff0a");
+    }
+
+    #[test]
+    fn ensure_icon_writes_file_to_cache_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(dir.path().to_str().unwrap())),
+                ("HOME", Some("/nonexistent")),
+            ],
+            || {
+                let path = ensure_icon().unwrap();
+                assert!(path.exists());
+                assert!(
+                    path.file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .starts_with("claude-code-icon-")
+                );
+                assert!(
+                    path.file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .ends_with(".png")
+                );
+
+                // Calling again returns the same cached path
+                let path2 = ensure_icon().unwrap();
+                assert_eq!(path, path2);
+            },
+        );
+    }
+
+    #[test]
+    fn ensure_icon_returns_none_without_cache_dir() {
+        temp_env::with_vars(
+            [("XDG_CACHE_HOME", None::<&str>), ("HOME", None::<&str>)],
+            || {
+                assert!(ensure_icon().is_none());
+            },
+        );
+    }
+}

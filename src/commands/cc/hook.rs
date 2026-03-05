@@ -801,6 +801,8 @@ mod tests {
         // No subtitle without tmux_info
         assert!(notification.subtitle().is_none());
         assert!(notification.action().is_none());
+        // Group is set to session ID
+        assert_eq!(notification.group(), Some("test-123"));
     }
 
     #[rstest]
