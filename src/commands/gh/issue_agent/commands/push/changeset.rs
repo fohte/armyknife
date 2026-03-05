@@ -308,12 +308,17 @@ impl<'a> ChangeSet<'a> {
                 }
             }
             for ref_str in &change.to_add {
-                if let Some((ref_owner, ref_repo, ref_number)) = parse_issue_ref(ref_str) {
-                    let id = client
-                        .get_issue_id(&ref_owner, &ref_repo, ref_number)
-                        .await?;
-                    client.add_sub_issue(owner, repo, issue_number, id).await?;
-                }
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(ref_str).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid sub-issue reference: '{}'. Expected format: owner/repo#number",
+                            ref_str
+                        )
+                    })?;
+                let id = client
+                    .get_issue_id(&ref_owner, &ref_repo, ref_number)
+                    .await?;
+                client.add_sub_issue(owner, repo, issue_number, id).await?;
             }
         }
 
@@ -322,17 +327,27 @@ impl<'a> ChangeSet<'a> {
             println!("Updating parent issue...");
             let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
             // Remove old parent relationship
-            if let Some(old_parent_ref) = &change.remote
-                && let Some((ref_owner, ref_repo, ref_number)) = parse_issue_ref(old_parent_ref)
-            {
+            if let Some(old_parent_ref) = &change.remote {
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(old_parent_ref).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
+                            old_parent_ref
+                        )
+                    })?;
                 client
                     .remove_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
                     .await?;
             }
             // Add new parent relationship
-            if let Some(new_parent_ref) = &change.local
-                && let Some((ref_owner, ref_repo, ref_number)) = parse_issue_ref(new_parent_ref)
-            {
+            if let Some(new_parent_ref) = &change.local {
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(new_parent_ref).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
+                            new_parent_ref
+                        )
+                    })?;
                 client
                     .add_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
                     .await?;
