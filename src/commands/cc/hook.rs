@@ -868,6 +868,45 @@ mod tests {
         assert_eq!(notification.message(), "Permission required");
     }
 
+    #[rstest]
+    #[case::running(SessionStatus::Running, "\u{25b6}\u{fe0f} Claude Code - Running")]
+    #[case::ended(SessionStatus::Ended, "\u{1f3c1} Claude Code - Ended")]
+    #[case::waiting(SessionStatus::WaitingInput, "\u{23f3} Claude Code - Waiting")]
+    #[case::stopped(SessionStatus::Stopped, "\u{23f9} Claude Code - Stopped")]
+    fn test_build_notification_emoji_title(
+        #[case] status: SessionStatus,
+        #[case] expected_title: &str,
+    ) {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = status;
+        let notification = build_notification(
+            HookEvent::Notification,
+            &input,
+            &session,
+            &Config::default(),
+        );
+
+        assert_eq!(notification.title(), expected_title);
+        assert_eq!(notification.group(), Some("test-123"));
+    }
+
+    #[test]
+    fn test_build_notification_fallback_message() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Running;
+        let notification = build_notification(
+            HookEvent::Notification,
+            &input,
+            &session,
+            &Config::default(),
+        );
+
+        // Non-stop, non-permission events without last_message fall back to "Notification"
+        assert_eq!(notification.message(), "Notification");
+    }
+
     #[test]
     fn test_build_notification_with_last_message() {
         let input = create_test_input(None);
