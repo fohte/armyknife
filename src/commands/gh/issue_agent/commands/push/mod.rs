@@ -182,6 +182,7 @@ async fn run_with_context(
                 &ctx.repo_name,
                 ctx.issue_number,
                 &ctx.storage,
+                &remote.issue,
             )
             .await?;
 

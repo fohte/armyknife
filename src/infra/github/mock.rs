@@ -436,6 +436,18 @@ impl<'a> MockRepoContext<'a> {
         }
     }
 
+    /// Mock REST endpoint for listing sub-issues (returns empty list by default).
+    pub async fn sub_issues_empty(&self, issue_number: u64) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/{}/{}/issues/{}/sub_issues",
+                self.owner, self.repo, issue_number
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
     /// Mock GraphQL endpoint for fetching issue templates.
     ///
     /// Uses `body_string_contains` to distinguish from other GraphQL queries.

@@ -3,6 +3,27 @@ use serde::{Deserialize, Serialize};
 
 use super::author::{Author, WithAuthor};
 
+/// Reference to another issue, used for sub-issue relationships.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubIssueRef {
+    /// Issue internal ID (used by Sub-issues API)
+    pub id: u64,
+    /// Issue number
+    pub number: i64,
+    /// Repository owner
+    pub owner: String,
+    /// Repository name
+    pub repo: String,
+}
+
+impl SubIssueRef {
+    /// Format as "owner/repo#number"
+    pub fn to_ref_string(&self) -> String {
+        format!("{}/{}#{}", self.owner, self.repo, self.number)
+    }
+}
+
 /// Represents a GitHub Issue fetched from the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +44,12 @@ pub struct Issue {
     /// Title edits are detected via `updatedAt` instead.
     #[serde(default)]
     pub last_edited_at: Option<DateTime<Utc>>,
+    /// Reference to the parent issue (format: "owner/repo#number"), if this is a sub-issue.
+    #[serde(default)]
+    pub parent_issue: Option<SubIssueRef>,
+    /// List of sub-issues (format: "owner/repo#number").
+    #[serde(default)]
+    pub sub_issues: Vec<SubIssueRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +100,8 @@ impl From<octocrab::models::issues::Issue> for Issue {
             updated_at: issue.updated_at,
             // REST API doesn't provide this field, it needs to be populated via GraphQL
             last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
         }
     }
 }

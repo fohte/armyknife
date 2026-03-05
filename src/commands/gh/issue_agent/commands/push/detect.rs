@@ -5,7 +5,9 @@ use std::collections::{HashMap, HashSet};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::LocalComment;
 
-use super::changeset::{BodyChange, CommentChange, LabelChange, TitleChange};
+use super::changeset::{
+    BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
+};
 
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
@@ -71,6 +73,74 @@ pub(super) fn detect_label_change(
         to_remove,
         local_sorted,
         remote_sorted,
+    })
+}
+
+pub(super) fn detect_sub_issue_change(
+    local_metadata: &IssueMetadata,
+    remote_issue: &Issue,
+) -> Option<SubIssueChange> {
+    let remote_refs: HashSet<String> = remote_issue
+        .sub_issues
+        .iter()
+        .map(|r| r.to_ref_string())
+        .collect();
+    let local_refs: HashSet<&str> = local_metadata
+        .sub_issues
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    if remote_refs
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<HashSet<&str>>()
+        == local_refs
+    {
+        return None;
+    }
+
+    let to_remove: Vec<String> = remote_refs
+        .iter()
+        .filter(|r| !local_refs.contains(r.as_str()))
+        .cloned()
+        .collect();
+    let to_add: Vec<String> = local_refs
+        .iter()
+        .filter(|r| !remote_refs.contains(**r))
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut remote_sorted: Vec<String> = remote_refs.into_iter().collect();
+    remote_sorted.sort();
+    let mut local_sorted: Vec<String> = local_refs.into_iter().map(|s| s.to_string()).collect();
+    local_sorted.sort();
+
+    Some(SubIssueChange {
+        to_add,
+        to_remove,
+        local_sorted,
+        remote_sorted,
+    })
+}
+
+pub(super) fn detect_parent_issue_change(
+    local_metadata: &IssueMetadata,
+    remote_issue: &Issue,
+) -> Option<ParentIssueChange> {
+    let remote_parent = remote_issue
+        .parent_issue
+        .as_ref()
+        .map(|r| r.to_ref_string());
+    let local_parent = local_metadata.parent_issue.clone();
+
+    if local_parent == remote_parent {
+        return None;
+    }
+
+    Some(ParentIssueChange {
+        local: local_parent,
+        remote: remote_parent,
     })
 }
 
@@ -430,6 +500,8 @@ mod tests {
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
                 last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
             }
         }
 

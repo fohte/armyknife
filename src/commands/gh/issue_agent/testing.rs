@@ -44,6 +44,8 @@ pub mod factories {
             created_at: Utc::now() - Duration::hours(2),
             updated_at: Utc::now(),
             last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
         }
     }
 

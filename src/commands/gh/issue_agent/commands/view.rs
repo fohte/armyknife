@@ -40,11 +40,14 @@ where
     let (owner, repo) = parse_repo(&repo_str)?;
     let issue_number = args.issue.issue_number;
 
-    let (issue, comments, timeline_events) = tokio::try_join!(
+    let (issue, comments, timeline_events, sub_issues) = tokio::try_join!(
         client.get_issue(&owner, &repo, issue_number),
         client.get_comments(&owner, &repo, issue_number),
-        client.get_timeline_events(&owner, &repo, issue_number)
+        client.get_timeline_events(&owner, &repo, issue_number),
+        client.get_sub_issues(&owner, &repo, issue_number),
     )?;
+    let mut issue = issue;
+    issue.sub_issues = sub_issues;
 
     Ok(format_issue_view_with(
         &issue,
@@ -682,6 +685,7 @@ mod tests {
             ])
             .await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -731,6 +735,7 @@ mod tests {
                 .await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(42).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -801,6 +806,7 @@ mod tests {
             ctx.issue(10).title("Empty Body Issue").body("").get().await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(10).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -839,6 +845,7 @@ mod tests {
                 .await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(15).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -899,6 +906,7 @@ mod tests {
                 },
             ])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -977,6 +985,7 @@ mod tests {
                 },
             ])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {

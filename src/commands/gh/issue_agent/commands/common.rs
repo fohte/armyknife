@@ -92,12 +92,13 @@ impl IssueContext {
 
     /// Fetch remote state from GitHub.
     pub async fn fetch_remote(&self, client: &OctocrabClient) -> anyhow::Result<RemoteData> {
-        let issue = client
-            .get_issue(&self.owner, &self.repo_name, self.issue_number)
-            .await?;
-        let comments = client
-            .get_comments(&self.owner, &self.repo_name, self.issue_number)
-            .await?;
+        let (issue, comments, sub_issues) = tokio::try_join!(
+            client.get_issue(&self.owner, &self.repo_name, self.issue_number),
+            client.get_comments(&self.owner, &self.repo_name, self.issue_number),
+            client.get_sub_issues(&self.owner, &self.repo_name, self.issue_number),
+        )?;
+        let mut issue = issue;
+        issue.sub_issues = sub_issues;
         Ok(RemoteData { issue, comments })
     }
 

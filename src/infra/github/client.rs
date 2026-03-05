@@ -131,6 +131,25 @@ impl OctocrabClient {
             created_at: chrono::DateTime<chrono::Utc>,
             updated_at: chrono::DateTime<chrono::Utc>,
             last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
+            parent: Option<ParentIssueData>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ParentIssueData {
+            number: i64,
+            repository: ParentRepoData,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ParentRepoData {
+            name: String,
+            owner: ParentRepoOwner,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ParentRepoOwner {
+            login: String,
         }
 
         #[derive(Debug, Deserialize)]
@@ -178,6 +197,13 @@ impl OctocrabClient {
                         createdAt
                         updatedAt
                         lastEditedAt
+                        parent {
+                            number
+                            repository {
+                                name
+                                owner { login }
+                            }
+                        }
                     }
                 }
             }
@@ -218,6 +244,17 @@ impl OctocrabClient {
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             last_edited_at: issue.last_edited_at,
+            parent_issue: issue.parent.map(|p| {
+                crate::commands::gh::issue_agent::models::SubIssueRef {
+                    // GraphQL doesn't expose the REST API numeric id for parent
+                    id: 0,
+                    number: p.number,
+                    owner: p.repository.owner.login,
+                    repo: p.repository.name,
+                }
+            }),
+            // Populated separately by get_sub_issues
+            sub_issues: vec![],
         })
     }
 
@@ -476,6 +513,95 @@ impl OctocrabClient {
     pub async fn get_current_user(&self) -> Result<String> {
         let user = self.client.current().user().await?;
         Ok(user.login)
+    }
+
+    // ============ Sub-Issue Operations ============
+
+    /// Get sub-issues for an issue using REST API.
+    pub async fn get_sub_issues(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+    ) -> Result<Vec<crate::commands::gh::issue_agent::models::SubIssueRef>> {
+        #[derive(Debug, Deserialize)]
+        struct SubIssueResponse {
+            id: u64,
+            number: i64,
+            repository_url: String,
+        }
+
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/sub_issues?per_page=100");
+        let response: Vec<SubIssueResponse> = self.client.get(route, None::<&()>).await?;
+
+        Ok(response
+            .into_iter()
+            .map(|s| {
+                let (sub_owner, sub_repo) = parse_repository_url(&s.repository_url);
+                crate::commands::gh::issue_agent::models::SubIssueRef {
+                    id: s.id,
+                    number: s.number,
+                    owner: sub_owner,
+                    repo: sub_repo,
+                }
+            })
+            .collect())
+    }
+
+    /// Add a sub-issue to a parent issue.
+    /// `sub_issue_id` is the internal issue ID (not the issue number).
+    pub async fn add_sub_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        parent_issue_number: u64,
+        sub_issue_id: u64,
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
+        let _response: serde_json::Value = self
+            .client
+            .post(
+                route,
+                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Remove a sub-issue from a parent issue.
+    /// `sub_issue_id` is the internal issue ID (not the issue number).
+    pub async fn remove_sub_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        parent_issue_number: u64,
+        sub_issue_id: u64,
+    ) -> Result<()> {
+        // Note: endpoint uses singular "sub_issue" for DELETE
+        let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issue");
+        let uri = http::Uri::builder()
+            .path_and_query(route)
+            .build()
+            .context("Failed to build URI")?;
+        let response = self
+            .client
+            ._delete(
+                uri,
+                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
+            )
+            .await?;
+        octocrab::map_github_error(response).await.map(drop)?;
+        Ok(())
+    }
+
+    /// Get the internal ID for an issue (needed for Sub-issues API).
+    pub async fn get_issue_id(&self, owner: &str, repo: &str, issue_number: u64) -> Result<u64> {
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let response: serde_json::Value = self.client.get(route, None::<&()>).await?;
+        let id = response["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'id' field in issue response"))?;
+        Ok(id)
     }
 
     // ============ Timeline Operations ============
@@ -740,6 +866,18 @@ impl OctocrabClient {
             .collect();
 
         Ok(templates)
+    }
+}
+
+/// Parse owner and repo from a GitHub repository URL.
+/// Input: "https://api.github.com/repos/{owner}/{repo}"
+/// Returns: (owner, repo)
+fn parse_repository_url(url: &str) -> (String, String) {
+    let parts: Vec<&str> = url.rsplitn(3, '/').collect();
+    if parts.len() >= 2 {
+        (parts[1].to_string(), parts[0].to_string())
+    } else {
+        ("unknown".to_string(), "unknown".to_string())
     }
 }
 
