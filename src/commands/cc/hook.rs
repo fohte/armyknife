@@ -237,6 +237,13 @@ fn process_hook_event_impl(
     // Silently ignore errors (e.g., not in tmux, tmux not installed).
     let _ = tmux::refresh_status();
 
+    // Remove stale notifications when the user responds or resumes a session.
+    // UserPromptSubmit fires after the user accepts/rejects a permission request.
+    // SessionStart (resume) fires when `claude -c` restores a previous session.
+    if matches!(event, HookEvent::UserPromptSubmit | HookEvent::SessionStart) {
+        let _ = crate::infra::notification::remove_group(&input.session_id);
+    }
+
     // Send notification if applicable (errors are logged but don't fail the hook).
     // Use default config if loading fails to avoid config errors blocking notifications.
     let config = config::load_config().unwrap_or_default();
@@ -573,14 +580,14 @@ fn build_notification(
     session: &Session,
     config: &Config,
 ) -> Notification {
-    // Title: "Claude Code - Stopped" or "Claude Code - Waiting"
-    let status_label = match session.status {
-        SessionStatus::WaitingInput => "Waiting",
-        SessionStatus::Stopped => "Stopped",
-        SessionStatus::Running => "Running",
-        SessionStatus::Ended => "Ended",
+    // Title: "⏳ Claude Code - Waiting" or "⏹ Claude Code - Stopped"
+    let (emoji, status_label) = match session.status {
+        SessionStatus::WaitingInput => ("\u{23f3}", "Waiting"),
+        SessionStatus::Stopped => ("\u{23f9}", "Stopped"),
+        SessionStatus::Running => ("\u{25b6}\u{fe0f}", "Running"),
+        SessionStatus::Ended => ("\u{1f3c1}", "Ended"),
     };
-    let title = format!("Claude Code - {}", status_label);
+    let title = format!("{} Claude Code - {}", emoji, status_label);
 
     // Subtitle: "session:window | タイトル" format
     // Limit to ~50 characters
@@ -603,6 +610,17 @@ fn build_notification(
     };
 
     let mut notification = Notification::new(&title, message);
+
+    // Set group ID to session ID for notification management (replace/remove)
+    notification = notification.with_group(&session.session_id);
+
+    // Set app icon for visual identification
+    if let Some(icon_path) = crate::infra::notification::icon::ensure_icon()
+        && let Some(path_str) = icon_path.to_str()
+    {
+        notification = notification.with_app_icon(path_str);
+    }
+
     // Use configured sound; empty string means silent
     if !config.notification.sound.is_empty() {
         notification = notification.with_sound(&config.notification.sound);
@@ -775,14 +793,16 @@ mod tests {
         let notification =
             build_notification(HookEvent::Stop, &input, &session, &Config::default());
 
-        // Title includes status
-        assert_eq!(notification.title(), "Claude Code - Stopped");
+        // Title includes emoji and status
+        assert_eq!(notification.title(), "\u{23f9} Claude Code - Stopped");
         // Message falls back to "Session stopped" when no last_message
         assert_eq!(notification.message(), "Session stopped");
         assert_eq!(notification.sound(), Some("Glass"));
         // No subtitle without tmux_info
         assert!(notification.subtitle().is_none());
         assert!(notification.action().is_none());
+        // Group is set to session ID
+        assert_eq!(notification.group(), Some("test-123"));
     }
 
     #[rstest]
@@ -809,7 +829,7 @@ mod tests {
             &Config::default(),
         );
 
-        assert_eq!(notification.title(), "Claude Code - Waiting");
+        assert_eq!(notification.title(), "\u{23f3} Claude Code - Waiting");
         assert_eq!(notification.message(), expected_message);
     }
 
@@ -846,6 +866,45 @@ mod tests {
 
         // Falls back to generic message
         assert_eq!(notification.message(), "Permission required");
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, "\u{25b6}\u{fe0f} Claude Code - Running")]
+    #[case::ended(SessionStatus::Ended, "\u{1f3c1} Claude Code - Ended")]
+    #[case::waiting(SessionStatus::WaitingInput, "\u{23f3} Claude Code - Waiting")]
+    #[case::stopped(SessionStatus::Stopped, "\u{23f9} Claude Code - Stopped")]
+    fn test_build_notification_emoji_title(
+        #[case] status: SessionStatus,
+        #[case] expected_title: &str,
+    ) {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = status;
+        let notification = build_notification(
+            HookEvent::Notification,
+            &input,
+            &session,
+            &Config::default(),
+        );
+
+        assert_eq!(notification.title(), expected_title);
+        assert_eq!(notification.group(), Some("test-123"));
+    }
+
+    #[test]
+    fn test_build_notification_fallback_message() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Running;
+        let notification = build_notification(
+            HookEvent::Notification,
+            &input,
+            &session,
+            &Config::default(),
+        );
+
+        // Non-stop, non-permission events without last_message fall back to "Notification"
+        assert_eq!(notification.message(), "Notification");
     }
 
     #[test]

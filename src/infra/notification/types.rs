@@ -6,6 +6,8 @@ pub struct Notification {
     message: String,
     sound: Option<String>,
     action: Option<NotificationAction>,
+    group: Option<String>,
+    app_icon: Option<String>,
 }
 
 impl Notification {
@@ -17,6 +19,8 @@ impl Notification {
             message: message.into(),
             sound: None,
             action: None,
+            group: None,
+            app_icon: None,
         }
     }
 
@@ -61,6 +65,28 @@ impl Notification {
     /// Returns the action to execute on click, if any.
     pub fn action(&self) -> Option<&NotificationAction> {
         self.action.as_ref()
+    }
+
+    /// Sets the group ID for notification management (replace/remove by group).
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    /// Returns the group ID, if any.
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    /// Sets the app icon path for the notification.
+    pub fn with_app_icon(mut self, path: impl Into<String>) -> Self {
+        self.app_icon = Some(path.into());
+        self
+    }
+
+    /// Returns the app icon path, if any.
+    pub fn app_icon(&self) -> Option<&str> {
+        self.app_icon.as_deref()
     }
 }
 
