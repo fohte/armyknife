@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.111](https://github.com/fohte/armyknife/compare/v0.1.110...v0.1.111) (2026-03-05)
+
+
+### Features
+
+* **cc/hook:** add icon, emoji status prefix, and group management to notifications ([#322](https://github.com/fohte/armyknife/issues/322)) ([ef5943f](https://github.com/fohte/armyknife/commit/ef5943f42a919ff0b966f314a5eb8fc406d8be09))
+
 ## [0.1.110](https://github.com/fohte/armyknife/compare/v0.1.109...v0.1.110) (2026-02-27)
 
 
