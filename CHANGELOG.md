@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.112](https://github.com/fohte/armyknife/compare/v0.1.111...v0.1.112) (2026-03-05)
+
+
+### Features
+
+* **issue-agent:** support sub-issues and parent issue management via frontmatter ([#321](https://github.com/fohte/armyknife/issues/321)) ([2d853ee](https://github.com/fohte/armyknife/commit/2d853ee8d27744703310a40da440e117dea1a09b))
+
 ## [0.1.111](https://github.com/fohte/armyknife/compare/v0.1.110...v0.1.111) (2026-03-05)
 
 
