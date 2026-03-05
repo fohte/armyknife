@@ -131,6 +131,25 @@ impl OctocrabClient {
             created_at: chrono::DateTime<chrono::Utc>,
             updated_at: chrono::DateTime<chrono::Utc>,
             last_edited_at: Option<chrono::DateTime<chrono::Utc>>,
+            parent: Option<ParentIssueData>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ParentIssueData {
+            number: i64,
+            repository: ParentRepoData,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ParentRepoData {
+            name: String,
+            owner: ParentRepoOwner,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ParentRepoOwner {
+            login: String,
         }
 
         #[derive(Debug, Deserialize)]
@@ -178,6 +197,13 @@ impl OctocrabClient {
                         createdAt
                         updatedAt
                         lastEditedAt
+                        parent {
+                            number
+                            repository {
+                                name
+                                owner { login }
+                            }
+                        }
                     }
                 }
             }
@@ -218,6 +244,17 @@ impl OctocrabClient {
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             last_edited_at: issue.last_edited_at,
+            parent_issue: issue.parent.map(|p| {
+                crate::commands::gh::issue_agent::models::SubIssueRef {
+                    // GraphQL doesn't expose the REST API numeric id for parent
+                    id: 0,
+                    number: p.number,
+                    owner: p.repository.owner.login,
+                    repo: p.repository.name,
+                }
+            }),
+            // Populated separately by get_sub_issues
+            sub_issues: vec![],
         })
     }
 
@@ -476,6 +513,95 @@ impl OctocrabClient {
     pub async fn get_current_user(&self) -> Result<String> {
         let user = self.client.current().user().await?;
         Ok(user.login)
+    }
+
+    // ============ Sub-Issue Operations ============
+
+    /// Get sub-issues for an issue using REST API.
+    pub async fn get_sub_issues(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+    ) -> Result<Vec<crate::commands::gh::issue_agent::models::SubIssueRef>> {
+        #[derive(Debug, Deserialize)]
+        struct SubIssueResponse {
+            id: u64,
+            number: i64,
+            repository_url: String,
+        }
+
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/sub_issues?per_page=100");
+        let response: Vec<SubIssueResponse> = self.client.get(route, None::<&()>).await?;
+
+        Ok(response
+            .into_iter()
+            .map(|s| {
+                let (sub_owner, sub_repo) = parse_repository_url(&s.repository_url);
+                crate::commands::gh::issue_agent::models::SubIssueRef {
+                    id: s.id,
+                    number: s.number,
+                    owner: sub_owner,
+                    repo: sub_repo,
+                }
+            })
+            .collect())
+    }
+
+    /// Add a sub-issue to a parent issue.
+    /// `sub_issue_id` is the internal issue ID (not the issue number).
+    pub async fn add_sub_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        parent_issue_number: u64,
+        sub_issue_id: u64,
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
+        let _response: serde_json::Value = self
+            .client
+            .post(
+                route,
+                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Remove a sub-issue from a parent issue.
+    /// `sub_issue_id` is the internal issue ID (not the issue number).
+    pub async fn remove_sub_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        parent_issue_number: u64,
+        sub_issue_id: u64,
+    ) -> Result<()> {
+        // Note: endpoint uses singular "sub_issue" for DELETE
+        let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issue");
+        let uri = http::Uri::builder()
+            .path_and_query(route)
+            .build()
+            .context("Failed to build URI")?;
+        let response = self
+            .client
+            ._delete(
+                uri,
+                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
+            )
+            .await?;
+        octocrab::map_github_error(response).await.map(drop)?;
+        Ok(())
+    }
+
+    /// Get the internal ID for an issue (needed for Sub-issues API).
+    pub async fn get_issue_id(&self, owner: &str, repo: &str, issue_number: u64) -> Result<u64> {
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let response: serde_json::Value = self.client.get(route, None::<&()>).await?;
+        let id = response["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'id' field in issue response"))?;
+        Ok(id)
     }
 
     // ============ Timeline Operations ============
@@ -743,6 +869,19 @@ impl OctocrabClient {
     }
 }
 
+/// Parse owner and repo from a GitHub repository URL.
+/// Input: "https://api.github.com/repos/{owner}/{repo}"
+/// Returns: (owner, repo)
+fn parse_repository_url(url: &str) -> (String, String) {
+    let mut parts = url.rsplitn(3, '/');
+    match (parts.next(), parts.next()) {
+        (Some(repo), Some(owner)) if !repo.is_empty() && !owner.is_empty() => {
+            (owner.to_string(), repo.to_string())
+        }
+        _ => ("unknown".to_string(), "unknown".to_string()),
+    }
+}
+
 /// Get GitHub token from `gh auth token` command.
 /// This reuses the authentication from GitHub CLI.
 ///
@@ -782,8 +921,9 @@ fn get_gh_token() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_repository_url;
     use crate::commands::gh::issue_agent::models::IssueTemplate;
-    use crate::infra::github::mock::GitHubMockServer;
+    use crate::infra::github::mock::{GitHubMockServer, RemoteSubIssue};
     use indoc::indoc;
     use rstest::rstest;
 
@@ -956,6 +1096,179 @@ mod tests {
                 .await;
 
             assert!(result.is_ok());
+        }
+    }
+
+    mod parse_repository_url_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid_url(
+            "https://api.github.com/repos/octocat/hello-world",
+            ("octocat", "hello-world")
+        )]
+        #[case::trailing_slash(
+            "https://api.github.com/repos/owner/repo/",
+            ("unknown", "unknown")
+        )]
+        #[case::empty_string("", ("unknown", "unknown"))]
+        #[case::single_segment("foobar", ("unknown", "unknown"))]
+        #[case::slash_only("/", ("unknown", "unknown"))]
+        #[case::different_base_url(
+            "https://example.com/some/path/my-org/my-repo",
+            ("my-org", "my-repo")
+        )]
+        fn test_parse_repository_url(#[case] input: &str, #[case] expected: (&str, &str)) {
+            let (owner, repo) = parse_repository_url(input);
+            assert_eq!(owner, expected.0);
+            assert_eq!(repo, expected.1);
+        }
+    }
+
+    mod get_sub_issues_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_empty_when_no_sub_issues() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").sub_issues_empty(1).await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_single_sub_issue() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .sub_issues(
+                    1,
+                    &[RemoteSubIssue {
+                        id: 100,
+                        number: 5,
+                        owner: "owner",
+                        repo: "repo",
+                    }],
+                )
+                .await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            let subs = result.unwrap();
+            assert_eq!(subs.len(), 1);
+            assert_eq!(subs[0].id, 100);
+            assert_eq!(subs[0].number, 5);
+            assert_eq!(subs[0].owner, "owner");
+            assert_eq!(subs[0].repo, "repo");
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_multiple_sub_issues() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .sub_issues(
+                    1,
+                    &[
+                        RemoteSubIssue {
+                            id: 100,
+                            number: 5,
+                            owner: "owner",
+                            repo: "repo",
+                        },
+                        RemoteSubIssue {
+                            id: 200,
+                            number: 10,
+                            owner: "other-org",
+                            repo: "other-repo",
+                        },
+                    ],
+                )
+                .await;
+
+            let client = mock.client();
+            let result = client.get_sub_issues("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            let subs = result.unwrap();
+            assert_eq!(subs.len(), 2);
+            assert_eq!(subs[0].id, 100);
+            assert_eq!(subs[0].number, 5);
+            assert_eq!(subs[1].id, 200);
+            assert_eq!(subs[1].number, 10);
+            assert_eq!(subs[1].owner, "other-org");
+            assert_eq!(subs[1].repo, "other-repo");
+        }
+    }
+
+    mod add_sub_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_add_sub_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").add_sub_issue(1).await;
+
+            let client = mock.client();
+            let result = client.add_sub_issue("owner", "repo", 1, 999).await;
+
+            assert!(result.is_ok());
+        }
+    }
+
+    mod remove_sub_issue_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_remove_sub_issue_success() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").remove_sub_issue(1).await;
+
+            let client = mock.client();
+            let result = client.remove_sub_issue("owner", "repo", 1, 999).await;
+
+            assert!(result.is_ok());
+        }
+    }
+
+    mod get_issue_id_tests {
+        use super::*;
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_issue_id() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").get_issue_id(42, 123456).await;
+
+            let client = mock.client();
+            let result = client.get_issue_id("owner", "repo", 42).await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 123456);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_returns_large_issue_id() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .get_issue_id(1, 9_999_999_999)
+                .await;
+
+            let client = mock.client();
+            let result = client.get_issue_id("owner", "repo", 1).await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 9_999_999_999);
         }
     }
 }

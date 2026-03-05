@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 
+use super::common;
 use super::common::IssueContext;
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::infra::github::OctocrabClient;
@@ -182,13 +183,18 @@ async fn run_with_context(
                 &ctx.repo_name,
                 ctx.issue_number,
                 &ctx.storage,
+                &remote.issue,
             )
             .await?;
 
         // Update local issue.md with new frontmatter from remote after successful push
-        let new_remote_issue = client
-            .get_issue(&ctx.owner, &ctx.repo_name, ctx.issue_number)
-            .await?;
+        let new_remote_issue = common::fetch_issue_with_sub_issues(
+            client,
+            &ctx.owner,
+            &ctx.repo_name,
+            ctx.issue_number,
+        )
+        .await?;
         let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;

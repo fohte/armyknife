@@ -30,6 +30,10 @@ pub struct IssueFrontmatter {
     pub assignees: Vec<String>,
     #[serde(default)]
     pub milestone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_issues: Vec<String>,
     pub readonly: ReadonlyMetadata,
 }
 
@@ -41,6 +45,8 @@ impl IssueFrontmatter {
             labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
             assignees: issue.assignees.iter().map(|a| a.login.clone()).collect(),
             milestone: issue.milestone.as_ref().map(|m| m.title.clone()),
+            parent_issue: issue.parent_issue.as_ref().map(|r| r.to_ref_string()),
+            sub_issues: issue.sub_issues.iter().map(|r| r.to_ref_string()).collect(),
             readonly: ReadonlyMetadata {
                 number: issue.number,
                 state: issue.state.clone(),
@@ -71,6 +77,10 @@ pub struct IssueMetadata {
     /// Used for body conflict detection.
     #[serde(default)]
     pub last_edited_at: Option<String>,
+    #[serde(default)]
+    pub parent_issue: Option<String>,
+    #[serde(default)]
+    pub sub_issues: Vec<String>,
 }
 
 impl From<IssueFrontmatter> for IssueMetadata {
@@ -86,6 +96,8 @@ impl From<IssueFrontmatter> for IssueMetadata {
             created_at: fm.readonly.created_at,
             updated_at: fm.readonly.updated_at,
             last_edited_at: fm.readonly.last_edited_at,
+            parent_issue: fm.parent_issue,
+            sub_issues: fm.sub_issues,
         }
     }
 }

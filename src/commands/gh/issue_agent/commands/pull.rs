@@ -3,7 +3,10 @@ use std::io::{self, Write};
 
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo, print_fetch_success, write_diff};
+use super::common::{
+    fetch_issue_with_sub_issues, get_repo_from_arg_or_git, parse_repo, print_fetch_success,
+    write_diff,
+};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueFrontmatter};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
 use crate::infra::github::OctocrabClient;
@@ -55,11 +58,11 @@ async fn run_with_client_and_storage(
 
     let (owner, repo_name) = parse_repo(&repo)?;
 
-    // Fetch issue and comments from GitHub
-    let issue = client.get_issue(&owner, &repo_name, issue_number).await?;
-    let comments = client
-        .get_comments(&owner, &repo_name, issue_number)
-        .await?;
+    // Fetch issue, comments, and sub-issues from GitHub
+    let (issue, comments) = tokio::try_join!(
+        fetch_issue_with_sub_issues(client, &owner, &repo_name, issue_number),
+        client.get_comments(&owner, &repo_name, issue_number),
+    )?;
 
     // Check for local changes before overwriting
     if storage.dir().exists() {
@@ -400,6 +403,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let storage = IssueStorage::from_dir(test_dir.path());
@@ -450,6 +454,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -481,6 +486,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -509,6 +515,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -584,6 +591,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -645,6 +653,7 @@ mod tests {
                 body: "Test comment body",
             }])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let storage = IssueStorage::from_dir(test_dir.path());
@@ -695,6 +704,7 @@ mod tests {
             let ctx = mock.repo("owner", "repo");
             ctx.issue(123).get().await;
             ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -726,6 +736,7 @@ mod tests {
                 body: "New comment from refresh",
             }])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
 
@@ -827,6 +838,8 @@ mod tests {
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
                 last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
             };
             storage.save_metadata(&local_metadata).unwrap();
 
@@ -963,6 +976,8 @@ mod tests {
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 updated_at: "2024-01-02T00:00:00Z".to_string(),
                 last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
             };
             storage.save_metadata(&local_metadata).unwrap();
 

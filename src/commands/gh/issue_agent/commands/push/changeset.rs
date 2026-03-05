@@ -8,7 +8,8 @@ use crossterm::style::Color;
 
 use super::super::common::{print_colored_line, print_diff};
 use super::detect::{
-    detect_body_change, detect_comment_changes, detect_label_change, detect_title_change,
+    detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
+    detect_sub_issue_change, detect_title_change,
 };
 
 /// Local state for change detection.
@@ -36,6 +37,8 @@ pub(crate) struct ChangeSet<'a> {
     pub(crate) body: Option<BodyChange<'a>>,
     pub(crate) title: Option<TitleChange<'a>>,
     pub(crate) labels: Option<LabelChange>,
+    pub(crate) sub_issues: Option<SubIssueChange>,
+    pub(crate) parent_issue: Option<ParentIssueChange>,
     pub(crate) comments: Vec<CommentChange<'a>>,
 }
 
@@ -54,6 +57,20 @@ pub(crate) struct LabelChange {
     pub(crate) to_remove: Vec<String>,
     pub(crate) local_sorted: Vec<String>,
     pub(crate) remote_sorted: Vec<String>,
+}
+
+pub(crate) struct SubIssueChange {
+    /// Sub-issues to add (ref strings like "owner/repo#number")
+    pub(crate) to_add: Vec<String>,
+    /// Sub-issues to remove (ref strings)
+    pub(crate) to_remove: Vec<String>,
+    pub(crate) local_sorted: Vec<String>,
+    pub(crate) remote_sorted: Vec<String>,
+}
+
+pub(crate) struct ParentIssueChange {
+    pub(crate) local: Option<String>,
+    pub(crate) remote: Option<String>,
 }
 
 #[derive(Debug)]
@@ -86,6 +103,8 @@ impl<'a> ChangeSet<'a> {
         let body = detect_body_change(local.body, remote.issue);
         let title = detect_title_change(local.metadata, remote.issue);
         let labels = detect_label_change(local.metadata, remote.issue);
+        let sub_issues = detect_sub_issue_change(local.metadata, remote.issue);
+        let parent_issue = detect_parent_issue_change(local.metadata, remote.issue);
         let comments = detect_comment_changes(
             local.comments,
             remote.comments,
@@ -98,6 +117,8 @@ impl<'a> ChangeSet<'a> {
             body,
             title,
             labels,
+            sub_issues,
+            parent_issue,
             comments,
         })
     }
@@ -106,6 +127,8 @@ impl<'a> ChangeSet<'a> {
         self.body.is_some()
             || self.title.is_some()
             || self.labels.is_some()
+            || self.sub_issues.is_some()
+            || self.parent_issue.is_some()
             || !self.comments.is_empty()
     }
 
@@ -128,6 +151,28 @@ impl<'a> ChangeSet<'a> {
             println!("=== Labels ===");
             print_colored_line("- ", &format!("{:?}", change.remote_sorted), Color::Red);
             print_colored_line("+ ", &format!("{:?}", change.local_sorted), Color::Green);
+        }
+
+        if let Some(change) = &self.sub_issues {
+            println!();
+            println!("=== Sub-issues ===");
+            print_colored_line("- ", &format!("{:?}", change.remote_sorted), Color::Red);
+            print_colored_line("+ ", &format!("{:?}", change.local_sorted), Color::Green);
+        }
+
+        if let Some(change) = &self.parent_issue {
+            println!();
+            println!("=== Parent Issue ===");
+            print_colored_line(
+                "- ",
+                change.remote.as_deref().unwrap_or("(none)"),
+                Color::Red,
+            );
+            print_colored_line(
+                "+ ",
+                change.local.as_deref().unwrap_or("(none)"),
+                Color::Green,
+            );
         }
 
         for change in &self.comments {
@@ -182,6 +227,7 @@ impl<'a> ChangeSet<'a> {
         repo: &str,
         issue_number: u64,
         storage: &IssueStorage,
+        remote_issue: &Issue,
     ) -> anyhow::Result<()> {
         if let Some(change) = &self.body {
             println!();
@@ -247,6 +293,253 @@ impl<'a> ChangeSet<'a> {
             }
         }
 
+        if let Some(change) = &self.sub_issues {
+            println!();
+            println!("Updating sub-issues...");
+            for ref_str in &change.to_remove {
+                if let Some(sub_ref) = remote_issue
+                    .sub_issues
+                    .iter()
+                    .find(|r| r.to_ref_string() == *ref_str)
+                {
+                    client
+                        .remove_sub_issue(owner, repo, issue_number, sub_ref.id)
+                        .await?;
+                }
+            }
+            for ref_str in &change.to_add {
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(ref_str).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid sub-issue reference: '{}'. Expected format: owner/repo#number",
+                            ref_str
+                        )
+                    })?;
+                let id = client
+                    .get_issue_id(&ref_owner, &ref_repo, ref_number)
+                    .await?;
+                client.add_sub_issue(owner, repo, issue_number, id).await?;
+            }
+        }
+
+        if let Some(change) = &self.parent_issue {
+            println!();
+            println!("Updating parent issue...");
+            let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
+            // Remove old parent relationship
+            if let Some(old_parent_ref) = &change.remote {
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(old_parent_ref).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
+                            old_parent_ref
+                        )
+                    })?;
+                client
+                    .remove_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
+                    .await?;
+            }
+            // Add new parent relationship
+            if let Some(new_parent_ref) = &change.local {
+                let (ref_owner, ref_repo, ref_number) =
+                    parse_issue_ref(new_parent_ref).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
+                            new_parent_ref
+                        )
+                    })?;
+                client
+                    .add_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
+                    .await?;
+            }
+        }
+
         Ok(())
+    }
+}
+
+/// Parse an issue reference string "owner/repo#number" into components.
+fn parse_issue_ref(ref_str: &str) -> Option<(String, String, u64)> {
+    let (repo_part, number_str) = ref_str.rsplit_once('#')?;
+    let (owner, repo) = repo_part.split_once('/')?;
+    let number = number_str.parse::<u64>().ok()?;
+    Some((owner.to_string(), repo.to_string(), number))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Build an empty ChangeSet (no changes).
+    fn empty_changeset<'a>() -> ChangeSet<'a> {
+        ChangeSet {
+            body: None,
+            title: None,
+            labels: None,
+            sub_issues: None,
+            parent_issue: None,
+            comments: vec![],
+        }
+    }
+
+    mod display_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_display_empty_changeset() {
+            let cs = empty_changeset();
+            assert!(!cs.has_changes());
+            // display() should succeed even with no changes
+            cs.display()
+                .expect("display() should not error on empty changeset");
+        }
+
+        #[rstest]
+        #[case::add_sub_issues(
+            vec!["owner/repo#10".to_string(), "owner/repo#20".to_string()],
+            vec![],
+            vec!["owner/repo#10".to_string(), "owner/repo#20".to_string()],
+            vec![]
+        )]
+        #[case::remove_sub_issues(
+            vec![],
+            vec!["org/proj#5".to_string()],
+            vec![],
+            vec!["org/proj#5".to_string()]
+        )]
+        #[case::add_and_remove_sub_issues(
+            vec!["a/b#1".to_string()],
+            vec!["c/d#2".to_string()],
+            vec!["a/b#1".to_string()],
+            vec!["c/d#2".to_string()]
+        )]
+        fn test_display_with_sub_issues(
+            #[case] local_sorted: Vec<String>,
+            #[case] remote_sorted: Vec<String>,
+            #[case] to_add: Vec<String>,
+            #[case] to_remove: Vec<String>,
+        ) {
+            let mut cs = empty_changeset();
+            cs.sub_issues = Some(SubIssueChange {
+                to_add,
+                to_remove,
+                local_sorted,
+                remote_sorted,
+            });
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with sub_issues change");
+        }
+
+        #[rstest]
+        #[case::set_parent(Some("owner/repo#1".to_string()), None)]
+        #[case::remove_parent(None, Some("owner/repo#1".to_string()))]
+        #[case::change_parent(
+            Some("new-owner/new-repo#2".to_string()),
+            Some("old-owner/old-repo#1".to_string())
+        )]
+        fn test_display_with_parent_issue(
+            #[case] local: Option<String>,
+            #[case] remote: Option<String>,
+        ) {
+            let mut cs = empty_changeset();
+            cs.parent_issue = Some(ParentIssueChange { local, remote });
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with parent_issue change");
+        }
+
+        #[rstest]
+        fn test_display_with_all_change_types() {
+            let body_local = "new body";
+            let body_remote = "old body";
+            let title_local = "new title";
+            let title_remote = "old title";
+
+            let cs = ChangeSet {
+                body: Some(BodyChange {
+                    local: body_local,
+                    remote: body_remote,
+                }),
+                title: Some(TitleChange {
+                    local: title_local,
+                    remote: title_remote,
+                }),
+                labels: Some(LabelChange {
+                    to_add: vec!["new-label".to_string()],
+                    to_remove: vec!["old-label".to_string()],
+                    local_sorted: vec!["new-label".to_string()],
+                    remote_sorted: vec!["old-label".to_string()],
+                }),
+                sub_issues: Some(SubIssueChange {
+                    to_add: vec!["owner/repo#10".to_string()],
+                    to_remove: vec!["owner/repo#5".to_string()],
+                    local_sorted: vec!["owner/repo#10".to_string()],
+                    remote_sorted: vec!["owner/repo#5".to_string()],
+                }),
+                parent_issue: Some(ParentIssueChange {
+                    local: Some("new-owner/new-repo#2".to_string()),
+                    remote: Some("old-owner/old-repo#1".to_string()),
+                }),
+                comments: vec![],
+            };
+
+            assert!(cs.has_changes());
+            cs.display()
+                .expect("display() should not error with all change types");
+        }
+    }
+
+    mod parse_issue_ref_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::valid("owner/repo#123", Some(("owner".to_string(), "repo".to_string(), 123)))]
+        #[case::large_number("org/project#99999", Some(("org".to_string(), "project".to_string(), 99999)))]
+        #[case::missing_hash("owner/repo", None)]
+        #[case::missing_slash("ownerrepo#1", None)]
+        #[case::non_numeric_number("owner/repo#abc", None)]
+        #[case::empty_string("", None)]
+        fn test_parse_issue_ref(
+            #[case] input: &str,
+            #[case] expected: Option<(String, String, u64)>,
+        ) {
+            assert_eq!(parse_issue_ref(input), expected);
+        }
+    }
+
+    mod has_changes_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_no_changes() {
+            let cs = empty_changeset();
+            assert!(!cs.has_changes());
+        }
+
+        #[rstest]
+        fn test_sub_issues_counts_as_change() {
+            let mut cs = empty_changeset();
+            cs.sub_issues = Some(SubIssueChange {
+                to_add: vec!["a/b#1".to_string()],
+                to_remove: vec![],
+                local_sorted: vec!["a/b#1".to_string()],
+                remote_sorted: vec![],
+            });
+            assert!(cs.has_changes());
+        }
+
+        #[rstest]
+        fn test_parent_issue_counts_as_change() {
+            let mut cs = empty_changeset();
+            cs.parent_issue = Some(ParentIssueChange {
+                local: Some("a/b#1".to_string()),
+                remote: None,
+            });
+            assert!(cs.has_changes());
+        }
     }
 }

@@ -161,6 +161,8 @@ mod tests {
             labels: vec!["bug".to_string()],
             assignees: vec!["user1".to_string()],
             milestone: None,
+            parent_issue: None,
+            sub_issues: vec![],
             readonly: ReadonlyMetadata {
                 number: 123,
                 state: "OPEN".to_string(),
@@ -213,6 +215,8 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
             last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
         };
 
         storage.save_metadata(&metadata).unwrap();

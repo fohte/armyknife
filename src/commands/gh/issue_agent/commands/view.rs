@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use clap::Args;
 
-use super::common::{get_repo_from_arg_or_git, parse_repo};
+use super::common::{fetch_issue_with_sub_issues, get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, TimelineItem};
 use crate::infra::github::OctocrabClient;
@@ -41,9 +41,9 @@ where
     let issue_number = args.issue.issue_number;
 
     let (issue, comments, timeline_events) = tokio::try_join!(
-        client.get_issue(&owner, &repo, issue_number),
+        fetch_issue_with_sub_issues(client, &owner, &repo, issue_number),
         client.get_comments(&owner, &repo, issue_number),
-        client.get_timeline_events(&owner, &repo, issue_number)
+        client.get_timeline_events(&owner, &repo, issue_number),
     )?;
 
     Ok(format_issue_view_with(
@@ -682,6 +682,7 @@ mod tests {
             ])
             .await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -731,6 +732,7 @@ mod tests {
                 .await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(42).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -801,6 +803,7 @@ mod tests {
             ctx.issue(10).title("Empty Body Issue").body("").get().await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(10).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -839,6 +842,7 @@ mod tests {
                 .await;
             ctx.graphql_comments(&[]).await;
             ctx.graphql_timeline_events(&[]).await;
+            ctx.sub_issues_empty(15).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -899,6 +903,7 @@ mod tests {
                 },
             ])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {
@@ -977,6 +982,7 @@ mod tests {
                 },
             ])
             .await;
+            ctx.sub_issues_empty(123).await;
 
             let client = mock.client();
             let args = ViewArgs {

@@ -35,6 +35,8 @@ pub fn create_metadata_json_full(
         created_at: "2024-01-01T00:00:00+00:00".to_string(),
         updated_at: updated_at.to_string(),
         last_edited_at: last_edited_at.map(|s| s.to_string()),
+        parent_issue: None,
+        sub_issues: vec![],
     };
     serde_json::to_string(&metadata).unwrap()
 }
@@ -160,6 +162,9 @@ impl<'a> TestSetup<'a> {
 
         // Set up remote comments mock
         ctx.graphql_comments(&self.remote_comments).await;
+
+        // Set up remote sub-issues mock (empty by default)
+        ctx.sub_issues_empty(123).await;
 
         // Set up current user mock
         mock.current_user(self.current_user).await;

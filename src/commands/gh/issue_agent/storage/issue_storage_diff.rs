@@ -111,6 +111,8 @@ mod tests {
             created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
             last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
         }
     }
 
