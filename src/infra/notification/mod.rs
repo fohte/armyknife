@@ -1,4 +1,5 @@
 mod fallback;
+pub mod icon;
 mod terminal_notifier;
 mod types;
 
@@ -15,6 +16,16 @@ pub fn send(notification: &Notification) -> Result<()> {
         terminal_notifier::send(notification)
     } else {
         fallback::send(notification)
+    }
+}
+
+/// Removes notifications belonging to the given group from the notification center.
+/// Only works with terminal-notifier; silently does nothing if unavailable.
+pub fn remove_group(group: &str) -> Result<()> {
+    if is_terminal_notifier_available() {
+        terminal_notifier::remove_group(group)
+    } else {
+        Ok(())
     }
 }
 

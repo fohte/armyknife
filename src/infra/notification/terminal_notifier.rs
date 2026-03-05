@@ -27,6 +27,14 @@ pub fn send(notification: &Notification) -> Result<()> {
         cmd.arg("-execute").arg(action.command());
     }
 
+    if let Some(group) = notification.group() {
+        cmd.arg("-group").arg(group);
+    }
+
+    if let Some(app_icon) = notification.app_icon() {
+        cmd.arg("-appIcon").arg(app_icon);
+    }
+
     let output = cmd
         .output()
         .context("failed to execute terminal-notifier")?;
@@ -34,6 +42,22 @@ pub fn send(notification: &Notification) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("terminal-notifier failed: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Removes notifications belonging to the given group from the notification center.
+pub fn remove_group(group: &str) -> Result<()> {
+    let output = Command::new("terminal-notifier")
+        .arg("-remove")
+        .arg(group)
+        .output()
+        .context("failed to execute terminal-notifier -remove")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("terminal-notifier -remove failed: {}", stderr);
     }
 
     Ok(())
