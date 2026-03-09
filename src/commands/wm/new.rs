@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::error::{Result, WmError};
-use super::git::{
-    branch_exists, branch_to_worktree_name, get_main_branch, get_repo_root, local_branch_exists,
-    remote_branch_exists,
-};
+use super::git::branch_to_worktree_name;
 use crate::commands::cc::store as cc_store;
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::infra::git::fetch_with_prune;
+use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{Config, load_config};
@@ -200,11 +198,22 @@ fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMod
     Ok(())
 }
 
+/// Check if a branch exists (local or remote) in the given repository.
+fn repo_branch_exists(repo: &Repository, branch: &str) -> bool {
+    repo.find_branch(branch, BranchType::Local).is_ok()
+        || repo
+            .find_branch(&format!("origin/{branch}"), BranchType::Remote)
+            .is_ok()
+}
+
 /// Add a worktree for an existing branch (local or remote)
 fn add_worktree_for_branch(repo: &Repository, worktree_dir: &Path, branch: &str) -> Result<()> {
-    if local_branch_exists(branch) {
+    if repo.find_branch(branch, BranchType::Local).is_ok() {
         git_worktree_add(repo, worktree_dir, WorktreeAddMode::LocalBranch { branch })
-    } else if remote_branch_exists(branch) {
+    } else if repo
+        .find_branch(&format!("origin/{branch}"), BranchType::Remote)
+        .is_ok()
+    {
         git_worktree_add(repo, worktree_dir, WorktreeAddMode::TrackRemote { branch })
     } else {
         // Fallback: use as-is (should not normally happen)
@@ -247,6 +256,11 @@ pub struct NewArgs {
     /// Sets ARMYKNIFE_ANCESTOR_SESSION_IDS for the child session.
     #[arg(long)]
     pub parent_session_id: Option<String>,
+
+    /// Path to the target repository.
+    /// When specified, operates on the given repository instead of the current directory.
+    #[arg(short = 'R', long)]
+    pub repo: Option<PathBuf>,
 }
 
 /// Context information injected into the prompt when --agent is used
@@ -384,7 +398,10 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
 
-    let repo_root = get_repo_root()?;
+    let repo_root = match &args.repo {
+        Some(path) => get_repo_root_in(path)?,
+        None => get_repo_root()?,
+    };
 
     // Save prompt to cache directory for recovery in case of failure
     let prompt_cache_path = prompt
@@ -411,7 +428,7 @@ fn run_worktree_creation(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let repo = open_repo_at(Path::new(repo_root)).map_err(|_| WmError::NotInGitRepo)?;
     let branch_prefix = &config.wm.branch_prefix;
 
     // Determine worktree directory name from branch name
@@ -434,7 +451,7 @@ fn run_worktree_creation(
 
     if args.force {
         // Force create new branch with prefix
-        let main_branch = get_main_branch()?;
+        let main_branch = get_main_branch_for_repo(&repo)?;
         let base_branch = args
             .from
             .clone()
@@ -452,34 +469,34 @@ fn run_worktree_creation(
 
         actual_branch = branch;
         actual_base = base_branch;
-    } else if branch_exists(name) {
+    } else if repo_branch_exists(&repo, name) {
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
         actual_branch = name.to_string();
         // actual_base is only used when --agent is set
         actual_base = if args.agent {
-            let main_branch = get_main_branch()?;
+            let main_branch = get_main_branch_for_repo(&repo)?;
             format!("origin/{main_branch}")
         } else {
             String::new()
         };
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
-        if branch_exists(&branch_with_prefix) {
+        if repo_branch_exists(&repo, &branch_with_prefix) {
             // Branch exists with prefix
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
 
             actual_branch = branch_with_prefix;
             actual_base = if args.agent {
-                let main_branch = get_main_branch()?;
+                let main_branch = get_main_branch_for_repo(&repo)?;
                 format!("origin/{main_branch}")
             } else {
                 String::new()
             };
         } else {
             // Branch doesn't exist, create new one with prefix
-            let main_branch = get_main_branch()?;
+            let main_branch = get_main_branch_for_repo(&repo)?;
             let base_branch = args
                 .from
                 .clone()
@@ -702,6 +719,86 @@ mod tests {
         assert!(worktree_dir.exists());
     }
 
+    #[rstest]
+    #[case::local_exists("existing-local", true)]
+    #[case::remote_exists("existing-remote", true)]
+    #[case::nonexistent("nonexistent", false)]
+    fn repo_branch_exists_checks_local_and_remote(#[case] branch: &str, #[case] expected: bool) {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        // Create a local branch
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("existing-local", &head, false).unwrap();
+
+        // Create a remote tracking branch
+        repo.reference(
+            "refs/remotes/origin/existing-remote",
+            head.id(),
+            true,
+            "create fake remote branch",
+        )
+        .unwrap();
+
+        assert_eq!(repo_branch_exists(&repo, branch), expected);
+    }
+
+    #[rstest]
+    fn add_worktree_for_branch_uses_local_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("local-branch", &head, false).unwrap();
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("local-branch");
+
+        add_worktree_for_branch(&repo, &worktree_dir, "local-branch").unwrap();
+        assert!(worktree_dir.exists());
+    }
+
+    #[rstest]
+    fn add_worktree_for_branch_tracks_remote_branch() {
+        // Create a "remote" bare repo and a local clone so that
+        // set_upstream can resolve the remote for origin/*.
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = remote_repo.index().unwrap().write_tree().unwrap();
+        let tree = remote_repo.find_tree(tree_id).unwrap();
+        let commit = remote_repo
+            .commit(Some("refs/heads/master"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        let master_commit = remote_repo.find_commit(commit).unwrap();
+        remote_repo
+            .branch("remote-branch", &master_commit, false)
+            .unwrap();
+
+        // Clone the remote
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| local_dir.path().to_path_buf());
+        let repo = Repository::clone(remote_dir.path().to_str().unwrap(), &local_path).unwrap();
+
+        // Fetch to get remote tracking branches
+        repo.find_remote("origin")
+            .unwrap()
+            .fetch(&[] as &[&str], None, None)
+            .unwrap();
+
+        let worktrees_dir = local_path.join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("remote-branch");
+
+        add_worktree_for_branch(&repo, &worktree_dir, "remote-branch").unwrap();
+        assert!(worktree_dir.exists());
+        // Should have created a local tracking branch
+        assert!(repo.find_branch("remote-branch", BranchType::Local).is_ok());
+    }
+
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
     use rstest::rstest;
 
@@ -750,6 +847,7 @@ mod tests {
             agent: false,
             label: None,
             parent_session_id: None,
+            repo: None,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -780,6 +878,7 @@ mod tests {
             agent: false,
             label: None,
             parent_session_id: None,
+            repo: None,
         };
         let result = resolve_args_with_deps(
             &args,
