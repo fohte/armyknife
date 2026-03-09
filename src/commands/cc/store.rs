@@ -385,8 +385,13 @@ fn cleanup_stale_sessions_impl<F>(is_pane_alive: F) -> Result<()>
 where
     F: Fn(&str) -> bool,
 {
-    let dir = sessions_dir()?;
+    cleanup_stale_sessions_in(&sessions_dir()?, is_pane_alive)
+}
 
+fn cleanup_stale_sessions_in<F>(dir: &Path, is_pane_alive: F) -> Result<()>
+where
+    F: Fn(&str) -> bool,
+{
     if !dir.exists() {
         return Ok(());
     }
@@ -394,7 +399,7 @@ where
     let now = Utc::now();
     let retention = TimeDelta::days(ENDED_SESSION_RETENTION_DAYS);
 
-    for entry in fs::read_dir(&dir)? {
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -582,39 +587,6 @@ mod tests {
             true
         }
 
-        /// Test helper that processes only a single session file.
-        /// This ensures test isolation without affecting other parallel tests.
-        fn cleanup_single_session_in<F>(
-            sessions_dir: &Path,
-            session_id: &str,
-            is_pane_alive: F,
-        ) -> Result<()>
-        where
-            F: Fn(&str) -> bool,
-        {
-            let path = session_file_in(sessions_dir, session_id)?;
-
-            if !path.exists() {
-                return Ok(());
-            }
-
-            let content = fs::read_to_string(&path)?;
-            let session: Session = serde_json::from_str(&content)?;
-
-            let should_remove = session
-                .tmux_info
-                .as_ref()
-                .is_some_and(|info| !is_pane_alive(&info.pane_id));
-
-            if should_remove {
-                let _ = fs::remove_file(&path);
-                let lock_path = path.with_extension("json.lock");
-                let _ = fs::remove_file(&lock_path);
-            }
-
-            Ok(())
-        }
-
         #[rstest]
         fn removes_session_with_nonexistent_pane(temp_session_dir: TempSessionDir) {
             let session_id = "dead-pane-test";
@@ -632,12 +604,8 @@ mod tests {
                 .expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_single_session_in(
-                &temp_session_dir.sessions_path,
-                session_id,
-                mock_pane_always_dead,
-            )
-            .expect("cleanup should succeed");
+            cleanup_stale_sessions_in(&temp_session_dir.sessions_path, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
             assert!(
                 !path.exists(),
@@ -661,12 +629,8 @@ mod tests {
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
 
-            cleanup_single_session_in(
-                &temp_session_dir.sessions_path,
-                session_id,
-                mock_pane_always_alive,
-            )
-            .expect("cleanup should succeed");
+            cleanup_stale_sessions_in(&temp_session_dir.sessions_path, mock_pane_always_alive)
+                .expect("cleanup should succeed");
 
             assert!(path.exists(), "session with alive pane should be kept");
         }
@@ -684,12 +648,8 @@ mod tests {
 
             // Even with mock that treats all panes as dead, sessions without
             // tmux_info should be kept.
-            cleanup_single_session_in(
-                &temp_session_dir.sessions_path,
-                session_id,
-                mock_pane_always_dead,
-            )
-            .expect("cleanup should succeed");
+            cleanup_stale_sessions_in(&temp_session_dir.sessions_path, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
             assert!(path.exists(), "session without tmux_info should be kept");
         }
@@ -713,12 +673,8 @@ mod tests {
             let lock_path = path.with_extension("json.lock");
             assert!(path.exists(), "session file should exist");
 
-            cleanup_single_session_in(
-                &temp_session_dir.sessions_path,
-                session_id,
-                mock_pane_always_dead,
-            )
-            .expect("cleanup should succeed");
+            cleanup_stale_sessions_in(&temp_session_dir.sessions_path, mock_pane_always_dead)
+                .expect("cleanup should succeed");
 
             assert!(!path.exists(), "session file should be removed");
             assert!(!lock_path.exists(), "lock file should also be removed");
