@@ -321,13 +321,13 @@ pub fn is_pane_alive(pane_id: &str) -> bool {
 
 /// Returns the set of all currently alive pane IDs.
 /// Uses a single `tmux list-panes -a` call instead of per-pane queries.
-pub fn list_all_pane_ids() -> std::collections::HashSet<String> {
-    let output = match run_tmux_output(&["list-panes", "-a", "-F", "#{pane_id}"]) {
-        Ok(output) => output,
-        Err(_) => return std::collections::HashSet::new(),
-    };
-
-    output.lines().map(|s| s.to_string()).collect()
+///
+/// Returns an error if the tmux command fails, so the caller can
+/// distinguish "no panes" from "failed to query" and avoid
+/// misidentifying all sessions as stale.
+pub fn list_all_pane_ids() -> Result<std::collections::HashSet<String>> {
+    let output = run_tmux_output(&["list-panes", "-a", "-F", "#{pane_id}"])?;
+    Ok(output.lines().map(|s| s.to_string()).collect())
 }
 
 /// Information about a tmux pane.
