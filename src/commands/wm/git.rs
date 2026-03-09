@@ -3,10 +3,7 @@
 //! Re-exports common git functions and provides wm-specific helpers.
 
 // Re-export common git functions for use by wm subcommands
-pub use crate::infra::git::{
-    branch_exists, get_main_branch, get_merge_status, get_repo_root, local_branch_exists,
-    remote_branch_exists,
-};
+pub use crate::infra::git::{get_merge_status, get_repo_root, local_branch_exists};
 
 /// Normalize a branch name to a worktree directory name.
 /// - Removes the given branch_prefix

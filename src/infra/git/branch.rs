@@ -5,26 +5,12 @@ use git2::{BranchType, Repository};
 use super::repo::{get_main_branch, open_repo};
 use crate::infra::github::{PrInfo, PrState};
 
-/// Check if a branch exists (local or remote)
-pub fn branch_exists(branch: &str) -> bool {
-    local_branch_exists(branch) || remote_branch_exists(branch)
-}
-
 /// Check if a local branch exists
 pub fn local_branch_exists(branch: &str) -> bool {
     let Ok(repo) = open_repo() else {
         return false;
     };
     repo.find_branch(branch, BranchType::Local).is_ok()
-}
-
-/// Check if a remote branch exists
-pub fn remote_branch_exists(branch: &str) -> bool {
-    let Ok(repo) = open_repo() else {
-        return false;
-    };
-    let remote_branch = format!("origin/{branch}");
-    repo.find_branch(&remote_branch, BranchType::Remote).is_ok()
 }
 
 /// Find the base branch for PR creation.
