@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.113](https://github.com/fohte/armyknife/compare/v0.1.112...v0.1.113) (2026-03-09)
+
+
+### Features
+
+* **wm:** add `--repo` (`-R`) option to `wm new` for targeting a different repository ([#325](https://github.com/fohte/armyknife/issues/325)) ([34151ce](https://github.com/fohte/armyknife/commit/34151ce7ad499f6a479c1486a201342972800003))
+
+
+### Performance Improvements
+
+* **cc:** batch pane liveness check in `cleanup_stale_sessions` ([#326](https://github.com/fohte/armyknife/issues/326)) ([1593578](https://github.com/fohte/armyknife/commit/15935782f40a0bd2c9d60a79ccc4bd9589b7ddf9))
+
 ## [0.1.112](https://github.com/fohte/armyknife/compare/v0.1.111...v0.1.112) (2026-03-05)
 
 
