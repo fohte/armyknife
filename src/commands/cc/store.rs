@@ -372,7 +372,9 @@ pub fn cleanup_stale_sessions() -> Result<()> {
         return Ok(());
     }
 
-    cleanup_stale_sessions_impl(tmux::is_pane_alive)
+    // Fetch all alive pane IDs in a single tmux call (O(1) instead of O(N))
+    let alive_panes = tmux::list_all_pane_ids();
+    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id))
 }
 
 fn cleanup_stale_sessions_impl<F>(is_pane_alive: F) -> Result<()>
