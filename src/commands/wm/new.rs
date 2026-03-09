@@ -719,6 +719,86 @@ mod tests {
         assert!(worktree_dir.exists());
     }
 
+    #[rstest]
+    #[case::local_exists("existing-local", true)]
+    #[case::remote_exists("existing-remote", true)]
+    #[case::nonexistent("nonexistent", false)]
+    fn repo_branch_exists_checks_local_and_remote(#[case] branch: &str, #[case] expected: bool) {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        // Create a local branch
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("existing-local", &head, false).unwrap();
+
+        // Create a remote tracking branch
+        repo.reference(
+            "refs/remotes/origin/existing-remote",
+            head.id(),
+            true,
+            "create fake remote branch",
+        )
+        .unwrap();
+
+        assert_eq!(repo_branch_exists(&repo, branch), expected);
+    }
+
+    #[rstest]
+    fn add_worktree_for_branch_uses_local_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("local-branch", &head, false).unwrap();
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("local-branch");
+
+        add_worktree_for_branch(&repo, &worktree_dir, "local-branch").unwrap();
+        assert!(worktree_dir.exists());
+    }
+
+    #[rstest]
+    fn add_worktree_for_branch_tracks_remote_branch() {
+        // Create a "remote" bare repo and a local clone so that
+        // set_upstream can resolve the remote for origin/*.
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
+        let sig = Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = remote_repo.index().unwrap().write_tree().unwrap();
+        let tree = remote_repo.find_tree(tree_id).unwrap();
+        let commit = remote_repo
+            .commit(Some("refs/heads/master"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        let master_commit = remote_repo.find_commit(commit).unwrap();
+        remote_repo
+            .branch("remote-branch", &master_commit, false)
+            .unwrap();
+
+        // Clone the remote
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| local_dir.path().to_path_buf());
+        let repo = Repository::clone(remote_dir.path().to_str().unwrap(), &local_path).unwrap();
+
+        // Fetch to get remote tracking branches
+        repo.find_remote("origin")
+            .unwrap()
+            .fetch(&[] as &[&str], None, None)
+            .unwrap();
+
+        let worktrees_dir = local_path.join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("remote-branch");
+
+        add_worktree_for_branch(&repo, &worktree_dir, "remote-branch").unwrap();
+        assert!(worktree_dir.exists());
+        // Should have created a local tracking branch
+        assert!(repo.find_branch("remote-branch", BranchType::Local).is_ok());
+    }
+
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
     use rstest::rstest;
 
