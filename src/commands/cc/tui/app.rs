@@ -60,12 +60,21 @@ pub struct App {
 impl App {
     /// Creates a new App instance with initial session data.
     /// Restores the last selected session if available.
+    ///
+    /// If `ARMYKNIFE_FOCUS_SESSION` is set, that session is selected instead of
+    /// the persisted last-selected session. This allows tmux bindings to pass
+    /// the currently focused pane's session ID via an environment variable.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let mut app = Self::with_sessions(sessions);
 
-        // Restore last selected session if available
-        if let Ok(Some(session_id)) = store::load_last_selected_session() {
+        // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
+        let initial_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| store::load_last_selected_session().ok().flatten());
+
+        if let Some(session_id) = initial_session_id {
             app.restore_selection(Some(&session_id));
         }
 
