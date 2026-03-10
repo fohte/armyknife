@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.114](https://github.com/fohte/armyknife/compare/v0.1.113...v0.1.114) (2026-03-10)
+
+
+### Features
+
+* **cc/watch:** support `ARMYKNIFE_FOCUS_SESSION` env for initial session selection ([#328](https://github.com/fohte/armyknife/issues/328)) ([12e6b17](https://github.com/fohte/armyknife/commit/12e6b179ff4e1cbc99df8fbff7504e39d59b0ad2))
+
 ## [0.1.113](https://github.com/fohte/armyknife/compare/v0.1.112...v0.1.113) (2026-03-09)
 
 
