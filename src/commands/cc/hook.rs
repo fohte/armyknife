@@ -140,6 +140,16 @@ fn process_hook_event_impl(
         }
     }
 
+    // Set pane option on UserPromptSubmit for new sessions.
+    // When `claude` is started without `-c`, only SessionStart(startup) fires,
+    // which skips setting the pane option to avoid wrong session_id on resume.
+    // UserPromptSubmit is the earliest subsequent event where we can set it.
+    if event == HookEvent::UserPromptSubmit
+        && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
+    {
+        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+    }
+
     // Get tmux info by finding the pane that contains this process
     let tmux_info = tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
         session_name: info.session_name,
@@ -1247,6 +1257,43 @@ mod tests {
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
             );
+        }
+
+        #[test]
+        fn new_session_full_flow_startup_then_user_prompt() {
+            let temp_dir = create_temp_sessions_dir();
+
+            // Simulate `claude` (without -c): SessionStart(startup) is skipped,
+            // then UserPromptSubmit creates the session.
+            // This also exercises the code path where UserPromptSubmit sets the
+            // pane option (when running inside tmux).
+            let startup_input = create_test_input_with_source(None, Some("startup"));
+            let startup_result =
+                process_hook_event_impl(HookEvent::SessionStart, startup_input, temp_dir.path())
+                    .expect("startup should succeed");
+            assert_eq!(startup_result, ProcessResult::Skipped);
+
+            // No session file should exist after startup skip
+            let session =
+                store::load_session_from(temp_dir.path(), "test-123").expect("load should succeed");
+            assert!(
+                session.is_none(),
+                "session should not exist after skipped startup"
+            );
+
+            // UserPromptSubmit creates the session
+            let prompt_input = create_test_input(None);
+            let prompt_result =
+                process_hook_event_impl(HookEvent::UserPromptSubmit, prompt_input, temp_dir.path())
+                    .expect("user-prompt-submit should succeed");
+            assert_eq!(prompt_result, ProcessResult::SessionSaved);
+
+            // Session should now exist
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("load should succeed")
+                .expect("session should exist after user-prompt-submit");
+            assert_eq!(session.session_id, "test-123");
+            assert_eq!(session.status, SessionStatus::Running);
         }
     }
 
