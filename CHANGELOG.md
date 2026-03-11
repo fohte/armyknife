@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.115](https://github.com/fohte/armyknife/compare/v0.1.114...v0.1.115) (2026-03-11)
+
+
+### Bug Fixes
+
+* **cc/hook:** set pane option on `UserPromptSubmit` for new sessions ([#330](https://github.com/fohte/armyknife/issues/330)) ([5798fb3](https://github.com/fohte/armyknife/commit/5798fb34ab7a00852ecf380797ea5e2449f712fb))
+
 ## [0.1.114](https://github.com/fohte/armyknife/compare/v0.1.113...v0.1.114) (2026-03-10)
 
 
