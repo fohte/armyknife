@@ -895,13 +895,6 @@ impl OctocrabClient {
 
     /// Resolve a review thread using GraphQL mutation.
     pub async fn resolve_review_thread(&self, thread_node_id: &str) -> Result<()> {
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct ResolveData {
-            #[expect(dead_code, reason = "required for deserialization")]
-            resolve_review_thread: Option<serde_json::Value>,
-        }
-
         const RESOLVE_MUTATION: &str = indoc! {"
             mutation($threadId: ID!) {
                 resolveReviewThread(input: { threadId: $threadId }) {
@@ -917,7 +910,7 @@ impl OctocrabClient {
             "threadId": thread_node_id,
         });
 
-        let _response: ResolveData = self.graphql(RESOLVE_MUTATION, variables).await?;
+        let _: serde_json::Value = self.graphql(RESOLVE_MUTATION, variables).await?;
         Ok(())
     }
 }
