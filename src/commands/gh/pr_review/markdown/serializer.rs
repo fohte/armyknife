@@ -1,0 +1,359 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
+
+/// YAML frontmatter for the threads.md file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadsFrontmatter {
+    pub pr: u64,
+    pub repo: String,
+    pub pulled_at: String,
+}
+
+pub struct MarkdownSerializer;
+
+impl MarkdownSerializer {
+    /// Generate a Markdown string from PrData and frontmatter metadata.
+    pub fn serialize(pr_data: &PrData, frontmatter: &ThreadsFrontmatter) -> String {
+        Self::serialize_with_drafts(pr_data, frontmatter, &HashMap::new())
+    }
+
+    /// Generate a Markdown string, preserving existing draft replies keyed by thread node ID.
+    pub fn serialize_with_drafts(
+        pr_data: &PrData,
+        frontmatter: &ThreadsFrontmatter,
+        existing_drafts: &HashMap<String, String>,
+    ) -> String {
+        let mut output = String::new();
+
+        // YAML frontmatter
+        output.push_str("---\n");
+        output.push_str(&format!("pr: {}\n", frontmatter.pr));
+        output.push_str(&format!("repo: \"{}\"\n", frontmatter.repo));
+        output.push_str(&format!("pulled_at: \"{}\"\n", frontmatter.pulled_at));
+        output.push_str("---\n");
+
+        for thread in &pr_data.threads {
+            output.push('\n');
+            output.push_str(&serialize_thread(thread, existing_drafts));
+        }
+
+        output
+    }
+}
+
+fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, String>) -> String {
+    let mut output = String::new();
+
+    let root = match thread.root_comment() {
+        Some(c) => c,
+        None => return output,
+    };
+
+    // Thread header
+    let node_id = thread.id.as_deref().unwrap_or("unknown");
+    let path = root.path.as_deref().unwrap_or("unknown");
+    let line = root
+        .effective_line()
+        .map(|l| l.to_string())
+        .unwrap_or_default();
+
+    let location = if line.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}:{line}")
+    };
+
+    output.push_str(&format!("<!-- thread: {node_id} path: {location} -->\n"));
+
+    // Resolve checkbox
+    if thread.is_resolved {
+        output.push_str("- [x] resolve\n");
+    } else {
+        output.push_str("- [ ] resolve\n");
+    }
+
+    // Diff hunk from root comment
+    if let Some(diff_hunk) = &root.diff_hunk {
+        output.push_str("<!-- diff -->\n");
+        output.push_str("```diff\n");
+        output.push_str(diff_hunk);
+        if !diff_hunk.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("```\n");
+        output.push_str("<!-- /diff -->\n");
+    }
+
+    // All comments in chronological order
+    for comment in &thread.comments.nodes {
+        let author = comment.author_login();
+        let timestamp = &comment.created_at;
+        output.push_str(&format!("<!-- comment: @{author} {timestamp} -->\n"));
+        output.push_str(&comment.body);
+        if !comment.body.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("<!-- /comment -->\n");
+    }
+
+    // Existing draft reply (preserved from previous pull)
+    if let Some(draft) = existing_drafts.get(node_id)
+        && !draft.trim().is_empty()
+    {
+        output.push_str(draft);
+        if !draft.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::gh::pr_review::models::{
+        Comment,
+        comment::{Author, PullRequestReview, ReplyTo},
+        thread::CommentsNode,
+    };
+    use indoc::indoc;
+    use rstest::rstest;
+
+    fn make_comment(id: i64, author: &str, body: &str) -> Comment {
+        Comment {
+            database_id: id,
+            author: Some(Author {
+                login: author.to_string(),
+            }),
+            body: body.to_string(),
+            created_at: "2024-01-15T10:30:00Z".to_string(),
+            path: None,
+            line: None,
+            original_line: None,
+            diff_hunk: None,
+            reply_to: None,
+            pull_request_review: None,
+        }
+    }
+
+    fn make_thread(
+        node_id: Option<&str>,
+        comments: Vec<Comment>,
+        is_resolved: bool,
+    ) -> ReviewThread {
+        ReviewThread {
+            id: node_id.map(|s| s.to_string()),
+            is_resolved,
+            comments: CommentsNode { nodes: comments },
+        }
+    }
+
+    fn default_frontmatter() -> ThreadsFrontmatter {
+        ThreadsFrontmatter {
+            pr: 42,
+            repo: "fohte/armyknife".to_string(),
+            pulled_at: "2024-01-15T10:00:00Z".to_string(),
+        }
+    }
+
+    #[rstest]
+    fn test_serialize_empty_threads() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_single_comment_thread() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_abc123"),
+                vec![Comment {
+                    path: Some("src/main.rs".to_string()),
+                    line: Some(42),
+                    diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old\n+new".to_string()),
+                    pull_request_review: Some(PullRequestReview { database_id: 100 }),
+                    ..make_comment(1, "reviewer", "Fix this bug")
+                }],
+                false,
+            )],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc123 path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- diff -->
+            ```diff
+            @@ -40,3 +40,5 @@
+             context
+            -old
+            +new
+            ```
+            <!-- /diff -->
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this bug
+            <!-- /comment -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_thread_with_replies() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_def456"),
+                vec![
+                    Comment {
+                        path: Some("lib.rs".to_string()),
+                        line: Some(10),
+                        pull_request_review: Some(PullRequestReview { database_id: 100 }),
+                        ..make_comment(1, "reviewer", "Please fix")
+                    },
+                    Comment {
+                        reply_to: Some(ReplyTo {}),
+                        pull_request_review: Some(PullRequestReview { database_id: 100 }),
+                        ..make_comment(2, "author", "Done!")
+                    },
+                ],
+                false,
+            )],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_def456 path: lib.rs:10 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Please fix
+            <!-- /comment -->
+            <!-- comment: @author 2024-01-15T10:30:00Z -->
+            Done!
+            <!-- /comment -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_resolved_thread() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_resolved"),
+                vec![Comment {
+                    path: Some("a.rs".to_string()),
+                    line: Some(1),
+                    ..make_comment(1, "reviewer", "Nit")
+                }],
+                true,
+            )],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_resolved path: a.rs:1 -->
+            - [x] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Nit
+            <!-- /comment -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_with_drafts_preserves_existing() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_abc123"),
+                vec![Comment {
+                    path: Some("a.rs".to_string()),
+                    line: Some(1),
+                    ..make_comment(1, "reviewer", "Fix this")
+                }],
+                false,
+            )],
+        };
+        let mut drafts = HashMap::new();
+        drafts.insert("RT_abc123".to_string(), "My draft reply\n".to_string());
+
+        let result =
+            MarkdownSerializer::serialize_with_drafts(&pr_data, &default_frontmatter(), &drafts);
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc123 path: a.rs:1 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+            My draft reply
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_no_line_number() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_noline"),
+                vec![Comment {
+                    path: Some("file.rs".to_string()),
+                    ..make_comment(1, "reviewer", "Comment")
+                }],
+                false,
+            )],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_noline path: file.rs -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Comment
+            <!-- /comment -->
+        "#};
+        assert_eq!(result, expected);
+    }
+}

@@ -217,14 +217,15 @@ pub(super) fn author_login(review: &Review) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::gh::check_pr_review::models::Author;
+    use crate::commands::gh::pr_review::models::comment::Author;
     use indoc::indoc;
     use rstest::rstest;
 
     mod test_helpers {
-        use crate::commands::gh::check_pr_review::models::{
-            Author, Comment, CommentsNode, PrData, PullRequestReview, ReplyTo, Review, ReviewState,
-            ReviewThread,
+        use crate::commands::gh::pr_review::models::{
+            Comment, PrData, Review, ReviewState, ReviewThread,
+            comment::{Author, PullRequestReview, ReplyTo},
+            thread::CommentsNode,
         };
 
         pub fn make_comment(
@@ -252,6 +253,7 @@ mod tests {
 
         pub fn make_thread(comments: Vec<Comment>, is_resolved: bool) -> ReviewThread {
             ReviewThread {
+                id: None,
                 is_resolved,
                 comments: CommentsNode { nodes: comments },
             }
@@ -435,11 +437,10 @@ mod tests {
 
     // Integration tests for format output
     mod integration {
+        use super::super::{format_review_details, format_summary};
         use super::test_helpers::*;
-        use crate::commands::gh::check_pr_review::format::{
-            FormatOptions, format_review_details, format_summary,
-        };
-        use crate::commands::gh::check_pr_review::models::{PrData, ReviewState};
+        use crate::commands::gh::pr_review::format::FormatOptions;
+        use crate::commands::gh::pr_review::models::{PrData, ReviewState};
         use indoc::indoc;
         use rstest::rstest;
 

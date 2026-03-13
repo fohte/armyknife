@@ -1,5 +1,6 @@
+use super::Result;
+use super::error::CheckPrReviewError;
 use super::models::{PrData, Review, ReviewThread};
-use super::{CheckPrReviewError, Result};
 use crate::infra::github::OctocrabClient;
 use indoc::indoc;
 use serde::Deserialize;
@@ -30,6 +31,7 @@ const GRAPHQL_QUERY: &str = indoc! {"
               endCursor
             }
             nodes {
+              id
               isResolved
               comments(first: 100) {
                 nodes {

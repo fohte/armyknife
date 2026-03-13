@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
-use crate::commands::gh::check_pr_review::fetch_pr_data;
+use crate::commands::gh::pr_review::fetch_pr_data;
 use crate::infra::github::OctocrabClient;
 
 /// Trait for review-related GitHub API operations.

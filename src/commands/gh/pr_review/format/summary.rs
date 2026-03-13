@@ -1,5 +1,5 @@
 use super::{author_login, truncate_text};
-use crate::commands::gh::check_pr_review::models::{PrData, ReviewThread};
+use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
 
 pub fn print_summary(pr_data: &PrData) {
     print!("{}", format_summary(pr_data));

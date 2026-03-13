@@ -21,6 +21,7 @@ fn make_comment(id: i64, review_id: Option<i64>, is_reply: bool) -> Comment {
 
 fn make_thread(review_id: Option<i64>, is_resolved: bool) -> ReviewThread {
     ReviewThread {
+        id: None,
         is_resolved,
         comments: CommentsNode {
             nodes: vec![make_comment(1, review_id, false)],
@@ -107,6 +108,7 @@ fn test_count_unresolved() {
 #[test]
 fn test_root_comment_and_replies() {
     let thread = ReviewThread {
+        id: None,
         is_resolved: false,
         comments: CommentsNode {
             nodes: vec![
