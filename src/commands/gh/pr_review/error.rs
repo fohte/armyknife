@@ -24,31 +24,6 @@ pub enum CheckPrReviewError {
 /// Unified error type for pr-review reply operations.
 #[derive(Error, Debug)]
 pub enum PrReviewError {
-    #[error("GitHub API error: {url} returned {status}")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "will be used when API error handling is wired up")
-    )]
-    GitHubApiError { url: String, status: u16 },
-
-    #[error("PR #{number} not found in {owner}/{repo}")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "will be used when API error handling is wired up")
-    )]
-    PrNotFound {
-        owner: String,
-        repo: String,
-        number: u64,
-    },
-
-    #[error("GraphQL error: {message}")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "will be used when API error handling is wired up")
-    )]
-    GraphQLError { message: String },
-
     #[error("Failed to post reply to thread {thread_id}: {details}")]
     ReplyPostFailed { thread_id: String, details: String },
 
@@ -94,18 +69,6 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::github_api_error(
-        PrReviewError::GitHubApiError { url: "https://api.github.com/repos/fohte/armyknife".to_string(), status: 403 },
-        "GitHub API error: https://api.github.com/repos/fohte/armyknife returned 403"
-    )]
-    #[case::graphql_error(
-        PrReviewError::GraphQLError { message: "rate limited".to_string() },
-        "GraphQL error: rate limited"
-    )]
-    #[case::pr_not_found(
-        PrReviewError::PrNotFound { owner: "fohte".to_string(), repo: "armyknife".to_string(), number: 42 },
-        "PR #42 not found in fohte/armyknife"
-    )]
     #[case::local_changes(
         PrReviewError::LocalChangesExist,
         "Local changes detected. Use --force to overwrite"
