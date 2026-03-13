@@ -179,12 +179,16 @@ Create a new comment boilerplate file for an existing issue.
 | --------------- | ---------------------------------------------- |
 | `--name <NAME>` | Name for the comment file (default: timestamp) |
 
-#### `a gh check-pr-review`
+#### `a gh pr-review`
+
+PR review workflow commands.
+
+##### `a gh pr-review check`
 
 Fetch PR review comments in a concise format for AI agents.
 
 ```sh
-a gh check-pr-review <pr-number> [options]
+a gh pr-review check <pr-number> [options]
 ```
 
 | Option               | Description                           |
@@ -193,6 +197,36 @@ a gh check-pr-review <pr-number> [options]
 | `--full`             | Show full details for all reviews     |
 | `--include-resolved` | Include resolved threads              |
 | `--open-details`     | Expand `<details>` blocks in comments |
+
+> `a gh check-pr-review` is a deprecated alias for `a gh pr-review check`.
+
+##### `a gh pr-review reply pull`
+
+Fetch review threads to a local Markdown file for editing.
+
+```sh
+a gh pr-review reply pull <pr-number> [options]
+```
+
+| Option               | Description                              |
+| -------------------- | ---------------------------------------- |
+| `-R, --repo <REPO>`  | Target repository (owner/repo)           |
+| `--include-resolved` | Include resolved threads                 |
+| `--force`            | Overwrite local changes without checking |
+
+##### `a gh pr-review reply push`
+
+Push draft replies and resolve actions from the local Markdown file to GitHub.
+
+```sh
+a gh pr-review reply push <pr-number> [options]
+```
+
+| Option              | Description                      |
+| ------------------- | -------------------------------- |
+| `-R, --repo <REPO>` | Target repository (owner/repo)   |
+| `--dry-run`         | Preview changes without applying |
+| `--force`           | Force push even with conflicts   |
 
 ### `a cc`
 
