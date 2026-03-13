@@ -191,12 +191,12 @@ Fetch PR review comments in a concise format for AI agents.
 a gh pr-review check <pr-number> [options]
 ```
 
-| Option               | Description                           |
-| -------------------- | ------------------------------------- |
-| `--review <n>`       | Show details for a specific review    |
-| `--full`             | Show full details for all reviews     |
-| `--include-resolved` | Include resolved threads              |
-| `--open-details`     | Expand `<details>` blocks in comments |
+| Option           | Description                           |
+| ---------------- | ------------------------------------- |
+| `--review <n>`   | Show details for a specific review    |
+| `--full`         | Show full details for all reviews     |
+| `-a, --all`      | Include resolved threads              |
+| `--open-details` | Expand `<details>` blocks in comments |
 
 > `a gh check-pr-review` is a deprecated alias for `a gh pr-review check`.
 
