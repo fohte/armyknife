@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.117](https://github.com/fohte/armyknife/compare/v0.1.116...v0.1.117) (2026-03-13)
+
+
+### Bug Fixes
+
+* **editor:** use AppleScript instead of `open -na` for Ghostty on macOS ([#334](https://github.com/fohte/armyknife/issues/334)) ([81d14f2](https://github.com/fohte/armyknife/commit/81d14f2a8ec6a100b44d1ec04fb7e03d869f8ea9))
+
 ## [0.1.116](https://github.com/fohte/armyknife/compare/v0.1.115...v0.1.116) (2026-03-13)
 
 
