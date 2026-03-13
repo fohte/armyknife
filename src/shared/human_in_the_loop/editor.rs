@@ -7,11 +7,6 @@ use indoc::formatdoc;
 
 use crate::shared::config::Terminal;
 
-/// Approximate width of a terminal character cell in pixels.
-const APPROX_CHAR_WIDTH_PX: u32 = 8;
-/// Approximate height of a terminal character cell in pixels.
-const APPROX_CHAR_HEIGHT_PX: u32 = 16;
-
 /// Options for launching a terminal window.
 pub struct LaunchOptions {
     pub window_title: String,
@@ -147,59 +142,40 @@ fn launch_ghostty_linux(
     cmd.status()
 }
 
-/// Launch Ghostty on macOS via `open -na`.
+/// Launch Ghostty on macOS via AppleScript.
 ///
-/// Uses `--command` with a wrapper script instead of `-e` to bypass the
-/// security permission dialog introduced in Ghostty v1.2.0 (GHSA-q9fg-cpmh-c78x).
-/// The `-e` flag triggers an "Allow Ghostty to execute ...?" dialog on every
-/// invocation, leaks arguments into existing tmux sessions, and temporarily
-/// resizes tmux panes. The `--command` flag treats the command as a Ghostty
-/// config setting rather than an external execution request, avoiding all of
-/// these issues.
+/// Uses `osascript` to tell the running Ghostty instance to open a new window
+/// with a surface configuration, instead of `open -na` which suffers from a
+/// race condition with `--quit-after-last-window-closed`: the window may fail
+/// to appear while the process lingers (ghostty-org/ghostty#8643).
+///
+/// AppleScript adds a window to the existing Ghostty instance, avoiding both
+/// the race condition and zombie process accumulation. Uses `--command` (not
+/// `-e`) in the surface config to bypass the security permission dialog
+/// introduced in Ghostty v1.2.0 (GHSA-q9fg-cpmh-c78x).
+///
+/// Window size/position options are not available via surface configuration,
+/// so they are omitted in favor of reliability.
 fn launch_ghostty_macos(
-    options: &LaunchOptions,
+    _options: &LaunchOptions,
     command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
     let wrapper_path = create_ghostty_wrapper_script(command, args)?;
 
-    let width_flag = format!("--window-width={}", options.window_cols);
-    let height_flag = format!("--window-height={}", options.window_rows);
-    let title_flag = format!("--title={}", options.window_title);
-    let command_flag = format!("--command={}", wrapper_path.display());
+    let command_config = format!("command={}", wrapper_path.display());
 
-    let mut ghostty_args = vec![
-        width_flag,
-        height_flag,
-        title_flag,
-        command_flag,
-        // Terminate the Ghostty process when its last window closes. Without
-        // this, `open -na` spawns a new app instance that stays alive (PPID=1)
-        // after the user finishes editing, leaving zombie-like processes behind.
-        "--quit-after-last-window-closed=true".to_string(),
-    ];
+    let script = format!(
+        "tell application \"Ghostty\" to new window with configuration \"{}\"",
+        command_config.replace('\\', "\\\\").replace('"', "\\\""),
+    );
 
-    // Center the window on screen if we can determine the display resolution
-    if let Some((pos_x, pos_y)) =
-        compute_centered_position(options.window_cols, options.window_rows)
-    {
-        ghostty_args.push(format!("--window-position-x={pos_x}"));
-        ghostty_args.push(format!("--window-position-y={pos_y}"));
-    }
-
-    let mut cmd = Command::new("open");
-    // -n: new instance, -a: application name
-    // NOTE: -W (wait) is intentionally omitted because it waits for the entire
-    // Ghostty *application* to exit, not just the spawned window, blocking
-    // indefinitely when another Ghostty instance is already running.
-    cmd.args(["-na", "Ghostty", "--args"]);
-    cmd.args(&ghostty_args);
-    cmd.status()
+    Command::new("osascript").args(["-e", &script]).status()
 }
 
 /// Create a temporary shell script that executes the given command with arguments.
 ///
-/// The script is persisted to disk (not auto-deleted) because `open -na` returns
+/// The script is persisted to disk (not auto-deleted) because the caller returns
 /// immediately before Ghostty reads it. The script removes itself after execution.
 fn create_ghostty_wrapper_script(
     command: impl AsRef<OsStr>,
@@ -255,53 +231,6 @@ fn create_ghostty_wrapper_script(
     Ok(path)
 }
 
-/// Compute window position to center a Ghostty window on the primary display.
-///
-/// Uses `system_profiler SPDisplaysDataType` to get the screen resolution, and
-/// approximates pixel dimensions from character cell counts (8px wide, 16px tall).
-/// Returns `None` if the resolution cannot be determined.
-fn compute_centered_position(cols: u32, rows: u32) -> Option<(u32, u32)> {
-    let output = Command::new("system_profiler")
-        .arg("SPDisplaysDataType")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_display_resolution(&stdout).map(|(screen_w, screen_h)| {
-        let window_w = cols * APPROX_CHAR_WIDTH_PX;
-        let window_h = rows * APPROX_CHAR_HEIGHT_PX;
-
-        let pos_x = screen_w.saturating_sub(window_w) / 2;
-        let pos_y = screen_h.saturating_sub(window_h) / 2;
-
-        (pos_x, pos_y)
-    })
-}
-
-/// Parse the primary display resolution from `system_profiler SPDisplaysDataType` output.
-///
-/// Looks for lines like "Resolution: 1920 x 1080" and returns the first match.
-fn parse_display_resolution(output: &str) -> Option<(u32, u32)> {
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Resolution:") {
-            // Format: "1920 x 1080 (QHD/FHD - ...)" or "1920 x 1080"
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 3
-                && parts[1] == "x"
-                && let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[2].parse::<u32>())
-            {
-                return Some((w, h));
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Read;
@@ -309,25 +238,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[rstest]
-    #[case::bare_resolution(
-        "          Resolution: 1920 x 1080\n",
-        Some((1920, 1080))
-    )]
-    #[case::resolution_with_suffix(
-        "          Resolution: 3840 x 2160 (4K UHD - 2160p)\n",
-        Some((3840, 2160))
-    )]
-    #[case::retina_display(
-        "          Resolution: 3024 x 1964 (Retina)\n",
-        Some((3024, 1964))
-    )]
-    #[case::no_resolution_line("          Vendor: Apple\n", None)]
-    #[case::empty("", None)]
-    fn test_parse_display_resolution(#[case] input: &str, #[case] expected: Option<(u32, u32)>) {
-        assert_eq!(parse_display_resolution(input), expected);
-    }
 
     #[rstest]
     #[case::simple_command("/usr/bin/echo", &[], "/usr/bin/echo\n")]
