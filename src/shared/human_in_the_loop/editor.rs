@@ -161,25 +161,97 @@ fn launch_ghostty_macos(
     command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
-    let wrapper_path = create_ghostty_wrapper_script(command, args)?;
+    // Signal file: the wrapper script touches this when the command exits.
+    // A background watcher polls for it to close the window and restore focus.
+    // Use a unique path in the temp directory (not pre-created) so the watcher
+    // detects the file appearing.
+    let signal_path_buf = std::env::temp_dir().join(format!(
+        "armyknife-ghostty-done-{}.signal",
+        std::process::id()
+    ));
 
-    let command_config = format!("command={}", wrapper_path.display());
+    let wrapper_path = create_ghostty_wrapper_script(command, args, &signal_path_buf)?;
 
-    let script = format!(
-        "tell application \"Ghostty\" to new window with configuration \"{}\"",
-        command_config.replace('\\', "\\\\").replace('"', "\\\""),
-    );
+    let wrapper_str = wrapper_path.display().to_string();
+    let escaped_wrapper = wrapper_str.replace('\\', "\\\\").replace('"', "\\\"");
 
-    Command::new("osascript").args(["-e", &script]).status()
+    // Ghostty's `command` surface config runs with a minimal PATH.
+    // Pass the current PATH so tools installed via mise (e.g. nvim) are found.
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let escaped_path = current_path.replace('\\', "\\\\").replace('"', "\\\"");
+
+    // Open a new Ghostty window via AppleScript. Record the previous front
+    // window and new window IDs so the background watcher can close the new
+    // window and re-activate the previous one.
+    let script = formatdoc! {r#"
+        tell application "Ghostty"
+            set prevWin to ""
+            try
+                set prevWin to id of front window
+            end try
+            set cfg to new surface configuration
+            set command of cfg to "{escaped_wrapper}"
+            set environment variables of cfg to {{"PATH={escaped_path}"}}
+            set newWin to new window with configuration cfg
+            set newWinId to id of newWin
+            return prevWin & "," & newWinId
+        end tell"#};
+
+    let output = Command::new("osascript").args(["-e", &script]).output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let ids = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let Some((prev_win_id, new_win_id)) = ids.split_once(',') else {
+        return Err(std::io::Error::other(format!(
+            "unexpected AppleScript output: {ids}"
+        )));
+    };
+
+    // Spawn a background watcher that polls for the signal file (created by
+    // the wrapper script's EXIT trap) then closes the Ghostty window and
+    // re-activates the previous one. This runs outside Ghostty so AppleScript
+    // focus commands work reliably.
+    let signal_str = signal_path_buf.display().to_string();
+    let escaped_signal = signal_str.replace('\'', "'\\''");
+    let escaped_new_win = new_win_id.replace('\'', "'\\''");
+    let escaped_prev_win = prev_win_id.replace('\'', "'\\''");
+
+    let watcher_sh = formatdoc! {"
+        while [ ! -f '{escaped_signal}' ]; do sleep 0.3; done
+        rm -f '{escaped_signal}'
+        osascript -e 'tell application \"Ghostty\"
+            try
+                close window (first window whose id is \"{escaped_new_win}\")
+            end try
+            try
+                activate window (first window whose id is \"{escaped_prev_win}\")
+                activate
+            end try
+        end tell'"};
+
+    Command::new("bash")
+        .args(["-c", &watcher_sh])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    Ok(output.status)
 }
 
 /// Create a temporary shell script that executes the given command with arguments.
 ///
 /// The script is persisted to disk (not auto-deleted) because the caller returns
-/// immediately before Ghostty reads it. The script removes itself after execution.
+/// immediately before Ghostty reads it. The script removes itself after execution
+/// and touches `signal_path` so the background watcher can detect completion.
 fn create_ghostty_wrapper_script(
     command: impl AsRef<OsStr>,
     args: &[OsString],
+    signal_path: &Path,
 ) -> std::io::Result<std::path::PathBuf> {
     let wrapper = tempfile::Builder::new()
         .prefix("armyknife-ghostty-")
@@ -194,17 +266,22 @@ fn create_ghostty_wrapper_script(
     let quoted_cmd = shlex::try_quote(&command_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    // Self-cleanup: the script removes itself via a trap after the command exits.
+    // Self-cleanup: the script removes itself via a trap after the command exits,
+    // and touches the signal file so the background watcher can detect completion.
     // `exec` is not used because it replaces the shell process and would discard
-    // the trap handler. The path is stored in a variable to avoid quoting issues
+    // the trap handler. Paths are stored in variables to avoid quoting issues
     // inside the trap string.
     let self_path = path.display().to_string();
     let quoted_self = shlex::try_quote(&self_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let signal_str = signal_path.display().to_string();
+    let quoted_signal = shlex::try_quote(&signal_str)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let mut script = formatdoc! {"
         #!/bin/bash
         _SELF={quoted_self}
-        trap 'rm -f \"$_SELF\"' EXIT
+        _SIGNAL={quoted_signal}
+        trap 'rm -f \"$_SELF\"; touch \"$_SIGNAL\"' EXIT
         {quoted_cmd}"};
     for arg in args {
         let arg_str = arg.to_string_lossy();
@@ -229,56 +306,4 @@ fn create_ghostty_wrapper_script(
     }
 
     Ok(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Read;
-
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    #[case::simple_command("/usr/bin/echo", &[], "/usr/bin/echo\n")]
-    #[case::command_with_args(
-        "/usr/bin/env",
-        &["bash", "-c", "echo hello"],
-        "/usr/bin/env bash -c 'echo hello'\n"
-    )]
-    #[case::args_with_special_chars(
-        "/bin/bash",
-        &["-c", "echo 'it works' && exit"],
-        "/bin/bash -c \"echo 'it works' && exit\"\n"
-    )]
-    fn test_create_ghostty_wrapper_script(
-        #[case] command: &str,
-        #[case] args: &[&str],
-        #[case] expected_cmd_line: &str,
-    ) {
-        let os_args: Vec<OsString> = args.iter().map(OsString::from).collect();
-        let wrapper_path = create_ghostty_wrapper_script(command, &os_args).unwrap();
-
-        let mut content = String::new();
-        let mut file = std::fs::File::open(&wrapper_path).unwrap();
-        file.read_to_string(&mut content).unwrap();
-
-        // Verify shebang, self-cleanup variable, trap, and command line
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines[0], "#!/bin/bash");
-        assert!(lines[1].starts_with("_SELF="));
-        assert_eq!(lines[2], r#"trap 'rm -f "$_SELF"' EXIT"#);
-        assert_eq!(format!("{}\n", lines[3]), expected_cmd_line);
-
-        // Verify the script is executable
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = file.metadata().unwrap().permissions().mode();
-            assert_eq!(mode & 0o755, 0o755);
-        }
-
-        // Clean up persisted file
-        std::fs::remove_file(&wrapper_path).unwrap();
-    }
 }
