@@ -166,8 +166,12 @@ fn launch_ghostty_macos(
     // Use a unique path in the temp directory (not pre-created) so the watcher
     // detects the file appearing.
     let signal_path_buf = std::env::temp_dir().join(format!(
-        "armyknife-ghostty-done-{}.signal",
-        std::process::id()
+        "armyknife-ghostty-done-{}-{}.signal",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
 
     let wrapper_path = create_ghostty_wrapper_script(command, args, &signal_path_buf)?;
