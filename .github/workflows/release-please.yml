@@ -77,7 +77,10 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: 'true'
       RUSTC_WRAPPER: 'sccache'
+<<<<<<< before updating
       SCCACHE_LOG: 'debug'
+=======
+>>>>>>> after updating
     steps:
       - uses: actions/checkout@v6
 
