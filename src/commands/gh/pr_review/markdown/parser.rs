@@ -73,7 +73,8 @@ fn parse_frontmatter(content: &str) -> Result<(ThreadsFrontmatter, &str), PrRevi
     }
 
     // Find the closing ---
-    let after_open = &content[4..]; // skip "---\n"
+    let skip = if content.starts_with("---\r\n") { 5 } else { 4 };
+    let after_open = &content[skip..]; // skip "---\n" or "---\r\n"
     let (yaml_end, body_start) =
         find_frontmatter_close(after_open).ok_or_else(|| PrReviewError::FrontmatterParseError {
             details: "missing closing ---".to_string(),
@@ -337,6 +338,29 @@ mod tests {
         let parsed = MarkdownParser::parse(content).unwrap();
         assert_eq!(parsed.threads[0].path, "src/main.rs");
         assert_eq!(parsed.threads[0].line, None);
+    }
+
+    #[rstest]
+    fn test_parse_crlf_line_endings() {
+        let lf_content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_crlf path: src/main.rs:1 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Comment
+            <!-- /comment -->
+        "#};
+        let content = lf_content.replace('\n', "\r\n");
+
+        let parsed = MarkdownParser::parse(&content).unwrap();
+        assert_eq!(parsed.frontmatter.pr, 42);
+        assert_eq!(parsed.threads.len(), 1);
+        assert_eq!(parsed.threads[0].thread_id, "RT_crlf");
     }
 
     #[rstest]

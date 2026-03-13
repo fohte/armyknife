@@ -188,12 +188,16 @@ impl ReplyChangeSet {
 }
 
 /// Check if a thread has comments created after the given timestamp.
+///
+/// Uses `chrono::DateTime` parsing to handle format differences (e.g.,
+/// fractional seconds) that would break lexicographic string comparison.
 fn has_new_comments_since(thread: &ReviewThread, pulled_at: &str) -> bool {
-    thread
-        .comments
-        .nodes
-        .iter()
-        .any(|c| c.created_at.as_str() > pulled_at)
+    let Ok(pulled_at_dt) = chrono::DateTime::parse_from_rfc3339(pulled_at) else {
+        return false;
+    };
+    thread.comments.nodes.iter().any(|c| {
+        chrono::DateTime::parse_from_rfc3339(&c.created_at).is_ok_and(|dt| dt > pulled_at_dt)
+    })
 }
 
 #[cfg(test)]
@@ -394,5 +398,25 @@ mod tests {
 
         let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
         assert!(!changeset.has_changes());
+    }
+
+    #[rstest]
+    fn test_detect_conflict_with_fractional_seconds() {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    // New comment with fractional seconds (must still be detected)
+                    make_comment(2, "other", "2024-01-15T11:00:00.123Z"),
+                ],
+                false,
+            )],
+        };
+
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        assert!(changeset.has_conflicts());
     }
 }
