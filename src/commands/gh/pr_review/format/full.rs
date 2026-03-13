@@ -3,8 +3,9 @@ use super::{
     FormatOptions, author_login, format_datetime, format_diff_with_delta, process_body,
     state_indicator,
 };
-use crate::commands::gh::check_pr_review::models::{Comment, PrData, Review, ReviewThread};
-use crate::commands::gh::check_pr_review::{CheckPrReviewError, Result};
+use crate::commands::gh::pr_review::Result;
+use crate::commands::gh::pr_review::error::CheckPrReviewError;
+use crate::commands::gh::pr_review::models::{Comment, PrData, Review, ReviewThread};
 
 pub fn print_full(pr_data: &PrData, options: &FormatOptions) {
     print!("{}", format_full(pr_data, options));

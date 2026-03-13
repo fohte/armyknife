@@ -867,6 +867,52 @@ impl OctocrabClient {
 
         Ok(templates)
     }
+
+    // ============ PR Review Operations ============
+
+    /// Reply to a PR review comment using REST API.
+    pub async fn reply_to_pr_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        in_reply_to: i64,
+        body: &str,
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{pr_number}/comments");
+        let _response: serde_json::Value = self
+            .client
+            .post(
+                route,
+                Some(&serde_json::json!({
+                    "body": body,
+                    "in_reply_to": in_reply_to,
+                })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Resolve a review thread using GraphQL mutation.
+    pub async fn resolve_review_thread(&self, thread_node_id: &str) -> Result<()> {
+        const RESOLVE_MUTATION: &str = indoc! {"
+            mutation($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                    thread {
+                        id
+                        isResolved
+                    }
+                }
+            }
+        "};
+
+        let variables = serde_json::json!({
+            "threadId": thread_node_id,
+        });
+
+        let _: serde_json::Value = self.graphql(RESOLVE_MUTATION, variables).await?;
+        Ok(())
+    }
 }
 
 /// Parse owner and repo from a GitHub repository URL.

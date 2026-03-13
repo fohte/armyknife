@@ -4,6 +4,8 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewThread {
+    /// GraphQL node ID, used for resolve mutation.
+    pub id: Option<String>,
     pub is_resolved: bool,
     pub comments: CommentsNode,
 }

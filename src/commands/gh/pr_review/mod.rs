@@ -1,36 +1,42 @@
 mod api;
+mod changeset;
+mod error;
 mod format;
+mod markdown;
 mod models;
+mod reply;
+mod storage;
 
-use clap::Args;
-use thiserror::Error;
+use clap::{Args, Subcommand};
 
 use crate::infra::git;
 
 pub use api::fetch_pr_data;
-
-#[derive(Error, Debug)]
-pub enum CheckPrReviewError {
-    #[error("Git error: {0}")]
-    GitError(#[from] git::GitError),
-
-    #[error("GitHub API error: {0}")]
-    GitHubError(#[from] crate::infra::github::GitHubError),
-
-    #[error("GraphQL API error: {0}")]
-    GraphQLError(String),
-
-    #[error("JSON parse error: {0}")]
-    JsonError(#[from] serde_json::Error),
-
-    #[error("Review [{0}] not found. Run without --review to see available reviews.")]
-    ReviewNotFound(usize),
-}
-
 pub type Result<T> = anyhow::Result<T>;
 
+#[derive(Subcommand, Clone, PartialEq, Eq)]
+pub enum PrReviewCommands {
+    /// View PR review comments in a concise format
+    Check(CheckArgs),
+
+    /// Manage PR review thread replies
+    Reply {
+        #[command(subcommand)]
+        command: ReplyCommands,
+    },
+}
+
+#[derive(Subcommand, Clone, PartialEq, Eq)]
+pub enum ReplyCommands {
+    /// Pull review threads from GitHub to a local Markdown file
+    Pull(reply::ReplyPullArgs),
+
+    /// Push local reply drafts and resolve actions to GitHub
+    Push(reply::ReplyPushArgs),
+}
+
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct CheckPrReviewArgs {
+pub struct CheckArgs {
     /// PR number
     pub pr_number: u64,
 
@@ -55,7 +61,25 @@ pub struct CheckPrReviewArgs {
     pub open_details: bool,
 }
 
-pub async fn run(args: &CheckPrReviewArgs) -> Result<()> {
+impl PrReviewCommands {
+    pub async fn run(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Check(args) => run_check(args).await,
+            Self::Reply { command } => command.run().await,
+        }
+    }
+}
+
+impl ReplyCommands {
+    pub async fn run(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Pull(args) => reply::run_pull(args).await,
+            Self::Push(args) => reply::run_push(args).await,
+        }
+    }
+}
+
+async fn run_check(args: &CheckArgs) -> Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
     let pr_data = fetch_pr_data(&owner, &repo, args.pr_number, args.include_resolved).await?;
