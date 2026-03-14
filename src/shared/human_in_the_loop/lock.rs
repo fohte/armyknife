@@ -78,9 +78,9 @@ impl Drop for CleanupGuard {
         // Remove lock file
         let _ = fs::remove_file(&self.lock_path);
 
-        // Restore tmux session
+        // Restore tmux pane focus
         if let Some(ref target) = self.tmux_target {
-            let _ = tmux::switch_to_session(target);
+            let _ = tmux::focus_pane(target);
         }
     }
 }
