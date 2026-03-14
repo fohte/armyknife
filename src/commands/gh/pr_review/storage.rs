@@ -13,7 +13,12 @@ pub struct ThreadStorage {
 
 impl ThreadStorage {
     pub fn new(owner: &str, repo: &str, pr_number: u64) -> Self {
-        let dir = get_cache_dir()
+        let dir = crate::shared::cache::pr_review_dir()
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(".cache")
+                    .join("armyknife")
+                    .join("gh-pr-review")
+            })
             .join(owner)
             .join(repo)
             .join(pr_number.to_string());
@@ -103,56 +108,11 @@ fn compute_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn get_cache_dir() -> PathBuf {
-    get_cache_dir_with_env(
-        std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|v| !v.is_empty()),
-        crate::shared::dirs::home_dir(),
-    )
-}
-
-fn get_cache_dir_with_env(xdg_cache_home: Option<String>, home_dir: Option<PathBuf>) -> PathBuf {
-    if let Some(xdg_cache) = xdg_cache_home {
-        PathBuf::from(xdg_cache).join("gh-pr-review")
-    } else if let Some(home) = home_dir {
-        home.join(".cache").join("gh-pr-review")
-    } else {
-        PathBuf::from(".cache").join("gh-pr-review")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
     use tempfile::TempDir;
-
-    #[rstest]
-    #[case::xdg_set(
-        Some("/tmp/cache".to_string()),
-        None,
-        "/tmp/cache/gh-pr-review"
-    )]
-    #[case::home_fallback(
-        None,
-        Some(PathBuf::from("/home/user")),
-        "/home/user/.cache/gh-pr-review"
-    )]
-    #[case::xdg_takes_priority(
-        Some("/custom/cache".to_string()),
-        Some(PathBuf::from("/home/user")),
-        "/custom/cache/gh-pr-review"
-    )]
-    #[case::no_home(None, None, ".cache/gh-pr-review")]
-    fn test_get_cache_dir_with_env(
-        #[case] xdg_cache_home: Option<String>,
-        #[case] home_dir: Option<PathBuf>,
-        #[case] expected: &str,
-    ) {
-        let dir = get_cache_dir_with_env(xdg_cache_home, home_dir);
-        assert_eq!(dir, PathBuf::from(expected));
-    }
 
     #[rstest]
     fn test_threads_path() {
