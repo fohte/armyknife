@@ -265,14 +265,14 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
         return run_tmux(&["switch-client", "-t", pane_id]);
     }
 
-    // From outside tmux, we need to find the client attached to the pane's
-    // session and switch it explicitly. `select-pane` alone only changes
-    // server-side state without affecting which pane the client displays.
-    let session = run_tmux_output(&["display-message", "-t", pane_id, "-p", "#{session_name}"])?;
-    let client = run_tmux_output(&["list-clients", "-t", &session, "-F", "#{client_tty}"])?;
+    // From outside tmux, we need to find a client and switch it explicitly.
+    // `select-pane` alone only changes server-side state without affecting
+    // which pane the client displays. The user may have switched to a
+    // different session while the editor was open, so we search all clients
+    // rather than filtering by the pane's session.
+    let clients = run_tmux_output(&["list-clients", "-F", "#{client_tty}"])?;
 
-    // Use the first client attached to this session
-    if let Some(client_tty) = client.lines().next() {
+    if let Some(client_tty) = clients.lines().next() {
         run_tmux(&["switch-client", "-c", client_tty, "-t", pane_id])
     } else {
         // No client attached; fall back to select-pane as best effort
