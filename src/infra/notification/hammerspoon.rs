@@ -1,17 +1,36 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use crate::shared::command::find_command_path;
+
 use super::types::Notification;
+
+/// Well-known location of the `hs` CLI bundled inside Hammerspoon.app.
+const HS_BUNDLED_PATH: &str = "/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs";
+
+/// Returns the path to the `hs` CLI, checking PATH first then the bundled location.
+pub fn find_hs_path() -> Option<PathBuf> {
+    if let Some(p) = find_command_path("hs") {
+        return Some(p);
+    }
+    let bundled = PathBuf::from(HS_BUNDLED_PATH);
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    None
+}
 
 /// Sends a notification using Hammerspoon's `hs` CLI.
 /// Click actions are handled via a pre-registered callback ("armyknife_notification")
 /// in the Hammerspoon config. The command to execute on click is stored in a global
 /// Lua table keyed by the notification's string representation.
 pub fn send(notification: &Notification) -> Result<()> {
+    let hs = find_hs_path().context("hs command not found")?;
     let lua = build_send_lua(notification);
 
-    let output = Command::new("hs")
+    let output = Command::new(&hs)
         .arg("-c")
         .arg(&lua)
         .output()
@@ -28,12 +47,13 @@ pub fn send(notification: &Notification) -> Result<()> {
 /// Removes notifications belonging to the given group.
 /// Delegates to a Lua helper defined in the Hammerspoon config.
 pub fn remove_group(group: &str) -> Result<()> {
+    let hs = find_hs_path().context("hs command not found")?;
     let lua = format!(
         "if _G._armyknife and _G._armyknife.remove_group then _G._armyknife.remove_group({}) end",
         lua_quote(group),
     );
 
-    let output = Command::new("hs")
+    let output = Command::new(&hs)
         .arg("-c")
         .arg(&lua)
         .output()

@@ -7,8 +7,6 @@ pub use types::{Notification, NotificationAction};
 
 use anyhow::Result;
 
-use crate::shared::command::is_command_available;
-
 /// Sends a notification using the best available method.
 /// Priority: Hammerspoon → notify-rust fallback.
 pub fn send(notification: &Notification) -> Result<()> {
@@ -31,7 +29,7 @@ pub fn remove_group(group: &str) -> Result<()> {
 
 /// Checks if the Hammerspoon CLI (`hs`) is available on the system.
 fn is_hammerspoon_available() -> bool {
-    is_command_available("hs")
+    hammerspoon::find_hs_path().is_some()
 }
 
 #[cfg(test)]
