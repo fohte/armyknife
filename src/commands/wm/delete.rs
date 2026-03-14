@@ -42,7 +42,7 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     // Check if the branch can be safely deleted before deleting worktree
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
         let merge_status = get_merge_status(branch).await;
-        if !merge_status.is_merged() && !args.force {
+        if !merge_status.should_cleanup() && !args.force {
             eprintln!(
                 "Warning: Branch '{}' is not merged ({})",
                 branch,

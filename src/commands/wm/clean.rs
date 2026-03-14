@@ -246,7 +246,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
             };
 
             let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
-            let is_merged = status.is_merged();
+            let should_delete = status.should_cleanup();
             let info = CleanWorktreeInfo {
                 wt: wt.clone(),
                 status,
@@ -254,7 +254,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
                 repo_name: Some(rd.repo_name.clone()),
             };
 
-            if is_merged {
+            if should_delete {
                 all_to_delete.push(info);
             } else {
                 all_to_keep.push(info);
@@ -323,7 +323,11 @@ fn status_color(status: &MergeStatus) -> &'static str {
 
 /// Get the icon for merge status
 fn status_icon(status: &MergeStatus) -> &'static str {
-    if status.is_merged() { "✓" } else { " " }
+    match status {
+        MergeStatus::Merged { .. } => "✓",
+        MergeStatus::Closed { .. } => "✗",
+        MergeStatus::NotMerged { .. } => " ",
+    }
 }
 
 /// Column widths for table display
@@ -500,7 +504,7 @@ async fn collect_worktrees(
         let status = get_merge_status_for_repo(repo, &wt.branch).await;
         // Collect tmux window IDs while the worktree path still exists
         let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
-        let is_merged = status.is_merged();
+        let should_delete = status.should_cleanup();
         let info = CleanWorktreeInfo {
             wt,
             status,
@@ -508,7 +512,7 @@ async fn collect_worktrees(
             repo_name: repo_name.map(|s| s.to_string()),
         };
 
-        if is_merged {
+        if should_delete {
             to_delete.push(info);
         } else {
             to_keep.push(info);
@@ -610,6 +614,7 @@ mod tests {
 
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, "✓")]
+    #[case::closed(MergeStatus::Closed { reason: "test".to_string() }, "✗")]
     #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, " ")]
     fn test_status_icon(#[case] status: MergeStatus, #[case] expected: &str) {
         assert_eq!(status_icon(&status), expected);
@@ -767,21 +772,13 @@ mod tests {
     #[test]
     fn test_render_worktrees_table_all_status_colors() {
         let test_repo = TestRepo::new();
-        let to_delete = vec![make_clean_info(
-            "pr-merged",
-            test_repo.path().join(".worktrees/pr-merged"),
-            "fohte/pr-merged",
-            MergeStatus::Merged {
-                reason: "merged".to_string(),
-            },
-        )];
-        let to_keep = vec![
+        let to_delete = vec![
             make_clean_info(
-                "pr-open",
-                test_repo.path().join(".worktrees/pr-open"),
-                "fohte/pr-open",
-                MergeStatus::NotMerged {
-                    reason: "open".to_string(),
+                "pr-merged",
+                test_repo.path().join(".worktrees/pr-merged"),
+                "fohte/pr-merged",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
                 },
             ),
             make_clean_info(
@@ -793,6 +790,14 @@ mod tests {
                 },
             ),
         ];
+        let to_keep = vec![make_clean_info(
+            "pr-open",
+            test_repo.path().join(".worktrees/pr-open"),
+            "fohte/pr-open",
+            MergeStatus::NotMerged {
+                reason: "open".to_string(),
+            },
+        )];
 
         let mut output = Vec::new();
         render_worktrees_table(&mut output, &to_delete, &to_keep, false)
@@ -804,8 +809,8 @@ mod tests {
             indoc! {"
                 NAME                         BRANCH                       STATUS
                 pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
+                pr-closed                    fohte/pr-closed              \x1b[31m✗ closed\x1b[0m
                 pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
-                pr-closed                    fohte/pr-closed              \x1b[31mclosed\x1b[0m
             "}
         );
     }
