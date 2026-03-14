@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.119](https://github.com/fohte/armyknife/compare/v0.1.118...v0.1.119) (2026-03-14)
+
+
+### Bug Fixes
+
+* **cache:** unify cache directories under `~/.cache/armyknife/` ([#417](https://github.com/fohte/armyknife/issues/417)) ([9a3a6a4](https://github.com/fohte/armyknife/commit/9a3a6a4a2e78c5920aa670a2d9f3073de4db9511))
+
 ## [0.1.118](https://github.com/fohte/armyknife/compare/v0.1.117...v0.1.118) (2026-03-13)
 
 
