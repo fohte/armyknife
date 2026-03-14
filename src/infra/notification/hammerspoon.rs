@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
@@ -72,11 +73,19 @@ fn build_send_lua(notification: &Notification) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // Ensure the global armyknife namespace exists
-    parts.push("_G._armyknife = _G._armyknife or {commands = {}, groups = {}}".to_string());
+    parts.push("_G._armyknife = _G._armyknife or {groups = {}}".to_string());
 
-    // Create notification with the registered callback tag if an action is present
-    if notification.action().is_some() {
-        parts.push("local n = hs.notify.new(\"armyknife_notification\")".to_string());
+    // For click actions, register a per-notification callback with a unique tag.
+    // The callback includes the command directly as a closure, avoiding the need
+    // to correlate notification objects across IPC boundaries.
+    if let Some(action) = notification.action() {
+        let tag = generate_tag();
+        parts.push(format!("local tag = {}", lua_quote(&tag),));
+        parts.push(format!(
+            "hs.notify.register(tag, function() hs.execute({}, true) end)",
+            lua_quote(action.command()),
+        ));
+        parts.push("local n = hs.notify.new(tag)".to_string());
     } else {
         parts.push("local n = hs.notify.new()".to_string());
     }
@@ -94,14 +103,6 @@ fn build_send_lua(notification: &Notification) -> String {
 
     if let Some(sound) = notification.sound() {
         parts.push(format!("n:soundName({})", lua_quote(sound)));
-    }
-
-    // Store click action command keyed by notification object for the callback to retrieve
-    if let Some(action) = notification.action() {
-        parts.push(format!(
-            "_G._armyknife.commands[tostring(n)] = {}",
-            lua_quote(action.command()),
-        ));
     }
 
     // Store notification by group for later withdrawal
@@ -124,6 +125,15 @@ fn build_send_lua(notification: &Notification) -> String {
     parts.push("n:send()".to_string());
 
     parts.join("; ")
+}
+
+/// Generates a unique tag for a notification callback.
+fn generate_tag() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("armyknife_{ts}")
 }
 
 /// Escapes a string for use as a Lua string literal (double-quoted).
