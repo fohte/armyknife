@@ -83,11 +83,42 @@ enum ProcessResult {
     Skipped,
 }
 
+/// Controls which side effects `process_hook_event_impl` executes.
+/// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
+/// to avoid calling external commands (tmux, terminal-notifier, etc.).
+struct SideEffects {
+    /// Call tmux commands (get_pane_info_by_pid, set/unset_pane_option, refresh_status)
+    tmux: bool,
+    /// Send/remove notifications via terminal-notifier
+    notifications: bool,
+    /// Spawn background label generation process
+    label_generation: bool,
+}
+
+impl SideEffects {
+    fn all() -> Self {
+        Self {
+            tmux: true,
+            notifications: true,
+            label_generation: true,
+        }
+    }
+
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            tmux: false,
+            notifications: false,
+            label_generation: false,
+        }
+    }
+}
+
 /// Processes a hook event with the given input.
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl(event, input, &sessions_dir).map(|_| ())
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
 }
 
 /// Internal implementation that returns ProcessResult for testing.
@@ -96,6 +127,7 @@ fn process_hook_event_impl(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
+    side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
@@ -103,7 +135,9 @@ fn process_hook_event_impl(
     // `claude -c` resume can restore label and ancestor chain.
     // Ended sessions are garbage-collected by cleanup_stale_sessions.
     if event == HookEvent::SessionEnd {
-        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+        if side_effects.tmux
+            && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
+        {
             let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
         }
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
@@ -111,7 +145,9 @@ fn process_hook_event_impl(
             session.updated_at = Utc::now();
             store::save_session_to(sessions_dir, &session)?;
         }
-        let _ = tmux::refresh_status();
+        if side_effects.tmux {
+            let _ = tmux::refresh_status();
+        }
         return Ok(ProcessResult::SessionEnded);
     }
 
@@ -133,7 +169,9 @@ fn process_hook_event_impl(
             return Ok(ProcessResult::Skipped);
         }
 
-        if let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id()) {
+        if side_effects.tmux
+            && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
+        {
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
@@ -144,19 +182,24 @@ fn process_hook_event_impl(
     // When `claude` is started without `-c`, only SessionStart(startup) fires,
     // which skips setting the pane option to avoid wrong session_id on resume.
     // UserPromptSubmit is the earliest subsequent event where we can set it.
-    if event == HookEvent::UserPromptSubmit
+    if side_effects.tmux
+        && event == HookEvent::UserPromptSubmit
         && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
     }
 
     // Get tmux info by finding the pane that contains this process
-    let tmux_info = tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
-        session_name: info.session_name,
-        window_name: info.window_name,
-        window_index: info.window_index,
-        pane_id: info.pane_id,
-    });
+    let tmux_info = if side_effects.tmux {
+        tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
+            session_name: info.session_name,
+            window_name: info.window_name,
+            window_index: info.window_index,
+            pane_id: info.pane_id,
+        })
+    } else {
+        None
+    };
 
     // Determine status based on event
     let status = determine_status(event, &input);
@@ -240,25 +283,33 @@ fn process_hook_event_impl(
         session.label = Some("...".to_string());
         store::save_session_to(sessions_dir, &session)?;
 
-        generate_label::spawn_label_generation(sessions_dir, &session.session_id, prompt);
+        if side_effects.label_generation {
+            generate_label::spawn_label_generation(sessions_dir, &session.session_id, prompt);
+        }
     }
 
     // Refresh tmux status bar so `#()` commands pick up the state change immediately.
     // Silently ignore errors (e.g., not in tmux, tmux not installed).
-    let _ = tmux::refresh_status();
+    if side_effects.tmux {
+        let _ = tmux::refresh_status();
+    }
 
     // Remove stale notifications when the user responds or resumes a session.
     // UserPromptSubmit fires after the user accepts/rejects a permission request.
     // SessionStart (resume) fires when `claude -c` restores a previous session.
-    if matches!(event, HookEvent::UserPromptSubmit | HookEvent::SessionStart) {
+    if side_effects.notifications
+        && matches!(event, HookEvent::UserPromptSubmit | HookEvent::SessionStart)
+    {
         let _ = crate::infra::notification::remove_group(&input.session_id);
     }
 
     // Send notification if applicable (errors are logged but don't fail the hook).
     // Use default config if loading fails to avoid config errors blocking notifications.
-    let config = config::load_config().unwrap_or_default();
-    if should_notify(event, &config) {
-        send_notification(event, &input, &session, &config);
+    if side_effects.notifications {
+        let config = config::load_config().unwrap_or_default();
+        if should_notify(event, &config) {
+            send_notification(event, &input, &session, &config);
+        }
     }
 
     Ok(ProcessResult::SessionSaved)
@@ -1181,8 +1232,13 @@ mod tests {
             // - "resume" with the actual session_id -> should create session
             let input = create_test_input_with_source(None, source);
 
-            let result = process_hook_event_impl(HookEvent::SessionStart, input, temp_dir.path())
-                .expect("should succeed");
+            let result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("should succeed");
 
             assert_eq!(
                 result, expected_result,
@@ -1200,9 +1256,13 @@ mod tests {
 
             // First event: "startup" with a new (unwanted) session_id
             let startup_input = create_test_input_with_source(None, Some("startup"));
-            let startup_result =
-                process_hook_event_impl(HookEvent::SessionStart, startup_input, temp_dir.path())
-                    .expect("startup should succeed");
+            let startup_result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                startup_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("startup should succeed");
             assert_eq!(
                 startup_result,
                 ProcessResult::Skipped,
@@ -1211,9 +1271,13 @@ mod tests {
 
             // Second event: "resume" with the actual session_id being restored
             let resume_input = create_test_input_with_source(None, Some("resume"));
-            let resume_result =
-                process_hook_event_impl(HookEvent::SessionStart, resume_input, temp_dir.path())
-                    .expect("resume should succeed");
+            let resume_result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                resume_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("resume should succeed");
             assert_eq!(
                 resume_result,
                 ProcessResult::SessionSaved,
@@ -1230,8 +1294,13 @@ mod tests {
             // Session will be created on first user-prompt-submit instead.
             let input = create_test_input_with_source(None, Some("startup"));
 
-            let result = process_hook_event_impl(HookEvent::SessionStart, input, temp_dir.path())
-                .expect("should succeed");
+            let result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("should succeed");
 
             assert_eq!(
                 result,
@@ -1248,9 +1317,13 @@ mod tests {
             // skipped SessionStart due to source="startup")
             let input = create_test_input(None);
 
-            let result =
-                process_hook_event_impl(HookEvent::UserPromptSubmit, input, temp_dir.path())
-                    .expect("should succeed");
+            let result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("should succeed");
 
             assert_eq!(
                 result,
@@ -1268,9 +1341,13 @@ mod tests {
             // This also exercises the code path where UserPromptSubmit sets the
             // pane option (when running inside tmux).
             let startup_input = create_test_input_with_source(None, Some("startup"));
-            let startup_result =
-                process_hook_event_impl(HookEvent::SessionStart, startup_input, temp_dir.path())
-                    .expect("startup should succeed");
+            let startup_result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                startup_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("startup should succeed");
             assert_eq!(startup_result, ProcessResult::Skipped);
 
             // No session file should exist after startup skip
@@ -1283,9 +1360,13 @@ mod tests {
 
             // UserPromptSubmit creates the session
             let prompt_input = create_test_input(None);
-            let prompt_result =
-                process_hook_event_impl(HookEvent::UserPromptSubmit, prompt_input, temp_dir.path())
-                    .expect("user-prompt-submit should succeed");
+            let prompt_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                prompt_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("user-prompt-submit should succeed");
             assert_eq!(prompt_result, ProcessResult::SessionSaved);
 
             // Session should now exist
