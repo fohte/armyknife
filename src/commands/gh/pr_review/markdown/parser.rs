@@ -201,7 +201,7 @@ fn extract_draft_reply(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
 
     #[rstest]
@@ -424,49 +424,40 @@ mod tests {
     }
 
     #[rstest]
-    fn test_parse_thread_with_author() {
-        let content = indoc! {r#"
+    #[case::with_line_number(
+        "RT_abc123",
+        "src/main.rs:42 author: @reviewer",
+        "src/main.rs",
+        Some(42)
+    )]
+    #[case::without_line_number("RT_abc", "src/main.rs author: @reviewer", "src/main.rs", None)]
+    fn test_parse_thread_with_author(
+        #[case] thread_id: &str,
+        #[case] location: &str,
+        #[case] expected_path: &str,
+        #[case] expected_line: Option<u64>,
+    ) {
+        let content = formatdoc! {r#"
             ---
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_abc123 path: src/main.rs:42 author: @reviewer -->
-            - [ ] resolve
-            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
-            Fix this bug
-            <!-- /comment -->
-        "#};
-
-        let parsed = MarkdownParser::parse(content).unwrap();
-        assert_eq!(parsed.threads.len(), 1);
-
-        let thread = &parsed.threads[0];
-        assert_eq!(thread.thread_id, "RT_abc123");
-        assert_eq!(thread.path, "src/main.rs");
-        assert_eq!(thread.line, Some(42));
-    }
-
-    #[rstest]
-    fn test_parse_thread_with_author_no_line_number() {
-        let content = indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            ---
-
-            <!-- thread: RT_abc path: src/main.rs author: @reviewer -->
+            <!-- thread: {thread_id} path: {location} -->
             - [ ] resolve
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
             Comment
             <!-- /comment -->
         "#};
 
-        let parsed = MarkdownParser::parse(content).unwrap();
-        assert_eq!(parsed.threads[0].path, "src/main.rs");
-        assert_eq!(parsed.threads[0].line, None);
+        let parsed = MarkdownParser::parse(&content).unwrap();
+        assert_eq!(parsed.threads.len(), 1);
+
+        let thread = &parsed.threads[0];
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.path, expected_path);
+        assert_eq!(thread.line, expected_line);
     }
 
     #[rstest]
