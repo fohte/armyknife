@@ -312,7 +312,7 @@ Git worktree management with tmux integration.
 | `list`              | List all worktrees                         |
 | `new <branch>`      | Create a new worktree and open tmux window |
 | `delete [worktree]` | Delete a worktree and its branch           |
-| `clean`             | Bulk delete merged worktrees               |
+| `clean`             | Bulk delete merged or closed worktrees     |
 
 `clean` options:
 

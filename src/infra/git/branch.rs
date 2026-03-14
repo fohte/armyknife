@@ -50,25 +50,6 @@ async fn find_base_branch_impl<C: crate::infra::github::RepoClient>(
     "main".to_string()
 }
 
-/// Check if `branch` is an ancestor of `base` in a specific repository
-fn check_is_ancestor_in_repo(repo: &Repository, branch: &str, base: &str) -> Option<bool> {
-    // Resolve branch to commit
-    let branch_oid = repo
-        .revparse_single(branch)
-        .ok()?
-        .peel_to_commit()
-        .ok()?
-        .id();
-
-    // Resolve base to commit
-    let base_oid = repo.revparse_single(base).ok()?.peel_to_commit().ok()?.id();
-
-    // `--is-ancestor A B` checks if A is ancestor of B
-    // This means B descends from A
-    // graph_descendant_of(descendant, ancestor) returns true if descendant is from ancestor
-    repo.graph_descendant_of(base_oid, branch_oid).ok()
-}
-
 #[derive(Debug, Clone)]
 pub enum MergeStatus {
     Merged { reason: String },
@@ -79,6 +60,18 @@ pub enum MergeStatus {
 impl MergeStatus {
     pub fn is_merged(&self) -> bool {
         matches!(self, MergeStatus::Merged { .. })
+    }
+
+    /// Whether this worktree should be cleaned up (deleted).
+    ///
+    /// Returns true for both `Merged` and `Closed` statuses:
+    /// - Merged: PR was merged, worktree is no longer needed
+    /// - Closed: PR was closed without merging, worktree is no longer needed
+    pub fn should_cleanup(&self) -> bool {
+        matches!(
+            self,
+            MergeStatus::Merged { .. } | MergeStatus::Closed { .. }
+        )
     }
 
     pub fn reason(&self) -> &str {
@@ -117,24 +110,17 @@ pub fn merge_status_from_pr(pr_info: &PrInfo) -> MergeStatus {
     }
 }
 
-/// Check merge status using local git data (merge-base).
+/// Fallback merge status when no PR is found for a branch.
 ///
-/// Requires that `fetch_with_prune` has been run for this repo
-/// so that remote tracking branches are up to date.
-pub fn merge_status_from_git(repo: &Repository, branch_name: &str) -> MergeStatus {
-    use super::repo::get_main_branch_for_repo;
-
-    let main_branch = get_main_branch_for_repo(repo).unwrap_or_else(|_| "main".to_string());
-    let base_branch = format!("origin/{main_branch}");
-
-    if let Some(true) = check_is_ancestor_in_repo(repo, branch_name, &base_branch) {
-        return MergeStatus::Merged {
-            reason: "Merged (git)".to_string(),
-        };
-    }
-
+/// Always returns `NotMerged` to protect branches that may have
+/// work-in-progress changes.
+pub fn merge_status_from_git(_repo: &Repository, _branch_name: &str) -> MergeStatus {
+    // When no PR is found, always treat the branch as not merged.
+    // The git merge-base check (is-ancestor) gives false positives for branches
+    // that have no commits yet, since their HEAD is an ancestor of the main branch.
+    // These branches may be work-in-progress, so it's safer to keep them.
     MergeStatus::NotMerged {
-        reason: "Not merged".to_string(),
+        reason: "No PR found".to_string(),
     }
 }
 
@@ -185,6 +171,7 @@ async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> 
 mod tests {
     use super::*;
     use crate::infra::github::RepoClient;
+    use rstest::rstest;
 
     /// Mock RepoClient for testing find_base_branch_with_client
     struct MockRepoClient {
@@ -249,6 +236,14 @@ mod tests {
         assert!(merged.is_merged());
         assert!(!closed.is_merged());
         assert!(!not_merged.is_merged());
+    }
+
+    #[rstest]
+    #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, true)]
+    #[case::closed(MergeStatus::Closed { reason: "test".to_string() }, true)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, false)]
+    fn test_merge_status_should_cleanup(#[case] status: MergeStatus, #[case] expected: bool) {
+        assert_eq!(status.should_cleanup(), expected);
     }
 
     #[test]
