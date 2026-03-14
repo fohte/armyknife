@@ -80,10 +80,15 @@ fn build_send_lua(notification: &Notification) -> String {
     // to correlate notification objects across IPC boundaries.
     if let Some(action) = notification.action() {
         let tag = generate_tag();
-        parts.push(format!("local tag = {}", lua_quote(&tag),));
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        parts.push(format!("local tag = {}", lua_quote(&tag)));
+        // Capture PATH at notification creation time so click callbacks can find
+        // commands like `a` and `tmux` that live outside the minimal PATH
+        // provided by hs.task.new.
         parts.push(format!(
-            "hs.notify.register(tag, function() hs.execute({}, true) end)",
+            "hs.notify.register(tag, function() local t = hs.task.new(\"/bin/sh\", function() end, {{\"-c\", {}}}); t:setEnvironment({{PATH = {}}}); t:start() end)",
             lua_quote(action.command()),
+            lua_quote(&current_path),
         ));
         parts.push("local n = hs.notify.new(tag)".to_string());
     } else {

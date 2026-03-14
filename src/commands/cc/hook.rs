@@ -19,8 +19,7 @@ use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OP
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
-use crate::shared::command::find_command_path;
-use crate::shared::config::{self, Config};
+use crate::shared::config::{self, Config, Terminal};
 use crate::shared::env_var::EnvVars;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -691,26 +690,37 @@ fn build_notification(
         notification = notification.with_subtitle(subtitle);
     }
 
-    // Add click action to focus tmux pane if available
-    // Skip action if paths cannot be safely quoted (e.g., contains null bytes)
-    // Use full path for tmux because Hammerspoon's hs.execute runs in minimal PATH environment
-    if let Some(tmux_info) = &session.tmux_info
-        && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
-        && let Some(tmux_path) = find_command_path("tmux")
-        && let Ok(tmux) = shlex::try_quote(&tmux_path.to_string_lossy())
-    {
-        // Use tmux switch-client with the first available client, then focus the configured app
-        let focus_app_str = config.editor.focus_app();
-        let focus_app =
-            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
-        let command = format!(
-            r#"client_name=$({tmux} list-clients -F '#{{client_name}}' | head -n1); {tmux} switch-client -c "$client_name" -t {}; open -a {focus_app}"#,
-            escaped_pane_id
-        );
+    // Add click action to focus tmux pane via `a cc focus` + app focus
+    if session.tmux_info.is_some() {
+        let session_id = shlex::try_quote(&session.session_id)
+            .unwrap_or_else(|_| session.session_id.clone().into());
+        let focus_cmd = build_focus_app_command(config);
+        let command = format!("a cc focus {session_id}; {focus_cmd}");
         notification = notification.with_action(NotificationAction::new(command));
     }
 
     notification
+}
+
+/// Ghostty's default window title. Used to identify the main terminal window
+/// when focusing via AppleScript, since Ghostty's AppleScript API does not
+/// expose tty information per window (https://github.com/ghostty-org/ghostty/issues/10756).
+const GHOSTTY_DEFAULT_TITLE: &str = "👻";
+
+/// Builds a shell command to focus the terminal application.
+/// For Ghostty on macOS, uses AppleScript to focus the main window by its default title.
+/// For other terminals, uses `open -a` which activates the most recent window.
+fn build_focus_app_command(config: &Config) -> String {
+    if cfg!(target_os = "macos") && config.editor.terminal == Terminal::Ghostty {
+        format!(
+            "osascript -e 'tell application \"Ghostty\"' -e 'activate (first window whose name is \"{GHOSTTY_DEFAULT_TITLE}\")' -e 'activate' -e 'end tell'"
+        )
+    } else {
+        let focus_app_str = config.editor.focus_app();
+        let focus_app =
+            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
+        format!("open -a {focus_app}")
+    }
 }
 
 /// Builds the subtitle for a notification.
@@ -1000,12 +1010,11 @@ mod tests {
         // Subtitle should contain session:window (no title since we can't mock Claude sessions)
         assert_eq!(notification.subtitle(), Some("main:dev"));
 
-        // Action should switch to the correct pane
+        // Action should focus the session pane and activate the terminal app
         assert!(notification.action().is_some());
         let action = notification.action().expect("action present");
-        assert!(action.command().contains("tmux switch-client"));
-        assert!(action.command().contains("%123"));
-        assert!(action.command().contains("list-clients"));
+        assert!(action.command().contains("a cc focus"));
+        assert!(action.command().contains("WezTerm"));
     }
 
     #[test]
