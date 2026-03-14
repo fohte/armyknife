@@ -1,4 +1,5 @@
 mod fallback;
+mod hammerspoon;
 pub mod icon;
 mod terminal_notifier;
 mod types;
@@ -10,9 +11,11 @@ use anyhow::Result;
 use crate::shared::command::is_command_available;
 
 /// Sends a notification using the best available method.
-/// Prefers terminal-notifier for click actions, falls back to notify-rust.
+/// Priority: Hammerspoon → terminal-notifier → notify-rust fallback.
 pub fn send(notification: &Notification) -> Result<()> {
-    if is_terminal_notifier_available() {
+    if is_hammerspoon_available() {
+        hammerspoon::send(notification)
+    } else if is_terminal_notifier_available() {
         terminal_notifier::send(notification)
     } else {
         fallback::send(notification)
@@ -20,17 +23,24 @@ pub fn send(notification: &Notification) -> Result<()> {
 }
 
 /// Removes notifications belonging to the given group from the notification center.
-/// Only works with terminal-notifier; silently does nothing if unavailable.
+/// Works with Hammerspoon or terminal-notifier; silently does nothing if neither is available.
 pub fn remove_group(group: &str) -> Result<()> {
-    if is_terminal_notifier_available() {
+    if is_hammerspoon_available() {
+        hammerspoon::remove_group(group)
+    } else if is_terminal_notifier_available() {
         terminal_notifier::remove_group(group)
     } else {
         Ok(())
     }
 }
 
+/// Checks if the Hammerspoon CLI (`hs`) is available on the system.
+fn is_hammerspoon_available() -> bool {
+    is_command_available("hs")
+}
+
 /// Checks if terminal-notifier is available on the system.
-pub fn is_terminal_notifier_available() -> bool {
+fn is_terminal_notifier_available() -> bool {
     is_command_available("terminal-notifier")
 }
 
