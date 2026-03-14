@@ -41,7 +41,7 @@ indicatif = "=0.18.4"
 ratatui = { version = "=0.30.0", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
 notify = "=8.2.0"
-notify-rust = { version = "=4.12.0", default-features = false }
+notify-rust = "=4.12.0"
 
 [dev-dependencies]
 rstest = "=0.26.1"
