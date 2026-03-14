@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.122](https://github.com/fohte/armyknife/compare/v0.1.121...v0.1.122) (2026-03-14)
+
+
+### Bug Fixes
+
+* **tmux:** search all clients in `focus_pane` to handle session switches ([#427](https://github.com/fohte/armyknife/issues/427)) ([b0d4bfa](https://github.com/fohte/armyknife/commit/b0d4bfa93854a8825cd74bc8a6472dc39106b0d5))
+
 ## [0.1.121](https://github.com/fohte/armyknife/compare/v0.1.120...v0.1.121) (2026-03-14)
 
 
