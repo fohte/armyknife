@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.121](https://github.com/fohte/armyknife/compare/v0.1.120...v0.1.121) (2026-03-14)
+
+
+### Bug Fixes
+
+* **tmux:** restore pane focus from outside tmux after editor closes ([#418](https://github.com/fohte/armyknife/issues/418)) ([a0d0f73](https://github.com/fohte/armyknife/commit/a0d0f73494487423388ef346edbf469ed121d732))
+
 ## [0.1.120](https://github.com/fohte/armyknife/compare/v0.1.119...v0.1.120) (2026-03-14)
 
 
