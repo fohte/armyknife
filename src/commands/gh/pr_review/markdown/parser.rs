@@ -144,8 +144,11 @@ fn parse_single_thread(part: &str) -> Result<ParsedThread, PrReviewError> {
 }
 
 fn parse_thread_header(header: &str) -> Result<(String, String, Option<u64>), PrReviewError> {
-    // header format: "{thread_id} path: {file_path}:{line}" or "{thread_id} path: {file_path}"
-    if let Some((_, thread_id, location)) = regex_captures!(r"^(\S+)\s+path:\s+(.+)$", header) {
+    // header format: "{thread_id} path: {location} author: @{login}"
+    // or legacy format without author: "{thread_id} path: {location}"
+    if let Some((_, thread_id, location)) =
+        regex_captures!(r"^(\S+)\s+path:\s+(.+?)(?:\s+author:\s+@\S+)?$", header)
+    {
         // Try to split location into path:line
         if let Some((_, path, line_str)) = regex_captures!(r"^(.+):(\d+)$", location) {
             let line = line_str.parse::<u64>().ok();
@@ -418,6 +421,52 @@ mod tests {
             parsed.threads[0].draft_reply,
             Some("Line 1 of draft\nLine 2 of draft".to_string())
         );
+    }
+
+    #[rstest]
+    fn test_parse_thread_with_author() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc123 path: src/main.rs:42 author: @reviewer -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this bug
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert_eq!(parsed.threads.len(), 1);
+
+        let thread = &parsed.threads[0];
+        assert_eq!(thread.thread_id, "RT_abc123");
+        assert_eq!(thread.path, "src/main.rs");
+        assert_eq!(thread.line, Some(42));
+    }
+
+    #[rstest]
+    fn test_parse_thread_with_author_no_line_number() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc path: src/main.rs author: @reviewer -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Comment
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert_eq!(parsed.threads[0].path, "src/main.rs");
+        assert_eq!(parsed.threads[0].line, None);
     }
 
     #[rstest]
