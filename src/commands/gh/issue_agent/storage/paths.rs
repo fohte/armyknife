@@ -3,11 +3,7 @@ use std::path::PathBuf;
 /// Returns the cache directory for gh-issue-agent.
 /// Uses the unified armyknife cache directory (~/.cache/armyknife/gh-issue-agent).
 fn get_cache_dir() -> PathBuf {
-    crate::shared::cache::issue_agent_dir().unwrap_or_else(|| {
-        PathBuf::from(".cache")
-            .join("armyknife")
-            .join("gh-issue-agent")
-    })
+    crate::shared::cache::issue_agent_dir()
 }
 
 /// Returns the directory path for a specific issue.

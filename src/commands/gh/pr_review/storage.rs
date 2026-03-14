@@ -6,7 +6,7 @@ use super::error::PrReviewError;
 
 /// Manages local storage for PR review thread files.
 ///
-/// Files are stored under `$XDG_CACHE_HOME/gh-pr-review/<owner>/<repo>/<pr_number>/`.
+/// Files are stored under `~/.cache/armyknife/gh-pr-review/<owner>/<repo>/<pr_number>/`.
 pub struct ThreadStorage {
     dir: PathBuf,
 }
@@ -14,11 +14,6 @@ pub struct ThreadStorage {
 impl ThreadStorage {
     pub fn new(owner: &str, repo: &str, pr_number: u64) -> Self {
         let dir = crate::shared::cache::pr_review_dir()
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(".cache")
-                    .join("armyknife")
-                    .join("gh-pr-review")
-            })
             .join(owner)
             .join(repo)
             .join(pr_number.to_string());
