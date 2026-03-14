@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **hook:** skip external commands in `session_start_tests` to prevent srt sandbox hangs ([#425](https://github.com/fohte/armyknife/issues/425)) ([b5d92cb](https://github.com/fohte/armyknife/commit/b5d92cbf97f45e195a3335621400d7a0036e481e))
 * **tmux:** search all clients in `focus_pane` to handle session switches ([#427](https://github.com/fohte/armyknife/issues/427)) ([b0d4bfa](https://github.com/fohte/armyknife/commit/b0d4bfa93854a8825cd74bc8a6472dc39106b0d5))
 
 ## [0.1.121](https://github.com/fohte/armyknife/compare/v0.1.120...v0.1.121) (2026-03-14)
