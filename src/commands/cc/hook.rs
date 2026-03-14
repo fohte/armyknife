@@ -85,11 +85,11 @@ enum ProcessResult {
 
 /// Controls which side effects `process_hook_event_impl` executes.
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
-/// to avoid calling external commands (tmux, terminal-notifier, etc.).
+/// to avoid calling external commands (tmux, hammerspoon, etc.).
 struct SideEffects {
     /// Call tmux commands (get_pane_info_by_pid, set/unset_pane_option, refresh_status)
     tmux: bool,
-    /// Send/remove notifications via terminal-notifier
+    /// Send/remove notifications via hammerspoon
     notifications: bool,
     /// Spawn background label generation process
     label_generation: bool,
@@ -693,7 +693,7 @@ fn build_notification(
 
     // Add click action to focus tmux pane if available
     // Skip action if paths cannot be safely quoted (e.g., contains null bytes)
-    // Use full path for tmux because terminal-notifier's -execute runs in minimal PATH environment
+    // Use full path for tmux because Hammerspoon's hs.execute runs in minimal PATH environment
     if let Some(tmux_info) = &session.tmux_info
         && let Ok(escaped_pane_id) = shlex::try_quote(&tmux_info.pane_id)
         && let Some(tmux_path) = find_command_path("tmux")
