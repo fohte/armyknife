@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.125](https://github.com/fohte/armyknife/compare/v0.1.124...v0.1.125) (2026-03-14)
+
+
+### Features
+
+* **pr-review:** add thread author to header line ([#435](https://github.com/fohte/armyknife/issues/435)) ([8773c8d](https://github.com/fohte/armyknife/commit/8773c8dbd34ec21d90bc596ee89c1ab18f31c052))
+
 ## [0.1.124](https://github.com/fohte/armyknife/compare/v0.1.123...v0.1.124) (2026-03-14)
 
 
