@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.123](https://github.com/fohte/armyknife/compare/v0.1.122...v0.1.123) (2026-03-14)
+
+
+### Dependencies
+
+* update rust crate tokio to v1.50.0 ([#341](https://github.com/fohte/armyknife/issues/341)) ([427cfad](https://github.com/fohte/armyknife/commit/427cfadd5462b5755e9f045628122d8b5eb4e6be))
+
 ## [0.1.122](https://github.com/fohte/armyknife/compare/v0.1.121...v0.1.122) (2026-03-14)
 
 
