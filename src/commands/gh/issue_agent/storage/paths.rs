@@ -28,38 +28,36 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::issue_dir("/cache", "owner/repo", 123, "/cache/owner/repo/123")]
-    #[case::issue_dir_full(
-        "/home/user/.cache/armyknife/gh-issue-agent",
-        "fohte/armyknife",
-        42,
-        "/home/user/.cache/armyknife/gh-issue-agent/fohte/armyknife/42"
-    )]
-    fn test_get_issue_dir_with_base(
-        #[case] base: &str,
-        #[case] repo: &str,
-        #[case] issue_number: i64,
-        #[case] expected: &str,
-    ) {
-        let dir = PathBuf::from(base)
-            .join(repo)
-            .join(issue_number.to_string());
-        assert_eq!(dir, PathBuf::from(expected));
+    fn test_get_issue_dir_appends_repo_and_number() {
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some("/tmp/test-cache")),
+                ("HOME", Some("/home/user")),
+            ],
+            || {
+                let dir = get_issue_dir("fohte/armyknife", 42);
+                assert_eq!(
+                    dir,
+                    PathBuf::from("/tmp/test-cache/armyknife/gh-issue-agent/fohte/armyknife/42")
+                );
+            },
+        );
     }
 
     #[rstest]
-    #[case::new_issue("/cache", "owner/repo", "/cache/owner/repo/new")]
-    #[case::new_issue_full(
-        "/home/user/.cache/armyknife/gh-issue-agent",
-        "fohte/armyknife",
-        "/home/user/.cache/armyknife/gh-issue-agent/fohte/armyknife/new"
-    )]
-    fn test_get_new_issue_dir_with_base(
-        #[case] base: &str,
-        #[case] repo: &str,
-        #[case] expected: &str,
-    ) {
-        let dir = PathBuf::from(base).join(repo).join("new");
-        assert_eq!(dir, PathBuf::from(expected));
+    fn test_get_new_issue_dir_appends_repo_and_new() {
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some("/tmp/test-cache")),
+                ("HOME", Some("/home/user")),
+            ],
+            || {
+                let dir = get_new_issue_dir("fohte/armyknife");
+                assert_eq!(
+                    dir,
+                    PathBuf::from("/tmp/test-cache/armyknife/gh-issue-agent/fohte/armyknife/new")
+                );
+            },
+        );
     }
 }
