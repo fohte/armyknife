@@ -58,7 +58,6 @@ pub enum MergeStatus {
 }
 
 impl MergeStatus {
-    #[cfg(test)]
     pub fn is_merged(&self) -> bool {
         matches!(self, MergeStatus::Merged { .. })
     }
@@ -111,10 +110,10 @@ pub fn merge_status_from_pr(pr_info: &PrInfo) -> MergeStatus {
     }
 }
 
-/// Check merge status using local git data (merge-base).
+/// Fallback merge status when no PR is found for a branch.
 ///
-/// Requires that `fetch_with_prune` has been run for this repo
-/// so that remote tracking branches are up to date.
+/// Always returns `NotMerged` to protect branches that may have
+/// work-in-progress changes.
 pub fn merge_status_from_git(_repo: &Repository, _branch_name: &str) -> MergeStatus {
     // When no PR is found, always treat the branch as not merged.
     // The git merge-base check (is-ancestor) gives false positives for branches
@@ -172,6 +171,7 @@ async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> 
 mod tests {
     use super::*;
     use crate::infra::github::RepoClient;
+    use rstest::rstest;
 
     /// Mock RepoClient for testing find_base_branch_with_client
     struct MockRepoClient {
@@ -238,21 +238,12 @@ mod tests {
         assert!(!not_merged.is_merged());
     }
 
-    #[test]
-    fn test_merge_status_should_cleanup() {
-        let merged = MergeStatus::Merged {
-            reason: "test".to_string(),
-        };
-        let closed = MergeStatus::Closed {
-            reason: "test".to_string(),
-        };
-        let not_merged = MergeStatus::NotMerged {
-            reason: "test".to_string(),
-        };
-
-        assert!(merged.should_cleanup());
-        assert!(closed.should_cleanup());
-        assert!(!not_merged.should_cleanup());
+    #[rstest]
+    #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, true)]
+    #[case::closed(MergeStatus::Closed { reason: "test".to_string() }, true)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, false)]
+    fn test_merge_status_should_cleanup(#[case] status: MergeStatus, #[case] expected: bool) {
+        assert_eq!(status.should_cleanup(), expected);
     }
 
     #[test]

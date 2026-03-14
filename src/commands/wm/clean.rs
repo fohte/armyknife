@@ -98,8 +98,7 @@ struct RepoWorktreeData {
 /// Optimized flow:
 /// 1. Collect local data (worktrees, owner/repo) without network
 /// 2. Batch GraphQL query for all branch PR statuses in one call
-/// 3. Only fetch repos that have branches without a PR (for merge-base fallback)
-/// 4. Determine merge status from PR info or git merge-base
+/// 3. Determine merge status from PR info (branches without PR are kept)
 async fn run_all(args: &CleanArgs) -> Result<()> {
     let config = load_config()?;
     let repos_root = resolve_repos_root(config.wm.repos_root.as_deref())
@@ -187,45 +186,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     };
     let pr_map = pr_map.unwrap_or_default();
 
-    // Phase 3: Selective fetch - only repos with branches missing from PR results
-    let repos_needing_fetch: Vec<&PathBuf> = repo_data
-        .iter()
-        .filter(|rd| {
-            rd.worktrees.iter().any(|wt| {
-                let has_pr = rd
-                    .github_id
-                    .as_ref()
-                    .and_then(|(owner, repo)| {
-                        pr_map.get(&(owner.clone(), repo.clone(), wt.branch.clone()))
-                    })
-                    .is_some_and(|pr| pr.is_some());
-                !has_pr
-            })
-        })
-        .map(|rd| &rd.repo_path)
-        .collect();
-
-    if !repos_needing_fetch.is_empty() {
-        spinner.set_message(format!(
-            "Fetching {} repo(s) for merge-base check...",
-            repos_needing_fetch.len()
-        ));
-        for repo_path in &repos_needing_fetch {
-            let repo = match Repository::open(repo_path) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            if let Err(e) = fetch_with_prune(&repo) {
-                let name = repo_path
-                    .strip_prefix(&repos_root)
-                    .unwrap_or(repo_path)
-                    .display();
-                eprintln!("Warning: Failed to fetch {name}: {e}");
-            }
-        }
-    }
-
-    // Phase 4: Determine merge status
+    // Phase 3: Determine merge status
     let mut all_to_delete = Vec::new();
     let mut all_to_keep = Vec::new();
 
