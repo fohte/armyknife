@@ -711,7 +711,10 @@ const GHOSTTY_DEFAULT_TITLE: &str = "👻";
 /// For Ghostty on macOS, uses AppleScript to focus the main window by its default title.
 /// For other terminals, uses `open -a` which activates the most recent window.
 fn build_focus_app_command(config: &Config) -> String {
-    if cfg!(target_os = "macos") && config.editor.terminal == Terminal::Ghostty {
+    if cfg!(target_os = "macos")
+        && config.editor.terminal == Terminal::Ghostty
+        && config.editor.focus_app.is_none()
+    {
         format!(
             "osascript -e 'tell application \"Ghostty\"' -e 'activate (first window whose name is \"{GHOSTTY_DEFAULT_TITLE}\")' -e 'activate' -e 'end tell'"
         )

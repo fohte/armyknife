@@ -49,9 +49,9 @@ pub fn send(notification: &Notification) -> Result<()> {
 /// Delegates to a Lua helper defined in the Hammerspoon config.
 pub fn remove_group(group: &str) -> Result<()> {
     let hs = find_hs_path().context("hs command not found")?;
+    let g = lua_quote(group);
     let lua = format!(
-        "if _G._armyknife and _G._armyknife.remove_group then _G._armyknife.remove_group({}) end",
-        lua_quote(group),
+        "if _G._armyknife and _G._armyknife.groups and _G._armyknife.groups[{g}] then for _, n in ipairs(_G._armyknife.groups[{g}]) do n:withdraw() end; _G._armyknife.groups[{g}] = nil end"
     );
 
     let output = Command::new(&hs)
@@ -73,7 +73,10 @@ fn build_send_lua(notification: &Notification) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // Ensure the global armyknife namespace exists
-    parts.push("_G._armyknife = _G._armyknife or {groups = {}}".to_string());
+    parts.push(
+        "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}"
+            .to_string(),
+    );
 
     // For click actions, register a per-notification callback with a unique tag.
     // The callback includes the command directly as a closure, avoiding the need
