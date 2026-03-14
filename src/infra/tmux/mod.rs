@@ -258,8 +258,8 @@ pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
 ///
 /// When called from inside tmux, uses `switch-client` to switch the current
 /// client to the target pane. When called from outside tmux (e.g., from a
-/// terminal launched by the editor), finds the client attached to the pane's
-/// session and uses `switch-client -c` to switch that client to the target pane.
+/// terminal launched by the editor), finds the most recently active tmux
+/// client and uses `switch-client -c` to switch it to the target pane.
 pub fn focus_pane(pane_id: &str) -> Result<()> {
     if in_tmux() {
         return run_tmux(&["switch-client", "-t", pane_id]);
@@ -269,10 +269,20 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
     // `select-pane` alone only changes server-side state without affecting
     // which pane the client displays. The user may have switched to a
     // different session while the editor was open, so we search all clients
-    // rather than filtering by the pane's session.
-    let clients = run_tmux_output(&["list-clients", "-F", "#{client_tty}"])?;
+    // and pick the most recently active one.
+    let clients_output =
+        run_tmux_output(&["list-clients", "-F", "#{client_activity}\t#{client_tty}"])?;
 
-    if let Some(client_tty) = clients.lines().next() {
+    if let Some(client_tty) = clients_output
+        .lines()
+        .filter_map(|line| {
+            let (activity, tty) = line.split_once('\t')?;
+            let ts = activity.parse::<u64>().ok()?;
+            Some((ts, tty))
+        })
+        .max_by_key(|(ts, _)| *ts)
+        .map(|(_, tty)| tty)
+    {
         run_tmux(&["switch-client", "-c", client_tty, "-t", pane_id])
     } else {
         // No client attached; fall back to select-pane as best effort
