@@ -38,10 +38,10 @@ termimad = "=0.34.1"
 thiserror = "=2.0.18"
 unicode-width = "=0.2.2"
 indicatif = "=0.18.4"
-ratatui = "=0.30.0"
+ratatui = { version = "=0.30.0", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
 notify = "=8.2.0"
-notify-rust = "=4.12.0"
+notify-rust = { version = "=4.12.0", default-features = false }
 
 [dev-dependencies]
 rstest = "=0.26.1"
