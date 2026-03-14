@@ -66,7 +66,10 @@ fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, Str
         format!("{path}:{line}")
     };
 
-    output.push_str(&format!("<!-- thread: {node_id} path: {location} -->\n"));
+    let author = root.author_login();
+    output.push_str(&format!(
+        "<!-- thread: {node_id} path: {location} author: @{author} -->\n"
+    ));
 
     // Resolve checkbox
     if thread.is_resolved {
@@ -201,7 +204,7 @@ mod tests {
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_abc123 path: src/main.rs:42 -->
+            <!-- thread: RT_abc123 path: src/main.rs:42 author: @reviewer -->
             - [ ] resolve
             <!-- diff -->
             ```diff
@@ -248,7 +251,7 @@ mod tests {
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_def456 path: lib.rs:10 -->
+            <!-- thread: RT_def456 path: lib.rs:10 author: @reviewer -->
             - [ ] resolve
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
             Please fix
@@ -282,7 +285,7 @@ mod tests {
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_resolved path: a.rs:1 -->
+            <!-- thread: RT_resolved path: a.rs:1 author: @reviewer -->
             - [x] resolve
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
             Nit
@@ -317,7 +320,7 @@ mod tests {
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_abc123 path: a.rs:1 -->
+            <!-- thread: RT_abc123 path: a.rs:1 author: @reviewer -->
             - [ ] resolve
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
             Fix this
@@ -348,7 +351,7 @@ mod tests {
             pulled_at: "2024-01-15T10:00:00Z"
             ---
 
-            <!-- thread: RT_noline path: file.rs -->
+            <!-- thread: RT_noline path: file.rs author: @reviewer -->
             - [ ] resolve
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
             Comment

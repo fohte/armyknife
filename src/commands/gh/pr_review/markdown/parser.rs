@@ -144,8 +144,11 @@ fn parse_single_thread(part: &str) -> Result<ParsedThread, PrReviewError> {
 }
 
 fn parse_thread_header(header: &str) -> Result<(String, String, Option<u64>), PrReviewError> {
-    // header format: "{thread_id} path: {file_path}:{line}" or "{thread_id} path: {file_path}"
-    if let Some((_, thread_id, location)) = regex_captures!(r"^(\S+)\s+path:\s+(.+)$", header) {
+    // header format: "{thread_id} path: {location} author: @{login}"
+    // or legacy format without author: "{thread_id} path: {location}"
+    if let Some((_, thread_id, location)) =
+        regex_captures!(r"^(\S+)\s+path:\s+(.+?)(?:\s+author:\s+@\S+)?$", header)
+    {
         // Try to split location into path:line
         if let Some((_, path, line_str)) = regex_captures!(r"^(.+):(\d+)$", location) {
             let line = line_str.parse::<u64>().ok();
@@ -198,7 +201,7 @@ fn extract_draft_reply(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
 
     #[rstest]
@@ -418,6 +421,43 @@ mod tests {
             parsed.threads[0].draft_reply,
             Some("Line 1 of draft\nLine 2 of draft".to_string())
         );
+    }
+
+    #[rstest]
+    #[case::with_line_number(
+        "RT_abc123",
+        "src/main.rs:42 author: @reviewer",
+        "src/main.rs",
+        Some(42)
+    )]
+    #[case::without_line_number("RT_abc", "src/main.rs author: @reviewer", "src/main.rs", None)]
+    fn test_parse_thread_with_author(
+        #[case] thread_id: &str,
+        #[case] location: &str,
+        #[case] expected_path: &str,
+        #[case] expected_line: Option<u64>,
+    ) {
+        let content = formatdoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: {thread_id} path: {location} -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Comment
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(&content).unwrap();
+        assert_eq!(parsed.threads.len(), 1);
+
+        let thread = &parsed.threads[0];
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.path, expected_path);
+        assert_eq!(thread.line, expected_line);
     }
 
     #[rstest]
