@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.124](https://github.com/fohte/armyknife/compare/v0.1.123...v0.1.124) (2026-03-14)
+
+
+### Bug Fixes
+
+* **wm:** correct worktree cleanup for no-commit branches and closed PRs ([#433](https://github.com/fohte/armyknife/issues/433)) ([73e1376](https://github.com/fohte/armyknife/commit/73e1376d51a6a366850370135b67cd6025461568))
+
 ## [0.1.123](https://github.com/fohte/armyknife/compare/v0.1.122...v0.1.123) (2026-03-14)
 
 
