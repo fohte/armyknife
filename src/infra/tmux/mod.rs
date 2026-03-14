@@ -258,15 +258,15 @@ pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
 ///
 /// When called from inside tmux, uses `switch-client` to switch the current
 /// client to the target pane. When called from outside tmux (e.g., from a
-/// terminal launched by the editor), uses `select-window` + `select-pane`
-/// to focus the target pane without requiring a tmux client context.
+/// terminal launched by the editor), uses `select-pane` to focus the target
+/// pane without requiring a tmux client context. `select-pane` with a pane
+/// ID also activates the window containing that pane.
 pub fn focus_pane(pane_id: &str) -> Result<()> {
     if in_tmux() {
         run_tmux(&["switch-client", "-t", pane_id])
     } else {
-        // From outside tmux, select-window and select-pane can target
-        // a pane by ID, which activates it on the tmux server side.
-        run_tmux(&["select-window", "-t", pane_id])?;
+        // From outside tmux, select-pane can target a pane by ID, which
+        // activates its window and the pane itself on the tmux server side.
         run_tmux(&["select-pane", "-t", pane_id])
     }
 }
