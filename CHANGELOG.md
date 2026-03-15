@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.126](https://github.com/fohte/armyknife/compare/v0.1.125...v0.1.126) (2026-03-15)
+
+
+### Features
+
+* **notification:** replace terminal-notifier with Hammerspoon ([#437](https://github.com/fohte/armyknife/issues/437)) ([eec67d5](https://github.com/fohte/armyknife/commit/eec67d5f7ffe1ccce3420535eb8fd8b570ae9bf7))
+
 ## [0.1.125](https://github.com/fohte/armyknife/compare/v0.1.124...v0.1.125) (2026-03-14)
 
 
