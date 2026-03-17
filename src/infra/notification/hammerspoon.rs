@@ -128,6 +128,11 @@ fn build_send_lua(notification: &Notification) -> String {
         ));
     }
 
+    // Enable the action button so that clicking the notification triggers the registered callback
+    if notification.action().is_some() {
+        parts.push("n:hasActionButton(true)".to_string());
+    }
+
     // Disable auto-withdraw so the notification stays until clicked or explicitly removed
     parts.push("n:withdrawAfter(0)".to_string());
     parts.push("n:send()".to_string());
