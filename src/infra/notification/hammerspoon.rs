@@ -96,6 +96,7 @@ fn build_send_lua(notification: &Notification) -> String {
             lua_quote(&current_home),
         ));
         parts.push("local n = hs.notify.new(tag)".to_string());
+        parts.push("n:hasActionButton(true)".to_string());
     } else {
         parts.push("local n = hs.notify.new()".to_string());
     }
@@ -128,11 +129,6 @@ fn build_send_lua(notification: &Notification) -> String {
             "n:contentImage(hs.image.imageFromPath({}))",
             lua_quote(app_icon)
         ));
-    }
-
-    // Enable the action button so that clicking the notification triggers the registered callback
-    if notification.action().is_some() {
-        parts.push("n:hasActionButton(true)".to_string());
     }
 
     // Disable auto-withdraw so the notification stays until clicked or explicitly removed
