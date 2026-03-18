@@ -52,11 +52,6 @@ impl EnvVars {
         }
     }
 
-    /// Returns env var pairs for setting SKIP_HOOKS in a child process.
-    pub fn skip_hooks_pair() -> (&'static str, &'static str) {
-        (SKIP_HOOKS, "1")
-    }
-
     /// Returns the env var name for SESSION_ID (used in CLAUDE_ENV_FILE export).
     pub fn session_id_name() -> &'static str {
         SESSION_ID

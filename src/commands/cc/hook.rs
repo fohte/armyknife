@@ -13,7 +13,6 @@ use lazy_regex::regex_replace_all;
 
 use super::claude_sessions;
 use super::error::CcError;
-use super::generate_label;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
@@ -90,8 +89,6 @@ struct SideEffects {
     tmux: bool,
     /// Send/remove notifications via hammerspoon
     notifications: bool,
-    /// Spawn background label generation process
-    label_generation: bool,
 }
 
 impl SideEffects {
@@ -99,7 +96,6 @@ impl SideEffects {
         Self {
             tmux: true,
             notifications: true,
-            label_generation: true,
         }
     }
 
@@ -108,7 +104,6 @@ impl SideEffects {
         Self {
             tmux: false,
             notifications: false,
-            label_generation: false,
         }
     }
 }
@@ -268,24 +263,6 @@ fn process_hook_event_impl(
 
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
-
-    // Auto-generate label for root sessions on first user prompt.
-    // Uses the prompt field from UserPromptSubmit stdin JSON directly, because
-    // transcript files (.jsonl) are not yet written when the hook fires.
-    // Spawns a background process to avoid blocking the hook.
-    // Sets a placeholder label before spawning to prevent duplicate spawns
-    // when multiple UserPromptSubmit events arrive before generation completes.
-    if event == HookEvent::UserPromptSubmit
-        && session.label.is_none()
-        && let Some(prompt) = &input.prompt
-    {
-        session.label = Some("...".to_string());
-        store::save_session_to(sessions_dir, &session)?;
-
-        if side_effects.label_generation {
-            generate_label::spawn_label_generation(sessions_dir, &session.session_id, prompt);
-        }
-    }
 
     // Refresh tmux status bar so `#()` commands pick up the state change immediately.
     // Silently ignore errors (e.g., not in tmux, tmux not installed).

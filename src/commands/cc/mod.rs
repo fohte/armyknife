@@ -1,7 +1,6 @@
 mod claude_sessions;
 mod error;
 mod focus;
-mod generate_label;
 mod hook;
 mod list;
 mod resume;
@@ -14,7 +13,6 @@ mod watch;
 use clap::Subcommand;
 
 pub use focus::FocusArgs;
-pub use generate_label::GenerateLabelArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
 pub use resume::ResumeArgs;
@@ -41,10 +39,6 @@ pub enum CcCommands {
     /// Save/restore session IDs for tmux-resurrect integration
     #[command(subcommand)]
     Resurrect(ResurrectCommands),
-
-    /// Generate a label for a session (internal, called by hook in background)
-    #[command(hide = true)]
-    GenerateLabel(GenerateLabelArgs),
 }
 
 impl CcCommands {
@@ -56,7 +50,6 @@ impl CcCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
-            Self::GenerateLabel(args) => generate_label::run(args)?,
         }
         Ok(())
     }
