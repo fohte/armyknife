@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.128](https://github.com/fohte/armyknife/compare/v0.1.127...v0.1.128) (2026-03-18)
+
+
+### Bug Fixes
+
+* **cc:** remove automatic session title generation ([#441](https://github.com/fohte/armyknife/issues/441)) ([a1d1495](https://github.com/fohte/armyknife/commit/a1d1495ce56c7f7468b9289eb0ddb81abd0518ed))
+
 ## [0.1.127](https://github.com/fohte/armyknife/compare/v0.1.126...v0.1.127) (2026-03-18)
 
 
