@@ -271,12 +271,12 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
     // different session while the editor was open, so we search all clients
     // and pick the most recently active one.
     let clients_output =
-        run_tmux_output(&["list-clients", "-F", "#{client_activity}\t#{client_tty}"])?;
+        run_tmux_output(&["list-clients", "-F", "#{client_activity} #{client_tty}"])?;
 
     if let Some(client_tty) = clients_output
         .lines()
         .filter_map(|line| {
-            let (activity, tty) = line.split_once('\t')?;
+            let (activity, tty) = line.split_once(' ')?;
             let ts = activity.parse::<u64>().ok()?;
             Some((ts, tty))
         })
