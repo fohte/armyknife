@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.127](https://github.com/fohte/armyknife/compare/v0.1.126...v0.1.127) (2026-03-18)
+
+
+### Bug Fixes
+
+* **notification:** restore tmux pane switching on notification click ([#439](https://github.com/fohte/armyknife/issues/439)) ([996cae0](https://github.com/fohte/armyknife/commit/996cae0b8c0171b123df15bd42c7733d227119d7))
+
 ## [0.1.126](https://github.com/fohte/armyknife/compare/v0.1.125...v0.1.126) (2026-03-15)
 
 
