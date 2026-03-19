@@ -12,7 +12,6 @@ use crate::commands::gh::pr_review::fetch_pr_data;
 use crate::infra::github::OctocrabClient;
 
 /// Trait for review-related GitHub API operations.
-#[async_trait::async_trait]
 pub trait ReviewClient: Send + Sync {
     /// Find the latest review timestamp from the specified reviewer.
     async fn find_latest_review(
@@ -161,7 +160,6 @@ impl OctocrabReviewClient {
     }
 }
 
-#[async_trait::async_trait]
 impl ReviewClient for OctocrabReviewClient {
     async fn find_latest_review(
         &self,
@@ -393,7 +391,6 @@ pub mod mock {
         }
     }
 
-    #[async_trait::async_trait]
     impl ReviewClient for MockReviewClient {
         async fn find_latest_review(
             &self,

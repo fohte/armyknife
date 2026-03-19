@@ -192,7 +192,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl RepoClient for MockRepoClient {
         async fn repo_exists(
             &self,

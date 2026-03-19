@@ -6,7 +6,6 @@ use super::client::OctocrabClient;
 use super::error::Result;
 
 /// Trait for repository operations.
-#[async_trait::async_trait]
 pub trait RepoClient: Send + Sync {
     /// Check if a repository exists on GitHub.
     async fn repo_exists(&self, owner: &str, repo: &str) -> Result<bool>;
@@ -18,7 +17,6 @@ pub trait RepoClient: Send + Sync {
     async fn get_default_branch(&self, owner: &str, repo: &str) -> Result<String>;
 }
 
-#[async_trait::async_trait]
 impl RepoClient for OctocrabClient {
     async fn repo_exists(&self, owner: &str, repo: &str) -> Result<bool> {
         match self.client.repos(owner, repo).get().await {
