@@ -18,13 +18,11 @@ use crate::infra::github::OctocrabClient;
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
 
-/// Target for push command: either an issue number or a path to an issue directory.
+/// Target for push command: either an issue number or a path to new issue directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushTarget {
     IssueNumber(u64),
     NewIssuePath(PathBuf),
-    /// Path to a directory containing an existing issue (has issue.md with readonly.number).
-    ExistingIssuePath(PathBuf, u64),
 }
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -63,9 +61,16 @@ fn parse_target(target: &str) -> anyhow::Result<PushTarget> {
     // Try as a path
     let path = PathBuf::from(target);
     if path.exists() && path.is_dir() {
-        // Check if this directory contains an existing issue (issue.md with readonly.number)
+        // Reject directories that contain an existing issue (pulled from GitHub).
+        // Users should use the issue number directly instead of the directory path.
         if let Some(issue_number) = read_issue_number_from_dir(&path) {
-            return Ok(PushTarget::ExistingIssuePath(path, issue_number));
+            anyhow::bail!(
+                "Directory '{}' contains existing issue #{}. Use the issue number instead:\n  \
+                 a gh issue-agent push {}",
+                path.display(),
+                issue_number,
+                issue_number
+            );
         }
         return Ok(PushTarget::NewIssuePath(path));
     }
@@ -90,13 +95,10 @@ pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
     match target {
         PushTarget::IssueNumber(issue_number) => run_update(args, issue_number).await,
         PushTarget::NewIssuePath(path) => create::run_create(args, path).await,
-        PushTarget::ExistingIssuePath(path, issue_number) => {
-            run_update_from_path(args, path, issue_number).await
-        }
     }
 }
 
-/// Run update for existing issue (original behavior, target is issue number).
+/// Run update for existing issue (original behavior).
 async fn run_update(args: &PushArgs, issue_number: u64) -> anyhow::Result<()> {
     let issue_args = super::IssueArgs {
         issue_number,
@@ -104,63 +106,6 @@ async fn run_update(args: &PushArgs, issue_number: u64) -> anyhow::Result<()> {
     };
     let (ctx, client) = IssueContext::from_args(&issue_args).await?;
     run_with_context(args, &ctx, client).await
-}
-
-/// Run update for existing issue from a directory path.
-/// Extracts repo from -R arg or from the directory path structure.
-async fn run_update_from_path(
-    args: &PushArgs,
-    path: PathBuf,
-    issue_number: u64,
-) -> anyhow::Result<()> {
-    let repo = get_repo_from_existing_issue_path_or_arg(&path, &args.repo)?;
-    let (owner, repo_name) = common::parse_repo(&repo)?;
-
-    let storage = crate::commands::gh::issue_agent::storage::IssueStorage::from_dir(path);
-
-    println!("Fetching latest from GitHub...");
-
-    let client = OctocrabClient::get()?;
-    let current_user = client.get_current_user().await?;
-
-    let ctx = IssueContext {
-        owner: owner.to_string(),
-        repo_name: repo_name.to_string(),
-        issue_number,
-        storage,
-        current_user,
-    };
-
-    run_with_context(args, &ctx, client).await
-}
-
-/// Get repository from -R argument or from existing issue path structure.
-/// Expected path: .../<owner>/<repo>/<issue_number>/
-fn get_repo_from_existing_issue_path_or_arg(
-    path: &std::path::Path,
-    repo_arg: &Option<String>,
-) -> anyhow::Result<String> {
-    if let Some(repo) = repo_arg {
-        return Ok(repo.clone());
-    }
-
-    // Try to extract owner/repo from path structure:
-    // Expected: .../<owner>/<repo>/<issue_number>/
-    if let Some(repo_dir) = path.parent()
-        && let (Some(repo_name), Some(owner_name)) = (
-            repo_dir.file_name(),
-            repo_dir.parent().and_then(|p| p.file_name()),
-        )
-    {
-        let repo = repo_name.to_string_lossy();
-        let owner = owner_name.to_string_lossy();
-        return Ok(format!("{}/{}", owner, repo));
-    }
-
-    anyhow::bail!(
-        "Cannot determine repository from path '{}'. Use -R owner/repo to specify.",
-        path.display()
-    )
 }
 
 /// Internal implementation that accepts a client and storage for testability.
@@ -176,7 +121,6 @@ pub(super) async fn run_with_client_and_storage(
     // Parse target to get issue number (for backward compatibility in tests)
     let issue_number = match parse_target(&args.target)? {
         PushTarget::IssueNumber(n) => n,
-        PushTarget::ExistingIssuePath(_, n) => n,
         PushTarget::NewIssuePath(_) => {
             anyhow::bail!("run_with_client_and_storage does not support new issue creation")
         }
@@ -324,7 +268,7 @@ mod tests {
         }
 
         #[rstest]
-        fn test_parse_path_with_existing_issue_frontmatter() {
+        fn test_parse_path_with_existing_issue_frontmatter_errors() {
             let temp_dir = TempDir::new().unwrap();
             let issue_md = indoc::indoc! {r#"
                 ---
@@ -345,10 +289,14 @@ mod tests {
             std::fs::write(temp_dir.path().join("issue.md"), issue_md).unwrap();
             let path = temp_dir.path().to_string_lossy().to_string();
 
-            let result = parse_target(&path).unwrap();
+            let err = parse_target(&path).unwrap_err();
             assert_eq!(
-                result,
-                PushTarget::ExistingIssuePath(PathBuf::from(&path), 42)
+                err.to_string(),
+                format!(
+                    "Directory '{}' contains existing issue #42. \
+                     Use the issue number instead:\n  a gh issue-agent push 42",
+                    temp_dir.path().display()
+                )
             );
         }
 
@@ -383,35 +331,6 @@ mod tests {
         fn test_parse_negative_number() {
             // Negative numbers are not valid issue numbers
             let result = parse_target("-1");
-            assert!(result.is_err());
-        }
-    }
-
-    mod get_repo_from_existing_issue_path_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::with_repo_arg("owner/repo")]
-        fn test_with_repo_arg(#[case] repo: &str) {
-            let path = PathBuf::from("/some/random/path");
-            let result =
-                get_repo_from_existing_issue_path_or_arg(&path, &Some(repo.to_string())).unwrap();
-            assert_eq!(result, repo);
-        }
-
-        #[rstest]
-        fn test_extract_from_issue_number_path() {
-            // Path: .../<owner>/<repo>/<issue_number>/
-            let path =
-                PathBuf::from("/home/user/.cache/armyknife/gh-issue-agent/fohte/armyknife/42");
-            let result = get_repo_from_existing_issue_path_or_arg(&path, &None).unwrap();
-            assert_eq!(result, "fohte/armyknife");
-        }
-
-        #[rstest]
-        fn test_fail_too_short_path() {
-            let path = PathBuf::from("42");
-            let result = get_repo_from_existing_issue_path_or_arg(&path, &None);
             assert!(result.is_err());
         }
     }
