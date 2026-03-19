@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.130](https://github.com/fohte/armyknife/compare/v0.1.129...v0.1.130) (2026-03-19)
+
+
+### Bug Fixes
+
+* **notification:** auto-dismiss permission request notifications on ask completion ([#446](https://github.com/fohte/armyknife/issues/446)) ([556d2b3](https://github.com/fohte/armyknife/commit/556d2b3c432489f22455556226a34374fcb99b9f))
+
 ## [0.1.129](https://github.com/fohte/armyknife/compare/v0.1.128...v0.1.129) (2026-03-19)
 
 
