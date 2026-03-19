@@ -270,12 +270,10 @@ fn process_hook_event_impl(
         let _ = tmux::refresh_status();
     }
 
-    // Remove stale notifications when the user responds or resumes a session.
-    // UserPromptSubmit fires after the user accepts/rejects a permission request.
-    // SessionStart (resume) fires when `claude -c` restores a previous session.
-    if side_effects.notifications
-        && matches!(event, HookEvent::UserPromptSubmit | HookEvent::SessionStart)
-    {
+    // Remove stale notifications on every event except SessionEnd.
+    // This ensures permission-request notifications are dismissed as soon as the
+    // user responds (the next event — PreToolUse, Stop, etc. — clears them).
+    if side_effects.notifications && !matches!(event, HookEvent::SessionEnd) {
         let _ = crate::infra::notification::remove_group(&input.session_id);
     }
 
