@@ -104,6 +104,7 @@ dependencies = [
  "notify",
  "notify-rust",
  "open",
+ "percent-encoding",
  "ratatui",
  "regex",
  "reqwest",

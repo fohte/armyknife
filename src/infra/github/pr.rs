@@ -128,8 +128,11 @@ impl PrClient for GitHubClient {
         repo: &str,
         branch: &str,
     ) -> Result<Option<PrInfo>> {
-        let route = format!("/repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=all");
-        let pulls: Vec<PrResponse> = self.rest_get(&route).await?;
+        let route = format!("/repos/{owner}/{repo}/pulls");
+        let head = format!("{owner}:{branch}");
+        let pulls: Vec<PrResponse> = self
+            .rest_get_with_query(&route, &[("head", &head), ("state", "all")])
+            .await?;
 
         let Some(pr) = pulls.into_iter().next() else {
             return Ok(None);

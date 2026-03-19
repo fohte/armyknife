@@ -19,6 +19,7 @@ clap_complete = "=4.5.66"
 git2 = { version = "=0.20.4", default-features = false, features = ["vendored-libgit2", "https"] }
 reqwest = { version = "=0.12.18", default-features = false, features = ["rustls-tls", "json"] }
 open = "=5.3.3"
+percent-encoding = "=2.3.2"
 tokio = { version = "=1.50.0", features = ["rt-multi-thread", "macros"] }
 indoc = "=2.0.7"
 lazy-regex = "=3.6.0"

@@ -125,6 +125,16 @@ impl GitHubClient {
         check_response(response).await
     }
 
+    /// Send a GET request with query parameters and deserialize the JSON response.
+    pub(crate) async fn rest_get_with_query<T: serde::de::DeserializeOwned>(
+        &self,
+        route: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let response = self.http.get(self.url(route)).query(query).send().await?;
+        check_response(response).await
+    }
+
     /// Send a POST request with a JSON body and deserialize the response.
     pub(crate) async fn rest_post<T: serde::de::DeserializeOwned>(
         &self,
@@ -419,7 +429,9 @@ impl GitHubClient {
         issue_number: u64,
         label: &str,
     ) -> Result<()> {
-        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/labels/{label}");
+        let encoded_label =
+            percent_encoding::utf8_percent_encode(label, percent_encoding::NON_ALPHANUMERIC);
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/labels/{encoded_label}");
         // GitHub returns 200 with remaining labels, not 204
         let response = self.http.delete(self.url(&route)).send().await?;
         let status = response.status();
