@@ -1,7 +1,7 @@
 use super::Result;
 use super::error::CheckPrReviewError;
 use super::models::{PrData, Review, ReviewThread};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 use indoc::indoc;
 use serde::Deserialize;
 use serde_json::json;
@@ -129,7 +129,7 @@ pub async fn fetch_pr_data(
     pr_number: u64,
     include_resolved: bool,
 ) -> Result<PrData> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     let mut threads: Vec<ReviewThread> = Vec::new();
     let mut reviews: Vec<Review> = Vec::new();
     let mut pagination = PaginationState::default();
@@ -162,7 +162,7 @@ pub async fn fetch_pr_data(
 }
 
 async fn execute_graphql(
-    client: &OctocrabClient,
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
     pr_number: u64,

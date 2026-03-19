@@ -15,7 +15,7 @@ use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
-use crate::infra::github::{BranchPrQuery, OctocrabClient};
+use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::infra::tmux;
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -177,7 +177,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
         .collect();
 
     let pr_map = if !queries.is_empty() {
-        match OctocrabClient::get() {
+        match GitHubClient::get() {
             Ok(client) => client.get_prs_for_branches_batch(&queries).await.ok(),
             Err(_) => None,
         }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use crate::infra::github::{
-    CreatePrParams, OctocrabClient, PrClient, PrState, RepoClient, UpdatePrParams,
+    CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ struct PrTarget {
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     run_impl(args, client).await
 }
 

@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use super::client::OctocrabClient;
+use serde::Deserialize;
+
+use super::client::GitHubClient;
 use super::error::{GitHubError, Result};
 
 /// Parameters for creating a pull request.
@@ -71,49 +73,53 @@ pub trait PrClient: Send + Sync {
     fn open_in_browser(&self, url: &str);
 }
 
-impl PrClient for OctocrabClient {
-    async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
-        let pulls = self.client.pulls(&params.owner, &params.repo);
+/// REST API response for PR create/update/list.
+#[derive(Debug, Deserialize)]
+struct PrResponse {
+    number: u64,
+    state: Option<String>,
+    html_url: Option<String>,
+    merged_at: Option<String>,
+}
 
+impl PrClient for GitHubClient {
+    async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
         // If base is not specified, find the base branch from local git info or GitHub API
         let base = match &params.base {
             Some(b) => b.clone(),
             None => crate::infra::git::find_base_branch(&params.owner, &params.repo, self).await,
         };
 
-        let pr = if params.draft {
-            pulls
-                .create(&params.title, &params.head, &base)
-                .body(&params.body)
-                .draft(Some(true))
-                .send()
-                .await?
-        } else {
-            pulls
-                .create(&params.title, &params.head, &base)
-                .body(&params.body)
-                .send()
-                .await?
-        };
+        let mut payload = serde_json::json!({
+            "title": params.title,
+            "body": params.body,
+            "head": params.head,
+            "base": base,
+        });
 
-        pr.html_url
-            .map(|u| u.to_string())
-            .ok_or_else(|| GitHubError::MissingPrUrl.into())
+        if params.draft {
+            payload["draft"] = serde_json::json!(true);
+        }
+
+        let route = format!("/repos/{}/{}/pulls", params.owner, params.repo);
+        let pr: PrResponse = self.rest_post(&route, &payload).await?;
+
+        pr.html_url.ok_or_else(|| GitHubError::MissingPrUrl.into())
     }
 
     async fn update_pull_request(&self, params: UpdatePrParams) -> Result<String> {
-        let pr = self
-            .client
-            .pulls(&params.owner, &params.repo)
-            .update(params.number)
-            .title(&params.title)
-            .body(&params.body)
-            .send()
-            .await?;
+        let route = format!(
+            "/repos/{}/{}/pulls/{}",
+            params.owner, params.repo, params.number
+        );
+        let payload = serde_json::json!({
+            "title": params.title,
+            "body": params.body,
+        });
 
-        pr.html_url
-            .map(|u| u.to_string())
-            .ok_or_else(|| GitHubError::MissingPrUrl.into())
+        let pr: PrResponse = self.rest_patch(&route, &payload).await?;
+
+        pr.html_url.ok_or_else(|| GitHubError::MissingPrUrl.into())
     }
 
     async fn get_pr_for_branch(
@@ -122,32 +128,24 @@ impl PrClient for OctocrabClient {
         repo: &str,
         branch: &str,
     ) -> Result<Option<PrInfo>> {
-        // Search for PRs with this head branch
-        let pulls = self
-            .client
-            .pulls(owner, repo)
-            .list()
-            .head(format!("{owner}:{branch}"))
-            .state(octocrab::params::State::All)
-            .send()
-            .await?;
+        let route = format!("/repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=all");
+        let pulls: Vec<PrResponse> = self.rest_get(&route).await?;
 
-        // Get the first (most recent) PR for this branch
-        let Some(pr) = pulls.items.into_iter().next() else {
+        let Some(pr) = pulls.into_iter().next() else {
             return Ok(None);
         };
 
         let state = if pr.merged_at.is_some() {
             PrState::Merged
         } else {
-            match pr.state {
-                Some(octocrab::models::IssueState::Open) => PrState::Open,
-                Some(octocrab::models::IssueState::Closed) => PrState::Closed,
+            match pr.state.as_deref() {
+                Some("open") => PrState::Open,
+                Some("closed") => PrState::Closed,
                 _ => PrState::Closed,
             }
         };
 
-        let url = pr.html_url.map(|u| u.to_string()).unwrap_or_default();
+        let url = pr.html_url.unwrap_or_default();
 
         Ok(Some(PrInfo {
             number: pr.number,
@@ -169,7 +167,7 @@ impl PrClient for OctocrabClient {
 /// GitHub GraphQL API has complexity limits; 50 branches keeps us well within bounds.
 const BATCH_SIZE: usize = 50;
 
-impl OctocrabClient {
+impl GitHubClient {
     /// Fetch PR status for multiple repo/branch combinations in a single GraphQL call.
     ///
     /// Uses aliased GraphQL queries to batch multiple repository+branch lookups,

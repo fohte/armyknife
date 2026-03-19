@@ -6,7 +6,7 @@ use super::IssueArgs;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
 use crate::infra::git;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 // Re-export git::parse_repo for convenience.
 // Note: This returns git::Result, callers using Box<dyn Error> can use `?` directly.
@@ -56,7 +56,7 @@ pub struct LocalData {
 
 /// Fetch an issue and its sub-issues in parallel, merging the results.
 pub async fn fetch_issue_with_sub_issues(
-    client: &OctocrabClient,
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
     issue_number: u64,
@@ -72,7 +72,7 @@ pub async fn fetch_issue_with_sub_issues(
 
 impl IssueContext {
     /// Initialize context from IssueArgs, validating inputs and fetching current user.
-    pub async fn from_args(args: &IssueArgs) -> anyhow::Result<(Self, &'static OctocrabClient)> {
+    pub async fn from_args(args: &IssueArgs) -> anyhow::Result<(Self, &'static GitHubClient)> {
         let repo = get_repo_from_arg_or_git(&args.repo)?;
         let issue_number = args.issue_number;
 
@@ -92,7 +92,7 @@ impl IssueContext {
 
         println!("Fetching latest from GitHub...");
 
-        let client = OctocrabClient::get()?;
+        let client = GitHubClient::get()?;
         let current_user = client.get_current_user().await?;
 
         let ctx = Self {
@@ -107,7 +107,7 @@ impl IssueContext {
     }
 
     /// Fetch remote state from GitHub.
-    pub async fn fetch_remote(&self, client: &OctocrabClient) -> anyhow::Result<RemoteData> {
+    pub async fn fetch_remote(&self, client: &GitHubClient) -> anyhow::Result<RemoteData> {
         let (issue, comments) = tokio::try_join!(
             fetch_issue_with_sub_issues(client, &self.owner, &self.repo_name, self.issue_number),
             client.get_comments(&self.owner, &self.repo_name, self.issue_number),

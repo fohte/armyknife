@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::infra::git;
-use crate::infra::github::{OctocrabClient, RepoClient};
+use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::config;
 
 /// Configuration management commands.
@@ -59,7 +59,7 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
         None if key == "repo.language" => {
             // Default: private repos -> "ja", public repos -> "en"
             if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
-                let client = OctocrabClient::get()?;
+                let client = GitHubClient::get()?;
                 let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
                 let default_lang = if is_private { "ja" } else { "en" };
                 println!("{default_lang}");

@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 use super::common::{get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::models::IssueTemplate;
 use crate::commands::gh::issue_agent::storage::IssueStorage;
-use crate::infra::github::{OctocrabClient, RepoClient};
+use crate::infra::github::{GitHubClient, RepoClient};
 
 /// Arguments for the init command.
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
@@ -61,7 +61,7 @@ pub struct InitCommentArgs {
 
 /// Run the init command.
 pub async fn run(args: &InitArgs) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     match &args.command {
         InitCommands::Issue(issue_args) => run_init_issue(issue_args, client).await,
         InitCommands::Comment(comment_args) => run_init_comment(comment_args, client).await,
@@ -70,7 +70,7 @@ pub async fn run(args: &InitArgs) -> anyhow::Result<()> {
 
 /// Validate that a repository exists on GitHub.
 async fn validate_repo_exists(
-    client: &OctocrabClient,
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
 ) -> anyhow::Result<()> {
@@ -81,7 +81,7 @@ async fn validate_repo_exists(
 }
 
 /// Initialize a new issue boilerplate file.
-async fn run_init_issue(args: &InitIssueArgs, client: &OctocrabClient) -> anyhow::Result<()> {
+async fn run_init_issue(args: &InitIssueArgs, client: &GitHubClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
     let (owner, repo_name) = parse_repo(&repo)?;
@@ -106,7 +106,7 @@ async fn run_init_issue(args: &InitIssueArgs, client: &OctocrabClient) -> anyhow
 }
 
 /// List available issue templates and exit.
-async fn list_templates(client: &OctocrabClient, owner: &str, repo: &str) -> anyhow::Result<()> {
+async fn list_templates(client: &GitHubClient, owner: &str, repo: &str) -> anyhow::Result<()> {
     let templates = fetch_templates_with_fallback(client, owner, repo).await;
     print_template_list(owner, repo, &templates);
     Ok(())
@@ -131,7 +131,7 @@ fn print_template_list(owner: &str, repo: &str, templates: &[IssueTemplate]) {
 
 /// Fetch templates from GitHub API, with graceful fallback on error.
 async fn fetch_templates_with_fallback(
-    client: &OctocrabClient,
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
 ) -> Vec<IssueTemplate> {
@@ -151,7 +151,7 @@ async fn fetch_templates_with_fallback(
 /// - `Ok(None)` if no template should be used (fallback to default)
 /// - `Err(...)` if the user needs to make a choice or template not found
 async fn fetch_and_select_template(
-    client: &OctocrabClient,
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
     requested_name: Option<&str>,
@@ -284,7 +284,7 @@ fn validate_comment_name(name: &str) -> anyhow::Result<()> {
 }
 
 /// Initialize a new comment boilerplate file.
-async fn run_init_comment(args: &InitCommentArgs, client: &OctocrabClient) -> anyhow::Result<()> {
+async fn run_init_comment(args: &InitCommentArgs, client: &GitHubClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
     let (owner, repo_name) = parse_repo(&repo)?;

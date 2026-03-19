@@ -13,7 +13,7 @@ use clap::Args;
 use super::common;
 use super::common::IssueContext;
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
@@ -112,7 +112,7 @@ async fn run_update(args: &PushArgs, issue_number: u64) -> anyhow::Result<()> {
 #[cfg(test)]
 pub(super) async fn run_with_client_and_storage(
     args: &PushArgs,
-    client: &OctocrabClient,
+    client: &GitHubClient,
     storage: &crate::commands::gh::issue_agent::storage::IssueStorage,
     current_user: &str,
 ) -> anyhow::Result<()> {
@@ -142,7 +142,7 @@ pub(super) async fn run_with_client_and_storage(
 async fn run_with_context(
     args: &PushArgs,
     ctx: &IssueContext,
-    client: &OctocrabClient,
+    client: &GitHubClient,
 ) -> anyhow::Result<()> {
     let remote = ctx.fetch_remote(client).await?;
     let local = ctx.load_local()?;

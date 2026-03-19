@@ -6,11 +6,11 @@ use super::PushArgs;
 use crate::commands::gh::issue_agent::models::{IssueFrontmatter, NewIssue};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 /// Run create for new issue.
 pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     run_create_with_client(args, path, client).await
 }
 
@@ -18,7 +18,7 @@ pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
 pub async fn run_create_with_client(
     args: &PushArgs,
     path: PathBuf,
-    client: impl std::ops::Deref<Target = OctocrabClient>,
+    client: impl std::ops::Deref<Target = GitHubClient>,
 ) -> anyhow::Result<()> {
     let client = &*client;
     // Get repo from path or -R option

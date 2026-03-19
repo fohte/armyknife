@@ -68,44 +68,6 @@ impl WithAuthor for Issue {
     }
 }
 
-impl From<octocrab::models::issues::Issue> for Issue {
-    fn from(issue: octocrab::models::issues::Issue) -> Self {
-        let state = match issue.state {
-            octocrab::models::IssueState::Open => "OPEN".to_string(),
-            octocrab::models::IssueState::Closed => "CLOSED".to_string(),
-            // IssueState is #[non_exhaustive], so handle future variants
-            _ => format!("{:?}", issue.state).to_uppercase(),
-        };
-
-        Self {
-            number: issue.number as i64,
-            title: issue.title,
-            body: issue.body,
-            state,
-            labels: issue
-                .labels
-                .into_iter()
-                .map(|l| Label { name: l.name })
-                .collect(),
-            assignees: issue
-                .assignees
-                .into_iter()
-                .map(|a| Author { login: a.login })
-                .collect(),
-            milestone: issue.milestone.map(|m| Milestone { title: m.title }),
-            author: Some(Author {
-                login: issue.user.login,
-            }),
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-            // REST API doesn't provide this field, it needs to be populated via GraphQL
-            last_edited_at: None,
-            parent_issue: None,
-            sub_issues: vec![],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,36 +7,17 @@ pub enum GitHubError {
     #[error("Failed to get GitHub token: {0}")]
     TokenError(String),
 
-    #[error("{}", format_octocrab_error(.0))]
-    ApiError(#[from] octocrab::Error),
+    #[error("{0}")]
+    ApiError(String),
+
+    #[error("HTTP request failed: {0}")]
+    HttpError(#[from] reqwest::Error),
 
     #[error("PR created but no URL in response")]
     MissingPrUrl,
 
     #[error("GraphQL error: {0}")]
     GraphQLError(String),
-}
-
-/// Format octocrab::Error to extract detailed error information from GitHub API responses.
-fn format_octocrab_error(err: &octocrab::Error) -> String {
-    match err {
-        octocrab::Error::GitHub { source, .. } => {
-            let mut msg = format!(
-                "GitHub API error: {} (HTTP {})",
-                source.message,
-                source.status_code.as_u16()
-            );
-
-            // Add detailed error information if available
-            if let Some(errors) = &source.errors {
-                msg.push_str(&format_error_details(errors));
-            }
-
-            msg
-        }
-        // For other error types, use the default Display implementation
-        _ => format!("GitHub API error: {err}"),
-    }
 }
 
 pub type Result<T> = anyhow::Result<T>;
@@ -63,6 +44,22 @@ fn format_error_details(errors: &[serde_json::Value]) -> String {
     } else {
         format!(" [{}]", error_details.join(", "))
     }
+}
+
+/// Build an ApiError from a GitHub API error response body.
+pub(crate) fn api_error_from_response(status: u16, body: &serde_json::Value) -> GitHubError {
+    let message = body
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown error");
+
+    let mut msg = format!("GitHub API error: {message} (HTTP {status})");
+
+    if let Some(errors) = body.get("errors").and_then(|v| v.as_array()) {
+        msg.push_str(&format_error_details(errors));
+    }
+
+    GitHubError::ApiError(msg)
 }
 
 #[cfg(test)]
@@ -117,5 +114,25 @@ mod tests {
     fn test_github_error_missing_pr_url_display() {
         let err = GitHubError::MissingPrUrl;
         assert_eq!(err.to_string(), "PR created but no URL in response");
+    }
+
+    #[test]
+    fn test_api_error_from_response_with_errors() {
+        let body = json!({
+            "message": "Validation Failed",
+            "errors": [{"field": "title", "code": "missing"}]
+        });
+        let err = api_error_from_response(422, &body);
+        assert_eq!(
+            err.to_string(),
+            "GitHub API error: Validation Failed (HTTP 422) [title is missing]"
+        );
+    }
+
+    #[test]
+    fn test_api_error_from_response_without_errors() {
+        let body = json!({"message": "Not Found"});
+        let err = api_error_from_response(404, &body);
+        assert_eq!(err.to_string(), "GitHub API error: Not Found (HTTP 404)");
     }
 }

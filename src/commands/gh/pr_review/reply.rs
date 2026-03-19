@@ -9,7 +9,7 @@ use super::markdown::serializer::ThreadsFrontmatter;
 use super::markdown::{MarkdownParser, MarkdownSerializer};
 use super::storage::ThreadStorage;
 use crate::infra::git;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -138,7 +138,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     }
 
     // Apply changes
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     changeset
         .apply(client, &owner, &repo, args.pr_number)
         .await?;
