@@ -486,12 +486,21 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
 }
 
 // Test run_with_client_and_storage rejects NewIssuePath
+// Uses a directory without issue.md frontmatter so parse_target returns NewIssuePath
 #[rstest]
 #[tokio::test]
-async fn test_rejects_new_issue_path(test_dir: TempDir) {
-    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+async fn test_rejects_new_issue_path() {
+    let temp_dir = TempDir::new().unwrap();
+    // Create a directory without issue.md (or with non-frontmatter issue.md)
+    // so that parse_target returns NewIssuePath
+    let new_dir = temp_dir.path().join("new");
+    std::fs::create_dir_all(&new_dir).unwrap();
+
+    let mock = crate::infra::github::GitHubMockServer::start().await;
+    let storage =
+        crate::commands::gh::issue_agent::storage::IssueStorage::from_dir(temp_dir.path());
     let args = PushArgs {
-        target: test_dir.path().to_string_lossy().to_string(),
+        target: new_dir.to_string_lossy().to_string(),
         repo: Some("owner/repo".to_string()),
         dry_run: false,
         force: false,
