@@ -52,7 +52,6 @@ pub struct BranchPrQuery {
 }
 
 /// Trait for pull request operations.
-#[async_trait::async_trait]
 pub trait PrClient: Send + Sync {
     /// Create a pull request and return its URL.
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String>;
@@ -72,7 +71,6 @@ pub trait PrClient: Send + Sync {
     fn open_in_browser(&self, url: &str);
 }
 
-#[async_trait::async_trait]
 impl PrClient for OctocrabClient {
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
         let pulls = self.client.pulls(&params.owner, &params.repo);
