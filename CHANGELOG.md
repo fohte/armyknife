@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.129](https://github.com/fohte/armyknife/compare/v0.1.128...v0.1.129) (2026-03-19)
+
+
+### Bug Fixes
+
+* **gh-issue-agent:** reject existing issue directory paths in `push` to prevent accidental issue creation ([#444](https://github.com/fohte/armyknife/issues/444)) ([716dd3a](https://github.com/fohte/armyknife/commit/716dd3a1c5d63acd8314192db8bd40fb00ac0c81))
+
 ## [0.1.128](https://github.com/fohte/armyknife/compare/v0.1.127...v0.1.128) (2026-03-18)
 
 
