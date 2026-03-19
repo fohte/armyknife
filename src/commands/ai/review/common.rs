@@ -70,7 +70,7 @@ pub struct WaitConfig {
 /// Reviewers that post "unable to" comments are skipped rather than causing an error.
 /// Returns Ok with an empty list if all reviewers are unable to review.
 pub async fn wait_for_all_reviews(
-    client: &(impl ReviewClient + ?Sized),
+    client: &impl ReviewClient,
     owner: &str,
     repo: &str,
     pr_number: u64,

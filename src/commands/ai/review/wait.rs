@@ -36,7 +36,7 @@ pub async fn run(args: &WaitArgs) -> Result<()> {
     run_with_client(args, &get_client()).await
 }
 
-pub async fn run_with_client(args: &WaitArgs, client: &(impl ReviewClient + ?Sized)) -> Result<()> {
+pub async fn run_with_client(args: &WaitArgs, client: &impl ReviewClient) -> Result<()> {
     let (owner, repo) = get_repo_owner_and_name(args.repo.as_deref())?;
     let pr_number = get_pr_number(&owner, &repo, args.pr).await?;
 
@@ -46,7 +46,7 @@ pub async fn run_with_client(args: &WaitArgs, client: &(impl ReviewClient + ?Siz
 /// Internal implementation that can be tested without PR/repo detection.
 pub(crate) async fn run_wait(
     args: &WaitArgs,
-    client: &(impl ReviewClient + ?Sized),
+    client: &impl ReviewClient,
     owner: &str,
     repo: &str,
     pr_number: u64,
