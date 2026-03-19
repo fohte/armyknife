@@ -61,6 +61,17 @@ fn parse_target(target: &str) -> anyhow::Result<PushTarget> {
     // Try as a path
     let path = PathBuf::from(target);
     if path.exists() && path.is_dir() {
+        // Reject directories that contain an existing issue (pulled from GitHub).
+        // Users should use the issue number directly instead of the directory path.
+        if let Some(issue_number) = read_issue_number_from_dir(&path) {
+            anyhow::bail!(
+                "Directory '{}' contains existing issue #{}. Use the issue number instead:\n  \
+                 a gh issue-agent push {}",
+                path.display(),
+                issue_number,
+                issue_number
+            );
+        }
         return Ok(PushTarget::NewIssuePath(path));
     }
 
@@ -68,6 +79,14 @@ fn parse_target(target: &str) -> anyhow::Result<PushTarget> {
         "Invalid target: '{}' is neither a valid issue number nor an existing directory",
         target
     )
+}
+
+/// Try to read the issue number from issue.md frontmatter in a directory.
+/// Returns Some(issue_number) if the directory contains an existing issue.
+fn read_issue_number_from_dir(dir: &std::path::Path) -> Option<u64> {
+    let storage = crate::commands::gh::issue_agent::storage::IssueStorage::from_dir(dir);
+    let metadata = storage.read_metadata().ok()?;
+    u64::try_from(metadata.number).ok()
 }
 
 pub async fn run(args: &PushArgs) -> anyhow::Result<()> {
@@ -240,8 +259,60 @@ mod tests {
         }
 
         #[rstest]
-        fn test_parse_path() {
+        fn test_parse_path_without_issue_md_is_new() {
             let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().to_string_lossy().to_string();
+
+            let result = parse_target(&path).unwrap();
+            assert!(matches!(result, PushTarget::NewIssuePath(_)));
+        }
+
+        #[rstest]
+        fn test_parse_path_with_existing_issue_frontmatter_errors() {
+            let temp_dir = TempDir::new().unwrap();
+            let issue_md = indoc::indoc! {r#"
+                ---
+                title: Test Issue
+                labels: []
+                assignees: []
+                milestone: null
+                readonly:
+                  number: 42
+                  state: OPEN
+                  author: testuser
+                  createdAt: "2024-01-01T00:00:00Z"
+                  updatedAt: "2024-01-02T00:00:00Z"
+                ---
+
+                Body
+            "#};
+            std::fs::write(temp_dir.path().join("issue.md"), issue_md).unwrap();
+            let path = temp_dir.path().to_string_lossy().to_string();
+
+            let err = parse_target(&path).unwrap_err();
+            let expected = format!(
+                indoc::indoc! {"
+                    Directory '{}' contains existing issue #42. Use the issue number instead:
+                      a gh issue-agent push 42"},
+                temp_dir.path().display()
+            );
+            assert_eq!(err.to_string(), expected);
+        }
+
+        #[rstest]
+        fn test_parse_path_with_new_issue_frontmatter() {
+            // issue.md with NewIssueFrontmatter (no readonly.number) should be NewIssuePath
+            let temp_dir = TempDir::new().unwrap();
+            let issue_md = indoc::indoc! {"
+                ---
+                title: New Issue
+                labels: [bug]
+                assignees: []
+                ---
+
+                Body
+            "};
+            std::fs::write(temp_dir.path().join("issue.md"), issue_md).unwrap();
             let path = temp_dir.path().to_string_lossy().to_string();
 
             let result = parse_target(&path).unwrap();
