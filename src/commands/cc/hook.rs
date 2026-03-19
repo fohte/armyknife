@@ -270,10 +270,12 @@ fn process_hook_event_impl(
         let _ = tmux::refresh_status();
     }
 
-    // Remove stale notifications on every event except SessionEnd.
-    // This ensures permission-request notifications are dismissed as soon as the
-    // user responds (the next event — PreToolUse, Stop, etc. — clears them).
-    if side_effects.notifications && !matches!(event, HookEvent::SessionEnd) {
+    // Remove stale notifications on every event that reaches here, except
+    // Notification events.  Notification(permission_prompt) fires right after
+    // PermissionRequest for the same permission ask; clearing the group there
+    // would erase the just-sent notification before the user sees it.
+    // SessionEnd never reaches here (early return above).
+    if side_effects.notifications && !matches!(event, HookEvent::Notification) {
         let _ = crate::infra::notification::remove_group(&input.session_id);
     }
 
