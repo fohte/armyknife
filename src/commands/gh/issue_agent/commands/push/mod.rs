@@ -290,14 +290,13 @@ mod tests {
             let path = temp_dir.path().to_string_lossy().to_string();
 
             let err = parse_target(&path).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                format!(
-                    "Directory '{}' contains existing issue #42. \
-                     Use the issue number instead:\n  a gh issue-agent push 42",
-                    temp_dir.path().display()
-                )
+            let expected = format!(
+                indoc::indoc! {"
+                    Directory '{}' contains existing issue #42. Use the issue number instead:
+                      a gh issue-agent push 42"},
+                temp_dir.path().display()
             );
+            assert_eq!(err.to_string(), expected);
         }
 
         #[rstest]
