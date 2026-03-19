@@ -1,6 +1,6 @@
-//! GitHub API client module using octocrab.
+//! GitHub API client module using reqwest.
 //!
-//! Provides OctocrabClient for GitHub operations,
+//! Provides GitHubClient for GitHub operations,
 //! with authentication via `gh auth token`.
 
 mod client;
@@ -10,7 +10,7 @@ pub(crate) mod mock;
 mod pr;
 mod repo;
 
-pub use client::OctocrabClient;
+pub use client::GitHubClient;
 pub use error::GitHubError;
 #[cfg(test)]
 pub use mock::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};

@@ -40,9 +40,9 @@ use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::client::OctocrabClient;
+use super::client::GitHubClient;
 
-/// Create a mock user JSON object for octocrab Author model.
+/// Create a mock user JSON object for GitHub API Author model.
 fn mock_user(login: &str) -> serde_json::Value {
     json!({
         "login": login,
@@ -66,7 +66,7 @@ fn mock_user(login: &str) -> serde_json::Value {
     })
 }
 
-/// Create a mock label JSON object for octocrab Label model.
+/// Create a mock label JSON object for GitHub API Label model.
 fn mock_label(name: &str) -> serde_json::Value {
     json!({
         "id": 1,
@@ -78,7 +78,7 @@ fn mock_label(name: &str) -> serde_json::Value {
     })
 }
 
-/// Create a mock comment JSON object for octocrab Comment model.
+/// Create a mock comment JSON object for GitHub API Comment model.
 fn mock_comment(
     owner: &str,
     repo: &str,
@@ -100,7 +100,7 @@ fn mock_comment(
     })
 }
 
-/// Create a mock issue JSON object for octocrab Issue model.
+/// Create a mock issue JSON object for GitHub API Issue model.
 fn mock_issue(
     owner: &str,
     repo: &str,
@@ -167,7 +167,7 @@ fn mock_issue_with_id(
     issue
 }
 
-/// Create a mock repository JSON object for octocrab Repository model.
+/// Create a mock repository JSON object for GitHub API Repository model.
 fn mock_repository(
     owner: &str,
     repo: &str,
@@ -192,7 +192,7 @@ fn mock_repository(
     })
 }
 
-/// Create a mock pull request JSON object for octocrab PullRequest model.
+/// Create a mock pull request JSON object for GitHub API PullRequest model.
 fn mock_pull_request(
     owner: &str,
     repo: &str,
@@ -398,9 +398,9 @@ impl GitHubMockServer {
         }
     }
 
-    /// Get an OctocrabClient configured to use this mock server.
-    pub fn client(&self) -> OctocrabClient {
-        OctocrabClient::with_base_url(&self.server.uri(), "test-token").unwrap()
+    /// Get a GitHubClient configured to use this mock server.
+    pub fn client(&self) -> GitHubClient {
+        GitHubClient::with_base_url(&self.server.uri(), "test-token").unwrap()
     }
 
     /// Create a repository context for building mocks.

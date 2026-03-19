@@ -9,7 +9,7 @@ use serde_json::json;
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
 use crate::commands::gh::pr_review::fetch_pr_data;
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 /// Trait for review-related GitHub API operations.
 pub trait ReviewClient: Send + Sync {
@@ -59,7 +59,7 @@ pub trait ReviewClient: Send + Sync {
     ) -> Result<()>;
 }
 
-/// Production implementation using octocrab.
+/// Production implementation using reqwest via GitHubClient.
 pub struct OctocrabReviewClient;
 
 // GraphQL query for PR comments and commits
@@ -144,7 +144,7 @@ impl OctocrabReviewClient {
         repo: &str,
         pr_number: u64,
     ) -> Result<PrInfoPullRequest> {
-        let client = OctocrabClient::get()?;
+        let client = GitHubClient::get()?;
         let variables = json!({
             "owner": owner,
             "repo": repo,
@@ -272,12 +272,10 @@ impl ReviewClient for OctocrabReviewClient {
         let review_command = reviewer
             .review_command()
             .ok_or(ReviewError::RequestNotSupported(reviewer))?;
-        let client = OctocrabClient::get()?;
+        let client = GitHubClient::get()?;
 
         client
-            .client
-            .issues(owner, repo)
-            .create_comment(pr_number, review_command)
+            .create_comment(owner, repo, pr_number, review_command)
             .await
             .context("Failed to post comment")?;
 

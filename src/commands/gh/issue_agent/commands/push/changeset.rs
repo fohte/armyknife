@@ -2,7 +2,7 @@
 
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 use crossterm::style::Color;
 
@@ -222,7 +222,7 @@ impl<'a> ChangeSet<'a> {
 
     pub(super) async fn apply(
         &self,
-        client: &OctocrabClient,
+        client: &GitHubClient,
         owner: &str,
         repo: &str,
         issue_number: u64,

@@ -9,7 +9,7 @@ use super::common::{
 };
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueFrontmatter};
 use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalChanges};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct PullArgs {
@@ -22,15 +22,12 @@ pub struct PullArgs {
 }
 
 pub async fn run(args: &PullArgs) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     run_with_client(args, client).await
 }
 
 /// Internal implementation that accepts a client for testability.
-pub(super) async fn run_with_client(
-    args: &PullArgs,
-    client: &OctocrabClient,
-) -> anyhow::Result<()> {
+pub(super) async fn run_with_client(args: &PullArgs, client: &GitHubClient) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;
     let issue_number = args.issue.issue_number;
 
@@ -50,7 +47,7 @@ pub(super) async fn run_with_client(
 /// Core implementation with custom storage. Returns the issue title on success.
 async fn run_with_client_and_storage(
     args: &PullArgs,
-    client: &OctocrabClient,
+    client: &GitHubClient,
     storage: &IssueStorage,
 ) -> anyhow::Result<String> {
     let repo = get_repo_from_arg_or_git(&args.issue.repo)?;

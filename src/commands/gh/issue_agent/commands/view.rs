@@ -4,7 +4,7 @@ use clap::Args;
 use super::common::{fetch_issue_with_sub_issues, get_repo_from_arg_or_git, parse_repo};
 use crate::commands::gh::issue_agent::format::{format_relative_time, indent_text};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, TimelineItem};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct ViewArgs {
@@ -13,7 +13,7 @@ pub struct ViewArgs {
 }
 
 pub async fn run(args: &ViewArgs) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     let output = run_with_client_and_output(args, client).await?;
     print!("{}", output);
     Ok(())
@@ -22,7 +22,7 @@ pub async fn run(args: &ViewArgs) -> anyhow::Result<()> {
 /// Internal implementation that returns the formatted output for testability.
 pub(super) async fn run_with_client_and_output(
     args: &ViewArgs,
-    client: &OctocrabClient,
+    client: &GitHubClient,
 ) -> anyhow::Result<String> {
     run_with_client_and_output_with(args, client, format_relative_time).await
 }
@@ -30,7 +30,7 @@ pub(super) async fn run_with_client_and_output(
 /// Internal implementation that accepts a custom time formatter for testability.
 async fn run_with_client_and_output_with<F>(
     args: &ViewArgs,
-    client: &OctocrabClient,
+    client: &GitHubClient,
     time_formatter: F,
 ) -> anyhow::Result<String>
 where

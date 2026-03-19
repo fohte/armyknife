@@ -144,12 +144,12 @@ pub async fn get_merge_status_for_repo(repo: &Repository, branch_name: &str) -> 
 
 async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> MergeStatus {
     use super::github::github_owner_and_repo;
-    use crate::infra::github::{OctocrabClient, PrClient};
+    use crate::infra::github::{GitHubClient, PrClient};
 
     // First, check PR status via GitHub API
     if let Some(repo) = repo
         && let Ok((owner, repo_name)) = github_owner_and_repo(repo)
-        && let Ok(client) = OctocrabClient::get()
+        && let Ok(client) = GitHubClient::get()
         && let Ok(Some(pr_info)) = client
             .get_pr_for_branch(&owner, &repo_name, branch_name)
             .await

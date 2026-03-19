@@ -1,4 +1,4 @@
-//! GitHub API client implementation using octocrab.
+//! GitHub API client implementation using reqwest.
 
 #[cfg(not(test))]
 use std::process::Command;
@@ -8,7 +8,10 @@ use anyhow::Context;
 use indoc::indoc;
 use serde::Deserialize;
 
-use super::error::{GitHubError, Result};
+use super::error::{GitHubError, Result, api_error_from_response};
+
+const GITHUB_API_BASE: &str = "https://api.github.com";
+const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
 /// Internal wrapper for GitHub GraphQL API responses.
 ///
@@ -25,49 +28,163 @@ struct GraphQLError {
     message: String,
 }
 
-/// Production implementation using octocrab.
-pub struct OctocrabClient {
-    pub(crate) client: octocrab::Octocrab,
+/// GitHub API client using reqwest.
+pub struct GitHubClient {
+    pub(crate) http: reqwest::Client,
+    pub(crate) base_url: String,
+    pub(crate) graphql_url: String,
 }
 
-/// Global singleton instance of OctocrabClient, initialized lazily.
+/// Global singleton instance of GitHubClient, initialized lazily.
 ///
 /// Stores the `Result` of initialization. Using a single `OnceLock` for the result
 /// ensures initialization logic runs only once, even across multiple threads.
-static OCTOCRAB_CLIENT: OnceLock<std::result::Result<OctocrabClient, String>> = OnceLock::new();
+static GITHUB_CLIENT: OnceLock<std::result::Result<GitHubClient, String>> = OnceLock::new();
 
-impl OctocrabClient {
-    /// Create a new OctocrabClient instance.
-    /// Prefer using `OctocrabClient::get()` to reuse the singleton instance.
+impl GitHubClient {
+    /// Create a new GitHubClient instance.
+    /// Prefer using `GitHubClient::get()` to reuse the singleton instance.
     fn new() -> Result<Self> {
         let token = get_gh_token()?;
-        let client = octocrab::Octocrab::builder()
-            .personal_token(token)
+        let http = reqwest::Client::builder()
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                        .context("Invalid token")?,
+                );
+                headers.insert(
+                    reqwest::header::ACCEPT,
+                    reqwest::header::HeaderValue::from_static("application/vnd.github+json"),
+                );
+                headers.insert(
+                    reqwest::header::USER_AGENT,
+                    reqwest::header::HeaderValue::from_static("armyknife"),
+                );
+                headers
+            })
             .build()
-            .context("Failed to build octocrab client")?;
-        Ok(Self { client })
+            .context("Failed to build HTTP client")?;
+        Ok(Self {
+            http,
+            base_url: GITHUB_API_BASE.to_string(),
+            graphql_url: GITHUB_GRAPHQL_URL.to_string(),
+        })
     }
 
-    /// Get the singleton instance of OctocrabClient.
+    /// Get the singleton instance of GitHubClient.
     /// Initializes the client on first call (runs `gh auth token` once).
     pub fn get() -> Result<&'static Self> {
         // get_or_init ensures the closure is only run once across all threads
-        OCTOCRAB_CLIENT
+        GITHUB_CLIENT
             .get_or_init(|| Self::new().map_err(|e| e.to_string()))
             .as_ref()
             .map_err(|e| GitHubError::TokenError(e.clone()).into())
     }
 
-    /// Create a new OctocrabClient with a custom base URL (for testing with wiremock).
+    /// Create a new GitHubClient with a custom base URL (for testing with wiremock).
     #[cfg(test)]
     pub fn with_base_url(base_url: &str, token: &str) -> Result<Self> {
-        let client = octocrab::Octocrab::builder()
-            .personal_token(token.to_string())
-            .base_uri(base_url)
-            .context("Invalid base URL")?
+        let http = reqwest::Client::builder()
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                        .context("Invalid token")?,
+                );
+                headers.insert(
+                    reqwest::header::ACCEPT,
+                    reqwest::header::HeaderValue::from_static("application/vnd.github+json"),
+                );
+                headers.insert(
+                    reqwest::header::USER_AGENT,
+                    reqwest::header::HeaderValue::from_static("armyknife"),
+                );
+                headers
+            })
             .build()
-            .context("Failed to build octocrab client")?;
-        Ok(Self { client })
+            .context("Failed to build HTTP client")?;
+        let graphql_url = format!("{base_url}/graphql");
+        Ok(Self {
+            http,
+            base_url: base_url.to_string(),
+            graphql_url,
+        })
+    }
+
+    /// Build a full URL for a REST API route.
+    pub(crate) fn url(&self, route: &str) -> String {
+        format!("{}{route}", self.base_url)
+    }
+
+    /// Send a GET request and deserialize the JSON response.
+    pub(crate) async fn rest_get<T: serde::de::DeserializeOwned>(&self, route: &str) -> Result<T> {
+        let response = self.http.get(self.url(route)).send().await?;
+        check_response(response).await
+    }
+
+    /// Send a GET request with query parameters and deserialize the JSON response.
+    pub(crate) async fn rest_get_with_query<T: serde::de::DeserializeOwned>(
+        &self,
+        route: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let response = self.http.get(self.url(route)).query(query).send().await?;
+        check_response(response).await
+    }
+
+    /// Send a POST request with a JSON body and deserialize the response.
+    pub(crate) async fn rest_post<T: serde::de::DeserializeOwned>(
+        &self,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> Result<T> {
+        let response = self.http.post(self.url(route)).json(body).send().await?;
+        check_response(response).await
+    }
+
+    /// Send a PATCH request with a JSON body and deserialize the response.
+    pub(crate) async fn rest_patch<T: serde::de::DeserializeOwned>(
+        &self,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> Result<T> {
+        let response = self.http.patch(self.url(route)).json(body).send().await?;
+        check_response(response).await
+    }
+
+    /// Send a DELETE request. Expects 204 No Content or similar success status.
+    pub(crate) async fn rest_delete(&self, route: &str) -> Result<()> {
+        let response = self.http.delete(self.url(route)).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
+        Ok(())
+    }
+
+    /// Send a DELETE request with a JSON body. Expects success status.
+    pub(crate) async fn rest_delete_with_body(
+        &self,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> Result<()> {
+        let response = self.http.delete(self.url(route)).json(body).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
+        Ok(())
     }
 
     /// Execute a GraphQL query and deserialize the response.
@@ -84,7 +201,8 @@ impl OctocrabClient {
             "query": query,
             "variables": variables,
         });
-        let response: GraphQLResponse<T> = self.client.graphql(&body).await?;
+        let response = self.http.post(&self.graphql_url).json(&body).send().await?;
+        let response: GraphQLResponse<T> = check_response(response).await?;
 
         if let Some(errors) = response.errors {
             let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -266,11 +384,9 @@ impl OctocrabClient {
         issue_number: u64,
         body: &str,
     ) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .update(issue_number)
-            .body(body)
-            .send()
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let _: serde_json::Value = self
+            .rest_patch(&route, &serde_json::json!({ "body": body }))
             .await?;
         Ok(())
     }
@@ -283,11 +399,9 @@ impl OctocrabClient {
         issue_number: u64,
         title: &str,
     ) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .update(issue_number)
-            .title(title)
-            .send()
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let _: serde_json::Value = self
+            .rest_patch(&route, &serde_json::json!({ "title": title }))
             .await?;
         Ok(())
     }
@@ -300,9 +414,9 @@ impl OctocrabClient {
         issue_number: u64,
         labels: &[String],
     ) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .add_labels(issue_number, labels)
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/labels");
+        let _: serde_json::Value = self
+            .rest_post(&route, &serde_json::json!({ "labels": labels }))
             .await?;
         Ok(())
     }
@@ -315,10 +429,19 @@ impl OctocrabClient {
         issue_number: u64,
         label: &str,
     ) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .remove_label(issue_number, label)
-            .await?;
+        let encoded_label =
+            percent_encoding::utf8_percent_encode(label, percent_encoding::NON_ALPHANUMERIC);
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/labels/{encoded_label}");
+        // GitHub returns 200 with remaining labels, not 204
+        let response = self.http.delete(self.url(&route)).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
         Ok(())
     }
 
@@ -332,19 +455,53 @@ impl OctocrabClient {
         labels: &[String],
         assignees: &[String],
     ) -> Result<crate::commands::gh::issue_agent::models::Issue> {
-        let issues = self.client.issues(owner, repo);
-        let mut builder = issues.create(title).body(body);
+        let route = format!("/repos/{owner}/{repo}/issues");
+        let mut payload = serde_json::json!({
+            "title": title,
+            "body": body,
+        });
 
         if !labels.is_empty() {
-            builder = builder.labels(labels.to_vec());
+            payload["labels"] = serde_json::json!(labels);
         }
 
         if !assignees.is_empty() {
-            builder = builder.assignees(assignees.to_vec());
+            payload["assignees"] = serde_json::json!(assignees);
         }
 
-        let issue = builder.send().await?;
-        Ok(issue.into())
+        let response: CreateIssueResponse = self.rest_post(&route, &payload).await?;
+
+        Ok(crate::commands::gh::issue_agent::models::Issue {
+            number: response.number,
+            title: response.title,
+            body: response.body,
+            state: match response.state.as_str() {
+                "open" => "OPEN".to_string(),
+                "closed" => "CLOSED".to_string(),
+                other => other.to_uppercase(),
+            },
+            labels: response
+                .labels
+                .into_iter()
+                .map(|l| crate::commands::gh::issue_agent::models::Label { name: l.name })
+                .collect(),
+            assignees: response
+                .assignees
+                .into_iter()
+                .map(|a| crate::commands::gh::issue_agent::models::Author { login: a.login })
+                .collect(),
+            milestone: response
+                .milestone
+                .map(|m| crate::commands::gh::issue_agent::models::Milestone { title: m.title }),
+            author: Some(crate::commands::gh::issue_agent::models::Author {
+                login: response.user.login,
+            }),
+            created_at: response.created_at,
+            updated_at: response.updated_at,
+            last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
+        })
     }
 
     // ============ Comment Operations ============
@@ -457,11 +614,9 @@ impl OctocrabClient {
         comment_id: u64,
         body: &str,
     ) -> Result<()> {
-        // Use REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
         let route = format!("/repos/{owner}/{repo}/issues/comments/{comment_id}");
-        let _response: serde_json::Value = self
-            .client
-            .patch(route, Some(&serde_json::json!({ "body": body })))
+        let _: serde_json::Value = self
+            .rest_patch(&route, &serde_json::json!({ "body": body }))
             .await?;
         Ok(())
     }
@@ -474,20 +629,18 @@ impl OctocrabClient {
         issue_number: u64,
         body: &str,
     ) -> Result<crate::commands::gh::issue_agent::models::Comment> {
-        let comment = self
-            .client
-            .issues(owner, repo)
-            .create_comment(issue_number, body)
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/comments");
+        let comment: CreateCommentResponse = self
+            .rest_post(&route, &serde_json::json!({ "body": body }))
             .await?;
 
         Ok(crate::commands::gh::issue_agent::models::Comment {
             id: comment.node_id,
-            database_id: comment.id.0 as i64,
+            database_id: comment.id as i64,
             author: Some(crate::commands::gh::issue_agent::models::Author {
                 login: comment.user.login,
             }),
             created_at: comment.created_at,
-            // For newly created comments, updated_at equals created_at if not provided
             updated_at: comment.updated_at.unwrap_or(comment.created_at),
             body: comment.body.unwrap_or_default(),
         })
@@ -495,23 +648,17 @@ impl OctocrabClient {
 
     /// Delete a comment from an issue.
     pub async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
-        // Use REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
-        // GitHub returns 204 No Content, so we use _delete to get raw response
-        // and just check for success status without parsing body
         let route = format!("/repos/{owner}/{repo}/issues/comments/{comment_id}");
-        let uri = http::Uri::builder()
-            .path_and_query(route)
-            .build()
-            .context("Failed to build URI")?;
-        let response = self.client._delete(uri, None::<&()>).await?;
-        // Check for error status and drop the response body
-        octocrab::map_github_error(response).await.map(drop)?;
-        Ok(())
+        self.rest_delete(&route).await
     }
 
     /// Get the current authenticated user.
     pub async fn get_current_user(&self) -> Result<String> {
-        let user = self.client.current().user().await?;
+        #[derive(Deserialize)]
+        struct User {
+            login: String,
+        }
+        let user: User = self.rest_get("/user").await?;
         Ok(user.login)
     }
 
@@ -532,7 +679,7 @@ impl OctocrabClient {
         }
 
         let route = format!("/repos/{owner}/{repo}/issues/{issue_number}/sub_issues?per_page=100");
-        let response: Vec<SubIssueResponse> = self.client.get(route, None::<&()>).await?;
+        let response: Vec<SubIssueResponse> = self.rest_get(&route).await?;
 
         Ok(response
             .into_iter()
@@ -558,12 +705,8 @@ impl OctocrabClient {
         sub_issue_id: u64,
     ) -> Result<()> {
         let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
-        let _response: serde_json::Value = self
-            .client
-            .post(
-                route,
-                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
-            )
+        let _: serde_json::Value = self
+            .rest_post(&route, &serde_json::json!({ "sub_issue_id": sub_issue_id }))
             .await?;
         Ok(())
     }
@@ -579,25 +722,14 @@ impl OctocrabClient {
     ) -> Result<()> {
         // Note: endpoint uses singular "sub_issue" for DELETE
         let route = format!("/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issue");
-        let uri = http::Uri::builder()
-            .path_and_query(route)
-            .build()
-            .context("Failed to build URI")?;
-        let response = self
-            .client
-            ._delete(
-                uri,
-                Some(&serde_json::json!({ "sub_issue_id": sub_issue_id })),
-            )
-            .await?;
-        octocrab::map_github_error(response).await.map(drop)?;
-        Ok(())
+        self.rest_delete_with_body(&route, &serde_json::json!({ "sub_issue_id": sub_issue_id }))
+            .await
     }
 
     /// Get the internal ID for an issue (needed for Sub-issues API).
     pub async fn get_issue_id(&self, owner: &str, repo: &str, issue_number: u64) -> Result<u64> {
         let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
-        let response: serde_json::Value = self.client.get(route, None::<&()>).await?;
+        let response: serde_json::Value = self.rest_get(&route).await?;
         let id = response["id"]
             .as_u64()
             .ok_or_else(|| anyhow::anyhow!("Missing 'id' field in issue response"))?;
@@ -880,14 +1012,13 @@ impl OctocrabClient {
         body: &str,
     ) -> Result<()> {
         let route = format!("/repos/{owner}/{repo}/pulls/{pr_number}/comments");
-        let _response: serde_json::Value = self
-            .client
-            .post(
-                route,
-                Some(&serde_json::json!({
+        let _: serde_json::Value = self
+            .rest_post(
+                &route,
+                &serde_json::json!({
                     "body": body,
                     "in_reply_to": in_reply_to,
-                })),
+                }),
             )
             .await?;
         Ok(())
@@ -915,6 +1046,60 @@ impl OctocrabClient {
     }
 }
 
+/// Response types for REST API deserialization.
+#[derive(Debug, Deserialize)]
+struct CreateIssueResponse {
+    number: i64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    labels: Vec<CreateIssueLabelResponse>,
+    assignees: Vec<CreateIssueUserResponse>,
+    milestone: Option<CreateIssueMilestoneResponse>,
+    user: CreateIssueUserResponse,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateIssueLabelResponse {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateIssueUserResponse {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateIssueMilestoneResponse {
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCommentResponse {
+    id: u64,
+    node_id: String,
+    body: Option<String>,
+    user: CreateIssueUserResponse,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Check HTTP response status and deserialize JSON body, or return an error.
+async fn check_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    let status = response.status();
+    if !status.is_success() {
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+        return Err(api_error_from_response(status.as_u16(), &body).into());
+    }
+    let body = response.json().await?;
+    Ok(body)
+}
+
 /// Parse owner and repo from a GitHub repository URL.
 /// Input: "https://api.github.com/repos/{owner}/{repo}"
 /// Returns: (owner, repo)
@@ -933,11 +1118,11 @@ fn parse_repository_url(url: &str) -> (String, String) {
 ///
 /// # Errors
 /// Returns an error when called during tests to prevent accidental real API calls.
-/// Use `OctocrabClient::with_base_url` in tests instead.
+/// Use `GitHubClient::with_base_url` in tests instead.
 fn get_gh_token() -> Result<String> {
     #[cfg(test)]
     return Err(GitHubError::TokenError(
-        "get_gh_token should not be called in tests. Use OctocrabClient::with_base_url instead."
+        "get_gh_token should not be called in tests. Use GitHubClient::with_base_url instead."
             .to_string(),
     )
     .into());

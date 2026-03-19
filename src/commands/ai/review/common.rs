@@ -4,7 +4,7 @@ use super::client::ReviewClient;
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
 use crate::infra::git;
-use crate::infra::github::{OctocrabClient, PrClient, PrState};
+use crate::infra::github::{GitHubClient, PrClient, PrState};
 use chrono::{DateTime, Utc};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -38,7 +38,7 @@ pub async fn get_pr_number(owner: &str, repo: &str, pr_arg: Option<u64>) -> Resu
     let branch = git::current_branch(&git_repo)?;
 
     // Find PR for this branch
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     let pr_info = client.get_pr_for_branch(owner, repo, &branch).await?;
 
     match pr_info {

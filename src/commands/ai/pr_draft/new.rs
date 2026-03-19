@@ -5,7 +5,7 @@ use super::common::{
     DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
     repo_allows_japanese,
 };
-use crate::infra::github::{OctocrabClient, RepoClient};
+use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::diff::eprint_diff;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub struct NewArgs {
 }
 
 pub async fn run(args: &NewArgs) -> anyhow::Result<()> {
-    let client = OctocrabClient::get()?;
+    let client = GitHubClient::get()?;
     run_impl(args, client).await
 }
 

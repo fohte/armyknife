@@ -6,7 +6,7 @@ use clap::Args;
 
 use super::common::IssueContext;
 use super::push::changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct DiffArgs {
@@ -23,7 +23,7 @@ pub async fn run(args: &DiffArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 pub(super) async fn run_with_client_and_storage(
     args: &DiffArgs,
-    client: &OctocrabClient,
+    client: &GitHubClient,
     storage: &crate::commands::gh::issue_agent::storage::IssueStorage,
     current_user: &str,
 ) -> anyhow::Result<()> {
@@ -42,7 +42,7 @@ pub(super) async fn run_with_client_and_storage(
     run_with_context(&ctx, client).await
 }
 
-async fn run_with_context(ctx: &IssueContext, client: &OctocrabClient) -> anyhow::Result<()> {
+async fn run_with_context(ctx: &IssueContext, client: &GitHubClient) -> anyhow::Result<()> {
     let remote = ctx.fetch_remote(client).await?;
     let local = ctx.load_local()?;
 

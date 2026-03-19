@@ -1,7 +1,7 @@
 use crate::commands::gh::pr_review::error::PrReviewError;
 use crate::commands::gh::pr_review::markdown::ParsedThreadsFile;
 use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
-use crate::infra::github::OctocrabClient;
+use crate::infra::github::GitHubClient;
 
 /// An action to apply to GitHub during push.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +143,7 @@ impl ReplyChangeSet {
     /// Actions are executed in order: replies first, then resolves.
     pub async fn apply(
         &self,
-        client: &OctocrabClient,
+        client: &GitHubClient,
         owner: &str,
         repo: &str,
         pr_number: u64,
