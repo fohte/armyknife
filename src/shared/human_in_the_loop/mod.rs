@@ -231,22 +231,30 @@ fn open_fifo_reader(fifo_path: &Path) -> Result<std::fs::File> {
 /// Block until data is available on the FIFO reader, then consume it.
 ///
 /// Clears `O_NONBLOCK` before reading so the read blocks until the
-/// writer signals completion.
+/// writer signals completion. Retries on `EINTR` (signal interruption).
 #[cfg(unix)]
 fn wait_for_fifo_signal(file: std::fs::File) -> Result<()> {
-    use std::io::Read;
+    use std::io::{self, Read};
     use std::os::unix::io::AsRawFd;
 
     // Clear O_NONBLOCK so read blocks until data arrives
     let fd = file.as_raw_fd();
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        if flags != -1 {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
     }
 
     let mut file = file;
     let mut buf = [0u8; 1];
-    let _ = file.read(&mut buf);
+    loop {
+        match file.read(&mut buf) {
+            Ok(_) => break,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
     Ok(())
 }
 
