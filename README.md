@@ -230,16 +230,17 @@ a gh pr-review reply push <pr-number> [options]
 
 ##### `a gh pr-review reply review`
 
-Pull threads, open in editor for review, and auto-push on approval. Sets `submit: true` in the frontmatter to approve.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving triggers an automatic push.
+
+Requires `reply pull` to have been run first.
 
 ```sh
 a gh pr-review reply review <pr-number> [options]
 ```
 
-| Option               | Description                    |
-| -------------------- | ------------------------------ |
-| `-R, --repo <REPO>`  | Target repository (owner/repo) |
-| `--include-resolved` | Include resolved threads       |
+| Option              | Description                    |
+| ------------------- | ------------------------------ |
+| `-R, --repo <REPO>` | Target repository (owner/repo) |
 
 ### `a cc`
 

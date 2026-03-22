@@ -83,7 +83,7 @@ impl ReplyCommands {
         match self {
             Self::Pull(args) => reply::run_pull(args).await,
             Self::Push(args) => reply::run_push(args).await,
-            Self::Review(args) => review::run_review(args).await,
+            Self::Review(args) => review::run_review(args),
             Self::ReviewComplete(args) => review::run_review_complete(args).await,
         }
     }

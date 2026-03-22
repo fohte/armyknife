@@ -20,10 +20,6 @@ pub struct ReviewArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
-
-    /// Include resolved threads
-    #[arg(long = "include-resolved")]
-    pub include_resolved: bool,
 }
 
 /// Internal command to complete the review process after the editor exits.
@@ -90,20 +86,15 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     // Push logic is handled after complete_review returns in run_review_complete.
 }
 
-pub async fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
+pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
-
-    // Pull first to ensure we have the latest data
-    let pull_args = reply::ReplyPullArgs {
-        pr_number: args.pr_number,
-        repo: args.repo.clone(),
-        include_resolved: args.include_resolved,
-        force: false,
-    };
-    reply::run_pull(&pull_args).await?;
 
     let storage = ThreadStorage::new(&owner, &repo, args.pr_number);
     let threads_path = storage.threads_path();
+
+    if !storage.exists() {
+        return Err(super::error::PrReviewError::NoPulledData.into());
+    }
 
     let config = load_config()?;
     let window_title = format!("PR Review: {owner}/{repo} #{}", args.pr_number);
