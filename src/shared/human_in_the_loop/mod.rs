@@ -86,8 +86,10 @@ where
     // Create lock file with RAII guard
     let mut lock_guard = LockGuard::acquire(document_path)?;
 
-    // Create a FIFO for the review-complete process to signal completion
+    // Create a FIFO for the review-complete process to signal completion.
+    // The FifoCleanupGuard ensures the FIFO is removed on early return.
     let fifo_path = create_done_fifo(document_path)?;
+    let mut fifo_cleanup = FifoCleanupGuard::new(&fifo_path);
 
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
@@ -110,7 +112,6 @@ where
     let status = launch_terminal(&editor_config.terminal, &options, &exe_path, &review_args)?;
 
     if !status.success() {
-        let _ = std::fs::remove_file(&fifo_path);
         return Err(HumanInTheLoopError::CommandFailed(format!(
             "Terminal exited with status: {status}"
         )));
@@ -124,7 +125,8 @@ where
     // This blocks with no CPU usage until the other process writes to the FIFO.
     wait_for_fifo(&fifo_path)?;
 
-    // Clean up the FIFO
+    // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
+    fifo_cleanup.disarm();
     let _ = std::fs::remove_file(&fifo_path);
 
     // Review complete - read the final document state
@@ -213,10 +215,44 @@ fn wait_for_fifo(fifo_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// RAII guard that removes the FIFO file on drop.
+///
+/// Used in `start_review` to ensure the FIFO is cleaned up on early-return
+/// error paths (e.g., if `current_exe()` or `launch_terminal()` fails).
+struct FifoCleanupGuard {
+    fifo_path: PathBuf,
+    disarmed: bool,
+}
+
+impl FifoCleanupGuard {
+    fn new(fifo_path: &Path) -> Self {
+        Self {
+            fifo_path: fifo_path.to_path_buf(),
+            disarmed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for FifoCleanupGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            let _ = std::fs::remove_file(&self.fifo_path);
+        }
+    }
+}
+
 /// RAII guard that writes to a FIFO on drop to signal the waiting process.
 ///
 /// Ensures the FIFO is signaled even if the review-complete process panics
 /// or encounters an error, preventing the parent process from hanging.
+///
+/// Uses `O_NONBLOCK` when opening the FIFO so that if the parent reader
+/// process has already exited (e.g., Ctrl+C), the write silently fails
+/// instead of blocking forever.
 struct FifoSignalGuard {
     fifo_path: PathBuf,
 }
@@ -231,12 +267,27 @@ impl FifoSignalGuard {
 
 impl Drop for FifoSignalGuard {
     fn drop(&mut self) {
+        signal_fifo(&self.fifo_path);
+    }
+}
+
+/// Write to a FIFO in non-blocking mode.
+///
+/// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
+/// if no reader has the FIFO open, instead of blocking forever.
+fn signal_fifo(fifo_path: &Path) {
+    #[cfg(unix)]
+    {
         use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let file = std::fs::OpenOptions::new()
             .write(true)
-            .open(&self.fifo_path)
-        {
-            let _ = file.write_all(b"0");
+            .custom_flags(libc::O_NONBLOCK)
+            .open(fifo_path);
+
+        if let Ok(mut f) = file {
+            let _ = f.write_all(b"0");
         }
     }
 }
