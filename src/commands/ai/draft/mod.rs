@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    DocumentSchema, ReviewHandler, complete_review, start_review,
+    DocumentSchema, FifoSignalGuard, ReviewHandler, complete_review, start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -118,6 +118,9 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
 }
 
 fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
+    // Create FIFO guard first to ensure signaling even if load_config fails
+    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+
     let config = load_config()?;
 
     complete_review::<EmptySchema, _>(
@@ -126,7 +129,6 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
         args.title.as_deref(),
         &DraftHandler,
         &config.editor,
-        args.done_fifo.as_deref(),
     )?;
 
     Ok(())

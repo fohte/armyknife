@@ -147,9 +147,11 @@ where
 /// 1. Sets up cleanup guards for lock file and tmux restoration
 /// 2. Launches the configured editor for the user to edit the document
 /// 3. After the editor exits, parses the document and calls the handler's callback
-/// 4. If `done_fifo` is provided, writes to it to signal the waiting `start_review` process
 ///
 /// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
+///
+/// The caller is responsible for creating a `FifoSignalGuard` before calling this
+/// function to ensure the FIFO is signaled even if earlier initialization fails.
 ///
 /// This is typically called by the review-complete subcommand that the terminal runs.
 pub fn complete_review<S, H>(
@@ -158,7 +160,6 @@ pub fn complete_review<S, H>(
     window_title: Option<&str>,
     handler: &H,
     editor_config: &EditorConfig,
-    done_fifo: Option<&Path>,
 ) -> Result<()>
 where
     S: DocumentSchema,
@@ -166,7 +167,6 @@ where
 {
     // Ensure cleanup happens even on panic
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
-    let _fifo_guard = done_fifo.map(FifoSignalGuard::new);
 
     // Launch editor
     let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
@@ -179,7 +179,6 @@ where
     // After editor exits, parse the document and call the handler
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
     handler.on_review_complete(&document)
-    // FifoSignalGuard writes to the FIFO on drop (even on error/panic)
 }
 
 /// Create a FIFO (named pipe) for signaling review completion.
@@ -296,12 +295,15 @@ impl Drop for FifoCleanupGuard {
 /// Uses `O_NONBLOCK` when opening the FIFO so that if the parent reader
 /// process has already exited (e.g., Ctrl+C), the write silently fails
 /// instead of blocking forever.
-struct FifoSignalGuard {
+///
+/// Should be created as early as possible in the review-complete process
+/// to ensure signaling even if later initialization (e.g., config loading) fails.
+pub struct FifoSignalGuard {
     fifo_path: PathBuf,
 }
 
 impl FifoSignalGuard {
-    fn new(fifo_path: &Path) -> Self {
+    pub fn new(fifo_path: &Path) -> Self {
         Self {
             fifo_path: fifo_path.to_path_buf(),
         }
