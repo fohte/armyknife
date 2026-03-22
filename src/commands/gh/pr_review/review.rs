@@ -2,14 +2,14 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use clap::Args;
+use indoc::formatdoc;
 
 use super::markdown::serializer::ThreadsFrontmatter;
-use super::reply;
 use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    Document, DocumentSchema, ReviewHandler, complete_review, start_review,
+    Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -47,9 +47,8 @@ pub struct ReviewCompleteArgs {
 
 /// Handler for PR review reply review sessions.
 struct PrReviewReplyHandler {
-    owner: String,
-    repo: String,
     pr_number: u64,
+    repo_slug: String,
 }
 
 impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
@@ -68,7 +67,7 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
             "--pr-number".into(),
             self.pr_number.to_string().into(),
             "--repo".into(),
-            format!("{}/{}", self.owner, self.repo).into(),
+            self.repo_slug.clone().into(),
         ];
 
         if let Some(target) = tmux_target {
@@ -82,8 +81,27 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
         args
     }
 
-    // on_review_complete uses the default no-op implementation.
-    // Push logic is handled after complete_review returns in run_review_complete.
+    fn on_review_complete(&self, document: &Document<ThreadsFrontmatter>) -> HilResult<()> {
+        if document.frontmatter.is_approved() {
+            document.save_approval()?;
+            println!(
+                "{}",
+                formatdoc! {"
+                    Replies approved. Run the following command to push:
+
+                        a gh pr-review reply push {pr_number} -R {repo}
+                ",
+                    pr_number = self.pr_number,
+                    repo = self.repo_slug,
+                }
+            );
+        } else {
+            document.remove_approval()?;
+            println!("Not approved. Set 'submit: true' and save to approve.");
+        }
+
+        Ok(())
+    }
 }
 
 pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
@@ -100,9 +118,8 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
     let window_title = format!("PR Review: {owner}/{repo} #{}", args.pr_number);
 
     let handler = PrReviewReplyHandler {
-        owner,
-        repo,
         pr_number: args.pr_number,
+        repo_slug: format!("{owner}/{repo}"),
     };
 
     start_review::<ThreadsFrontmatter, _>(&threads_path, &window_title, &handler, &config.editor)?;
@@ -110,18 +127,12 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
+pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     let config = load_config()?;
 
-    let (owner, repo) = args
-        .repo
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("Invalid repo format: {}", args.repo))?;
-
     let handler = PrReviewReplyHandler {
-        owner: owner.to_string(),
-        repo: repo.to_string(),
         pr_number: args.pr_number,
+        repo_slug: args.repo.clone(),
     };
 
     complete_review::<ThreadsFrontmatter, _>(
@@ -132,40 +143,6 @@ pub async fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()
         &config.editor,
     )?;
 
-    // After editor closes, check if user approved and push
-    let document = Document::<ThreadsFrontmatter>::from_path(args.filepath.clone())?;
-
-    if document.frontmatter.is_approved() {
-        // Reset submit flag to prevent repeated auto-push on next review
-        reset_submit_flag(&args.filepath)?;
-
-        println!("Approved. Pushing replies to GitHub...");
-
-        let push_args = reply::ReplyPushArgs {
-            pr_number: args.pr_number,
-            repo: Some(args.repo.clone()),
-            dry_run: false,
-            force: false,
-        };
-
-        if let Err(e) = reply::run_push(&push_args).await {
-            eprintln!("Push failed: {e}");
-        }
-    } else {
-        println!("Not approved. Set 'submit: true' in the frontmatter and save to approve.");
-    }
-
-    Ok(())
-}
-
-/// Reset `submit: true` to `submit: false` in the threads.md file.
-///
-/// This prevents the next `review` session from auto-pushing again
-/// when the user opens and closes the editor without changes.
-fn reset_submit_flag(filepath: &std::path::Path) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(filepath)?;
-    let updated = content.replacen("submit: true", "submit: false", 1);
-    std::fs::write(filepath, updated)?;
     Ok(())
 }
 
@@ -177,9 +154,8 @@ mod tests {
     #[test]
     fn build_review_args_should_include_pr_and_repo() {
         let handler = PrReviewReplyHandler {
-            owner: "fohte".to_string(),
-            repo: "armyknife".to_string(),
             pr_number: 42,
+            repo_slug: "fohte/armyknife".to_string(),
         };
 
         let path = std::path::PathBuf::from("/tmp/threads.md");
@@ -204,9 +180,8 @@ mod tests {
     #[test]
     fn build_review_args_without_tmux() {
         let handler = PrReviewReplyHandler {
-            owner: "fohte".to_string(),
-            repo: "armyknife".to_string(),
             pr_number: 10,
+            repo_slug: "fohte/armyknife".to_string(),
         };
 
         let path = std::path::PathBuf::from("/tmp/threads.md");
@@ -215,57 +190,5 @@ mod tests {
         assert_eq!(args.len(), 11);
         assert_eq!(args[9], "--window-title");
         assert_eq!(args[10], "Title");
-    }
-
-    #[rstest::rstest]
-    #[case::changes_true_to_false(
-        indoc::indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            submit: true
-            ---
-            body
-        "#},
-        indoc::indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            submit: false
-            ---
-            body
-        "#},
-    )]
-    #[case::preserves_already_false(
-        indoc::indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            submit: false
-            ---
-            body
-        "#},
-        indoc::indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            submit: false
-            ---
-            body
-        "#},
-    )]
-    fn reset_submit_flag_handles_submit_value(#[case] input: &str, #[case] expected: &str) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("threads.md");
-        std::fs::write(&path, input).unwrap();
-
-        reset_submit_flag(&path).unwrap();
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content, expected);
     }
 }
