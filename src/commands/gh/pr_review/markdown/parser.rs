@@ -497,6 +497,7 @@ mod tests {
             pr: 42,
             repo: "fohte/armyknife".to_string(),
             pulled_at: "2024-01-15T10:00:00Z".to_string(),
+            submit: false,
         };
 
         let serialized = MarkdownSerializer::serialize(&pr_data, &frontmatter);

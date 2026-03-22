@@ -5,6 +5,7 @@ mod format;
 mod markdown;
 mod models;
 mod reply;
+mod review;
 mod storage;
 
 use clap::{Args, Subcommand};
@@ -33,6 +34,13 @@ pub enum ReplyCommands {
 
     /// Push local reply drafts and resolve actions to GitHub
     Push(reply::ReplyPushArgs),
+
+    /// Pull threads and open in editor for review (auto-pushes on approve)
+    Review(review::ReviewArgs),
+
+    /// Internal: Complete the review process after the editor exits
+    #[command(hide = true)]
+    ReviewComplete(review::ReviewCompleteArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -75,6 +83,8 @@ impl ReplyCommands {
         match self {
             Self::Pull(args) => reply::run_pull(args).await,
             Self::Push(args) => reply::run_push(args).await,
+            Self::Review(args) => review::run_review(args).await,
+            Self::ReviewComplete(args) => review::run_review_complete(args).await,
         }
     }
 }

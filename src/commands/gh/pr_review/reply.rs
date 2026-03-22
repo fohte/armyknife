@@ -83,6 +83,7 @@ pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
         pr: args.pr_number,
         repo: format!("{owner}/{repo}"),
         pulled_at: now,
+        submit: false,
     };
 
     let content =
@@ -152,6 +153,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         pr: args.pr_number,
         repo: format!("{owner}/{repo}"),
         pulled_at: now,
+        submit: false,
     };
 
     let updated_content = MarkdownSerializer::serialize(&updated_remote, &frontmatter);

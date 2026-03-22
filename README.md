@@ -228,6 +228,19 @@ a gh pr-review reply push <pr-number> [options]
 | `--dry-run`         | Preview changes without applying |
 | `--force`           | Force push even with conflicts   |
 
+##### `a gh pr-review reply review`
+
+Pull threads, open in editor for review, and auto-push on approval. Sets `submit: true` in the frontmatter to approve.
+
+```sh
+a gh pr-review reply review <pr-number> [options]
+```
+
+| Option               | Description                    |
+| -------------------- | ------------------------------ |
+| `-R, --repo <REPO>`  | Target repository (owner/repo) |
+| `--include-resolved` | Include resolved threads       |
+
 ### `a cc`
 
 Claude Code session monitoring with tmux integration.
