@@ -112,13 +112,14 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         &config.editor,
     )?;
 
-    // Exit with code 1 if the user didn't change any steps (ready-for-translation
-    // or submit), indicating no review action was taken.
+    // Exit with code 1 if no review action was taken: either the editor was
+    // already open (None), or the user didn't change any steps.
     // Safe to call process::exit here: no RAII guards are held at this point
     // (lock file and cleanup guards are managed by the review-complete process).
-    if let Some(doc) = document
-        && doc.frontmatter.steps == before.frontmatter.steps
-    {
+    let steps_changed = document
+        .as_ref()
+        .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
+    if !steps_changed {
         std::process::exit(1);
     }
 
