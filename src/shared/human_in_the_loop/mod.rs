@@ -91,6 +91,13 @@ where
     let fifo_path = create_done_fifo(document_path)?;
     let mut fifo_cleanup = FifoCleanupGuard::new(&fifo_path);
 
+    // Open the FIFO reader *before* launching the terminal to prevent a race
+    // condition: on Linux, launch_terminal blocks until the terminal closes,
+    // so complete_review signals the FIFO before we reach the read call.
+    // By opening the reader first (with O_NONBLOCK to avoid blocking on open),
+    // the writer's signal is buffered in the pipe and read picks it up later.
+    let fifo_reader = open_fifo_reader(&fifo_path)?;
+
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
 
@@ -123,7 +130,7 @@ where
 
     // Wait for the review-complete process to finish via FIFO.
     // This blocks with no CPU usage until the other process writes to the FIFO.
-    wait_for_fifo(&fifo_path)?;
+    wait_for_fifo_signal(fifo_reader)?;
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
     fifo_cleanup.disarm();
@@ -204,12 +211,40 @@ fn fifo_path_for(document_path: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// Block until data is available on the FIFO, then consume it.
-fn wait_for_fifo(fifo_path: &Path) -> Result<()> {
-    // Opening a FIFO for reading blocks until a writer opens the other end.
-    // Once the writer writes and closes, read returns and we unblock.
+/// Open a FIFO for reading in non-blocking mode.
+///
+/// Must be called *before* launching the terminal so the reader end is
+/// connected when the writer signals. `O_NONBLOCK` is used so the open
+/// returns immediately even without a writer.
+#[cfg(unix)]
+fn open_fifo_reader(fifo_path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(fifo_path)?;
+
+    Ok(file)
+}
+
+/// Block until data is available on the FIFO reader, then consume it.
+///
+/// Clears `O_NONBLOCK` before reading so the read blocks until the
+/// writer signals completion.
+#[cfg(unix)]
+fn wait_for_fifo_signal(file: std::fs::File) -> Result<()> {
     use std::io::Read;
-    let mut file = std::fs::File::open(fifo_path)?;
+    use std::os::unix::io::AsRawFd;
+
+    // Clear O_NONBLOCK so read blocks until data arrives
+    let fd = file.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+    }
+
+    let mut file = file;
     let mut buf = [0u8; 1];
     let _ = file.read(&mut buf);
     Ok(())
