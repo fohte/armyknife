@@ -136,6 +136,9 @@ pub async fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()
     let document = Document::<ThreadsFrontmatter>::from_path(args.filepath.clone())?;
 
     if document.frontmatter.is_approved() {
+        // Reset submit flag to prevent repeated auto-push on next review
+        reset_submit_flag(&args.filepath)?;
+
         println!("Approved. Pushing replies to GitHub...");
 
         let push_args = reply::ReplyPushArgs {
@@ -152,6 +155,17 @@ pub async fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()
         println!("Not approved. Set 'submit: true' in the frontmatter and save to approve.");
     }
 
+    Ok(())
+}
+
+/// Reset `submit: true` to `submit: false` in the threads.md file.
+///
+/// This prevents the next `review` session from auto-pushing again
+/// when the user opens and closes the editor without changes.
+fn reset_submit_flag(filepath: &std::path::Path) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(filepath)?;
+    let updated = content.replacen("submit: true", "submit: false", 1);
+    std::fs::write(filepath, updated)?;
     Ok(())
 }
 
@@ -201,5 +215,56 @@ mod tests {
         assert_eq!(args.len(), 11);
         assert_eq!(args[9], "--window-title");
         assert_eq!(args[10], "Title");
+    }
+
+    #[test]
+    fn reset_submit_flag_changes_true_to_false() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("threads.md");
+        let input = indoc::indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: true
+            ---
+            body
+        "#};
+        let expected = indoc::indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+            body
+        "#};
+        std::fs::write(&path, input).unwrap();
+
+        reset_submit_flag(&path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, expected);
+    }
+
+    #[test]
+    fn reset_submit_flag_preserves_already_false() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("threads.md");
+        let original = indoc::indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+            body
+        "#};
+        std::fs::write(&path, original).unwrap();
+
+        reset_submit_flag(&path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original);
     }
 }
