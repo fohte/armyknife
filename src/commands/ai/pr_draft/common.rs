@@ -129,7 +129,7 @@ impl DocumentSchema for Frontmatter {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Steps {
     #[serde(default, rename = "ready-for-translation")]
     pub ready_for_translation: bool,

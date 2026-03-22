@@ -98,6 +98,9 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
+    // Read frontmatter before review to detect changes
+    let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
+
     let document = start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
@@ -105,10 +108,10 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         &config.editor,
     )?;
 
-    // Exit with code 1 if the draft was not approved, so callers (e.g. Claude Code
-    // running this in the background) can detect the result from the exit status.
+    // Exit with code 1 if the user didn't change any steps (ready-for-translation
+    // or submit), indicating no review action was taken.
     if let Some(doc) = document
-        && !doc.frontmatter.is_approved()
+        && doc.frontmatter.steps == before.frontmatter.steps
     {
         std::process::exit(1);
     }
