@@ -110,8 +110,6 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
 
     start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
 
-    println!("Opened draft in editor: {}", path.display());
-
     Ok(())
 }
 

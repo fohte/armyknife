@@ -21,8 +21,12 @@ pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::shared::config::EditorConfig;
+
+/// Polling interval for waiting on lock file removal.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(300);
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -55,14 +59,17 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// 1. Checks for an existing lock (another editor open)
 /// 2. Creates a lock file
 /// 3. Launches the configured terminal to run the review-complete command after the editor exits
+/// 4. Blocks until the review-complete process finishes (detected by lock file removal)
 ///
 /// The handler's `build_complete_args` is used to construct the command that the terminal will run.
+/// Returns the final document state after the user finishes editing, or `None` if the editor
+/// was already open (lock existed).
 pub fn start_review<S, H>(
     document_path: &Path,
     window_title: &str,
     handler: &H,
     editor_config: &EditorConfig,
-) -> Result<()>
+) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -76,7 +83,7 @@ where
     // Check for existing lock
     if LockGuard::is_locked(document_path) {
         eprintln!("Skipped: Editor is already open for this file.");
-        return Ok(());
+        return Ok(None);
     }
 
     // Create lock file with RAII guard
@@ -110,7 +117,15 @@ where
     // (review-complete will handle cleanup when it finishes)
     lock_guard.disarm();
 
-    Ok(())
+    // Wait for the review-complete process to finish by polling for lock file removal.
+    // The CleanupGuard in complete_review removes the lock file when the editor exits.
+    while LockGuard::is_locked(document_path) {
+        std::thread::sleep(LOCK_POLL_INTERVAL);
+    }
+
+    // Review complete - read the final document state
+    let document = Document::<S>::from_path(document_path.to_path_buf())?;
+    Ok(Some(document))
 }
 
 /// Complete a review session after the user closes the editor.
