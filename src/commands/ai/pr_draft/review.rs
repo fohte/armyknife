@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, Frontmatter, RepoInfo};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
+    Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
+    start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -29,6 +30,10 @@ pub struct ReviewCompleteArgs {
     /// Window title for Neovim
     #[arg(long)]
     pub window_title: Option<String>,
+
+    /// Internal: FIFO path to signal completion to the waiting start_review process
+    #[arg(long, hide = true)]
+    pub done_fifo: Option<PathBuf>,
 }
 
 /// Handler for PR draft review sessions.
@@ -98,17 +103,34 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    start_review::<Frontmatter, _>(
+    // Read frontmatter before review to detect changes
+    let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
+
+    let document = start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
     )?;
 
+    // Exit with code 1 if no review action was taken: either the editor was
+    // already open (None), or the user didn't change any steps.
+    // Safe to call process::exit here: no RAII guards are held at this point
+    // (lock file and cleanup guards are managed by the review-complete process).
+    let steps_changed = document
+        .as_ref()
+        .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
+    if !steps_changed {
+        std::process::exit(1);
+    }
+
     Ok(())
 }
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
+    // Create FIFO guard first to ensure signaling even if load_config fails
+    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+
     let config = load_config()?;
 
     complete_review::<Frontmatter, _>(

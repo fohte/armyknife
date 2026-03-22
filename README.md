@@ -104,11 +104,11 @@ Open a file in editor for review (no approval flow).
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                        |
-| -------- | ------------------------------------------------------------------ |
-| `new`    | Create a new PR body draft file                                    |
-| `review` | Open the draft in editor for review                                |
-| `submit` | Create a PR from the approved draft (updates existing PR if found) |
+| Action   | Description                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| `new`    | Create a new PR body draft file                                                                      |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not) |
+| `submit` | Create a PR from the approved draft (updates existing PR if found)                                   |
 
 `submit` options:
 

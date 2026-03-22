@@ -23,6 +23,7 @@ percent-encoding = "=2.3.2"
 tokio = { version = "=1.50.0", features = ["rt-multi-thread", "macros"] }
 indoc = "=2.0.7"
 lazy-regex = "=3.6.0"
+libc = "=0.2.183"
 regex = "=1.12.3"
 self_update = { version = "=0.42.0", features = ["rustls", "compression-flate2"], default-features = false }
 schemars = "=1.2.1"

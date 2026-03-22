@@ -20,7 +20,7 @@ pub use lock::{CleanupGuard, LockGuard};
 pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::shared::config::EditorConfig;
 
@@ -54,15 +54,19 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// This function:
 /// 1. Checks for an existing lock (another editor open)
 /// 2. Creates a lock file
-/// 3. Launches the configured terminal to run the review-complete command after the editor exits
+/// 3. Creates a FIFO for completion signaling
+/// 4. Launches the configured terminal to run the review-complete command after the editor exits
+/// 5. Blocks until the review-complete process signals completion via the FIFO
 ///
 /// The handler's `build_complete_args` is used to construct the command that the terminal will run.
+/// Returns the final document state after the user finishes editing, or `None` if the editor
+/// was already open (lock existed).
 pub fn start_review<S, H>(
     document_path: &Path,
     window_title: &str,
     handler: &H,
     editor_config: &EditorConfig,
-) -> Result<()>
+) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -76,11 +80,23 @@ where
     // Check for existing lock
     if LockGuard::is_locked(document_path) {
         eprintln!("Skipped: Editor is already open for this file.");
-        return Ok(());
+        return Ok(None);
     }
 
     // Create lock file with RAII guard
     let mut lock_guard = LockGuard::acquire(document_path)?;
+
+    // Create a FIFO for the review-complete process to signal completion.
+    // The FifoCleanupGuard ensures the FIFO is removed on early return.
+    let fifo_path = create_done_fifo(document_path)?;
+    let mut fifo_cleanup = FifoCleanupGuard::new(&fifo_path);
+
+    // Open the FIFO reader *before* launching the terminal to prevent a race
+    // condition: on Linux, launch_terminal blocks until the terminal closes,
+    // so complete_review signals the FIFO before we reach the read call.
+    // By opening the reader first (with O_NONBLOCK to avoid blocking on open),
+    // the writer's signal is buffered in the pipe and read picks it up later.
+    let fifo_reader = open_fifo_reader(&fifo_path)?;
 
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
@@ -88,9 +104,11 @@ where
     // Get the path to the current executable
     let exe_path = std::env::current_exe()?;
 
-    // Build the review-complete command arguments
-    let review_args =
+    // Build the review-complete command arguments and append --done-fifo
+    let mut review_args =
         handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
+    review_args.push("--done-fifo".into());
+    review_args.push(fifo_path.as_os_str().to_os_string());
 
     // Launch terminal emulator
     let options = LaunchOptions {
@@ -110,7 +128,17 @@ where
     // (review-complete will handle cleanup when it finishes)
     lock_guard.disarm();
 
-    Ok(())
+    // Wait for the review-complete process to finish via FIFO.
+    // This blocks with no CPU usage until the other process writes to the FIFO.
+    wait_for_fifo_signal(fifo_reader)?;
+
+    // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
+    fifo_cleanup.disarm();
+    let _ = std::fs::remove_file(&fifo_path);
+
+    // Review complete - read the final document state
+    let document = Document::<S>::from_path(document_path.to_path_buf())?;
+    Ok(Some(document))
 }
 
 /// Complete a review session after the user closes the editor.
@@ -121,6 +149,9 @@ where
 /// 3. After the editor exits, parses the document and calls the handler's callback
 ///
 /// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
+///
+/// The caller is responsible for creating a `FifoSignalGuard` before calling this
+/// function to ensure the FIFO is signaled even if earlier initialization fails.
 ///
 /// This is typically called by the review-complete subcommand that the terminal runs.
 pub fn complete_review<S, H>(
@@ -148,4 +179,160 @@ where
     // After editor exits, parse the document and call the handler
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
     handler.on_review_complete(&document)
+}
+
+/// Create a FIFO (named pipe) for signaling review completion.
+///
+/// The FIFO path is derived from the document path with a `.done` extension.
+fn create_done_fifo(document_path: &Path) -> Result<PathBuf> {
+    let fifo_path = fifo_path_for(document_path);
+
+    // Remove stale FIFO if it exists
+    let _ = std::fs::remove_file(&fifo_path);
+
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo_path)
+        .status()?;
+
+    if !status.success() {
+        return Err(HumanInTheLoopError::CommandFailed(
+            "Failed to create FIFO".to_string(),
+        ));
+    }
+
+    Ok(fifo_path)
+}
+
+/// Derive the FIFO path from a document path.
+fn fifo_path_for(document_path: &Path) -> PathBuf {
+    let mut p = document_path.as_os_str().to_os_string();
+    p.push(".done");
+    PathBuf::from(p)
+}
+
+/// Open a FIFO for reading in non-blocking mode.
+///
+/// Must be called *before* launching the terminal so the reader end is
+/// connected when the writer signals. `O_NONBLOCK` is used so the open
+/// returns immediately even without a writer.
+#[cfg(unix)]
+fn open_fifo_reader(fifo_path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(fifo_path)?;
+
+    Ok(file)
+}
+
+/// Block until data is available on the FIFO reader, then consume it.
+///
+/// Clears `O_NONBLOCK` before reading so the read blocks until the
+/// writer signals completion. Retries on `EINTR` (signal interruption).
+#[cfg(unix)]
+fn wait_for_fifo_signal(file: std::fs::File) -> Result<()> {
+    use std::io::{self, Read};
+    use std::os::unix::io::AsRawFd;
+
+    // Clear O_NONBLOCK so read blocks until data arrives
+    let fd = file.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags != -1 {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
+
+    let mut file = file;
+    let mut buf = [0u8; 1];
+    loop {
+        match file.read(&mut buf) {
+            Ok(_) => break,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// RAII guard that removes the FIFO file on drop.
+///
+/// Used in `start_review` to ensure the FIFO is cleaned up on early-return
+/// error paths (e.g., if `current_exe()` or `launch_terminal()` fails).
+struct FifoCleanupGuard {
+    fifo_path: PathBuf,
+    disarmed: bool,
+}
+
+impl FifoCleanupGuard {
+    fn new(fifo_path: &Path) -> Self {
+        Self {
+            fifo_path: fifo_path.to_path_buf(),
+            disarmed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for FifoCleanupGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            let _ = std::fs::remove_file(&self.fifo_path);
+        }
+    }
+}
+
+/// RAII guard that writes to a FIFO on drop to signal the waiting process.
+///
+/// Ensures the FIFO is signaled even if the review-complete process panics
+/// or encounters an error, preventing the parent process from hanging.
+///
+/// Uses `O_NONBLOCK` when opening the FIFO so that if the parent reader
+/// process has already exited (e.g., Ctrl+C), the write silently fails
+/// instead of blocking forever.
+///
+/// Should be created as early as possible in the review-complete process
+/// to ensure signaling even if later initialization (e.g., config loading) fails.
+pub struct FifoSignalGuard {
+    fifo_path: PathBuf,
+}
+
+impl FifoSignalGuard {
+    pub fn new(fifo_path: &Path) -> Self {
+        Self {
+            fifo_path: fifo_path.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for FifoSignalGuard {
+    fn drop(&mut self) {
+        signal_fifo(&self.fifo_path);
+    }
+}
+
+/// Write to a FIFO in non-blocking mode.
+///
+/// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
+/// if no reader has the FIFO open, instead of blocking forever.
+fn signal_fifo(fifo_path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(fifo_path);
+
+        if let Ok(mut f) = file {
+            let _ = f.write_all(b"0");
+        }
+    }
 }

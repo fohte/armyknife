@@ -101,6 +101,7 @@ dependencies = [
  "indicatif 0.18.4",
  "indoc",
  "lazy-regex",
+ "libc",
  "notify",
  "notify-rust",
  "open",
