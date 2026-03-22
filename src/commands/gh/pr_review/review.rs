@@ -217,11 +217,9 @@ mod tests {
         assert_eq!(args[10], "Title");
     }
 
-    #[test]
-    fn reset_submit_flag_changes_true_to_false() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("threads.md");
-        let input = indoc::indoc! {r#"
+    #[rstest::rstest]
+    #[case::changes_true_to_false(
+        indoc::indoc! {r#"
             ---
             pr: 42
             repo: "fohte/armyknife"
@@ -229,8 +227,8 @@ mod tests {
             submit: true
             ---
             body
-        "#};
-        let expected = indoc::indoc! {r#"
+        "#},
+        indoc::indoc! {r#"
             ---
             pr: 42
             repo: "fohte/armyknife"
@@ -238,33 +236,36 @@ mod tests {
             submit: false
             ---
             body
-        "#};
+        "#},
+    )]
+    #[case::preserves_already_false(
+        indoc::indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+            body
+        "#},
+        indoc::indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+            body
+        "#},
+    )]
+    fn reset_submit_flag_handles_submit_value(#[case] input: &str, #[case] expected: &str) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("threads.md");
         std::fs::write(&path, input).unwrap();
 
         reset_submit_flag(&path).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, expected);
-    }
-
-    #[test]
-    fn reset_submit_flag_preserves_already_false() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("threads.md");
-        let original = indoc::indoc! {r#"
-            ---
-            pr: 42
-            repo: "fohte/armyknife"
-            pulled_at: "2024-01-15T10:00:00Z"
-            submit: false
-            ---
-            body
-        "#};
-        std::fs::write(&path, original).unwrap();
-
-        reset_submit_flag(&path).unwrap();
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content, original);
     }
 }
