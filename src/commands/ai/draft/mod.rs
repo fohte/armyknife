@@ -26,6 +26,10 @@ pub struct DraftArgs {
     /// Internal: run in edit-complete mode (called by WezTerm)
     #[arg(long, hide = true)]
     pub complete: bool,
+
+    /// Internal: FIFO path to signal completion to the waiting start_review process
+    #[arg(long, hide = true)]
+    pub done_fifo: Option<PathBuf>,
 }
 
 /// Permissive schema for simple file editing that accepts any frontmatter.
@@ -122,6 +126,7 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
         args.title.as_deref(),
         &DraftHandler,
         &config.editor,
+        args.done_fifo.as_deref(),
     )?;
 
     Ok(())

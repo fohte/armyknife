@@ -29,6 +29,10 @@ pub struct ReviewCompleteArgs {
     /// Window title for Neovim
     #[arg(long)]
     pub window_title: Option<String>,
+
+    /// Internal: FIFO path to signal completion to the waiting start_review process
+    #[arg(long, hide = true)]
+    pub done_fifo: Option<PathBuf>,
 }
 
 /// Handler for PR draft review sessions.
@@ -130,6 +134,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         args.window_title.as_deref(),
         &PrDraftReviewHandler,
         &config.editor,
+        args.done_fifo.as_deref(),
     )?;
 
     Ok(())

@@ -20,17 +20,9 @@ pub use lock::{CleanupGuard, LockGuard};
 pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 use crate::shared::config::EditorConfig;
-
-/// Polling interval for waiting on lock file removal.
-const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(300);
-
-/// Maximum time to wait for the lock file to be removed before giving up.
-/// Set generously since users may leave the editor open for extended periods.
-const LOCK_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -62,8 +54,9 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// This function:
 /// 1. Checks for an existing lock (another editor open)
 /// 2. Creates a lock file
-/// 3. Launches the configured terminal to run the review-complete command after the editor exits
-/// 4. Blocks until the review-complete process finishes (detected by lock file removal)
+/// 3. Creates a FIFO for completion signaling
+/// 4. Launches the configured terminal to run the review-complete command after the editor exits
+/// 5. Blocks until the review-complete process signals completion via the FIFO
 ///
 /// The handler's `build_complete_args` is used to construct the command that the terminal will run.
 /// Returns the final document state after the user finishes editing, or `None` if the editor
@@ -93,15 +86,20 @@ where
     // Create lock file with RAII guard
     let mut lock_guard = LockGuard::acquire(document_path)?;
 
+    // Create a FIFO for the review-complete process to signal completion
+    let fifo_path = create_done_fifo(document_path)?;
+
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
 
     // Get the path to the current executable
     let exe_path = std::env::current_exe()?;
 
-    // Build the review-complete command arguments
-    let review_args =
+    // Build the review-complete command arguments and append --done-fifo
+    let mut review_args =
         handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
+    review_args.push("--done-fifo".into());
+    review_args.push(fifo_path.as_os_str().to_os_string());
 
     // Launch terminal emulator
     let options = LaunchOptions {
@@ -112,6 +110,7 @@ where
     let status = launch_terminal(&editor_config.terminal, &options, &exe_path, &review_args)?;
 
     if !status.success() {
+        let _ = std::fs::remove_file(&fifo_path);
         return Err(HumanInTheLoopError::CommandFailed(format!(
             "Terminal exited with status: {status}"
         )));
@@ -121,18 +120,12 @@ where
     // (review-complete will handle cleanup when it finishes)
     lock_guard.disarm();
 
-    // Wait for the review-complete process to finish by polling for lock file removal.
-    // The CleanupGuard in complete_review removes the lock file when the editor exits.
-    let start = std::time::Instant::now();
-    while LockGuard::is_locked(document_path) {
-        if start.elapsed() > LOCK_POLL_TIMEOUT {
-            return Err(HumanInTheLoopError::CommandFailed(format!(
-                "Timed out waiting for editor to close. Lock file may be stale: {}",
-                LockGuard::lock_path(document_path).display()
-            )));
-        }
-        std::thread::sleep(LOCK_POLL_INTERVAL);
-    }
+    // Wait for the review-complete process to finish via FIFO.
+    // This blocks with no CPU usage until the other process writes to the FIFO.
+    wait_for_fifo(&fifo_path)?;
+
+    // Clean up the FIFO
+    let _ = std::fs::remove_file(&fifo_path);
 
     // Review complete - read the final document state
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
@@ -145,6 +138,7 @@ where
 /// 1. Sets up cleanup guards for lock file and tmux restoration
 /// 2. Launches the configured editor for the user to edit the document
 /// 3. After the editor exits, parses the document and calls the handler's callback
+/// 4. If `done_fifo` is provided, writes to it to signal the waiting `start_review` process
 ///
 /// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
 ///
@@ -155,6 +149,7 @@ pub fn complete_review<S, H>(
     window_title: Option<&str>,
     handler: &H,
     editor_config: &EditorConfig,
+    done_fifo: Option<&Path>,
 ) -> Result<()>
 where
     S: DocumentSchema,
@@ -162,6 +157,7 @@ where
 {
     // Ensure cleanup happens even on panic
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
+    let _fifo_guard = done_fifo.map(FifoSignalGuard::new);
 
     // Launch editor
     let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
@@ -174,4 +170,73 @@ where
     // After editor exits, parse the document and call the handler
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
     handler.on_review_complete(&document)
+    // FifoSignalGuard writes to the FIFO on drop (even on error/panic)
+}
+
+/// Create a FIFO (named pipe) for signaling review completion.
+///
+/// The FIFO path is derived from the document path with a `.done` extension.
+fn create_done_fifo(document_path: &Path) -> Result<PathBuf> {
+    let fifo_path = fifo_path_for(document_path);
+
+    // Remove stale FIFO if it exists
+    let _ = std::fs::remove_file(&fifo_path);
+
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo_path)
+        .status()?;
+
+    if !status.success() {
+        return Err(HumanInTheLoopError::CommandFailed(
+            "Failed to create FIFO".to_string(),
+        ));
+    }
+
+    Ok(fifo_path)
+}
+
+/// Derive the FIFO path from a document path.
+fn fifo_path_for(document_path: &Path) -> PathBuf {
+    let mut p = document_path.as_os_str().to_os_string();
+    p.push(".done");
+    PathBuf::from(p)
+}
+
+/// Block until data is available on the FIFO, then consume it.
+fn wait_for_fifo(fifo_path: &Path) -> Result<()> {
+    // Opening a FIFO for reading blocks until a writer opens the other end.
+    // Once the writer writes and closes, read returns and we unblock.
+    use std::io::Read;
+    let mut file = std::fs::File::open(fifo_path)?;
+    let mut buf = [0u8; 1];
+    let _ = file.read(&mut buf);
+    Ok(())
+}
+
+/// RAII guard that writes to a FIFO on drop to signal the waiting process.
+///
+/// Ensures the FIFO is signaled even if the review-complete process panics
+/// or encounters an error, preventing the parent process from hanging.
+struct FifoSignalGuard {
+    fifo_path: PathBuf,
+}
+
+impl FifoSignalGuard {
+    fn new(fifo_path: &Path) -> Self {
+        Self {
+            fifo_path: fifo_path.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for FifoSignalGuard {
+    fn drop(&mut self) {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.fifo_path)
+        {
+            let _ = file.write_all(b"0");
+        }
+    }
 }
