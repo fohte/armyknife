@@ -110,6 +110,8 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
     // Exit with code 1 if the user didn't change any steps (ready-for-translation
     // or submit), indicating no review action was taken.
+    // Safe to call process::exit here: no RAII guards are held at this point
+    // (lock file and cleanup guards are managed by the review-complete process).
     if let Some(doc) = document
         && doc.frontmatter.steps == before.frontmatter.steps
     {

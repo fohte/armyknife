@@ -28,6 +28,10 @@ use crate::shared::config::EditorConfig;
 /// Polling interval for waiting on lock file removal.
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(300);
 
+/// Maximum time to wait for the lock file to be removed before giving up.
+/// Set generously since users may leave the editor open for extended periods.
+const LOCK_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Trait for types that handle the review completion callback.
 ///
 /// Each use case (PR draft, issue comment, PR review reply, or simple file editing)
@@ -119,7 +123,14 @@ where
 
     // Wait for the review-complete process to finish by polling for lock file removal.
     // The CleanupGuard in complete_review removes the lock file when the editor exits.
+    let start = std::time::Instant::now();
     while LockGuard::is_locked(document_path) {
+        if start.elapsed() > LOCK_POLL_TIMEOUT {
+            return Err(HumanInTheLoopError::CommandFailed(format!(
+                "Timed out waiting for editor to close. Lock file may be stale: {}",
+                LockGuard::lock_path(document_path).display()
+            )));
+        }
         std::thread::sleep(LOCK_POLL_INTERVAL);
     }
 
