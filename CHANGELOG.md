@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.136](https://github.com/fohte/armyknife/compare/v0.1.135...v0.1.136) (2026-03-23)
+
+
+### Features
+
+* **gh/pr-review:** add `reply review` subcommand with HITL framework integration ([#462](https://github.com/fohte/armyknife/issues/462)) ([ee78061](https://github.com/fohte/armyknife/commit/ee780619d263cb15015e34c1d889bea339aff692))
+
 ## [0.1.135](https://github.com/fohte/armyknife/compare/v0.1.134...v0.1.135) (2026-03-23)
 
 
