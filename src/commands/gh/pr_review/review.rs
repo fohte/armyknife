@@ -9,7 +9,8 @@ use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    Document, DocumentSchema, Result as HilResult, ReviewHandler, complete_review, start_review,
+    Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
+    start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -43,6 +44,10 @@ pub struct ReviewCompleteArgs {
     /// Window title for Neovim
     #[arg(long)]
     pub window_title: Option<String>,
+
+    /// Internal: FIFO path to signal completion to the waiting start_review process
+    #[arg(long, hide = true)]
+    pub done_fifo: Option<std::path::PathBuf>,
 }
 
 /// Handler for PR review reply review sessions.
@@ -128,6 +133,9 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 }
 
 pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
+    // Create FIFO guard first to ensure signaling even if load_config fails
+    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+
     let config = load_config()?;
 
     let handler = PrReviewReplyHandler {
