@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.134](https://github.com/fohte/armyknife/compare/v0.1.133...v0.1.134) (2026-03-23)
+
+
+### Features
+
+* **human_in_the_loop:** block `start_review` until the editor closes ([#461](https://github.com/fohte/armyknife/issues/461)) ([281d297](https://github.com/fohte/armyknife/commit/281d297b99b15439c80b224390e45bc4b0187ad7))
+
 ## [0.1.133](https://github.com/fohte/armyknife/compare/v0.1.132...v0.1.133) (2026-03-19)
 
 
