@@ -11,7 +11,7 @@ pub struct ThreadsFrontmatter {
     pub pr: u64,
     pub repo: String,
     pub pulled_at: String,
-    /// Set to `true` to approve and auto-push replies after editor close.
+    /// Set to `true` to mark replies as approved after editor close.
     #[serde(default)]
     pub submit: bool,
 }

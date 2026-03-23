@@ -230,7 +230,7 @@ a gh pr-review reply push <pr-number> [options]
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving triggers an automatic push.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push.
 
 Requires `reply pull` to have been run first.
 

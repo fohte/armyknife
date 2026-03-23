@@ -35,7 +35,7 @@ pub enum ReplyCommands {
     /// Push local reply drafts and resolve actions to GitHub
     Push(reply::ReplyPushArgs),
 
-    /// Pull threads and open in editor for review (auto-pushes on approve)
+    /// Open threads in editor for review (saves approval on close)
     Review(review::ReviewArgs),
 
     /// Internal: Complete the review process after the editor exits
