@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.135](https://github.com/fohte/armyknife/compare/v0.1.134...v0.1.135) (2026-03-23)
+
+
+### Bug Fixes
+
+* **human_in_the_loop:** re-open FIFO on spurious EOF to fix macOS wait ([#464](https://github.com/fohte/armyknife/issues/464)) ([302ceac](https://github.com/fohte/armyknife/commit/302ceac943accd231fbd3e8e5ccc008bf0fb5163))
+
 ## [0.1.134](https://github.com/fohte/armyknife/compare/v0.1.133...v0.1.134) (2026-03-23)
 
 
