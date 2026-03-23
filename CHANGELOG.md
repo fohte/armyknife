@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.137](https://github.com/fohte/armyknife/compare/v0.1.136...v0.1.137) (2026-03-23)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** add missing `--done-fifo` arg to `reply review-complete` ([#468](https://github.com/fohte/armyknife/issues/468)) ([2e87e2e](https://github.com/fohte/armyknife/commit/2e87e2e17c61752e544d79b52c3460ce85a49ec2))
+
 ## [0.1.136](https://github.com/fohte/armyknife/compare/v0.1.135...v0.1.136) (2026-03-23)
 
 
