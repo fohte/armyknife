@@ -130,7 +130,7 @@ where
 
     // Wait for the review-complete process to finish via FIFO.
     // This blocks with no CPU usage until the other process writes to the FIFO.
-    wait_for_fifo_signal(fifo_reader)?;
+    wait_for_fifo_signal(fifo_reader, &fifo_path)?;
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
     fifo_cleanup.disarm();
@@ -227,12 +227,16 @@ fn open_fifo_reader(fifo_path: &Path) -> Result<std::fs::File> {
     Ok(file)
 }
 
-/// Block until data is available on the FIFO reader, then consume it.
+/// Block until the writer sends a signal byte on the FIFO.
 ///
-/// Clears `O_NONBLOCK` before reading so the read blocks until the
-/// writer signals completion. Retries on `EINTR` (signal interruption).
+/// On Linux, clearing `O_NONBLOCK` and reading blocks until data arrives.
+/// On macOS, however, reading a FIFO with no writer attached returns `Ok(0)`
+/// (spurious EOF) even after clearing `O_NONBLOCK`. To handle this portably,
+/// when `read` returns `Ok(0)` we close the fd and re-open the FIFO in
+/// blocking mode. The blocking `open` itself will wait until a writer connects,
+/// and the subsequent `read` will return the signal byte.
 #[cfg(unix)]
-fn wait_for_fifo_signal(file: std::fs::File) -> Result<()> {
+fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
     use std::io::{self, Read};
     use std::os::unix::io::AsRawFd;
 
@@ -249,7 +253,13 @@ fn wait_for_fifo_signal(file: std::fs::File) -> Result<()> {
     let mut buf = [0u8; 1];
     loop {
         match file.read(&mut buf) {
-            Ok(_) => break,
+            Ok(n) if n > 0 => break,
+            Ok(_) => {
+                // Ok(0) = spurious EOF (macOS: no writer connected yet).
+                // Re-open in blocking mode; the open itself blocks until a writer connects.
+                drop(file);
+                file = std::fs::File::open(fifo_path)?;
+            }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
