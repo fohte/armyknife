@@ -10,6 +10,7 @@ use super::markdown::{MarkdownParser, MarkdownSerializer};
 use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
+use crate::shared::human_in_the_loop::Document;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -83,6 +84,7 @@ pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
         pr: args.pr_number,
         repo: format!("{owner}/{repo}"),
         pulled_at: now,
+        submit: false,
     };
 
     let content =
@@ -105,6 +107,10 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     if !storage.exists() {
         return Err(PrReviewError::NoPulledData.into());
     }
+
+    // Verify approval before pushing
+    let document = Document::<ThreadsFrontmatter>::from_path(storage.threads_path())?;
+    document.verify_approval()?;
 
     let content = storage.read_threads()?;
     let local = MarkdownParser::parse(&content)?;
@@ -152,6 +158,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         pr: args.pr_number,
         repo: format!("{owner}/{repo}"),
         pulled_at: now,
+        submit: false,
     };
 
     let updated_content = MarkdownSerializer::serialize(&updated_remote, &frontmatter);

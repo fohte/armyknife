@@ -57,6 +57,11 @@ impl<S: DocumentSchema> Document<S> {
     pub fn remove_approval(&self) -> Result<()> {
         self.approval_manager().remove()
     }
+
+    /// Verify that the document has been approved and not modified since.
+    pub fn verify_approval(&self) -> Result<()> {
+        self.approval_manager().verify()
+    }
 }
 
 /// Parse frontmatter from document content.

@@ -15,6 +15,12 @@ pub enum HumanInTheLoopError {
 
     #[error("Command failed: {0}")]
     CommandFailed(String),
+
+    #[error("Not approved. Run 'review' and set 'submit: true'")]
+    NotApproved,
+
+    #[error("File has been modified after approval. Run 'review' again")]
+    ModifiedAfterApproval,
 }
 
 pub type Result<T> = std::result::Result<T, HumanInTheLoopError>;

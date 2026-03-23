@@ -3,13 +3,23 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
+use crate::shared::human_in_the_loop::DocumentSchema;
 
 /// YAML frontmatter for the threads.md file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreadsFrontmatter {
     pub pr: u64,
     pub repo: String,
     pub pulled_at: String,
+    /// Set to `true` to mark replies as approved after editor close.
+    #[serde(default)]
+    pub submit: bool,
+}
+
+impl DocumentSchema for ThreadsFrontmatter {
+    fn is_approved(&self) -> bool {
+        self.submit
+    }
 }
 
 pub struct MarkdownSerializer;
@@ -33,6 +43,7 @@ impl MarkdownSerializer {
         output.push_str(&format!("pr: {}\n", frontmatter.pr));
         output.push_str(&format!("repo: \"{}\"\n", frontmatter.repo));
         output.push_str(&format!("pulled_at: \"{}\"\n", frontmatter.pulled_at));
+        output.push_str(&format!("submit: {}\n", frontmatter.submit));
         output.push_str("---\n");
 
         for thread in &pr_data.threads {
@@ -160,6 +171,7 @@ mod tests {
             pr: 42,
             repo: "fohte/armyknife".to_string(),
             pulled_at: "2024-01-15T10:00:00Z".to_string(),
+            submit: false,
         }
     }
 
@@ -175,6 +187,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
         "#};
         assert_eq!(result, expected);
@@ -202,6 +215,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
 
             <!-- thread: RT_abc123 path: src/main.rs:42 author: @reviewer -->
@@ -249,6 +263,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
 
             <!-- thread: RT_def456 path: lib.rs:10 author: @reviewer -->
@@ -283,6 +298,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
 
             <!-- thread: RT_resolved path: a.rs:1 author: @reviewer -->
@@ -318,6 +334,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
 
             <!-- thread: RT_abc123 path: a.rs:1 author: @reviewer -->
@@ -349,6 +366,7 @@ mod tests {
             pr: 42
             repo: "fohte/armyknife"
             pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
             ---
 
             <!-- thread: RT_noline path: file.rs author: @reviewer -->
