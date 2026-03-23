@@ -151,44 +151,48 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    #[test]
-    fn build_review_args_should_include_pr_and_repo() {
+    #[rstest::rstest]
+    #[case::with_tmux(
+        42,
+        Some("sess:1.0"),
+        "Test Title",
+        vec![
+            "gh", "pr-review", "reply", "review-complete",
+            "/tmp/threads.md", "--pr-number", "42",
+            "--repo", "fohte/armyknife",
+            "--tmux-target", "sess:1.0",
+            "--window-title", "Test Title",
+        ],
+    )]
+    #[case::without_tmux(
+        10,
+        None,
+        "Title",
+        vec![
+            "gh", "pr-review", "reply", "review-complete",
+            "/tmp/threads.md", "--pr-number", "10",
+            "--repo", "fohte/armyknife",
+            "--window-title", "Title",
+        ],
+    )]
+    fn build_review_args(
+        #[case] pr_number: u64,
+        #[case] tmux_target: Option<&str>,
+        #[case] window_title: &str,
+        #[case] expected: Vec<&str>,
+    ) {
         let handler = PrReviewReplyHandler {
-            pr_number: 42,
+            pr_number,
             repo_slug: "fohte/armyknife".to_string(),
         };
 
         let path = std::path::PathBuf::from("/tmp/threads.md");
-        let args = handler.build_complete_args(&path, Some("sess:1.0"), "Test Title");
+        let args = handler.build_complete_args(&path, tmux_target, window_title);
 
-        assert_eq!(args[0], "gh");
-        assert_eq!(args[1], "pr-review");
-        assert_eq!(args[2], "reply");
-        assert_eq!(args[3], "review-complete");
-        assert_eq!(args[4], std::ffi::OsStr::new("/tmp/threads.md"));
-        assert_eq!(args[5], "--pr-number");
-        assert_eq!(args[6], "42");
-        assert_eq!(args[7], "--repo");
-        assert_eq!(args[8], "fohte/armyknife");
-        assert_eq!(args[9], "--tmux-target");
-        assert_eq!(args[10], "sess:1.0");
-        assert_eq!(args[11], "--window-title");
-        assert_eq!(args[12], "Test Title");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn build_review_args_without_tmux() {
-        let handler = PrReviewReplyHandler {
-            pr_number: 10,
-            repo_slug: "fohte/armyknife".to_string(),
-        };
-
-        let path = std::path::PathBuf::from("/tmp/threads.md");
-        let args = handler.build_complete_args(&path, None, "Title");
-
-        assert_eq!(args.len(), 11);
-        assert_eq!(args[9], "--window-title");
-        assert_eq!(args[10], "Title");
+        let args_str: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args_str, expected);
     }
 }
