@@ -121,8 +121,11 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
     if !steps_changed {
+        eprintln!("No steps changed. Review cancelled.");
         std::process::exit(1);
     }
+
+    eprintln!("Review completed. Steps updated.");
 
     Ok(())
 }
