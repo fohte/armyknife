@@ -42,6 +42,22 @@ impl ApprovalManager {
         Ok(())
     }
 
+    /// Verify that the document has been approved and not modified since.
+    pub fn verify(&self) -> Result<()> {
+        if !self.exists() {
+            return Err(super::error::HumanInTheLoopError::NotApproved);
+        }
+
+        let saved_hash = fs::read_to_string(&self.approve_path)?.trim().to_string();
+        let current_hash = self.compute_hash()?;
+
+        if saved_hash != current_hash {
+            return Err(super::error::HumanInTheLoopError::ModifiedAfterApproval);
+        }
+
+        Ok(())
+    }
+
     fn compute_hash(&self) -> std::io::Result<String> {
         let content = fs::read_to_string(&self.document_path)?;
         let mut hasher = Sha256::new();
