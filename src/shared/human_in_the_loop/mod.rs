@@ -257,7 +257,9 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
             Ok(_) => {
                 // Ok(0) = spurious EOF (macOS: no writer connected yet).
                 // Re-open in blocking mode; the open itself blocks until a writer connects.
-                drop(file);
+                // Open the new fd before dropping the old one to maintain continuous
+                // reader presence on the FIFO, preventing the writer's O_NONBLOCK open
+                // from getting ENXIO.
                 file = std::fs::File::open(fifo_path)?;
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
