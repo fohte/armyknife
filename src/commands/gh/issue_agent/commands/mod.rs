@@ -3,6 +3,7 @@ mod diff;
 mod init;
 mod pull;
 pub(crate) mod push;
+mod review;
 #[cfg(test)]
 mod test_helpers;
 mod view;
@@ -17,6 +18,10 @@ pub use pull::PullArgs;
 pub use pull::run as run_pull;
 pub use push::PushArgs;
 pub use push::run as run_push;
+pub use review::ReviewArgs;
+pub use review::ReviewCompleteArgs;
+pub use review::run as run_review;
+pub use review::run_complete as run_review_complete;
 pub use view::ViewArgs;
 pub use view::run as run_view;
 

@@ -485,6 +485,64 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
     );
 }
 
+// Approval check tests
+#[rstest]
+#[tokio::test]
+async fn test_push_fails_without_approval(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .local_body("Changed body")
+        .remote_body("Original body")
+        .build()
+        .await;
+
+    // Remove the review approval files that TestSetup creates
+    let _ = std::fs::remove_file(test_dir.path().join("review.md"));
+    let _ = std::fs::remove_file(test_dir.path().join("review.md.approve"));
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    let err = result.expect_err("push should fail without approval");
+    assert!(
+        err.to_string().contains("Not approved"),
+        "Expected 'Not approved' error, got: {}",
+        err
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_push_dry_run_skips_approval_check(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .local_body("Changed body")
+        .remote_body("Original body")
+        .build()
+        .await;
+
+    // Remove the review approval files
+    let _ = std::fs::remove_file(test_dir.path().join("review.md"));
+    let _ = std::fs::remove_file(test_dir.path().join("review.md.approve"));
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args(true, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "dry-run should skip approval check: {:?}",
+        result.err()
+    );
+}
+
 // Test run_with_client_and_storage rejects NewIssuePath
 // Uses a directory without issue.md frontmatter so parse_target returns NewIssuePath
 #[rstest]

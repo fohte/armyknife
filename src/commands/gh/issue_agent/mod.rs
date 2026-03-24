@@ -15,7 +15,14 @@ pub enum IssueAgentCommands {
     /// Fetch issue and save locally (use --force to overwrite local changes)
     Pull(commands::PullArgs),
 
-    /// Push local changes to GitHub
+    /// Review changes before pushing (opens editor for approval)
+    Review(commands::ReviewArgs),
+
+    /// Internal: Complete the review process after the editor exits
+    #[command(hide = true)]
+    ReviewComplete(commands::ReviewCompleteArgs),
+
+    /// Push local changes to GitHub (requires review approval)
     Push(commands::PushArgs),
 
     /// Show diff between local changes and remote
@@ -30,6 +37,8 @@ impl IssueAgentCommands {
         match self {
             Self::View(args) => commands::run_view(args).await,
             Self::Pull(args) => commands::run_pull(args).await,
+            Self::Review(args) => commands::run_review(args).await,
+            Self::ReviewComplete(args) => commands::run_review_complete(args),
             Self::Push(args) => commands::run_push(args).await,
             Self::Diff(args) => commands::run_diff(args).await,
             Self::Init(args) => commands::run_init(args).await,

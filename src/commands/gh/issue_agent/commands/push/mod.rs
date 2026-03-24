@@ -18,6 +18,9 @@ use crate::infra::github::GitHubClient;
 use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
 
+use super::review;
+use crate::shared::human_in_the_loop::Document;
+
 /// Target for push command: either an issue number or a path to new issue directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushTarget {
@@ -194,6 +197,35 @@ async fn run_with_context(
     let has_changes = changeset.has_changes();
     changeset.display()?;
 
+    // Verify approval before applying (skip for dry-run)
+    if !args.dry_run && has_changes {
+        let review_path = review::review_path_for(ctx.storage.dir());
+        let review_doc = Document::<review::PushReviewFrontmatter>::from_path(review_path.clone())
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Not approved. Run 'a gh issue-agent review {}' first.",
+                    ctx.issue_number
+                )
+            })?;
+        review_doc.verify_approval().map_err(|e| {
+            match e {
+                crate::shared::human_in_the_loop::HumanInTheLoopError::NotApproved => {
+                    anyhow::anyhow!(
+                        "Not approved. Run 'a gh issue-agent review {}' first.",
+                        ctx.issue_number
+                    )
+                }
+                crate::shared::human_in_the_loop::HumanInTheLoopError::ModifiedAfterApproval => {
+                    anyhow::anyhow!(
+                        "Review file has been modified after approval. Run 'a gh issue-agent review {}' again.",
+                        ctx.issue_number
+                    )
+                }
+                other => other.into(),
+            }
+        })?;
+    }
+
     if !args.dry_run && has_changes {
         changeset
             .apply(
@@ -217,6 +249,12 @@ async fn run_with_context(
         let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;
+
+        // Clean up review files after successful push
+        let review_path = review::review_path_for(ctx.storage.dir());
+        let _ = std::fs::remove_file(&review_path);
+        let approve_path = review_path.with_extension("md.approve");
+        let _ = std::fs::remove_file(&approve_path);
     }
 
     // Show result
