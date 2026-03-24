@@ -186,31 +186,20 @@ impl<'a> TestSetup<'a> {
 
         let storage = IssueStorage::from_dir(self.dir);
 
-        // Set up review approval so push tests pass the approval check
-        create_approved_review(self.dir);
+        // Approve all local files so push tests pass the approval check
+        approve_file(&self.dir.join("issue.md"));
+        approve_file(&self.dir.join("metadata.json"));
 
         (mock, storage)
     }
 }
 
-/// Create an approved review.md file in the given directory.
-///
-/// This simulates the user having run `a gh issue-agent review` and
-/// setting `submit: true` in the frontmatter.
-pub fn create_approved_review(dir: &Path) {
-    use sha2::{Digest, Sha256};
+/// Create an .approve file for the given path, simulating `a ai draft` approval.
+pub fn approve_file(path: &Path) {
+    use crate::shared::human_in_the_loop::ApprovalManager;
 
-    let review_content = indoc::indoc! {"
-        ---
-        submit: true
-        ---
-    "};
-    let review_path = dir.join("review.md");
-    fs::write(&review_path, review_content).unwrap();
-
-    // Create the .approve file with the hash of review.md
-    let mut hasher = Sha256::new();
-    hasher.update(review_content.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    fs::write(review_path.with_extension("md.approve"), hash).unwrap();
+    if path.exists() {
+        let manager = ApprovalManager::new(path);
+        manager.save().unwrap();
+    }
 }

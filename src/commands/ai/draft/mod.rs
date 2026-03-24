@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    DocumentSchema, FifoSignalGuard, ReviewHandler, complete_review, start_review,
+    Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
+    start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -76,7 +77,10 @@ impl ReviewHandler<EmptySchema> for DraftHandler {
         args
     }
 
-    // Uses default on_review_complete (does nothing)
+    fn on_review_complete(&self, document: &Document<EmptySchema>) -> HilResult<()> {
+        document.save_approval()?;
+        Ok(())
+    }
 }
 
 pub fn run(args: &DraftArgs) -> anyhow::Result<()> {
