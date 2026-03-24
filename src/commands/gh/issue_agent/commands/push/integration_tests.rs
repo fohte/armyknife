@@ -490,8 +490,14 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
 
 // Approval check tests
 #[rstest]
+#[case::fails_without_approval(false, false)]
+#[case::dry_run_skips_approval_check(true, true)]
 #[tokio::test]
-async fn test_push_fails_without_approval(test_dir: TempDir) {
+async fn test_push_approval_check(
+    test_dir: TempDir,
+    #[case] dry_run: bool,
+    #[case] should_succeed: bool,
+) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .local_body("Changed body")
         .remote_body("Original body")
@@ -503,45 +509,27 @@ async fn test_push_fails_without_approval(test_dir: TempDir) {
 
     let client = mock.client();
     let result = run_with_client_and_storage(
-        &make_args(false, false, false),
+        &make_args(dry_run, false, false),
         &client,
         &storage,
         "testuser",
     )
     .await;
-    let err = result.expect_err("push should fail without approval");
-    assert!(
-        err.to_string().contains("not been approved"),
-        "Expected approval error, got: {}",
-        err
-    );
-}
 
-#[rstest]
-#[tokio::test]
-async fn test_push_dry_run_skips_approval_check(test_dir: TempDir) {
-    let (mock, storage) = TestSetup::new(test_dir.path())
-        .local_body("Changed body")
-        .remote_body("Original body")
-        .build()
-        .await;
-
-    // Remove the .approve file for issue.md
-    let _ = std::fs::remove_file(test_dir.path().join("issue.md.approve"));
-
-    let client = mock.client();
-    let result = run_with_client_and_storage(
-        &make_args(true, false, false),
-        &client,
-        &storage,
-        "testuser",
-    )
-    .await;
-    assert!(
-        result.is_ok(),
-        "dry-run should skip approval check: {:?}",
-        result.err()
-    );
+    if should_succeed {
+        assert!(
+            result.is_ok(),
+            "push should succeed but failed: {:?}",
+            result.err()
+        );
+    } else {
+        let err = result.expect_err("push should fail without approval");
+        assert!(
+            err.to_string().contains("not been approved"),
+            "Expected approval error, got: {}",
+            err
+        );
+    }
 }
 
 // Test run_with_client_and_storage rejects NewIssuePath
