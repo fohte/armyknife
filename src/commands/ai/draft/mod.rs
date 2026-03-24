@@ -33,19 +33,22 @@ pub struct DraftArgs {
     pub done_fifo: Option<PathBuf>,
 }
 
-/// Permissive schema for simple file editing that accepts any frontmatter.
+/// Permissive schema for file editing that checks `submit` field for approval.
 ///
 /// Uses `#[serde(flatten)]` with a catch-all map to ignore unknown fields,
 /// allowing files with arbitrary YAML frontmatter to be opened without errors.
+/// The `submit` field is used to indicate approval when present and set to `true`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmptySchema {
+    #[serde(default)]
+    pub submit: bool,
     #[serde(flatten)]
     _extra: std::collections::HashMap<String, serde_yaml::Value>,
 }
 
 impl DocumentSchema for EmptySchema {
     fn is_approved(&self) -> bool {
-        false
+        self.submit
     }
 }
 
@@ -78,7 +81,13 @@ impl ReviewHandler<EmptySchema> for DraftHandler {
     }
 
     fn on_review_complete(&self, document: &Document<EmptySchema>) -> HilResult<()> {
-        document.save_approval()?;
+        if document.frontmatter.is_approved() {
+            document.save_approval()?;
+            println!("Approved.");
+        } else {
+            document.remove_approval()?;
+            println!("Not approved. Set 'submit: true' in the frontmatter to approve.");
+        }
         Ok(())
     }
 }

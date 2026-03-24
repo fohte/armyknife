@@ -254,6 +254,7 @@ mod tests {
                     assignees:
                     - assignee1
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN
@@ -286,6 +287,7 @@ mod tests {
                     assignees:
                     - assignee1
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN
@@ -316,6 +318,7 @@ mod tests {
                     assignees:
                     - assignee1
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN
@@ -431,6 +434,7 @@ mod tests {
                     - bug
                     assignees: []
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN
@@ -624,6 +628,7 @@ mod tests {
                     - bug
                     assignees: []
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN
@@ -681,6 +686,7 @@ mod tests {
                     - bug
                     assignees: []
                     milestone: null
+                    submit: false
                     readonly:
                       number: 123
                       state: OPEN

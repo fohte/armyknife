@@ -163,6 +163,7 @@ mod tests {
             milestone: None,
             parent_issue: None,
             sub_issues: vec![],
+            submit: false,
             readonly: ReadonlyMetadata {
                 number: 123,
                 state: "OPEN".to_string(),
