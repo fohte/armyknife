@@ -125,7 +125,12 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
             format!("Draft: {}", file_name)
         });
 
-    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
+    let result =
+        start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
+
+    if result.is_none() {
+        std::process::exit(1);
+    }
 
     Ok(())
 }

@@ -103,12 +103,17 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    start_review::<Frontmatter, _>(
+    let result = start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
     )?;
+
+    if result.is_none() {
+        eprintln!("Review cancelled.");
+        std::process::exit(1);
+    }
 
     eprintln!("Review completed. Steps updated.");
 
