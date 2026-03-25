@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.138](https://github.com/fohte/armyknife/compare/v0.1.137...v0.1.138) (2026-03-25)
+
+
+### Features
+
+* **gh/issue-agent:** add `review <path>` subcommand and require approval before `push` ([#470](https://github.com/fohte/armyknife/issues/470)) ([e2f5431](https://github.com/fohte/armyknife/commit/e2f543170c073f9e96c2af77424ee6c755238531))
+
 ## [0.1.137](https://github.com/fohte/armyknife/compare/v0.1.136...v0.1.137) (2026-03-23)
 
 
