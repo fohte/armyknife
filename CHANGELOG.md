@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.139](https://github.com/fohte/armyknife/compare/v0.1.138...v0.1.139) (2026-03-25)
+
+
+### Bug Fixes
+
+* **human_in_the_loop:** distinguish "already open" exit code from "not approved" ([#472](https://github.com/fohte/armyknife/issues/472)) ([c584409](https://github.com/fohte/armyknife/commit/c584409b3f67c26f93282e052031f2b4715e7582))
+
 ## [0.1.138](https://github.com/fohte/armyknife/compare/v0.1.137...v0.1.138) (2026-03-25)
 
 
