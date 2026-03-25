@@ -187,6 +187,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     // (for comment files), making the re-read document appear unapproved.
     let approval = crate::shared::human_in_the_loop::ApprovalManager::new(&path);
     if !approval.exists() {
+        eprintln!("Review not approved.");
         std::process::exit(exit_code::NOT_APPROVED);
     }
 

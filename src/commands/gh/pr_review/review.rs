@@ -144,6 +144,7 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|d| d.frontmatter.is_approved());
     if !approved {
+        eprintln!("Review not approved.");
         std::process::exit(exit_code::NOT_APPROVED);
     }
 
