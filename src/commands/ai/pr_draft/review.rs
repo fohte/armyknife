@@ -103,27 +103,12 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    // Read frontmatter before review to detect changes
-    let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
-
-    let document = start_review::<Frontmatter, _>(
+    start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
     )?;
-
-    // Exit with code 1 if no review action was taken: either the editor was
-    // already open (None), or the user didn't change any steps.
-    // Safe to call process::exit here: no RAII guards are held at this point
-    // (lock file and cleanup guards are managed by the review-complete process).
-    let steps_changed = document
-        .as_ref()
-        .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
-    if !steps_changed {
-        eprintln!("No steps changed. Review cancelled.");
-        std::process::exit(1);
-    }
 
     eprintln!("Review completed. Steps updated.");
 
