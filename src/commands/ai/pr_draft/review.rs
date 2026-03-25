@@ -113,14 +113,20 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         &config.editor,
     )?;
 
-    // Exit with code 1 if no review action was taken: either the editor was
-    // already open (None), or the user didn't change any steps.
+    use crate::shared::human_in_the_loop::exit_code;
+
+    // If the editor was already open, exit with a distinct code so callers
+    // can distinguish "already open" from "user did not approve".
+    if document.is_none() {
+        std::process::exit(exit_code::ALREADY_OPEN);
+    }
+
     let steps_changed = document
         .as_ref()
         .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
     if !steps_changed {
-        eprintln!("No steps changed. Review cancelled.");
-        std::process::exit(1);
+        eprintln!("No steps changed. Review not approved.");
+        std::process::exit(exit_code::NOT_APPROVED);
     }
 
     eprintln!("Review completed. Steps updated.");
