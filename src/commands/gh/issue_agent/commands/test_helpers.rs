@@ -196,7 +196,7 @@ impl<'a> TestSetup<'a> {
     }
 }
 
-/// Create an .approve file for the given path, simulating `a ai draft` approval.
+/// Create an .approve file for the given path, simulating `a gh issue-agent review` approval.
 pub fn approve_file(path: &Path) {
     use crate::shared::human_in_the_loop::ApprovalManager;
 

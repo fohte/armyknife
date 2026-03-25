@@ -34,7 +34,7 @@ pub struct IssueFrontmatter {
     pub parent_issue: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_issues: Vec<String>,
-    /// Approval flag for push. Set to `true` via `a ai draft` to approve changes.
+    /// Approval flag for push. Set to `true` via `a gh issue-agent review` to approve changes.
     #[serde(default)]
     pub submit: bool,
     pub readonly: ReadonlyMetadata,
