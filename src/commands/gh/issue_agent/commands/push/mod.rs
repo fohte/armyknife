@@ -266,7 +266,7 @@ fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<
     paths
 }
 
-/// Verify that all changed files have been approved via `a ai draft`.
+/// Verify that all changed files have been approved via `a gh issue-agent review`.
 fn verify_changeset_approval(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> anyhow::Result<()> {
     let paths = collect_approval_paths(changeset, ctx);
     let mut unapproved = Vec::new();
@@ -287,7 +287,7 @@ fn verify_changeset_approval(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> a
     if !unapproved.is_empty() {
         let files = unapproved.join("\n  ");
         anyhow::bail!(
-            "The following files have not been approved. Run 'a ai draft <file>' for each:\n  {}",
+            "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
             files
         );
     }
