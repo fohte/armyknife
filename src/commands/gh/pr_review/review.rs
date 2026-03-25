@@ -127,6 +127,8 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         repo_slug: format!("{owner}/{repo}"),
     };
 
+    use crate::shared::human_in_the_loop::exit_code;
+
     let document = start_review::<ThreadsFrontmatter, _>(
         &threads_path,
         &window_title,
@@ -134,11 +136,16 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         &config.editor,
     )?;
 
+    if document.is_none() {
+        std::process::exit(exit_code::ALREADY_OPEN);
+    }
+
     let approved = document
         .as_ref()
         .is_some_and(|d| d.frontmatter.is_approved());
     if !approved {
-        std::process::exit(1);
+        eprintln!("Review not approved.");
+        std::process::exit(exit_code::NOT_APPROVED);
     }
 
     Ok(())

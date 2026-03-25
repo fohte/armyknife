@@ -10,6 +10,7 @@ mod approval;
 mod document;
 mod editor;
 mod error;
+pub mod exit_code;
 mod lock;
 mod tmux;
 

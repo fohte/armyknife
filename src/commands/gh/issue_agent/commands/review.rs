@@ -173,14 +173,22 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| "file".to_string());
     let window_title = format!("Review: {}", file_name);
 
-    start_review::<SubmitSchema, _>(&path, &window_title, &IssueReviewHandler, &config.editor)?;
+    use crate::shared::human_in_the_loop::exit_code;
+
+    let document =
+        start_review::<SubmitSchema, _>(&path, &window_title, &IssueReviewHandler, &config.editor)?;
+
+    if document.is_none() {
+        std::process::exit(exit_code::ALREADY_OPEN);
+    }
 
     // Check approval via .approve file rather than the document's frontmatter,
     // because on_review_complete may have stripped the temporary frontmatter
     // (for comment files), making the re-read document appear unapproved.
     let approval = crate::shared::human_in_the_loop::ApprovalManager::new(&path);
     if !approval.exists() {
-        std::process::exit(1);
+        eprintln!("Review not approved.");
+        std::process::exit(exit_code::NOT_APPROVED);
     }
 
     Ok(())

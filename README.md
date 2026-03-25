@@ -104,11 +104,11 @@ Open a file in editor for review (no approval flow).
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                          |
-| -------- | ---------------------------------------------------------------------------------------------------- |
-| `new`    | Create a new PR body draft file                                                                      |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not) |
-| `submit` | Create a PR from the approved draft (updates existing PR if found)                                   |
+| Action   | Description                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `new`    | Create a new PR body draft file                                                                                                |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open) |
+| `submit` | Create a PR from the approved draft (updates existing PR if found)                                                             |
 
 `submit` options:
 
@@ -145,14 +145,14 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command  | Description                                                      |
-| -------- | ---------------------------------------------------------------- |
-| `view`   | View issue and comments (read-only, no local cache)              |
-| `pull`   | Fetch issue and save locally                                     |
-| `review` | Review a file before pushing (opens editor, requires approval)   |
-| `push`   | Push local changes to GitHub (requires file approval via review) |
-| `diff`   | Show colored diff between local changes and remote               |
-| `init`   | Create boilerplate files for new issues or comments              |
+| Command  | Description                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| `view`   | View issue and comments (read-only, no local cache)                                                  |
+| `pull`   | Fetch issue and save locally                                                                         |
+| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open) |
+| `push`   | Push local changes to GitHub (requires file approval via review)                                     |
+| `diff`   | Show colored diff between local changes and remote                                                   |
+| `init`   | Create boilerplate files for new issues or comments                                                  |
 
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |
@@ -231,7 +231,7 @@ a gh pr-review reply push <pr-number> [options]
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open.
 
 Requires `reply pull` to have been run first.
 
