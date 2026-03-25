@@ -241,16 +241,15 @@ fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<
     let mut paths = Vec::new();
     let dir = ctx.storage.dir();
 
-    if changeset.body.is_some() {
-        paths.push(dir.join("issue.md"));
-    }
-
-    if changeset.title.is_some()
+    // Both body and metadata (title, labels, sub-issues, parent-issue) are
+    // stored in issue.md's YAML frontmatter, so any change requires issue.md approval.
+    let issue_md_changed = changeset.body.is_some()
+        || changeset.title.is_some()
         || changeset.labels.is_some()
         || changeset.sub_issues.is_some()
-        || changeset.parent_issue.is_some()
-    {
-        paths.push(dir.join("metadata.json"));
+        || changeset.parent_issue.is_some();
+    if issue_md_changed {
+        paths.push(dir.join("issue.md"));
     }
 
     for change in &changeset.comments {

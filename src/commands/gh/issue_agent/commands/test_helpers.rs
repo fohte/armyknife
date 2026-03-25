@@ -186,9 +186,11 @@ impl<'a> TestSetup<'a> {
 
         let storage = IssueStorage::from_dir(self.dir);
 
-        // Approve all local files so push tests pass the approval check
+        // Approve issue.md so push tests pass the approval check.
+        // metadata.json does not exist in production (metadata is in issue.md frontmatter),
+        // but tests use legacy format with separate files. The approval check only looks
+        // at issue.md since that's where all issue data lives.
         approve_file(&self.dir.join("issue.md"));
-        approve_file(&self.dir.join("metadata.json"));
 
         (mock, storage)
     }
