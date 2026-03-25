@@ -139,13 +139,6 @@ where
 
     // Review complete - read the final document state
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
-
-    // Return None if the document was not approved, letting callers decide
-    // how to handle it (exit 1, print message, etc.)
-    if !document.frontmatter.is_approved() {
-        return Ok(None);
-    }
-
     Ok(Some(document))
 }
 

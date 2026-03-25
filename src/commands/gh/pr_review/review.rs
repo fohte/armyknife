@@ -127,14 +127,17 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         repo_slug: format!("{owner}/{repo}"),
     };
 
-    let result = start_review::<ThreadsFrontmatter, _>(
+    let document = start_review::<ThreadsFrontmatter, _>(
         &threads_path,
         &window_title,
         &handler,
         &config.editor,
     )?;
 
-    if result.is_none() {
+    let approved = document
+        .as_ref()
+        .is_some_and(|d| d.frontmatter.is_approved());
+    if !approved {
         std::process::exit(1);
     }
 

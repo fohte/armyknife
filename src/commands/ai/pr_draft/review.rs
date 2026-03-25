@@ -103,14 +103,17 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    let result = start_review::<Frontmatter, _>(
+    let document = start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
     )?;
 
-    if result.is_none() {
+    let approved = document
+        .as_ref()
+        .is_some_and(|d| d.frontmatter.is_approved());
+    if !approved {
         eprintln!("Review cancelled.");
         std::process::exit(1);
     }

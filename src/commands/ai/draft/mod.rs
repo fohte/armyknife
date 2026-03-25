@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
-    start_review,
+    DocumentSchema, FifoSignalGuard, ReviewHandler, complete_review, start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -33,22 +32,19 @@ pub struct DraftArgs {
     pub done_fifo: Option<PathBuf>,
 }
 
-/// Permissive schema for file editing that checks `submit` field for approval.
+/// Permissive schema for simple file editing that accepts any frontmatter.
 ///
 /// Uses `#[serde(flatten)]` with a catch-all map to ignore unknown fields,
 /// allowing files with arbitrary YAML frontmatter to be opened without errors.
-/// The `submit` field is used to indicate approval when present and set to `true`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmptySchema {
-    #[serde(default)]
-    pub submit: bool,
     #[serde(flatten)]
     _extra: std::collections::HashMap<String, serde_yaml::Value>,
 }
 
 impl DocumentSchema for EmptySchema {
     fn is_approved(&self) -> bool {
-        self.submit
+        false
     }
 }
 
@@ -80,16 +76,7 @@ impl ReviewHandler<EmptySchema> for DraftHandler {
         args
     }
 
-    fn on_review_complete(&self, document: &Document<EmptySchema>) -> HilResult<()> {
-        if document.frontmatter.is_approved() {
-            document.save_approval()?;
-            println!("Approved.");
-        } else {
-            document.remove_approval()?;
-            println!("Not approved. Set 'submit: true' in the frontmatter to approve.");
-        }
-        Ok(())
-    }
+    // Uses default on_review_complete (does nothing)
 }
 
 pub fn run(args: &DraftArgs) -> anyhow::Result<()> {
@@ -125,12 +112,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
             format!("Draft: {}", file_name)
         });
 
-    let result =
-        start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
-
-    if result.is_none() {
-        std::process::exit(1);
-    }
+    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
 
     Ok(())
 }
