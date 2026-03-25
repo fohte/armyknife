@@ -13,6 +13,7 @@ mod error;
 mod lock;
 mod tmux;
 
+pub use approval::ApprovalManager;
 pub use document::{Document, DocumentSchema};
 pub use editor::{LaunchOptions, launch_terminal, run_editor};
 pub use error::{HumanInTheLoopError, Result};

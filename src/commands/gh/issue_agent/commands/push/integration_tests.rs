@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
-    TestSetup, create_comment_file, setup_local_comment, test_dir,
+    TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
 };
 use crate::infra::github::RemoteComment;
 use rstest::rstest;
@@ -259,6 +259,7 @@ async fn test_updates_own_comment(test_dir: TempDir) {
             "Updated",
         ),
     );
+    approve_file(&test_dir.path().join("comments/001_comment_12345.md"));
     let ctx = mock.repo("owner", "repo");
     ctx.comment().update().await;
     ctx.issue(123).get().await;
@@ -279,6 +280,7 @@ async fn test_updates_own_comment(test_dir: TempDir) {
 async fn test_creates_new_comment(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
+    approve_file(&test_dir.path().join("comments/new_my_comment.md"));
     let ctx = mock.repo("owner", "repo");
     ctx.issue(123).create_comment().await;
     ctx.issue(123).get().await;
@@ -357,6 +359,7 @@ async fn test_edit_others_comment_allowed_with_flag(test_dir: TempDir) {
             "Modified",
         ),
     );
+    approve_file(&test_dir.path().join("comments/001_comment_12345.md"));
     let ctx = mock.repo("owner", "repo");
     ctx.comment().update().await;
     ctx.issue(123).get().await;
@@ -483,6 +486,50 @@ async fn test_delete_others_comment_requires_allow_delete(test_dir: TempDir) {
         result.unwrap_err().to_string(),
         "Cannot delete other user's comment (database_id: 12345, author: otheruser). Use --allow-delete to allow."
     );
+}
+
+// Approval check tests
+#[rstest]
+#[case::fails_without_approval(false, false)]
+#[case::dry_run_skips_approval_check(true, true)]
+#[tokio::test]
+async fn test_push_approval_check(
+    test_dir: TempDir,
+    #[case] dry_run: bool,
+    #[case] should_succeed: bool,
+) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .local_body("Changed body")
+        .remote_body("Original body")
+        .build()
+        .await;
+
+    // Remove the .approve file for issue.md that TestSetup creates
+    let _ = std::fs::remove_file(test_dir.path().join("issue.md.approve"));
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args(dry_run, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+
+    if should_succeed {
+        assert!(
+            result.is_ok(),
+            "push should succeed but failed: {:?}",
+            result.err()
+        );
+    } else {
+        let err = result.expect_err("push should fail without approval");
+        assert!(
+            err.to_string().contains("not been approved"),
+            "Expected approval error, got: {}",
+            err
+        );
+    }
 }
 
 // Test run_with_client_and_storage rejects NewIssuePath

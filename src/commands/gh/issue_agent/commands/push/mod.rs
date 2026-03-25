@@ -14,8 +14,9 @@ use super::common;
 use super::common::IssueContext;
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::infra::github::GitHubClient;
+use crate::shared::human_in_the_loop::ApprovalManager;
 
-use changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
+use changeset::{ChangeSet, CommentChange, DetectOptions, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
 
 /// Target for push command: either an issue number or a path to new issue directory.
@@ -194,6 +195,11 @@ async fn run_with_context(
     let has_changes = changeset.has_changes();
     changeset.display()?;
 
+    // Verify approval before applying (skip for dry-run)
+    if !args.dry_run && has_changes {
+        verify_changeset_approval(&changeset, ctx)?;
+    }
+
     if !args.dry_run && has_changes {
         changeset
             .apply(
@@ -217,12 +223,85 @@ async fn run_with_context(
         let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;
+
+        // Clean up .approve files after successful push
+        cleanup_approve_files(&changeset, ctx);
     }
 
     // Show result
     print_result(args.dry_run, has_changes);
 
     Ok(())
+}
+
+/// Collect file paths that require approval for the given changeset.
+///
+/// Deletions are excluded because the file no longer exists locally.
+fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let dir = ctx.storage.dir();
+
+    // Both body and metadata (title, labels, sub-issues, parent-issue) are
+    // stored in issue.md's YAML frontmatter, so any change requires issue.md approval.
+    let issue_md_changed = changeset.body.is_some()
+        || changeset.title.is_some()
+        || changeset.labels.is_some()
+        || changeset.sub_issues.is_some()
+        || changeset.parent_issue.is_some();
+    if issue_md_changed {
+        paths.push(dir.join("issue.md"));
+    }
+
+    for change in &changeset.comments {
+        match change {
+            CommentChange::New { filename, .. } | CommentChange::Updated { filename, .. } => {
+                paths.push(dir.join("comments").join(filename));
+            }
+            CommentChange::Deleted { .. } => {
+                // Deletions don't have a local file to approve
+            }
+        }
+    }
+
+    paths
+}
+
+/// Verify that all changed files have been approved via `a gh issue-agent review`.
+fn verify_changeset_approval(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> anyhow::Result<()> {
+    let paths = collect_approval_paths(changeset, ctx);
+    let mut unapproved = Vec::new();
+
+    for path in &paths {
+        let manager = ApprovalManager::new(path);
+        if let Err(e) = manager.verify() {
+            use crate::shared::human_in_the_loop::HumanInTheLoopError;
+            match e {
+                HumanInTheLoopError::NotApproved | HumanInTheLoopError::ModifiedAfterApproval => {
+                    unapproved.push(path.display().to_string());
+                }
+                other => return Err(other.into()),
+            }
+        }
+    }
+
+    if !unapproved.is_empty() {
+        let files = unapproved.join("\n  ");
+        anyhow::bail!(
+            "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+            files
+        );
+    }
+
+    Ok(())
+}
+
+/// Remove .approve files for changed files after successful push.
+fn cleanup_approve_files(changeset: &ChangeSet<'_>, ctx: &IssueContext) {
+    let paths = collect_approval_paths(changeset, ctx);
+    for path in &paths {
+        let manager = ApprovalManager::new(path);
+        let _ = manager.remove();
+    }
 }
 
 fn print_result(dry_run: bool, has_changes: bool) {

@@ -185,6 +185,23 @@ impl<'a> TestSetup<'a> {
         .unwrap();
 
         let storage = IssueStorage::from_dir(self.dir);
+
+        // Approve issue.md so push tests pass the approval check.
+        // metadata.json does not exist in production (metadata is in issue.md frontmatter),
+        // but tests use legacy format with separate files. The approval check only looks
+        // at issue.md since that's where all issue data lives.
+        approve_file(&self.dir.join("issue.md"));
+
         (mock, storage)
+    }
+}
+
+/// Create an .approve file for the given path, simulating `a gh issue-agent review` approval.
+pub fn approve_file(path: &Path) {
+    use crate::shared::human_in_the_loop::ApprovalManager;
+
+    if path.exists() {
+        let manager = ApprovalManager::new(path);
+        manager.save().unwrap();
     }
 }

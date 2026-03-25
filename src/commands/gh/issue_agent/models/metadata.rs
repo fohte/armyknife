@@ -34,6 +34,9 @@ pub struct IssueFrontmatter {
     pub parent_issue: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_issues: Vec<String>,
+    /// Approval flag for push. Set to `true` via `a gh issue-agent review` to approve changes.
+    #[serde(default)]
+    pub submit: bool,
     pub readonly: ReadonlyMetadata,
 }
 
@@ -47,6 +50,7 @@ impl IssueFrontmatter {
             milestone: issue.milestone.as_ref().map(|m| m.title.clone()),
             parent_issue: issue.parent_issue.as_ref().map(|r| r.to_ref_string()),
             sub_issues: issue.sub_issues.iter().map(|r| r.to_ref_string()).collect(),
+            submit: false,
             readonly: ReadonlyMetadata {
                 number: issue.number,
                 state: issue.state.clone(),

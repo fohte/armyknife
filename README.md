@@ -145,13 +145,14 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command | Description                                         |
-| ------- | --------------------------------------------------- |
-| `view`  | View issue and comments (read-only, no local cache) |
-| `pull`  | Fetch issue and save locally                        |
-| `push`  | Push local changes to GitHub                        |
-| `diff`  | Show colored diff between local changes and remote  |
-| `init`  | Create boilerplate files for new issues or comments |
+| Command  | Description                                                      |
+| -------- | ---------------------------------------------------------------- |
+| `view`   | View issue and comments (read-only, no local cache)              |
+| `pull`   | Fetch issue and save locally                                     |
+| `review` | Review a file before pushing (opens editor, requires approval)   |
+| `push`   | Push local changes to GitHub (requires file approval via review) |
+| `diff`   | Show colored diff between local changes and remote               |
+| `init`   | Create boilerplate files for new issues or comments              |
 
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |

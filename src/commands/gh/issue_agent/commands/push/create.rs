@@ -247,6 +247,7 @@ mod tests {
                     - bug
                     assignees: []
                     milestone: null
+                    submit: false
                     readonly:
                       number: 42
                       state: OPEN

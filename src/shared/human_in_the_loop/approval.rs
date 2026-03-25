@@ -15,10 +15,15 @@ pub struct ApprovalManager {
 
 impl ApprovalManager {
     /// Create a new approval manager for a document.
+    ///
+    /// The approve file is the document path with `.approve` appended
+    /// (e.g., `issue.md` → `issue.md.approve`, `metadata.json` → `metadata.json.approve`).
     pub fn new(document_path: &Path) -> Self {
+        let mut approve_name = document_path.as_os_str().to_os_string();
+        approve_name.push(".approve");
         Self {
             document_path: document_path.to_path_buf(),
-            approve_path: document_path.with_extension("md.approve"),
+            approve_path: PathBuf::from(approve_name),
         }
     }
 
