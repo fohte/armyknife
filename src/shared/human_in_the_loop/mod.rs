@@ -78,11 +78,6 @@ where
         ));
     }
 
-    // Read approval state before editing to detect changes
-    let approved_before = Document::<S>::from_path(document_path.to_path_buf())?
-        .frontmatter
-        .is_approved();
-
     // Check for existing lock
     if LockGuard::is_locked(document_path) {
         eprintln!("Skipped: Editor is already open for this file.");
@@ -145,8 +140,8 @@ where
     // Review complete - read the final document state
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
 
-    // Check if approval state changed
-    if document.frontmatter.is_approved() == approved_before {
+    // Check if the document was approved
+    if !document.frontmatter.is_approved() {
         return Err(HumanInTheLoopError::NotApproved);
     }
 
