@@ -85,7 +85,7 @@ enum ProcessResult {
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
 /// to avoid calling external commands (tmux, hammerspoon, etc.).
 struct SideEffects {
-    /// Call tmux commands (get_pane_info_by_pid, set/unset_pane_option, refresh_status)
+    /// Call tmux commands (get_pane_info_by_pid, set_pane_option, refresh_status)
     tmux: bool,
     /// Send/remove notifications via hammerspoon
     notifications: bool,
