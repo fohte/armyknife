@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.140](https://github.com/fohte/armyknife/compare/v0.1.139...v0.1.140) (2026-04-07)
+
+
+### Bug Fixes
+
+* **cc/resume:** preserve tmux pane option so `a cc resume` works after session ends ([#474](https://github.com/fohte/armyknife/issues/474)) ([6f9aa49](https://github.com/fohte/armyknife/commit/6f9aa49f5038c8116e624b192ef03d48659f83f8))
+
 ## [0.1.139](https://github.com/fohte/armyknife/compare/v0.1.138...v0.1.139) (2026-03-25)
 
 
