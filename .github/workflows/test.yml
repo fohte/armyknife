@@ -55,15 +55,9 @@ jobs:
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-<<<<<<< before updating
-      - uses: jdx/mise-action@v3
-        with:
-          cache: true
-=======
       - uses: jdx/mise-action@v4
 
       - run: cargo fetch
->>>>>>> after updating
 
       - name: Run lefthook
         id: lefthook
@@ -110,13 +104,7 @@ jobs:
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-<<<<<<< before updating
-      - uses: jdx/mise-action@v3
-        with:
-          cache: true
-=======
       - uses: jdx/mise-action@v4
->>>>>>> after updating
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

@@ -15,12 +15,8 @@ node = "24.14.0"
 shellcheck = "0.11.0"
 shfmt = "3.13.0"
 
-<<<<<<< before updating
 # sandbox runtime for tests
 "npm:@anthropic-ai/sandbox-runtime" = "0.0.42"
-
-[settings]
-npm.bun = true
 
 [tasks.test]
 description = "Run tests in sandbox"
@@ -28,8 +24,3 @@ run = ["cargo test --no-run", "srt --settings ./srt-settings.json cargo test"]
 [tasks.test.env]
 # Disable sccache (if configured locally) to avoid sandbox permission issues
 RUSTC_WRAPPER = ""
-=======
-[env]
-# Share target dir across worktrees to avoid full recompilation
-CARGO_TARGET_DIR = "{{config_root}}/target"
->>>>>>> after updating
