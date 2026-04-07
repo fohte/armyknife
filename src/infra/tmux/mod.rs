@@ -297,13 +297,6 @@ pub fn set_pane_option(pane_id: &str, option: &str, value: &str) -> Result<()> {
     run_tmux(&["set-option", "-p", "-t", pane_id, option, value])
 }
 
-/// Unset a user option on a specific tmux pane.
-/// User options are prefixed with '@' (e.g., "@armyknife-session-id").
-/// This does not require being inside tmux, as it targets a specific pane ID.
-pub fn unset_pane_option(pane_id: &str, option: &str) -> Result<()> {
-    run_tmux(&["set-option", "-p", "-u", "-t", pane_id, option])
-}
-
 /// Get a user option value from the current tmux pane.
 /// Returns None if not in tmux, the option is not set, or the command fails.
 pub fn get_current_pane_option(option: &str) -> Option<String> {
@@ -319,12 +312,6 @@ pub fn get_current_pane_option(option: &str) -> Option<String> {
     } else {
         Some(output)
     }
-}
-
-/// Get the current pane's ID (e.g., "%0").
-/// Returns None if not in tmux or if the command fails.
-pub fn current_pane_id() -> Option<String> {
-    query_tmux_value("#{pane_id}")
 }
 
 /// Refresh all tmux clients' status bars.

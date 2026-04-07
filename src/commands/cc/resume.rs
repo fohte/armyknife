@@ -29,11 +29,6 @@ pub fn run(_args: &ResumeArgs) -> Result<()> {
         );
     }
 
-    // Clear the pane option before exec, so after session ends the option is clean
-    if let Some(pane_id) = tmux::current_pane_id() {
-        let _ = tmux::unset_pane_option(&pane_id, TMUX_SESSION_OPTION);
-    }
-
     // Find claude command path
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
