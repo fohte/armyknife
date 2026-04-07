@@ -85,7 +85,7 @@ enum ProcessResult {
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
 /// to avoid calling external commands (tmux, hammerspoon, etc.).
 struct SideEffects {
-    /// Call tmux commands (get_pane_info_by_pid, set/unset_pane_option, refresh_status)
+    /// Call tmux commands (get_pane_info_by_pid, set_pane_option, refresh_status)
     tmux: bool,
     /// Send/remove notifications via hammerspoon
     notifications: bool,
@@ -129,11 +129,6 @@ fn process_hook_event_impl(
     // `claude -c` resume can restore label and ancestor chain.
     // Ended sessions are garbage-collected by cleanup_stale_sessions.
     if event == HookEvent::SessionEnd {
-        if side_effects.tmux
-            && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
-        {
-            let _ = tmux::unset_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION);
-        }
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
             session.status = SessionStatus::Ended;
             session.updated_at = Utc::now();
