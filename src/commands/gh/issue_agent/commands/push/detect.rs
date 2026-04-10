@@ -9,12 +9,27 @@ use super::changeset::{
     BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
 };
 
+/// Normalize body text for comparison.
+///
+/// GitHub API may return body with trailing newlines or CRLF line endings that
+/// are not preserved in local files after pull (or vice versa). Normalizing
+/// before comparison prevents false positives where a no-op pull would be
+/// detected as a body change.
+///
+/// Leading whitespace is intentionally preserved because it can be
+/// semantically significant in markdown (e.g., indented code blocks).
+fn normalize_body_for_compare(body: &str) -> String {
+    body.replace("\r\n", "\n")
+        .trim_end_matches(['\n', '\r', ' ', '\t'])
+        .to_string()
+}
+
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
     remote_issue: &'a Issue,
 ) -> Option<BodyChange<'a>> {
     let remote_body = remote_issue.body.as_deref().unwrap_or("");
-    if local_body != remote_body {
+    if normalize_body_for_compare(local_body) != normalize_body_for_compare(remote_body) {
         Some(BodyChange {
             local: local_body,
             remote: remote_body,
@@ -361,7 +376,8 @@ pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
 
     // Check body conflict using lastEditedAt
     let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
-    let local_body_changed = input.local_body != remote_body;
+    let local_body_changed =
+        normalize_body_for_compare(input.local_body) != normalize_body_for_compare(remote_body);
 
     if local_body_changed {
         let local_body_ts = input.local_metadata.last_edited_at.as_deref();
@@ -478,6 +494,155 @@ mod tests {
                     "Cannot edit other user's comment: 001.md (author: {}). Use --edit-others to allow.",
                     author
                 )
+            );
+        }
+    }
+
+    mod detect_body_change_tests {
+        use super::*;
+
+        /// Pull stores the raw remote body (may end with `\n\n`) into issue.md,
+        /// and the read-side `parse_issue_md` strips trailing newlines before
+        /// comparison. Without normalization, detect_body_change would report a
+        /// no-op pull as a body change. Make sure these cases are NOT detected
+        /// as changes.
+        // Use `concat!` to split multi-escape string literals so that the
+        // `prefer-indoc` lint (which targets literals with 2+ `\n` escapes)
+        // does not fire on intentionally control-character-heavy test data.
+        #[rstest]
+        #[case::local_no_trailing_vs_remote_one("body", "body\n")]
+        #[case::local_no_trailing_vs_remote_two("body", concat!("body\n", "\n"))]
+        #[case::local_one_vs_remote_two("body\n", concat!("body\n", "\n"))]
+        #[case::both_no_trailing("body", "body")]
+        #[case::crlf_vs_lf(concat!("body\n", "line2"), concat!("body\r\n", "line2\r\n"))]
+        #[case::trailing_spaces("body", "body   ")]
+        #[case::trailing_mixed_whitespace("body", concat!("body \t\n", "\n"))]
+        #[case::multiline_with_trailing(
+            indoc! {"
+                line 1
+                - [ ] task
+            "},
+            indoc! {"
+                line 1
+                - [ ] task
+
+            "},
+        )]
+        fn test_no_change_with_whitespace_difference(
+            #[case] local_body: &str,
+            #[case] remote_body: &str,
+        ) {
+            let issue = factories::issue_with(|i| {
+                i.body = Some(remote_body.to_string());
+            });
+            assert!(
+                detect_body_change(local_body, &issue).is_none(),
+                "Expected no change for local={:?}, remote={:?}",
+                local_body,
+                remote_body,
+            );
+        }
+
+        #[rstest]
+        #[case::different_text("body", "body modified")]
+        #[case::line_added("line 1", "line 1\nline 2")]
+        #[case::line_removed("line 1\nline 2", "line 1")]
+        #[case::leading_whitespace_preserved(" body", "body")]
+        #[case::empty_vs_nonempty("", "body")]
+        fn test_actual_change_is_detected(#[case] local_body: &str, #[case] remote_body: &str) {
+            let issue = factories::issue_with(|i| {
+                i.body = Some(remote_body.to_string());
+            });
+            assert!(
+                detect_body_change(local_body, &issue).is_some(),
+                "Expected a change for local={:?}, remote={:?}",
+                local_body,
+                remote_body,
+            );
+        }
+    }
+
+    mod check_conflicts_body_tests {
+        use super::*;
+        use chrono::{TimeZone, Utc};
+
+        fn metadata_default() -> IssueMetadata {
+            IssueMetadata {
+                number: 1,
+                title: "Test".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
+            }
+        }
+
+        /// Even if the remote `lastEditedAt` differs from the local one, a
+        /// whitespace-only delta in the body must not be reported as a
+        /// conflict. Without normalization, a no-op pull followed by a remote
+        /// edit on another field would surface a spurious body conflict.
+        #[rstest]
+        #[case::trailing_newline("body", "body\n")]
+        #[case::trailing_two_newlines("body", concat!("body\n", "\n"))]
+        #[case::crlf("body\nline", concat!("body\r\n", "line\r\n"))]
+        fn test_no_body_conflict_with_whitespace_difference(
+            #[case] local_body: &str,
+            #[case] remote_body: &str,
+        ) {
+            let metadata = metadata_default();
+            let remote_issue = factories::issue_with(|i| {
+                i.body = Some(remote_body.to_string());
+                // Force the timestamps to differ so that the only reason a
+                // conflict could be reported is a detected body change.
+                i.last_edited_at = Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap());
+            });
+
+            let input = ConflictCheckInput {
+                local_metadata: &metadata,
+                local_body,
+                local_comments: &[],
+                remote_issue: &remote_issue,
+                remote_comments: &[],
+            };
+
+            let conflicts = check_conflicts(&input);
+            assert!(
+                !conflicts.iter().any(|c| matches!(c, Conflict::Body { .. })),
+                "Expected no body conflict, got: {:?}",
+                conflicts,
+            );
+        }
+
+        #[rstest]
+        fn test_real_body_conflict_is_detected() {
+            let metadata = IssueMetadata {
+                last_edited_at: Some("2024-01-01T00:00:00+00:00".to_string()),
+                ..metadata_default()
+            };
+            let remote_issue = factories::issue_with(|i| {
+                i.body = Some("remote body".to_string());
+                i.last_edited_at = Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap());
+            });
+
+            let input = ConflictCheckInput {
+                local_metadata: &metadata,
+                local_body: "local body",
+                local_comments: &[],
+                remote_issue: &remote_issue,
+                remote_comments: &[],
+            };
+
+            let conflicts = check_conflicts(&input);
+            assert!(
+                conflicts.iter().any(|c| matches!(c, Conflict::Body { .. })),
+                "Expected a body conflict, got: {:?}",
+                conflicts,
             );
         }
     }

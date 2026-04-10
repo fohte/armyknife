@@ -27,6 +27,21 @@ impl LocalChanges {
     }
 }
 
+/// Normalize body text for comparison.
+///
+/// GitHub API may return body with trailing newlines or CRLF line endings that
+/// are not preserved in local files after pull (or vice versa). Normalizing
+/// before comparison prevents false positives where a no-op pull would be
+/// detected as a body change.
+///
+/// Leading whitespace is intentionally preserved because it can be
+/// semantically significant in markdown (e.g., indented code blocks).
+fn normalize_body_for_compare(body: &str) -> String {
+    body.replace("\r\n", "\n")
+        .trim_end_matches(['\n', '\r', ' ', '\t'])
+        .to_string()
+}
+
 impl IssueStorage {
     /// Detect local changes compared to remote data, returning detailed change info.
     pub fn detect_changes(
@@ -39,7 +54,7 @@ impl IssueStorage {
         // Check issue body
         if let Ok(local_body) = self.read_body() {
             let remote_body = remote_issue.body.as_deref().unwrap_or("");
-            if local_body != remote_body {
+            if normalize_body_for_compare(&local_body) != normalize_body_for_compare(remote_body) {
                 changes.body_changed = true;
             }
         }
@@ -173,6 +188,57 @@ mod tests {
         let changes = storage.detect_changes(&test_issue, &[]).unwrap();
         assert!(changes.has_changes());
         assert!(changes.body_changed);
+    }
+
+    /// Pull writes the raw remote body into issue.md, and `read_body` strips
+    /// trailing newlines on read. Without normalization in detect_changes, a
+    /// no-op pull whose remote body ends with `\n` or `\n\n` would always be
+    /// reported as a body change.
+    // Use `concat!` to split multi-escape string literals so that the
+    // `prefer-indoc` lint (which targets literals with 2+ `\n` escapes)
+    // does not fire on intentionally control-character-heavy test data.
+    #[rstest]
+    #[case::remote_trailing_newline("Original body", "Original body\n")]
+    #[case::remote_trailing_two_newlines("Original body", concat!("Original body\n", "\n"))]
+    #[case::remote_crlf("Original body", "Original body\r\n")]
+    #[case::remote_trailing_spaces("Original body", "Original body  ")]
+    #[case::remote_multiline_crlf("line 1\nline 2", concat!("line 1\r\n", "line 2\r\n"))]
+    fn test_body_unchanged_with_whitespace_difference(
+        test_dir: TempDir,
+        #[case] local_body: &str,
+        #[case] remote_body: &str,
+    ) {
+        let storage = IssueStorage::from_dir(test_dir.path());
+        // Use the legacy body-only format. read_body strips trailing newlines
+        // so the local side mirrors what we would see after a clean pull.
+        fs::write(test_dir.path().join("issue.md"), local_body).unwrap();
+
+        let issue = Issue {
+            number: 123,
+            title: "Test Issue".to_string(),
+            body: Some(remote_body.to_string()),
+            state: "OPEN".to_string(),
+            labels: vec![Label {
+                name: "bug".to_string(),
+            }],
+            assignees: vec![],
+            milestone: None,
+            author: Some(Author {
+                login: "testuser".to_string(),
+            }),
+            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+            last_edited_at: None,
+            parent_issue: None,
+            sub_issues: vec![],
+        };
+
+        let changes = storage.detect_changes(&issue, &[]).unwrap();
+        assert!(
+            !changes.body_changed,
+            "Expected body_changed=false for local={:?}, remote={:?}",
+            local_body, remote_body,
+        );
     }
 
     #[rstest]
