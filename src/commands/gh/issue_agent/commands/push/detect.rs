@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::LocalComment;
 
@@ -9,33 +10,18 @@ use super::changeset::{
     BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
 };
 
-/// Normalize body text for comparison.
-///
-/// GitHub API may return body with trailing newlines or CRLF line endings that
-/// are not preserved in local files after pull (or vice versa). Normalizing
-/// before comparison prevents false positives where a no-op pull would be
-/// detected as a body change.
-///
-/// Leading whitespace is intentionally preserved because it can be
-/// semantically significant in markdown (e.g., indented code blocks).
-fn normalize_body_for_compare(body: &str) -> String {
-    body.replace("\r\n", "\n")
-        .trim_end_matches(['\n', '\r', ' ', '\t'])
-        .to_string()
-}
-
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
     remote_issue: &'a Issue,
 ) -> Option<BodyChange<'a>> {
     let remote_body = remote_issue.body.as_deref().unwrap_or("");
-    if normalize_body_for_compare(local_body) != normalize_body_for_compare(remote_body) {
+    if bodies_equal(local_body, remote_body) {
+        None
+    } else {
         Some(BodyChange {
             local: local_body,
             remote: remote_body,
         })
-    } else {
-        None
     }
 }
 
@@ -376,8 +362,7 @@ pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
 
     // Check body conflict using lastEditedAt
     let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
-    let local_body_changed =
-        normalize_body_for_compare(input.local_body) != normalize_body_for_compare(remote_body);
+    let local_body_changed = !bodies_equal(input.local_body, remote_body);
 
     if local_body_changed {
         let local_body_ts = input.local_metadata.last_edited_at.as_deref();

@@ -1,3 +1,4 @@
+pub(crate) mod body_compare;
 pub mod commands;
 pub mod format;
 pub mod models;

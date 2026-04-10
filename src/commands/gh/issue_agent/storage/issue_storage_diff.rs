@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::error::Result;
 use super::issue_storage::IssueStorage;
+use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue};
 
 /// Result of change detection between local and remote data.
@@ -27,21 +28,6 @@ impl LocalChanges {
     }
 }
 
-/// Normalize body text for comparison.
-///
-/// GitHub API may return body with trailing newlines or CRLF line endings that
-/// are not preserved in local files after pull (or vice versa). Normalizing
-/// before comparison prevents false positives where a no-op pull would be
-/// detected as a body change.
-///
-/// Leading whitespace is intentionally preserved because it can be
-/// semantically significant in markdown (e.g., indented code blocks).
-fn normalize_body_for_compare(body: &str) -> String {
-    body.replace("\r\n", "\n")
-        .trim_end_matches(['\n', '\r', ' ', '\t'])
-        .to_string()
-}
-
 impl IssueStorage {
     /// Detect local changes compared to remote data, returning detailed change info.
     pub fn detect_changes(
@@ -54,7 +40,7 @@ impl IssueStorage {
         // Check issue body
         if let Ok(local_body) = self.read_body() {
             let remote_body = remote_issue.body.as_deref().unwrap_or("");
-            if normalize_body_for_compare(&local_body) != normalize_body_for_compare(remote_body) {
+            if !bodies_equal(&local_body, remote_body) {
                 changes.body_changed = true;
             }
         }
@@ -205,6 +191,7 @@ mod tests {
     #[case::remote_multiline_crlf("line 1\nline 2", concat!("line 1\r\n", "line 2\r\n"))]
     fn test_body_unchanged_with_whitespace_difference(
         test_dir: TempDir,
+        mut test_issue: Issue,
         #[case] local_body: &str,
         #[case] remote_body: &str,
     ) {
@@ -213,27 +200,9 @@ mod tests {
         // so the local side mirrors what we would see after a clean pull.
         fs::write(test_dir.path().join("issue.md"), local_body).unwrap();
 
-        let issue = Issue {
-            number: 123,
-            title: "Test Issue".to_string(),
-            body: Some(remote_body.to_string()),
-            state: "OPEN".to_string(),
-            labels: vec![Label {
-                name: "bug".to_string(),
-            }],
-            assignees: vec![],
-            milestone: None,
-            author: Some(Author {
-                login: "testuser".to_string(),
-            }),
-            created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-            updated_at: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-            last_edited_at: None,
-            parent_issue: None,
-            sub_issues: vec![],
-        };
+        test_issue.body = Some(remote_body.to_string());
 
-        let changes = storage.detect_changes(&issue, &[]).unwrap();
+        let changes = storage.detect_changes(&test_issue, &[]).unwrap();
         assert!(
             !changes.body_changed,
             "Expected body_changed=false for local={:?}, remote={:?}",
