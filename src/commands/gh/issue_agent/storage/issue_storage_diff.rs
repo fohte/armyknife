@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::error::Result;
 use super::issue_storage::IssueStorage;
+use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue};
 
 /// Result of change detection between local and remote data.
@@ -39,7 +40,7 @@ impl IssueStorage {
         // Check issue body
         if let Ok(local_body) = self.read_body() {
             let remote_body = remote_issue.body.as_deref().unwrap_or("");
-            if local_body != remote_body {
+            if !bodies_equal(&local_body, remote_body) {
                 changes.body_changed = true;
             }
         }
@@ -173,6 +174,40 @@ mod tests {
         let changes = storage.detect_changes(&test_issue, &[]).unwrap();
         assert!(changes.has_changes());
         assert!(changes.body_changed);
+    }
+
+    /// Pull writes the raw remote body into issue.md, and `read_body` strips
+    /// trailing newlines on read. Without normalization in detect_changes, a
+    /// no-op pull whose remote body ends with `\n` or `\n\n` would always be
+    /// reported as a body change.
+    // Use `concat!` to split multi-escape string literals so that the
+    // `prefer-indoc` lint (which targets literals with 2+ `\n` escapes)
+    // does not fire on intentionally control-character-heavy test data.
+    #[rstest]
+    #[case::remote_trailing_newline("Original body", "Original body\n")]
+    #[case::remote_trailing_two_newlines("Original body", concat!("Original body\n", "\n"))]
+    #[case::remote_crlf("Original body", "Original body\r\n")]
+    #[case::remote_trailing_spaces("Original body", "Original body  ")]
+    #[case::remote_multiline_crlf("line 1\nline 2", concat!("line 1\r\n", "line 2\r\n"))]
+    fn test_body_unchanged_with_whitespace_difference(
+        test_dir: TempDir,
+        mut test_issue: Issue,
+        #[case] local_body: &str,
+        #[case] remote_body: &str,
+    ) {
+        let storage = IssueStorage::from_dir(test_dir.path());
+        // Use the legacy body-only format. read_body strips trailing newlines
+        // so the local side mirrors what we would see after a clean pull.
+        fs::write(test_dir.path().join("issue.md"), local_body).unwrap();
+
+        test_issue.body = Some(remote_body.to_string());
+
+        let changes = storage.detect_changes(&test_issue, &[]).unwrap();
+        assert!(
+            !changes.body_changed,
+            "Expected body_changed=false for local={:?}, remote={:?}",
+            local_body, remote_body,
+        );
     }
 
     #[rstest]
