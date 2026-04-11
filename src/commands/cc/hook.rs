@@ -16,7 +16,6 @@ use super::error::CcError;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use crate::infra::notification::{Notification, NotificationAction};
-use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{self, Config, Terminal};
@@ -224,13 +223,8 @@ fn process_hook_event_impl(
                 current_tool: None,
                 label: env.session_label.clone(),
                 ancestor_session_ids,
-                claude_pid: None,
             }
         });
-
-    // Snapshot the previous status before overwriting, so downstream logic
-    // can detect transitions (e.g., resuming from Paused to re-discover PID).
-    let previous_status = session.status;
 
     // Update session fields
     session.cwd.clone_from(&input.cwd);
@@ -267,18 +261,6 @@ fn process_hook_event_impl(
         HookEvent::PostToolUse | HookEvent::Stop => None,
         _ => session.current_tool, // Keep existing value for other events
     };
-
-    // Record the ancestor `claude` process PID so that `cc sweep` can
-    // SIGTERM it later. If the session was previously Paused and is now
-    // active again, the old PID is stale (the process was killed), so we
-    // unconditionally re-discover on resume events. For first observation
-    // we also look it up. The lookup uses `ps` so it is only attempted when
-    // tmux side effects are enabled (tests disable both together).
-    let resuming_from_paused =
-        previous_status == SessionStatus::Paused && status != SessionStatus::Paused;
-    if side_effects.tmux && (session.claude_pid.is_none() || resuming_from_paused) {
-        session.claude_pid = process::find_ancestor_by_command(std::process::id(), "claude", 20);
-    }
 
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
@@ -1115,7 +1097,6 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            claude_pid: None,
         }
     }
 

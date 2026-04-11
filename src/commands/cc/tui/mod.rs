@@ -259,7 +259,6 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                claude_pid: None,
             })
             .collect();
 
@@ -463,7 +462,6 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                claude_pid: None,
             },
             Session {
                 session_id: "session-waiting".to_string(),
@@ -478,7 +476,6 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                claude_pid: None,
             },
             Session {
                 session_id: "session-stopped".to_string(),
@@ -493,7 +490,6 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                claude_pid: None,
             },
         ];
         App::with_sessions(sessions)

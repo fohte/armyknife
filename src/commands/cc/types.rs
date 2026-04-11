@@ -34,10 +34,6 @@ pub struct Session {
     /// child sessions can still find their nearest living ancestor.
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
-    /// PID of the `claude` process for this session, recorded by the hook.
-    /// Used by `cc sweep` to send SIGTERM when the Stopped timeout elapses.
-    #[serde(default)]
-    pub claude_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

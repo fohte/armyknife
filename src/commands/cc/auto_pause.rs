@@ -11,31 +11,29 @@ use thiserror::Error;
 
 use super::types::{Session, SessionStatus};
 
-/// Reasons why a stopped session should not (yet) be paused.
+/// Purely time/status-based pause decision.
+///
+/// This ignores whether sweep can actually locate the `claude` process -- the
+/// caller handles that separately after `Pause` is returned, because pid
+/// lookup is a side-effectful tree walk that has no place in a pure function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseDecision {
-    /// Session should be paused now (SIGTERM + mark as Paused).
+    /// Session should be paused now (caller must still resolve the pid).
     Pause,
     /// Session is not in a pausable state (e.g., Running, Ended).
     NotStopped,
     /// Session is Stopped but the timeout has not elapsed yet.
     NotYetElapsed,
-    /// No PID is recorded, so we cannot send a signal.
-    NoPid,
 }
 
 /// Determines whether a stopped session should be paused right now.
 ///
 /// Called by `sweep` once per session on each periodic run. Only `Stopped`
-/// sessions with a recorded `claude_pid` and an elapsed timeout are paused;
-/// any other state is treated as "user is still using it".
+/// sessions whose timeout has elapsed are candidates for pausing; any other
+/// state is treated as "user is still using it".
 pub fn decide_pause(session: &Session, now: DateTime<Utc>, timeout: Duration) -> PauseDecision {
     if session.status != SessionStatus::Stopped {
         return PauseDecision::NotStopped;
-    }
-
-    if session.claude_pid.is_none() {
-        return PauseDecision::NoPid;
     }
 
     let elapsed = now.signed_duration_since(session.updated_at);
@@ -144,7 +142,7 @@ mod tests {
 
     use super::*;
 
-    fn stopped_session(updated_at: DateTime<Utc>, pid: Option<u32>) -> Session {
+    fn stopped_session(updated_at: DateTime<Utc>) -> Session {
         Session {
             session_id: "sess".to_string(),
             cwd: PathBuf::from("/tmp"),
@@ -158,7 +156,6 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            claude_pid: pid,
         }
     }
 
@@ -172,7 +169,7 @@ mod tests {
         #[case] expected: PauseDecision,
     ) {
         let now = Utc::now();
-        let session = stopped_session(now - TimeDelta::seconds(elapsed_secs), Some(123));
+        let session = stopped_session(now - TimeDelta::seconds(elapsed_secs));
         let decision = decide_pause(&session, now, Duration::from_secs(timeout_secs));
         assert_eq!(decision, expected);
     }
@@ -184,7 +181,7 @@ mod tests {
     #[case::ended(SessionStatus::Ended)]
     fn decide_pause_skips_non_stopped(#[case] status: SessionStatus) {
         let now = Utc::now();
-        let mut session = stopped_session(now - TimeDelta::hours(1), Some(123));
+        let mut session = stopped_session(now - TimeDelta::hours(1));
         session.status = status;
         assert_eq!(
             decide_pause(&session, now, Duration::from_secs(60)),
@@ -193,20 +190,10 @@ mod tests {
     }
 
     #[rstest]
-    fn decide_pause_without_pid_is_not_pausable() {
-        let now = Utc::now();
-        let session = stopped_session(now - TimeDelta::hours(1), None);
-        assert_eq!(
-            decide_pause(&session, now, Duration::from_secs(60)),
-            PauseDecision::NoPid
-        );
-    }
-
-    #[rstest]
     fn decide_pause_clock_skew_is_not_yet_elapsed() {
         let now = Utc::now();
         // updated_at is in the future -- treat as not yet elapsed.
-        let session = stopped_session(now + TimeDelta::seconds(60), Some(123));
+        let session = stopped_session(now + TimeDelta::seconds(60));
         assert_eq!(
             decide_pause(&session, now, Duration::from_secs(10)),
             PauseDecision::NotYetElapsed

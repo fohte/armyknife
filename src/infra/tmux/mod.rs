@@ -9,6 +9,8 @@ use std::process::Command;
 use indoc::writedoc;
 use thiserror::Error;
 
+use crate::infra::process;
+
 #[derive(Error, Debug)]
 pub enum TmuxError {
     #[error("{}", .0)]
@@ -463,7 +465,7 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
         }
 
         // Get parent PID
-        match get_parent_pid(current_pid) {
+        match process::get_parent_pid(current_pid) {
             Some(ppid) if ppid != current_pid && ppid != 0 => current_pid = ppid,
             _ => break,
         }
@@ -472,21 +474,13 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     None
 }
 
-/// Gets the parent process ID for a given process.
-fn get_parent_pid(pid: u32) -> Option<u32> {
-    let output = Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
+/// Returns the pane_pid (the top-of-pty process tmux launched in the pane) for
+/// the given pane_id, or `None` if the pane does not exist or tmux is not
+/// running. Typically used to locate the shell that hosts a long-running
+/// process such as `claude` so callers can walk its descendants.
+pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
+    let output = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_pid}"]).ok()?;
+    output.trim().parse::<u32>().ok()
 }
 
 /// Parses a single line from tmux list-panes output for PID matching.
