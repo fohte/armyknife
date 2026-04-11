@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.141](https://github.com/fohte/armyknife/compare/v0.1.140...v0.1.141) (2026-04-11)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** stop reporting a no-op pull as a body change ([#479](https://github.com/fohte/armyknife/issues/479)) ([9fdb6f0](https://github.com/fohte/armyknife/commit/9fdb6f0edab062df5d4ff86472c52f3229ba77ff))
+
 ## [0.1.140](https://github.com/fohte/armyknife/compare/v0.1.139...v0.1.140) (2026-04-07)
 
 
