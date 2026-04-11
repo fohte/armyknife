@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
@@ -88,8 +88,8 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 
     let sessions_dir = store::sessions_dir()?;
     let sender = LibcSignalSender;
-    let resolver = TmuxPidResolver;
-    let report = sweep_impl(&sessions_dir, timeout, &sender, &resolver, args.dry_run)?;
+    let probe = TmuxSessionProbe;
+    let report = sweep_impl(&sessions_dir, timeout, &sender, &probe, args.dry_run)?;
 
     // Always print a summary in --dry-run so the user can see the reasoning.
     // Otherwise only speak up when we actually paused something, since the
@@ -109,29 +109,46 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     Ok(())
 }
 
-/// Resolves a session to the live `claude` pid that currently hosts it.
+/// Abstraction over the tmux/process queries sweep needs at runtime.
 ///
 /// Sweep runs detached from any claude process, so it cannot use its own
-/// process ancestry to find the session's claude. Instead it looks up the
-/// session's tmux pane, takes the pane_pid (the shell tmux spawned), and
-/// walks that subtree looking for a `claude` process. This is why sweep
-/// no longer needs the Stop hook to persist a pid on the session.
-pub(crate) trait PidResolver {
-    fn resolve(&self, session: &Session) -> Option<u32>;
+/// process ancestry. Instead it asks the probe two questions about each
+/// candidate session:
+///
+/// - **What was the last time the user touched this pane?**
+///   Returned by `last_activity`. We max this against `session.updated_at`
+///   so we never pause a Stopped session whose user is still typing.
+/// - **Which pid should we SIGTERM?**
+///   Returned by `resolve_pid`. Implemented by looking up the pane's
+///   pane_pid and walking its descendants for a `claude` process.
+pub(crate) trait SessionProbe {
+    /// Returns the pid of the live `claude` process hosting `session`, if one
+    /// can be located via the session's tmux pane.
+    fn resolve_pid(&self, session: &Session) -> Option<u32>;
+
+    /// Returns the unix timestamp of the most recent I/O on the tmux window
+    /// containing `session`'s pane, or `None` if tmux cannot report it.
+    fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>>;
 }
 
-struct TmuxPidResolver;
+struct TmuxSessionProbe;
 
 /// Descendant walks are bounded to this many processes. A shell hosting
 /// claude has at most a handful of children, so this is a safety cap rather
 /// than an expected limit.
 const MAX_DESCENDANT_NODES: usize = 64;
 
-impl PidResolver for TmuxPidResolver {
-    fn resolve(&self, session: &Session) -> Option<u32> {
+impl SessionProbe for TmuxSessionProbe {
+    fn resolve_pid(&self, session: &Session) -> Option<u32> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
         let pane_pid = tmux::get_pane_pid(pane_id)?;
         process::find_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
+    }
+
+    fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>> {
+        let pane_id = &session.tmux_info.as_ref()?.pane_id;
+        let ts = tmux::get_window_activity(pane_id)?;
+        Utc.timestamp_opt(ts, 0).single()
     }
 }
 
@@ -162,11 +179,11 @@ pub struct SweepReport {
 /// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
 /// timeout has elapsed. Ended sessions are ignored entirely so that the
 /// counts match what `a cc list` displays.
-pub(crate) fn sweep_impl<S: SignalSender, R: PidResolver>(
+pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
     sessions_dir: &Path,
     timeout: Duration,
     sender: &S,
-    resolver: &R,
+    probe: &P,
     dry_run: bool,
 ) -> Result<SweepReport> {
     let mut report = SweepReport::default();
@@ -210,13 +227,21 @@ pub(crate) fn sweep_impl<S: SignalSender, R: PidResolver>(
 
         report.scanned += 1;
 
+        // Fold tmux's window activity into the effective "last touched" time
+        // so a user who's still typing into a Stopped pane doesn't get
+        // paused mid-prompt. This takes the max because window_activity can
+        // lag session.updated_at immediately after a hook write.
+        let effective = effective_updated_at(&session, probe);
+        let mut session = session;
+        session.updated_at = effective;
+
         match auto_pause::decide_pause(&session, now, timeout) {
             PauseDecision::Pause => {
                 // Resolve the live claude pid for this session. If we can't
                 // find one, the session's host process is already gone and
                 // there is nothing to SIGTERM -- still count it for
                 // observability.
-                let Some(pid) = resolver.resolve(&session) else {
+                let Some(pid) = probe.resolve_pid(&session) else {
                     report.no_pid += 1;
                     continue;
                 };
@@ -242,6 +267,16 @@ pub(crate) fn sweep_impl<S: SignalSender, R: PidResolver>(
     }
 
     Ok(report)
+}
+
+/// Returns the later of `session.updated_at` and the tmux window's last
+/// activity. If the probe can't report an activity timestamp (not in tmux,
+/// pane gone, etc.) we fall back to `session.updated_at` alone.
+fn effective_updated_at<P: SessionProbe>(session: &Session, probe: &P) -> DateTime<Utc> {
+    match probe.last_activity(session) {
+        Some(activity) if activity > session.updated_at => activity,
+        _ => session.updated_at,
+    }
 }
 
 /// Sends SIGTERM to `pid` and flips the session status to Paused.
@@ -296,27 +331,40 @@ mod tests {
         TestDir { temp, path }
     }
 
-    /// Test double: looks up pids by session_id from a caller-populated map,
-    /// so tests can simulate "claude is alive" vs "pane is gone" without
-    /// actually spawning processes or needing a tmux server.
+    /// Test double: looks up pids and tmux activity timestamps by
+    /// session_id from caller-populated maps, so tests can simulate
+    /// "claude is alive" vs "pane is gone" and "user is typing" vs
+    /// "pane is idle" without actually spawning processes or touching tmux.
     #[derive(Default)]
-    struct FakeResolver {
-        map: RefCell<HashMap<String, u32>>,
+    struct FakeProbe {
+        pids: RefCell<HashMap<String, u32>>,
+        activity: RefCell<HashMap<String, DateTime<Utc>>>,
     }
 
-    impl FakeResolver {
-        fn with(pairs: &[(&str, u32)]) -> Self {
+    impl FakeProbe {
+        fn with_pids(pairs: &[(&str, u32)]) -> Self {
             let r = Self::default();
             for (id, pid) in pairs {
-                r.map.borrow_mut().insert((*id).to_string(), *pid);
+                r.pids.borrow_mut().insert((*id).to_string(), *pid);
             }
             r
         }
+
+        fn with_activity(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
+            for (id, ts) in pairs {
+                self.activity.get_mut().insert((*id).to_string(), *ts);
+            }
+            self
+        }
     }
 
-    impl PidResolver for FakeResolver {
-        fn resolve(&self, session: &Session) -> Option<u32> {
-            self.map.borrow().get(&session.session_id).copied()
+    impl SessionProbe for FakeProbe {
+        fn resolve_pid(&self, session: &Session) -> Option<u32> {
+            self.pids.borrow().get(&session.session_id).copied()
+        }
+
+        fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>> {
+            self.activity.borrow().get(&session.session_id).copied()
         }
     }
 
@@ -344,12 +392,12 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::with(&[("sess-a", 4242)]);
+        let probe = FakeProbe::with_pids(&[("sess-a", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -377,12 +425,12 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::default();
+        let probe = FakeProbe::default();
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -405,12 +453,12 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::default();
+        let probe = FakeProbe::default();
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -428,12 +476,12 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::with(&[("sess-c", 4242)]);
+        let probe = FakeProbe::with_pids(&[("sess-c", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(3600),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -458,12 +506,12 @@ mod tests {
         // Resolver returns None -- simulates a tmux pane that no longer
         // hosts claude (or a session without tmux_info at all).
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::default();
+        let probe = FakeProbe::default();
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -490,12 +538,12 @@ mod tests {
             .next_error
             .borrow_mut()
             .replace(std::io::ErrorKind::NotFound);
-        let resolver = FakeResolver::with(&[("sess-d", 4242)]);
+        let probe = FakeProbe::with_pids(&[("sess-d", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -510,18 +558,81 @@ mod tests {
     }
 
     #[rstest]
+    fn recent_tmux_activity_blocks_pause(test_dir: TestDir) {
+        // Session was marked Stopped an hour ago, so the naive timeout check
+        // would pause it. But the tmux window has seen I/O a few seconds
+        // ago -- the user is typing a long prompt -- and must not be
+        // killed.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("typing", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let recent_activity = Utc::now() - TimeDelta::seconds(5);
+        let probe =
+            FakeProbe::with_pids(&[("typing", 4242)]).with_activity(&[("typing", recent_activity)]);
+
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(60),
+            &sender,
+            &probe,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 0);
+        assert_eq!(report.waiting, 1);
+        assert!(
+            sender.calls.borrow().is_empty(),
+            "active user must not be SIGTERM'd"
+        );
+
+        let reloaded = store::load_session_from(&test_dir.path, "typing")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn stale_tmux_activity_does_not_block_pause(test_dir: TestDir) {
+        // Session updated an hour ago AND the window has been idle for
+        // longer than the timeout. Normal pause path.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("idle", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let stale_activity = Utc::now() - TimeDelta::minutes(45);
+        let probe =
+            FakeProbe::with_pids(&[("idle", 4242)]).with_activity(&[("idle", stale_activity)]);
+
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(30 * 60),
+            &sender,
+            &probe,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 1);
+        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+    }
+
+    #[rstest]
     fn dry_run_does_not_signal_or_save(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-dry", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::with(&[("sess-dry", 4242)]);
+        let probe = FakeProbe::with_pids(&[("sess-dry", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
-            &resolver,
+            &probe,
             true,
         )
         .expect("sweep");
@@ -560,12 +671,12 @@ mod tests {
         let sender = RecordingSender::default();
         // Only `pausable` has a resolvable pid; `no-pid` is deliberately
         // absent from the map to simulate a dead pane.
-        let resolver = FakeResolver::with(&[("pausable", 4242), ("running", 4243)]);
+        let probe = FakeProbe::with_pids(&[("pausable", 4242), ("running", 4243)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(60),
             &sender,
-            &resolver,
+            &probe,
             false,
         )
         .expect("sweep");
@@ -583,16 +694,10 @@ mod tests {
     #[rstest]
     fn missing_sessions_dir_is_not_an_error(test_dir: TestDir) {
         let sender = RecordingSender::default();
-        let resolver = FakeResolver::default();
+        let probe = FakeProbe::default();
         let nonexistent = test_dir.path.join("does-not-exist");
-        let report = sweep_impl(
-            &nonexistent,
-            Duration::from_secs(1),
-            &sender,
-            &resolver,
-            false,
-        )
-        .expect("sweep should succeed even if dir is missing");
+        let report = sweep_impl(&nonexistent, Duration::from_secs(1), &sender, &probe, false)
+            .expect("sweep should succeed even if dir is missing");
         assert_eq!(report, SweepReport::default());
     }
 }

@@ -483,6 +483,20 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
     output.trim().parse::<u32>().ok()
 }
 
+/// Returns the last-activity timestamp of the window that contains `pane_id`,
+/// as reported by tmux's `#{window_activity}` format. This is a unix
+/// timestamp (seconds) of the most recent I/O on any pane in that window --
+/// tmux does not track per-pane activity, only per-window.
+///
+/// Used by `cc sweep` to avoid pausing a Stopped session while the user is
+/// still typing into its pane: if window_activity is newer than
+/// session.updated_at, the user is effectively still active.
+pub fn get_window_activity(pane_id: &str) -> Option<i64> {
+    let output =
+        run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{window_activity}"]).ok()?;
+    output.trim().parse::<i64>().ok()
+}
+
 /// Parses a single line from tmux list-panes output for PID matching.
 /// Format: "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
 fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
