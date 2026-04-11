@@ -1,10 +1,13 @@
+mod auto_pause;
 mod claude_sessions;
 mod error;
 mod focus;
 mod hook;
 mod list;
+mod pause_timer;
 mod resume;
 mod resurrect;
+mod signal;
 pub(crate) mod store;
 mod tui;
 mod types;
@@ -15,6 +18,7 @@ use clap::Subcommand;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
+pub use pause_timer::PauseTimerArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use watch::WatchArgs;
@@ -39,6 +43,10 @@ pub enum CcCommands {
     /// Save/restore session IDs for tmux-resurrect integration
     #[command(subcommand)]
     Resurrect(ResurrectCommands),
+
+    /// Sleep and then SIGTERM a long-stopped session (spawned by the Stop hook)
+    #[command(hide = true)]
+    PauseTimer(PauseTimerArgs),
 }
 
 impl CcCommands {
@@ -50,6 +58,7 @@ impl CcCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
+            Self::PauseTimer(args) => pause_timer::run(args)?,
         }
         Ok(())
     }

@@ -306,6 +306,23 @@ These hooks record session state changes, enabling `a cc list` to display active
 
 The `SessionStart` hook stores the session ID in the tmux pane title, allowing `a cc resume` to restore the session after a tmux resurrect.
 
+#### Auto-pause
+
+Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused`, so `a cc resume` can restore the conversation by invoking `claude --resume`.
+
+The Stop hook spawns a detached `a cc pause-timer` process that sleeps for the timeout and then re-reads the session. If the user has resumed the session in the meantime, the timer exits without killing anything.
+
+Configure via `~/.config/armyknife/config.yaml`:
+
+```yaml
+cc:
+  auto_pause:
+    enabled: true # default: true
+    timeout: 30m # default: "30m" (accepts "30s", "10m", "1h30m", etc.)
+```
+
+Set `enabled: false` to disable auto-pausing entirely.
+
 #### Environment Variables
 
 | Variable                | Values                            | Description                 |

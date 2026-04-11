@@ -201,7 +201,9 @@ fn format_status(status: SessionStatus) -> String {
     let (col, reset) = match status {
         SessionStatus::Running => (color::GREEN, color::RESET),
         SessionStatus::WaitingInput => (color::YELLOW, color::RESET),
-        SessionStatus::Stopped | SessionStatus::Ended => (color::GRAY, color::RESET),
+        SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => {
+            (color::GRAY, color::RESET)
+        }
     };
     format!("{col}{name:<8}{reset}")
 }
@@ -253,6 +255,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            claude_pid: None,
         }
     }
 
@@ -394,6 +397,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -408,6 +412,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -422,6 +427,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
         ];
 
@@ -687,6 +693,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -706,6 +713,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -720,6 +728,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                claude_pid: None,
             },
         ];
 

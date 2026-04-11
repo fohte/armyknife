@@ -351,6 +351,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            claude_pid: None,
         }
     }
 
@@ -373,6 +374,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            claude_pid: None,
         }
     }
 

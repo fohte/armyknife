@@ -540,7 +540,7 @@ fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
+        SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => Color::DarkGray,
     }
 }
 
@@ -578,7 +578,7 @@ fn count_statuses(sessions: &[Session]) -> (usize, usize, usize) {
         match session.status {
             SessionStatus::Running => running += 1,
             SessionStatus::WaitingInput => waiting += 1,
-            SessionStatus::Stopped | SessionStatus::Ended => stopped += 1,
+            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => stopped += 1,
         }
     }
 
@@ -915,6 +915,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            claude_pid: None,
         }
     }
 
