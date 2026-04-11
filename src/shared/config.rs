@@ -261,10 +261,10 @@ pub struct CcConfig {
 /// Configuration for automatically pausing sessions that stay in the Stopped
 /// state for longer than `timeout`.
 ///
-/// When a `stop` hook fires, armyknife spawns a detached `a cc pause-timer`
-/// process that sleeps for `timeout` and then sends SIGTERM to the Claude Code
-/// process if the session is still Stopped. The session file is preserved and
-/// the status is flipped to Paused, so that `a cc resume` can restore it.
+/// A periodic `a cc sweep` run (typically driven by launchd) scans all sessions,
+/// sends SIGTERM to any Claude Code process whose session has been Stopped for
+/// longer than `timeout`, and flips the session status to Paused so that
+/// `a cc resume` can restore it later.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AutoPauseConfig {

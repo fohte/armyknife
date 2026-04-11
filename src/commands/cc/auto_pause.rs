@@ -1,8 +1,8 @@
 //! Logic for automatically pausing long-stopped Claude Code sessions.
 //!
-//! The actual side effects (sleep, signal, store update) live in
-//! `pause_timer.rs`; this module only contains pure functions so they can be
-//! unit-tested without spawning processes or touching the filesystem.
+//! The actual side effects (signal delivery, store update) live in `sweep.rs`;
+//! this module only contains pure functions so they can be unit-tested without
+//! spawning processes or touching the filesystem.
 
 use std::time::Duration;
 
@@ -26,10 +26,9 @@ pub enum PauseDecision {
 
 /// Determines whether a stopped session should be paused right now.
 ///
-/// The timer process snapshots the session at spawn time, sleeps, and then
-/// reloads the session to check if the user has resumed it in the meantime.
-/// Only `Stopped` sessions with a recorded `claude_pid` and an elapsed timeout
-/// are paused; any other state is treated as "user is still using it".
+/// Called by `sweep` once per session on each periodic run. Only `Stopped`
+/// sessions with a recorded `claude_pid` and an elapsed timeout are paused;
+/// any other state is treated as "user is still using it".
 pub fn decide_pause(session: &Session, now: DateTime<Utc>, timeout: Duration) -> PauseDecision {
     if session.status != SessionStatus::Stopped {
         return PauseDecision::NotStopped;

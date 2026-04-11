@@ -5,7 +5,7 @@ use std::io;
 
 /// Sends a Unix signal to a process.
 ///
-/// The trait exists so `pause_timer` can be unit-tested against a fake
+/// The trait exists so `sweep` can be unit-tested against a fake
 /// implementation that only records calls.
 pub trait SignalSender {
     /// Sends `signal` (a raw signal number, e.g., `libc::SIGTERM`) to `pid`.

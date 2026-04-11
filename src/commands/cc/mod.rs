@@ -4,11 +4,11 @@ mod error;
 mod focus;
 mod hook;
 mod list;
-mod pause_timer;
 mod resume;
 mod resurrect;
 mod signal;
 pub(crate) mod store;
+mod sweep;
 mod tui;
 mod types;
 mod watch;
@@ -18,9 +18,9 @@ use clap::Subcommand;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
-pub use pause_timer::PauseTimerArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
+pub use sweep::SweepArgs;
 pub use watch::WatchArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -44,9 +44,8 @@ pub enum CcCommands {
     #[command(subcommand)]
     Resurrect(ResurrectCommands),
 
-    /// Sleep and then SIGTERM a long-stopped session (spawned by the Stop hook)
-    #[command(hide = true)]
-    PauseTimer(PauseTimerArgs),
+    /// Pause long-stopped sessions by sending SIGTERM (run periodically)
+    Sweep(SweepArgs),
 }
 
 impl CcCommands {
@@ -58,7 +57,7 @@ impl CcCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
-            Self::PauseTimer(args) => pause_timer::run(args)?,
+            Self::Sweep(args) => sweep::run(args)?,
         }
         Ok(())
     }

@@ -1,0 +1,425 @@
+//! `a cc sweep` subcommand.
+//!
+//! Scans every session file on disk and pauses any session that has been
+//! `Stopped` for longer than the configured timeout. Designed to be invoked
+//! periodically (e.g., by a launchd agent on a 1-minute interval) rather than
+//! spawned on demand from the Stop hook.
+//!
+//! Running sweep has no effect on sessions that are Running, WaitingInput,
+//! Paused, or Ended -- the pure decision function `auto_pause::decide_pause`
+//! owns the policy.
+
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use clap::{Args, Subcommand};
+
+use super::auto_pause::{self, PauseDecision};
+use super::signal::{LibcSignalSender, SignalSender};
+use super::store;
+use super::types::{Session, SessionStatus};
+use crate::shared::config;
+
+mod service;
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct SweepArgs {
+    #[command(subcommand)]
+    pub command: Option<SweepCommands>,
+
+    /// Override the timeout duration from config (for testing / manual runs).
+    /// Accepts human-friendly durations like `30s`, `10m`, `1h30m`.
+    /// Only used when running without a subcommand (i.e. a one-shot sweep).
+    #[arg(long, global = true)]
+    pub timeout: Option<String>,
+
+    /// Dry-run: log what would be paused without sending signals or updating
+    /// session files.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+}
+
+#[derive(Subcommand, Clone, PartialEq, Eq)]
+pub enum SweepCommands {
+    /// Run a single sweep pass (default when no subcommand is given).
+    Run,
+
+    /// Install the launchd agent that runs sweep periodically (macOS).
+    Install,
+
+    /// Remove the launchd agent installed by `install`.
+    Uninstall,
+
+    /// Print the launchd agent status (plist path, bootstrapped state).
+    Status,
+}
+
+/// Entry point for `a cc sweep`.
+pub fn run(args: &SweepArgs) -> Result<()> {
+    match args.command.clone().unwrap_or(SweepCommands::Run) {
+        SweepCommands::Run => run_sweep(args),
+        SweepCommands::Install => service::install(),
+        SweepCommands::Uninstall => service::uninstall(),
+        SweepCommands::Status => service::status(),
+    }
+}
+
+fn run_sweep(args: &SweepArgs) -> Result<()> {
+    let config = config::load_config().unwrap_or_default();
+
+    // Respect the enabled flag unless a manual --timeout override was given.
+    // (A manual `--timeout 1s` run is an explicit opt-in; we should honor it
+    // even if the user set `enabled: false` in their config.)
+    if args.timeout.is_none() && !config.cc.auto_pause.enabled {
+        return Ok(());
+    }
+
+    let timeout_str = args
+        .timeout
+        .clone()
+        .unwrap_or_else(|| config.cc.auto_pause.timeout.clone());
+    let timeout = auto_pause::parse_duration(&timeout_str)
+        .with_context(|| format!("invalid cc.auto_pause.timeout `{timeout_str}`"))?;
+
+    let sessions_dir = store::sessions_dir()?;
+    let sender = LibcSignalSender;
+    let report = sweep_impl(&sessions_dir, timeout, &sender, args.dry_run)?;
+
+    if report.paused > 0 || args.dry_run {
+        eprintln!(
+            "[armyknife] cc sweep: scanned={} paused={} skipped={}",
+            report.scanned, report.paused, report.skipped
+        );
+    }
+
+    Ok(())
+}
+
+/// Result of a single sweep pass. Exposed for tests and for the CLI summary.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SweepReport {
+    pub scanned: usize,
+    pub paused: usize,
+    pub skipped: usize,
+}
+
+/// Testable core of `run`. Reads every `*.json` session file under
+/// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
+/// timeout has elapsed.
+pub(crate) fn sweep_impl<S: SignalSender>(
+    sessions_dir: &Path,
+    timeout: Duration,
+    sender: &S,
+    dry_run: bool,
+) -> Result<SweepReport> {
+    let mut report = SweepReport::default();
+
+    if !sessions_dir.exists() {
+        return Ok(report);
+    }
+
+    let now = Utc::now();
+
+    // Read directory entries up-front so we don't hold the iterator while
+    // mutating files inside the loop.
+    let entries: Vec<_> = fs::read_dir(sessions_dir)
+        .with_context(|| format!("reading sessions dir {}", sessions_dir.display()))?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+
+        // Extract session_id from the file stem so we can go through the
+        // store helpers (which handle locking) instead of reading raw json.
+        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+
+        let session = match store::load_session_from(sessions_dir, session_id)? {
+            Some(s) => s,
+            None => continue,
+        };
+
+        report.scanned += 1;
+
+        match auto_pause::decide_pause(&session, now, timeout) {
+            PauseDecision::Pause => {
+                if dry_run {
+                    eprintln!(
+                        "[armyknife] cc sweep (dry-run): would pause {} (pid={:?})",
+                        session.session_id, session.claude_pid
+                    );
+                    report.paused += 1;
+                    continue;
+                }
+                if pause_session(sessions_dir, session, sender)? {
+                    report.paused += 1;
+                } else {
+                    report.skipped += 1;
+                }
+            }
+            PauseDecision::NotStopped | PauseDecision::NotYetElapsed | PauseDecision::NoPid => {
+                report.skipped += 1;
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+/// Sends SIGTERM to the session's recorded pid and flips the status to Paused.
+/// Returns `Ok(true)` if the session was paused (including ESRCH: the process
+/// was already gone but we still want to record Paused), or `Ok(false)` if we
+/// could not pause it (missing pid).
+fn pause_session<S: SignalSender>(
+    sessions_dir: &Path,
+    mut session: Session,
+    sender: &S,
+) -> Result<bool> {
+    // `decide_pause` guarantees claude_pid is Some when PauseDecision::Pause is
+    // returned, but guard anyway so a future refactor can't cause us to kill
+    // pid 0 (= the process group of the caller on some systems).
+    let Some(pid) = session.claude_pid else {
+        return Ok(false);
+    };
+    if pid == 0 {
+        return Ok(false);
+    }
+
+    // Best-effort SIGTERM. ESRCH (process already gone) is not fatal -- we
+    // still want to flip the status so `cc resume` can restore the session.
+    if let Err(e) = sender.send(pid, libc::SIGTERM)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "[armyknife] cc sweep: failed to SIGTERM pid {pid} for session {}: {e}",
+            session.session_id
+        );
+    }
+
+    session.status = SessionStatus::Paused;
+    session.updated_at = Utc::now();
+    store::save_session_to(sessions_dir, &session)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use chrono::{DateTime, TimeDelta, Utc};
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    use super::super::signal::test_support::RecordingSender;
+    use super::super::store::save_session_to;
+    use super::super::types::{Session, SessionStatus};
+    use super::*;
+
+    struct TestDir {
+        #[expect(dead_code, reason = "kept alive until test ends")]
+        temp: TempDir,
+        path: PathBuf,
+    }
+
+    #[fixture]
+    fn test_dir() -> TestDir {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().to_path_buf();
+        TestDir { temp, path }
+    }
+
+    fn make_session(
+        id: &str,
+        status: SessionStatus,
+        updated_at: DateTime<Utc>,
+        pid: Option<u32>,
+    ) -> Session {
+        Session {
+            session_id: id.to_string(),
+            cwd: PathBuf::from("/tmp"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: updated_at,
+            updated_at,
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            claude_pid: pid,
+        }
+    }
+
+    #[rstest]
+    fn pauses_elapsed_stopped_session(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-a", SessionStatus::Stopped, old, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.paused, 1);
+        assert_eq!(report.skipped, 0);
+        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-a")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Paused);
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::waiting(SessionStatus::WaitingInput)]
+    #[case::already_paused(SessionStatus::Paused)]
+    #[case::ended(SessionStatus::Ended)]
+    fn skips_non_stopped_sessions(test_dir: TestDir, #[case] status: SessionStatus) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-b", status, old, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
+
+        assert_eq!(report.paused, 0);
+        assert!(sender.calls.borrow().is_empty());
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-b")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, status);
+    }
+
+    #[rstest]
+    fn skips_stopped_session_that_has_not_elapsed(test_dir: TestDir) {
+        let recent = Utc::now();
+        let session = make_session("sess-c", SessionStatus::Stopped, recent, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(3600), &sender, false).expect("sweep");
+
+        assert_eq!(report.paused, 0);
+        assert!(sender.calls.borrow().is_empty());
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-c")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn skips_stopped_session_without_pid(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-no-pid", SessionStatus::Stopped, old, None);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
+
+        assert_eq!(report.paused, 0);
+        assert!(sender.calls.borrow().is_empty());
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-no-pid")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn esrch_still_marks_paused(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-d", SessionStatus::Stopped, old, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        sender
+            .next_error
+            .borrow_mut()
+            .replace(std::io::ErrorKind::NotFound);
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
+
+        assert_eq!(report.paused, 1);
+        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-d")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Paused);
+    }
+
+    #[rstest]
+    fn dry_run_does_not_signal_or_save(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-dry", SessionStatus::Stopped, old, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, true).expect("sweep");
+
+        assert_eq!(report.paused, 1);
+        assert!(
+            sender.calls.borrow().is_empty(),
+            "dry-run must not send signals"
+        );
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-dry")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            reloaded.status,
+            SessionStatus::Stopped,
+            "dry-run must not update session status"
+        );
+    }
+
+    #[rstest]
+    fn handles_mixed_directory(test_dir: TestDir) {
+        let now = Utc::now();
+        let old = now - TimeDelta::hours(1);
+
+        let pausable = make_session("pausable", SessionStatus::Stopped, old, Some(4242));
+        let running = make_session("running", SessionStatus::Running, now, Some(4243));
+        let recent_stop = make_session("recent", SessionStatus::Stopped, now, Some(4244));
+        let no_pid = make_session("no-pid", SessionStatus::Stopped, old, None);
+
+        for s in [&pausable, &running, &recent_stop, &no_pid] {
+            save_session_to(&test_dir.path, s).expect("save");
+        }
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(60), &sender, false).expect("sweep");
+
+        assert_eq!(report.scanned, 4);
+        assert_eq!(report.paused, 1);
+        assert_eq!(report.skipped, 3);
+        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+    }
+
+    #[rstest]
+    fn missing_sessions_dir_is_not_an_error(test_dir: TestDir) {
+        let sender = RecordingSender::default();
+        let nonexistent = test_dir.path.join("does-not-exist");
+        let report = sweep_impl(&nonexistent, Duration::from_secs(1), &sender, false)
+            .expect("sweep should succeed even if dir is missing");
+        assert_eq!(report, SweepReport::default());
+    }
+}

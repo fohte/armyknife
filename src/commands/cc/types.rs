@@ -35,7 +35,7 @@ pub struct Session {
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
     /// PID of the `claude` process for this session, recorded by the hook.
-    /// Used by `cc pause-timer` to send SIGTERM when the Stopped timeout elapses.
+    /// Used by `cc sweep` to send SIGTERM when the Stopped timeout elapses.
     #[serde(default)]
     pub claude_pid: Option<u32>,
 }

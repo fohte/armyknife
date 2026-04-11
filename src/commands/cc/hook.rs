@@ -129,8 +129,14 @@ fn process_hook_event_impl(
     // Handle session end: mark as ended instead of deleting so that
     // `claude -c` resume can restore label and ancestor chain.
     // Ended sessions are garbage-collected by cleanup_stale_sessions.
+    //
+    // Paused sessions are preserved: when `a cc sweep` SIGTERMs a stopped
+    // Claude Code process, its shutdown fires SessionEnd, which would
+    // otherwise clobber the Paused marker and break `a cc resume`.
     if event == HookEvent::SessionEnd {
-        if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
+        if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)?
+            && session.status != SessionStatus::Paused
+        {
             session.status = SessionStatus::Ended;
             session.updated_at = Utc::now();
             store::save_session_to(sessions_dir, &session)?;
@@ -262,7 +268,7 @@ fn process_hook_event_impl(
         _ => session.current_tool, // Keep existing value for other events
     };
 
-    // Record the ancestor `claude` process PID so that `cc pause-timer` can
+    // Record the ancestor `claude` process PID so that `cc sweep` can
     // SIGTERM it later. If the session was previously Paused and is now
     // active again, the old PID is stale (the process was killed), so we
     // unconditionally re-discover on resume events. For first observation
@@ -274,21 +280,8 @@ fn process_hook_event_impl(
         session.claude_pid = process::find_ancestor_by_command(std::process::id(), "claude", 20);
     }
 
-    // If the session just transitioned to Stopped and auto_pause is enabled,
-    // flip any previous Paused marker back is handled on resume; here we only
-    // spawn the detached pause-timer process.
-    let should_spawn_pause_timer =
-        side_effects.tmux && event == HookEvent::Stop && session.claude_pid.is_some();
-
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
-
-    if should_spawn_pause_timer {
-        let config = config::load_config().unwrap_or_default();
-        if config.cc.auto_pause.enabled {
-            spawn_pause_timer(&session.session_id);
-        }
-    }
 
     // Refresh tmux status bar so `#()` commands pick up the state change immediately.
     // Silently ignore errors (e.g., not in tmux, tmux not installed).
@@ -571,60 +564,6 @@ fn export_session_id_to_env_file(session_id: &str) {
             .append(true)
             .open(env_file)
             .and_then(|mut f| f.write_all(export_line.as_bytes()));
-    }
-}
-
-/// Spawns a detached `a cc pause-timer <session_id>` process.
-///
-/// The child is fully detached from the hook process (new session id via
-/// `setsid`, stdio redirected to /dev/null) so that it survives the hook
-/// returning and the Claude Code process exiting. On error we silently log
-/// to stderr -- pause-timer is best-effort and must never fail the hook.
-fn spawn_pause_timer(session_id: &str) {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[armyknife] warning: failed to locate self exe: {e}");
-            return;
-        }
-    };
-
-    // SAFETY: `setsid(2)` has no preconditions and takes no arguments; it is
-    // safe to call from a `pre_exec` hook because it doesn't touch memory
-    // shared with the parent.
-    let mut cmd = Command::new(exe);
-    cmd.arg("cc")
-        .arg("pause-timer")
-        .arg(session_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Detach: put the child in its own session so it's not killed when the
-    // hook process (and its terminal) goes away.
-    unsafe {
-        cmd.pre_exec(|| {
-            // SAFETY: setsid is async-signal-safe.
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    // Propagate a marker env var so the spawned process skips its own hooks
-    // if they ever get wired up. The existing ARMYKNIFE_SKIP_HOOKS covers
-    // recursive claude -p invocations, but reuse it to be safe.
-    cmd.env("ARMYKNIFE_SKIP_HOOKS", "1");
-
-    match cmd.spawn() {
-        Ok(_child) => {
-            // Intentionally do not wait; child runs independently.
-        }
-        Err(e) => {
-            eprintln!("[armyknife] warning: failed to spawn pause-timer: {e}");
-        }
     }
 }
 
