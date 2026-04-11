@@ -88,10 +88,18 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     let sender = LibcSignalSender;
     let report = sweep_impl(&sessions_dir, timeout, &sender, args.dry_run)?;
 
+    // Always print a summary in --dry-run so the user can see the reasoning.
+    // Otherwise only speak up when we actually paused something, since the
+    // launchd-driven periodic invocation would otherwise flood the log.
     if report.paused > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] cc sweep: scanned={} paused={} skipped={}",
-            report.scanned, report.paused, report.skipped
+            "[armyknife] cc sweep: scanned={} paused={} waiting={} no_pid={} active={} (timeout={})",
+            report.scanned,
+            report.paused,
+            report.waiting,
+            report.no_pid,
+            report.active,
+            timeout_str,
         );
     }
 
@@ -99,16 +107,32 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 }
 
 /// Result of a single sweep pass. Exposed for tests and for the CLI summary.
+///
+/// The counters break down every non-ended session file that sweep considered
+/// so users can see *why* a given session was or wasn't paused. Ended
+/// sessions are not counted at all -- they match `a cc list`'s view of the
+/// store.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SweepReport {
+    /// Number of non-ended session files scanned.
     pub scanned: usize,
+    /// Sessions that were (or would have been, in --dry-run) paused.
     pub paused: usize,
-    pub skipped: usize,
+    /// Stopped sessions whose timeout has not yet elapsed.
+    pub waiting: usize,
+    /// Stopped sessions with no recorded `claude_pid`. These cannot be
+    /// paused because sweep has no process to SIGTERM -- typically legacy
+    /// sessions created before the auto-pause feature landed, or sessions
+    /// that never observed a hook tick after the Stop hook was added.
+    pub no_pid: usize,
+    /// Sessions in an active state (Running, WaitingInput, Paused).
+    pub active: usize,
 }
 
 /// Testable core of `run`. Reads every `*.json` session file under
 /// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
-/// timeout has elapsed.
+/// timeout has elapsed. Ended sessions are ignored entirely so that the
+/// counts match what `a cc list` displays.
 pub(crate) fn sweep_impl<S: SignalSender>(
     sessions_dir: &Path,
     timeout: Duration,
@@ -147,6 +171,13 @@ pub(crate) fn sweep_impl<S: SignalSender>(
             None => continue,
         };
 
+        // Skip ended sessions so the scanned count lines up with `a cc list`.
+        // Ended sessions are retained on disk only so that `claude -c` can
+        // restore their label / ancestor chain -- they never need pausing.
+        if session.status == SessionStatus::Ended {
+            continue;
+        }
+
         report.scanned += 1;
 
         match auto_pause::decide_pause(&session, now, timeout) {
@@ -162,11 +193,20 @@ pub(crate) fn sweep_impl<S: SignalSender>(
                 if pause_session(sessions_dir, session, sender)? {
                     report.paused += 1;
                 } else {
-                    report.skipped += 1;
+                    // pause_session returned false -- only happens when the
+                    // pid is None or 0, which `decide_pause` already guards
+                    // against. Count as no_pid for observability.
+                    report.no_pid += 1;
                 }
             }
-            PauseDecision::NotStopped | PauseDecision::NotYetElapsed | PauseDecision::NoPid => {
-                report.skipped += 1;
+            PauseDecision::NotYetElapsed => {
+                report.waiting += 1;
+            }
+            PauseDecision::NoPid => {
+                report.no_pid += 1;
+            }
+            PauseDecision::NotStopped => {
+                report.active += 1;
             }
         }
     }
@@ -271,7 +311,9 @@ mod tests {
 
         assert_eq!(report.scanned, 1);
         assert_eq!(report.paused, 1);
-        assert_eq!(report.skipped, 0);
+        assert_eq!(report.waiting, 0);
+        assert_eq!(report.no_pid, 0);
+        assert_eq!(report.active, 0);
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-a")
@@ -284,8 +326,7 @@ mod tests {
     #[case::running(SessionStatus::Running)]
     #[case::waiting(SessionStatus::WaitingInput)]
     #[case::already_paused(SessionStatus::Paused)]
-    #[case::ended(SessionStatus::Ended)]
-    fn skips_non_stopped_sessions(test_dir: TestDir, #[case] status: SessionStatus) {
+    fn counts_active_sessions(test_dir: TestDir, #[case] status: SessionStatus) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-b", status, old, Some(4242));
         save_session_to(&test_dir.path, &session).expect("save");
@@ -294,7 +335,9 @@ mod tests {
         let report =
             sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
 
+        assert_eq!(report.scanned, 1);
         assert_eq!(report.paused, 0);
+        assert_eq!(report.active, 1);
         assert!(sender.calls.borrow().is_empty());
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-b")
@@ -304,7 +347,23 @@ mod tests {
     }
 
     #[rstest]
-    fn skips_stopped_session_that_has_not_elapsed(test_dir: TestDir) {
+    fn ended_sessions_are_not_scanned(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-ended", SessionStatus::Ended, old, Some(4242));
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report =
+            sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
+
+        // Ended sessions are skipped entirely so the scanned count matches
+        // what `a cc list` displays.
+        assert_eq!(report, SweepReport::default());
+        assert!(sender.calls.borrow().is_empty());
+    }
+
+    #[rstest]
+    fn counts_stopped_session_that_has_not_elapsed(test_dir: TestDir) {
         let recent = Utc::now();
         let session = make_session("sess-c", SessionStatus::Stopped, recent, Some(4242));
         save_session_to(&test_dir.path, &session).expect("save");
@@ -313,7 +372,9 @@ mod tests {
         let report =
             sweep_impl(&test_dir.path, Duration::from_secs(3600), &sender, false).expect("sweep");
 
+        assert_eq!(report.scanned, 1);
         assert_eq!(report.paused, 0);
+        assert_eq!(report.waiting, 1);
         assert!(sender.calls.borrow().is_empty());
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-c")
@@ -323,7 +384,7 @@ mod tests {
     }
 
     #[rstest]
-    fn skips_stopped_session_without_pid(test_dir: TestDir) {
+    fn counts_stopped_session_without_pid(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-no-pid", SessionStatus::Stopped, old, None);
         save_session_to(&test_dir.path, &session).expect("save");
@@ -332,7 +393,9 @@ mod tests {
         let report =
             sweep_impl(&test_dir.path, Duration::from_secs(1), &sender, false).expect("sweep");
 
+        assert_eq!(report.scanned, 1);
         assert_eq!(report.paused, 0);
+        assert_eq!(report.no_pid, 1);
         assert!(sender.calls.borrow().is_empty());
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-no-pid")
@@ -399,8 +462,9 @@ mod tests {
         let running = make_session("running", SessionStatus::Running, now, Some(4243));
         let recent_stop = make_session("recent", SessionStatus::Stopped, now, Some(4244));
         let no_pid = make_session("no-pid", SessionStatus::Stopped, old, None);
+        let ended = make_session("ended", SessionStatus::Ended, old, Some(4245));
 
-        for s in [&pausable, &running, &recent_stop, &no_pid] {
+        for s in [&pausable, &running, &recent_stop, &no_pid, &ended] {
             save_session_to(&test_dir.path, s).expect("save");
         }
 
@@ -408,9 +472,13 @@ mod tests {
         let report =
             sweep_impl(&test_dir.path, Duration::from_secs(60), &sender, false).expect("sweep");
 
+        // Ended is filtered before counting; the remaining 4 break down into
+        // one pause, one waiting (not elapsed), one no_pid, one active.
         assert_eq!(report.scanned, 4);
         assert_eq!(report.paused, 1);
-        assert_eq!(report.skipped, 3);
+        assert_eq!(report.waiting, 1);
+        assert_eq!(report.no_pid, 1);
+        assert_eq!(report.active, 1);
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
     }
 
