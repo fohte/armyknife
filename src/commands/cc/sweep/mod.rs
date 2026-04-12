@@ -236,11 +236,12 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
         // Fold the pane's pty atime (last user input) into the effective
         // "last touched" time so a user who's still typing into a Stopped
         // pane doesn't get paused mid-prompt.
+        // N.B. We intentionally do NOT mutate session.updated_at here --
+        // the effective timestamp is only for the timeout decision, not for
+        // persisting to disk.
         let effective = effective_updated_at(&session, probe);
-        let mut session = session;
-        session.updated_at = effective;
 
-        match auto_pause::decide_pause(&session, now, timeout) {
+        match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => {
                 // Resolve the live claude pid for this session. If we can't
                 // find one, the session's host process is already gone and
@@ -295,7 +296,7 @@ fn pause_session<S: SignalSender>(
     // Best-effort SIGTERM. ESRCH (process already gone) is not fatal -- we
     // still want to flip the status so `cc resume` can restore the session.
     if let Err(e) = sender.send(pid, libc::SIGTERM)
-        && e.kind() != std::io::ErrorKind::NotFound
+        && e.raw_os_error() != Some(libc::ESRCH)
     {
         eprintln!(
             "[armyknife] cc sweep: failed to SIGTERM pid {pid} for session {}: {e}",
@@ -539,10 +540,7 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        sender
-            .next_error
-            .borrow_mut()
-            .replace(std::io::ErrorKind::NotFound);
+        sender.fail_with_esrch.replace(true);
         let probe = FakeProbe::with_pids(&[("sess-d", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
@@ -597,6 +595,44 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn tmux_activity_is_not_persisted_as_updated_at(test_dir: TestDir) {
+        // Even when tmux pane activity extends the effective timeout, the
+        // persisted updated_at must remain unchanged (the tmux timestamp is
+        // only for the decision, not for the on-disk record).
+        let old = Utc::now() - TimeDelta::hours(2);
+        let session = make_session("persist-check", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        // Tmux activity is old enough that the session still gets paused.
+        let stale_activity = Utc::now() - TimeDelta::hours(1);
+        let probe = FakeProbe::with_pids(&[("persist-check", 4242)])
+            .with_last_input(&[("persist-check", stale_activity)]);
+
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(30 * 60),
+            &sender,
+            &probe,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 1);
+
+        let reloaded = store::load_session_from(&test_dir.path, "persist-check")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Paused);
+        // The persisted updated_at must be the original session time, not
+        // the tmux pane activity timestamp.
+        assert_eq!(
+            reloaded.updated_at, old,
+            "updated_at must not be overwritten with tmux activity timestamp"
+        );
     }
 
     #[rstest]

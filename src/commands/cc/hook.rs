@@ -229,7 +229,13 @@ fn process_hook_event_impl(
     // Update session fields
     session.cwd.clone_from(&input.cwd);
     session.updated_at = now;
-    session.status = status;
+
+    // Don't overwrite Paused status -- sweep set it and `cc resume` needs it.
+    // If Claude fires a Stop hook during SIGTERM shutdown, we must preserve
+    // the Paused marker so SessionEnd doesn't clobber it.
+    if session.status != SessionStatus::Paused {
+        session.status = status;
+    }
 
     // Update tmux info if available
     if tmux_info.is_some() {
@@ -1081,6 +1087,48 @@ mod tests {
 
         // Very short limit
         assert_eq!(truncate_string("hello world", 5), "he...");
+    }
+
+    #[rstest]
+    #[case::stop_on_paused(HookEvent::Stop)]
+    #[case::pre_tool_use_on_paused(HookEvent::PreToolUse)]
+    #[case::user_prompt_submit_on_paused(HookEvent::UserPromptSubmit)]
+    fn hook_preserves_paused_status(#[case] event: HookEvent) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        // Pre-create a Paused session on disk
+        let session = Session {
+            session_id: "paused-sess".to_string(),
+            cwd: "/tmp/test".into(),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Paused,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+        };
+        store::save_session_to(sessions_dir, &session).expect("save");
+
+        let input: HookInput =
+            serde_json::from_str(r#"{"session_id":"paused-sess","cwd":"/tmp/test"}"#)
+                .expect("valid JSON");
+
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "paused-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            reloaded.status,
+            SessionStatus::Paused,
+            "{event:?} hook must not overwrite Paused status"
+        );
     }
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {

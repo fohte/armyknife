@@ -31,12 +31,27 @@ pub enum PauseDecision {
 /// Called by `sweep` once per session on each periodic run. Only `Stopped`
 /// sessions whose timeout has elapsed are candidates for pausing; any other
 /// state is treated as "user is still using it".
+#[cfg(test)]
 pub fn decide_pause(session: &Session, now: DateTime<Utc>, timeout: Duration) -> PauseDecision {
+    decide_pause_with_effective(session, now, timeout, session.updated_at)
+}
+
+/// Like [`decide_pause`] but uses an externally-supplied "last touched"
+/// timestamp instead of `session.updated_at`. Sweep passes in
+/// `effective_updated_at` (the max of session.updated_at and the tmux pane's
+/// last input) so it can account for recent user activity without mutating
+/// the session on disk.
+pub fn decide_pause_with_effective(
+    session: &Session,
+    now: DateTime<Utc>,
+    timeout: Duration,
+    effective_updated_at: DateTime<Utc>,
+) -> PauseDecision {
     if session.status != SessionStatus::Stopped {
         return PauseDecision::NotStopped;
     }
 
-    let elapsed = now.signed_duration_since(session.updated_at);
+    let elapsed = now.signed_duration_since(effective_updated_at);
     let Ok(elapsed_std) = elapsed.to_std() else {
         // Negative elapsed time (clock skew) -- treat as not yet elapsed.
         return PauseDecision::NotYetElapsed;

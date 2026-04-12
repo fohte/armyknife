@@ -42,14 +42,15 @@ pub(crate) mod test_support {
     #[derive(Default)]
     pub(crate) struct RecordingSender {
         pub calls: RefCell<Vec<(u32, i32)>>,
-        pub next_error: RefCell<Option<io::ErrorKind>>,
+        /// When set, the next `send` call fails with ESRCH (process not found).
+        pub fail_with_esrch: RefCell<bool>,
     }
 
     impl SignalSender for RecordingSender {
         fn send(&self, pid: u32, signal: i32) -> io::Result<()> {
             self.calls.borrow_mut().push((pid, signal));
-            if let Some(kind) = self.next_error.borrow_mut().take() {
-                return Err(io::Error::from(kind));
+            if self.fail_with_esrch.replace(false) {
+                return Err(io::Error::from_raw_os_error(libc::ESRCH));
             }
             Ok(())
         }
