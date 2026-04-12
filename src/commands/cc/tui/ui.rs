@@ -1,12 +1,10 @@
 use crate::commands::cc::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
-#[cfg(test)]
-use ratatui::widgets::ListState;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -36,10 +34,15 @@ const TIME_AGO_DARK_GREEN: Color = Color::Indexed(72);
 const TIME_AGO_DARKER_GREEN: Color = Color::Indexed(65);
 const TIME_AGO_LIGHT_GRAY: Color = Color::Indexed(245);
 const TIME_AGO_DARK_GRAY: Color = Color::Indexed(241);
+const HEADER_HEIGHT: u16 = 3;
+const HELP_BAR_HEIGHT: u16 = 2;
 
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let now = Utc::now();
+    render_with_time(frame, app, Utc::now());
+}
+
+fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     let area = frame.area();
 
     // Determine layout based on mode and error state
@@ -52,28 +55,28 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
         (true, true) => vec![
-            Constraint::Length(3), // Header
+            Constraint::Length(HEADER_HEIGHT),
             Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
-            Constraint::Length(1), // Help bar
+            Constraint::Length(HELP_BAR_HEIGHT),
             Constraint::Length(1), // Error
         ],
         (true, false) => vec![
-            Constraint::Length(3), // Header
+            Constraint::Length(HEADER_HEIGHT),
             Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
-            Constraint::Length(1), // Help bar
+            Constraint::Length(HELP_BAR_HEIGHT),
         ],
         (false, true) => vec![
-            Constraint::Length(3), // Header
-            Constraint::Min(1),    // Session list
-            Constraint::Length(1), // Help bar
+            Constraint::Length(HEADER_HEIGHT),
+            Constraint::Min(1), // Session list
+            Constraint::Length(HELP_BAR_HEIGHT),
             Constraint::Length(1), // Error
         ],
         (false, false) => vec![
-            Constraint::Length(3), // Header
-            Constraint::Min(1),    // Session list
-            Constraint::Length(1), // Help bar
+            Constraint::Length(HEADER_HEIGHT),
+            Constraint::Min(1), // Session list
+            Constraint::Length(HELP_BAR_HEIGHT),
         ],
     };
 
@@ -253,7 +256,7 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
-    let help_text = match &app.mode {
+    let help_lines: Vec<Line> = match &app.mode {
         AppMode::Confirm { is_alive, .. } => {
             let prompt = if *is_alive {
                 "Stop and delete session?"
@@ -263,61 +266,75 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             let warn_style = Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
-            Line::from(vec![
-                Span::styled(format!("  {prompt} "), warn_style),
-                Span::styled("y", bold),
-                Span::raw(": yes  "),
-                Span::styled("n/Esc", bold),
-                Span::raw(": cancel"),
-            ])
+            vec![
+                Line::from(vec![
+                    Span::styled(format!("  {prompt} "), warn_style),
+                    Span::styled("y", bold),
+                    Span::raw(": yes  "),
+                    Span::styled("n/Esc", bold),
+                    Span::raw(": cancel"),
+                ]),
+                Line::from(""),
+            ]
         }
-        AppMode::Search => Line::from(vec![
-            Span::styled("  C-n/C-p", bold),
-            Span::raw(": move  "),
-            Span::styled("Enter", bold),
-            Span::raw(": focus  "),
-            Span::styled("Esc", bold),
-            Span::raw(": cancel"),
-        ]),
-        AppMode::Normal if app.has_filter() => Line::from(vec![
-            Span::styled("  j/k", bold),
-            Span::raw(": move  "),
-            Span::styled("f", bold),
-            Span::raw(": focus  "),
-            Span::styled("r", bold),
-            Span::raw(": resume  "),
-            Span::styled("d", bold),
-            Span::raw(": delete  "),
-            Span::styled("/", bold),
-            Span::raw(": edit  "),
-            Span::styled("C-rwsp", bold),
-            Span::raw(": filter  "),
-            Span::styled("Esc", bold),
-            Span::raw(": clear  "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ]),
-        AppMode::Normal => Line::from(vec![
-            Span::styled("  j/k", bold),
-            Span::raw(": move  "),
-            Span::styled("f", bold),
-            Span::raw(": focus  "),
-            Span::styled("r", bold),
-            Span::raw(": resume  "),
-            Span::styled("d", bold),
-            Span::raw(": delete  "),
-            Span::styled("1-9", bold),
-            Span::raw(": quick  "),
-            Span::styled("/", bold),
-            Span::raw(": search  "),
-            Span::styled("C-rwsp", bold),
-            Span::raw(": filter  "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ]),
+        AppMode::Search => vec![
+            Line::from(vec![
+                Span::styled("  C-n/C-p", bold),
+                Span::raw(": move  "),
+                Span::styled("Enter", bold),
+                Span::raw(": focus  "),
+                Span::styled("Esc", bold),
+                Span::raw(": cancel"),
+            ]),
+            Line::from(""),
+        ],
+        AppMode::Normal if app.has_filter() => vec![
+            Line::from(vec![
+                Span::styled("  j/k", bold),
+                Span::raw(": move  "),
+                Span::styled("f", bold),
+                Span::raw(": focus  "),
+                Span::styled("r", bold),
+                Span::raw(": resume  "),
+                Span::styled("d", bold),
+                Span::raw(": delete  "),
+                Span::styled("/", bold),
+                Span::raw(": edit  "),
+                Span::styled("q", bold),
+                Span::raw(": quit"),
+            ]),
+            Line::from(vec![
+                Span::styled("  C-r/w/s/p", bold),
+                Span::raw(": filter  "),
+                Span::styled("Esc", bold),
+                Span::raw(": clear"),
+            ]),
+        ],
+        AppMode::Normal => vec![
+            Line::from(vec![
+                Span::styled("  j/k", bold),
+                Span::raw(": move  "),
+                Span::styled("f", bold),
+                Span::raw(": focus  "),
+                Span::styled("r", bold),
+                Span::raw(": resume  "),
+                Span::styled("d", bold),
+                Span::raw(": delete  "),
+                Span::styled("1-9", bold),
+                Span::raw(": quick  "),
+                Span::styled("/", bold),
+                Span::raw(": search  "),
+                Span::styled("q", bold),
+                Span::raw(": quit"),
+            ]),
+            Line::from(vec![
+                Span::styled("  C-r/w/s/p", bold),
+                Span::raw(": filter"),
+            ]),
+        ],
     };
 
-    let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
+    let help = Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, area);
 }
 
@@ -836,26 +853,12 @@ fn render_to_string(
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    // Create a minimal App state for rendering
-    let mut list_state = ListState::default();
-    list_state.select(selected_index);
-
     let mut app = App::with_sessions(sessions.to_vec());
-    app.list_state = list_state;
+    app.list_state.select(selected_index);
 
     terminal
         .draw(|frame| {
-            let area = frame.area();
-            let areas = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-            render_header(frame, areas[0], &app);
-            render_session_list_internal(frame, areas[1], sessions, &mut app.list_state, now);
-            render_help(frame, areas[2], &app);
+            render_with_time(frame, &mut app, now);
         })
         .unwrap();
 
@@ -881,58 +884,6 @@ fn render_to_string(
     }
 
     output
-}
-
-/// Internal render function for session list used by test render.
-/// Uses tree view rendering.
-#[cfg(test)]
-fn render_session_list_internal(
-    frame: &mut Frame,
-    area: Rect,
-    sessions: &[Session],
-    list_state: &mut ListState,
-    now: DateTime<Utc>,
-) {
-    if sessions.is_empty() {
-        let empty_message = Paragraph::new("  No active Claude Code sessions.")
-            .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(empty_message, area);
-        return;
-    }
-
-    let term_width = area.width as usize;
-    let session_refs: Vec<&Session> = sessions.iter().collect();
-    let tree_entries = build_session_tree(&session_refs);
-
-    let items: Vec<ListItem> = tree_entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let next_entry = tree_entries.get(i + 1);
-            let title = get_title_display_name_fallback(entry.session);
-            let repo_name = entry
-                .session
-                .cwd
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            create_tree_session_item(
-                entry,
-                next_entry,
-                Some(&title),
-                now,
-                term_width,
-                "",
-                repo_name,
-            )
-        })
-        .collect();
-
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
-
-    frame.render_stateful_widget(list, area, list_state);
 }
 
 #[cfg(test)]
@@ -1113,7 +1064,7 @@ mod tests {
         session2.status = SessionStatus::WaitingInput;
 
         let sessions = vec![session1, session2];
-        let output = render_to_string(&sessions, Some(0), now, 80, 12);
+        let output = render_to_string(&sessions, Some(0), now, 80, 13);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1127,7 +1078,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1136,7 +1088,7 @@ mod tests {
     fn test_render_full_screen_empty_sessions() {
         let now = Utc::now();
         let sessions: Vec<Session> = vec![];
-        let output = render_to_string(&sessions, None, now, 80, 8);
+        let output = render_to_string(&sessions, None, now, 80, 9);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1146,7 +1098,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1167,7 +1120,7 @@ mod tests {
         session.last_message = Some("I've updated the code as requested.".to_string());
 
         let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(0), now, 80, 8);
+        let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1177,7 +1130,8 @@ mod tests {
                ▎ I've updated the code as requested.
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1197,7 +1151,7 @@ mod tests {
         session.status = SessionStatus::Running;
 
         let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(0), now, 80, 8);
+        let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1207,7 +1161,8 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1224,7 +1179,7 @@ mod tests {
         // These differ, so label "docs" should appear
 
         let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(0), now, 80, 8);
+        let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1234,7 +1189,8 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1271,7 +1227,7 @@ mod tests {
         child.current_tool = Some("Bash(cargo test)".to_string());
 
         let sessions = vec![parent, child];
-        let output = render_to_string(&sessions, Some(0), now, 80, 12);
+        let output = render_to_string(&sessions, Some(0), now, 80, 13);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1285,7 +1241,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
@@ -1325,7 +1282,7 @@ mod tests {
         child2.status = SessionStatus::WaitingInput;
 
         let sessions = vec![parent, child1, child2];
-        let output = render_to_string(&sessions, Some(0), now, 80, 15);
+        let output = render_to_string(&sessions, Some(0), now, 80, 16);
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -1342,7 +1299,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  C-rwsp: filt"};
+              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
+              C-r/w/s/p: filter"};
 
         assert_eq!(output, expected);
     }
