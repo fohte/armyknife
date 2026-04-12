@@ -122,12 +122,24 @@ fn plist_path() -> Result<PathBuf> {
         .join(format!("{SERVICE_LABEL}.plist")))
 }
 
+/// Escapes XML special characters so that arbitrary paths can be safely
+/// interpolated into the plist XML template.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 fn render_plist(exe: &str) -> String {
     // StandardErrorPath points at a file under the cache dir that armyknife
     // already owns, so log rotation can be done externally (e.g., by user).
     // We do not set StandardOutPath because `a cc sweep run` only prints on
     // error (the per-run stderr summary is the only output when paused > 0).
     let log_path = log_path_string();
+    let exe = escape_xml(exe);
+    let log_path = escape_xml(&log_path);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -210,5 +222,24 @@ mod tests {
             log = log_path_string(),
         };
         assert_eq!(render_plist("/usr/local/bin/a"), expected);
+    }
+
+    #[test]
+    fn render_plist_escapes_xml_special_chars() {
+        let plist = render_plist("/path/with <special> & \"chars\"");
+        let expected = "<string>/path/with &lt;special&gt; &amp; &quot;chars&quot;</string>";
+        let exe_line = plist
+            .lines()
+            .find(|l| l.trim_start().starts_with("<string>/path/with"))
+            .expect("exe line should exist in plist");
+        assert_eq!(exe_line.trim(), expected);
+    }
+
+    #[test]
+    fn escape_xml_replaces_all_special_chars() {
+        assert_eq!(
+            escape_xml("a&b<c>d\"e'f"),
+            "a&amp;b&lt;c&gt;d&quot;e&apos;f"
+        );
     }
 }

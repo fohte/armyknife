@@ -128,7 +128,7 @@ fn resume_selected_session(app: &mut App) {
     // Only respawn if the pane is sitting at a shell prompt. If the user
     // started another program in the pane we must not kill it silently.
     match tmux::get_pane_current_command(pane_id) {
-        Some(cmd) if SHELL_COMMANDS.iter().any(|s| cmd.ends_with(s)) => {}
+        Some(cmd) if SHELL_COMMANDS.iter().any(|s| cmd == *s) => {}
         Some(cmd) => {
             app.set_error(format!("Pane is running `{cmd}`, cannot resume"));
             return;

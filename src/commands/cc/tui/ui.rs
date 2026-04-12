@@ -125,12 +125,13 @@ fn get_status_style(
 /// Renders the header with status counts.
 /// When a status filter is active, the matching status is visually highlighted.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let (running, waiting, stopped) = count_statuses(&app.sessions);
+    let (running, waiting, stopped, paused) = count_statuses(&app.sessions);
     let status_filter = app.status_filter;
 
     let running_style = get_status_style(Color::Green, SessionStatus::Running, status_filter);
     let waiting_style = get_status_style(Color::Yellow, SessionStatus::WaitingInput, status_filter);
     let stopped_style = get_status_style(Color::DarkGray, SessionStatus::Stopped, status_filter);
+    let paused_style = get_status_style(Color::Indexed(245), SessionStatus::Paused, status_filter);
 
     let status_line = Line::from(vec![
         Span::styled(
@@ -150,6 +151,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
                 waiting
             ),
             waiting_style,
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("{} {}", SessionStatus::Paused.display_symbol(), paused),
+            paused_style,
         ),
         Span::raw("  "),
         Span::styled(
@@ -629,20 +635,22 @@ fn time_ago_color(updated_at: DateTime<Utc>, now: DateTime<Utc>) -> Color {
 }
 
 /// Counts sessions by status.
-fn count_statuses(sessions: &[Session]) -> (usize, usize, usize) {
+fn count_statuses(sessions: &[Session]) -> (usize, usize, usize, usize) {
     let mut running = 0;
     let mut waiting = 0;
     let mut stopped = 0;
+    let mut paused = 0;
 
     for session in sessions {
         match session.status {
             SessionStatus::Running => running += 1,
             SessionStatus::WaitingInput => waiting += 1,
-            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => stopped += 1,
+            SessionStatus::Paused => paused += 1,
+            SessionStatus::Stopped | SessionStatus::Ended => stopped += 1,
         }
     }
 
-    (running, waiting, stopped)
+    (running, waiting, stopped, paused)
 }
 
 /// Gets the title display name for a session without external file I/O.
@@ -937,10 +945,38 @@ mod tests {
             },
         ];
 
-        let (running, waiting, stopped) = count_statuses(&sessions);
+        let (running, waiting, stopped, paused) = count_statuses(&sessions);
         assert_eq!(running, 2);
         assert_eq!(waiting, 1);
         assert_eq!(stopped, 1);
+        assert_eq!(paused, 0);
+    }
+
+    #[test]
+    fn test_count_statuses_with_paused() {
+        let sessions = vec![
+            {
+                let mut s = create_test_session("1");
+                s.status = SessionStatus::Running;
+                s
+            },
+            {
+                let mut s = create_test_session("2");
+                s.status = SessionStatus::Paused;
+                s
+            },
+            {
+                let mut s = create_test_session("3");
+                s.status = SessionStatus::Paused;
+                s
+            },
+        ];
+
+        let (running, waiting, stopped, paused) = count_statuses(&sessions);
+        assert_eq!(running, 1);
+        assert_eq!(waiting, 0);
+        assert_eq!(stopped, 0);
+        assert_eq!(paused, 2);
     }
 
     #[test]
@@ -1068,7 +1104,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 1  ○ 0                    │
+            │  Claude Code Sessions                       ● 1  ◐ 1  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >● ▎ webapp:dev  just now
                ▎
@@ -1092,7 +1128,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 0                    │
+            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
               No active Claude Code sessions.
 
@@ -1124,7 +1160,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >● ▎ webapp:dev  just now
                ▎ I've updated the code as requested.
@@ -1155,7 +1191,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ○ 0                    │
+            │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >● ▎ webapp:dev  just now
                ▎
@@ -1183,7 +1219,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ○ 1                    │
+            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 1               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >○ ▎ /home/user/docs  docs  just now
                ▎
@@ -1231,7 +1267,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 2  ◐ 0  ○ 0                    │
+            │  Claude Code Sessions                       ● 2  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >● ▎ app:main  just now
                ▎ Bash(cargo build)
@@ -1286,7 +1322,7 @@ mod tests {
 
         let expected = indoc! {"
             ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 2  ◐ 1  ○ 0                    │
+            │  Claude Code Sessions                       ● 2  ◐ 1  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
             >● ▎ app:main  just now
                ▎

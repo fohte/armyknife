@@ -368,8 +368,8 @@ where
                 .as_ref()
                 .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
-        let expired_ended =
-            session.status == SessionStatus::Ended && now - session.updated_at > retention;
+        let expired_ended = matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
+            && now - session.updated_at > retention;
 
         if stale_pane || expired_ended {
             let _ = fs::remove_file(&path);
