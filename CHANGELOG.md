@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.143](https://github.com/fohte/armyknife/compare/v0.1.142...v0.1.143) (2026-04-12)
+
+
+### Features
+
+* **cc/watch:** allow deleting sessions with `d` key ([#484](https://github.com/fohte/armyknife/issues/484)) ([2c484ac](https://github.com/fohte/armyknife/commit/2c484ace33f95d4d4a9efb63e5471bf29a0bc118))
+
 ## [0.1.142](https://github.com/fohte/armyknife/compare/v0.1.141...v0.1.142) (2026-04-12)
 
 
