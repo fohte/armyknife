@@ -488,24 +488,18 @@ impl App {
         store::delete_session(&session_id)?;
         self.remove_session(&session_id);
 
-        // If the session was running in a worktree, clean up worktree resources
+        // If the session was running in a worktree, clean up all associated
+        // resources: worktree, branch, tmux windows, and sibling sessions
         if let Some(ref cwd) = session_cwd {
             use crate::shared::cleanup;
             let result = cleanup::cleanup_worktree_resources(cwd)?;
             if result.worktree_deleted {
-                if let Some(branch) = &result.branch_deleted {
-                    eprintln!("Branch deleted: {branch}");
-                }
-                if result.windows_closed > 0 {
-                    eprintln!("Tmux windows closed: {}", result.windows_closed);
-                }
-                // Also remove sessions of other agents in the same worktree
-                let _ = cleanup::cleanup_sessions_in_path(cwd);
-                // Remove those sessions from the in-memory list too
+                // Remove sibling sessions from the in-memory list
+                // (session files already deleted by cleanup_worktree_resources)
                 let to_remove: Vec<String> = self
                     .sessions
                     .iter()
-                    .filter(|s| s.cwd.starts_with(cwd) && s.session_id != session_id)
+                    .filter(|s| s.cwd.starts_with(cwd))
                     .map(|s| s.session_id.clone())
                     .collect();
                 for id in &to_remove {

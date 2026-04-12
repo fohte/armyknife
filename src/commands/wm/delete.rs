@@ -5,11 +5,9 @@ use std::io::{self, Write};
 
 use super::error::{Result, WmError};
 use super::git::{branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists};
-use super::worktree::{
-    delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
-    get_worktree_branch,
-};
+use super::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 use crate::infra::tmux;
+use crate::shared::cleanup;
 use crate::shared::config::load_config;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -34,15 +32,47 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     let main_repo = get_main_repo(&repo)?;
 
     let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
-    let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
-    // Check if we're in a tmux session and current pane is in the worktree
-    let target_window_id = tmux::get_window_id_if_in_path(&worktree_path);
+    // Check merge status before deletion (needs worktree to still exist)
+    check_merge_status(&main_repo, &worktree_name, args.force).await?;
 
-    // Check if the branch can be safely deleted before deleting worktree
+    // Capture the current tmux window ID before cleanup deletes it,
+    // so we can close the window we're sitting in
+    let current_window_id = tmux::get_window_id_if_in_path(&worktree_path);
+
+    let worktree_abs = std::path::Path::new(&worktree_path);
+    let result = cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, worktree_abs)?;
+
+    if !result.worktree_deleted {
+        bail!("Failed to remove worktree: {worktree_path}");
+    }
+    println!("Worktree removed: {worktree_path}");
+
+    if let Some(branch) = &result.branch_deleted {
+        println!("Branch deleted: {branch}");
+    }
+    if result.sessions_cleaned > 0 {
+        println!("Sessions cleaned: {}", result.sessions_cleaned);
+    }
+
+    // Close the current tmux window if we're inside the deleted worktree.
+    // cleanup_worktree_by_name uses get_window_ids_in_path which queries all
+    // panes globally, but the current window may have already been captured
+    // above via get_window_id_if_in_path. Ensure it's closed.
+    if let Some(window_id) = current_window_id {
+        let _ = tmux::kill_window(&window_id);
+    }
+
+    Ok(())
+}
+
+/// Checks if the worktree's branch is merged and prompts for confirmation if not.
+async fn check_merge_status(repo: &Repository, worktree_name: &str, force: bool) -> Result<()> {
+    let branch_name = get_worktree_branch(repo, worktree_name);
+
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
         let merge_status = get_merge_status(branch).await;
-        if !merge_status.is_merged() && !args.force {
+        if !merge_status.is_merged() && !force {
             eprintln!(
                 "Warning: Branch '{}' is not merged ({})",
                 branch,
@@ -58,32 +88,6 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
                 return Err(WmError::Cancelled.into());
             }
         }
-    }
-
-    // Remove the worktree
-    if !delete_worktree(&main_repo, &worktree_name)? {
-        bail!("Failed to remove worktree: {worktree_path}");
-    }
-    println!("Worktree removed: {worktree_path}");
-
-    // Delete the branch if it exists
-    if let Some(branch) = branch_name
-        && delete_branch_if_exists(&main_repo, &branch)
-    {
-        println!("Branch deleted: {branch}");
-    }
-
-    // Close the original tmux window (identified by window ID)
-    // Ignore errors since this is a best-effort cleanup
-    if let Some(window_id) = target_window_id {
-        let _ = tmux::kill_window(&window_id);
-    }
-
-    // Clean up Claude Code session files for sessions running in this worktree
-    let worktree_abs = std::path::Path::new(&worktree_path);
-    let cleaned = crate::shared::cleanup::cleanup_sessions_in_path(worktree_abs)?;
-    if cleaned > 0 {
-        println!("Sessions cleaned: {cleaned}");
     }
 
     Ok(())
