@@ -431,8 +431,9 @@ fn create_tree_session_item(
     };
     let truncated_info = truncate(&combined_info, session_info_width);
     let is_paused = session.status == SessionStatus::Paused;
+    let paused_style = Style::default().fg(Color::Indexed(245));
     let info_style = if is_paused {
-        Style::default().fg(Color::DarkGray)
+        paused_style
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
@@ -449,7 +450,7 @@ fn create_tree_session_item(
     line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
     line1_spans.push(Span::raw("  "));
     let time_style = if is_paused {
-        Style::default().fg(Color::DarkGray)
+        paused_style
     } else {
         Style::default().fg(time_ago_fg)
     };
@@ -463,7 +464,11 @@ fn create_tree_session_item(
         .or(session.last_message.as_deref())
         .unwrap_or("");
     let truncated_content = truncate(line2_content, content_width);
-    let content_style = Style::default().add_modifier(Modifier::DIM);
+    let content_style = if is_paused {
+        paused_style
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
     let mut line2_spans = Vec::new();
     if !line2_tree_prefix.is_empty() {
         line2_spans.push(Span::styled(line2_tree_prefix, dim_style));
