@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.146](https://github.com/fohte/armyknife/compare/v0.1.145...v0.1.146) (2026-04-12)
+
+
+### Bug Fixes
+
+* **cc/sweep:** pause sessions whose pane_pid is claude itself ([#490](https://github.com/fohte/armyknife/issues/490)) ([48afbb3](https://github.com/fohte/armyknife/commit/48afbb31116f4644bd7cf764b90b1853cfd852d9))
+
 ## [0.1.145](https://github.com/fohte/armyknife/compare/v0.1.144...v0.1.145) (2026-04-12)
 
 
