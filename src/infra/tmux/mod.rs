@@ -306,9 +306,30 @@ pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
     if cmd.is_empty() { None } else { Some(cmd) }
 }
 
-/// Kills the process in the pane and restarts it with `command`.
-pub fn respawn_pane(pane_id: &str, command: &str) -> Result<()> {
-    run_tmux(&["respawn-pane", "-k", "-t", pane_id, command])
+/// Sends `command` followed by Enter to the pane's current process.
+///
+/// Unlike `respawn_pane`, this leaves the pane's existing shell running so
+/// that when the spawned command exits, control returns to the shell (and
+/// the pane is not closed by tmux). The caller must ensure the pane is
+/// currently sitting at a shell prompt.
+pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
+    // Batch two `send-keys` invocations into a single tmux call: the literal
+    // command string (`-l` disables key-name interpretation) followed by
+    // `C-m` (Enter) so the shell actually runs it. Tmux treats `;` as a
+    // command separator when it appears as its own argument.
+    run_tmux(&[
+        "send-keys",
+        "-t",
+        pane_id,
+        "-l",
+        "--",
+        command,
+        ";",
+        "send-keys",
+        "-t",
+        pane_id,
+        "C-m",
+    ])
 }
 
 /// Set a user option on a specific tmux pane.
