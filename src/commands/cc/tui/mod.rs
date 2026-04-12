@@ -204,6 +204,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             focus_selected_session(app);
         }
 
+        // Delete selected session (with confirmation)
+        KeyCode::Char('d') => {
+            app.request_delete();
+        }
+
         // Status filters (toggle)
         KeyCode::Char('w') => {
             app.toggle_status_filter(SessionStatus::WaitingInput);
@@ -225,11 +230,27 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles key events in Confirm mode.
+fn handle_confirm_key_event(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('y') => {
+            if let Err(e) = app.confirm_delete() {
+                app.set_error(format!("Failed to delete session: {e}"));
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.cancel_confirm();
+        }
+        _ => {}
+    }
+}
+
 /// Handles key events based on current mode.
 fn handle_key_event(app: &mut App, key: KeyEvent) {
     match app.mode {
         AppMode::Normal => handle_normal_key_event(app, key),
         AppMode::Search => handle_search_key_event(app, key),
+        AppMode::Confirm { .. } => handle_confirm_key_event(app, key),
     }
 }
 
@@ -634,5 +655,54 @@ mod tests {
             ("s3".to_string(), SessionChangeType::Deleted),
         ]);
         assert!(merge_session_changes(map, true).is_none());
+    }
+
+    // =========================================================================
+    // Delete/confirm mode tests
+    // =========================================================================
+
+    #[test]
+    fn test_d_key_enters_confirm_mode() {
+        let mut app = create_test_app_with_sessions(3);
+        let selected_id = app.selected_session().map(|s| s.session_id.clone());
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+
+        assert!(matches!(app.mode, AppMode::Confirm { .. }));
+        if let AppMode::Confirm { session_id, .. } = &app.mode {
+            assert_eq!(Some(session_id.clone()), selected_id);
+        }
+    }
+
+    #[test]
+    fn test_d_key_no_op_when_no_sessions() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+
+        assert_eq!(app.mode, AppMode::Normal);
+    }
+
+    #[rstest]
+    #[case::n_cancels(KeyCode::Char('n'))]
+    #[case::esc_cancels(KeyCode::Esc)]
+    fn test_confirm_cancel(#[case] cancel_key: KeyCode) {
+        let mut app = create_test_app_with_sessions(3);
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        assert!(matches!(app.mode, AppMode::Confirm { .. }));
+
+        handle_key_event(&mut app, key(cancel_key));
+        assert_eq!(app.mode, AppMode::Normal);
+        // Sessions should remain unchanged
+        assert_eq!(app.sessions.len(), 3);
+    }
+
+    #[test]
+    fn test_confirm_ignores_unrelated_keys() {
+        let mut app = create_test_app_with_sessions(3);
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        assert!(matches!(app.mode, AppMode::Confirm { .. }));
+
+        // Pressing 'j' or other keys should not change mode
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+        assert!(matches!(app.mode, AppMode::Confirm { .. }));
     }
 }

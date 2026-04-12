@@ -12,11 +12,16 @@ use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
 
 /// Application mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AppMode {
     #[default]
     Normal,
     Search,
+    /// Confirm deletion of a session. Holds the session_id and its status.
+    Confirm {
+        session_id: String,
+        is_alive: bool,
+    },
 }
 
 /// Application state for the TUI.
@@ -438,6 +443,69 @@ impl App {
         }
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
+    }
+
+    /// Enters confirm-delete mode for the currently selected session.
+    pub fn request_delete(&mut self) {
+        if let Some(session) = self.selected_session() {
+            let is_alive = session
+                .tmux_info
+                .as_ref()
+                .is_some_and(|info| tmux::is_pane_alive(&info.pane_id));
+            self.mode = AppMode::Confirm {
+                session_id: session.session_id.clone(),
+                is_alive,
+            };
+        }
+    }
+
+    /// Executes the confirmed delete action.
+    /// If the session is alive, sends SIGTERM to the pane process first.
+    pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
+        let current_selection = self.list_state.selected();
+        let (session_id, is_alive) = match &self.mode {
+            AppMode::Confirm {
+                session_id,
+                is_alive,
+            } => (session_id.clone(), *is_alive),
+            _ => return Ok(()),
+        };
+
+        if is_alive
+            && let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id)
+            && let Some(ref tmux_info) = session.tmux_info
+        {
+            tmux::send_sigterm_to_pane(&tmux_info.pane_id);
+        }
+
+        store::delete_session(&session_id)?;
+        self.remove_session(&session_id);
+
+        // Re-sort and rebuild
+        store::sort_sessions(&mut self.sessions);
+        self.rebuild_title_cache();
+        if self.searchable_text_cache.is_some() {
+            self.update_searchable_text_cache();
+        }
+        self.apply_filter();
+
+        // Restore selection to the same index, clamped to the new list length
+        if let Some(selected) = current_selection {
+            let new_len = self.tree_ordered_indices.len();
+            if new_len > 0 {
+                self.list_state.select(Some(selected.min(new_len - 1)));
+            } else {
+                self.list_state.select(None);
+            }
+        }
+
+        self.mode = AppMode::Normal;
+        Ok(())
+    }
+
+    /// Cancels the confirm-delete dialog.
+    pub fn cancel_confirm(&mut self) {
+        self.mode = AppMode::Normal;
     }
 
     /// Clears the filter and shows all sessions.
