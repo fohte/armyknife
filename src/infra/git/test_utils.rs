@@ -14,7 +14,17 @@ pub struct TempRepo {
 impl TempRepo {
     /// Create a new temporary git repository with a GitHub-style origin remote.
     pub fn new(owner: &str, repo_name: &str, branch: &str) -> Self {
-        let dir = TempDir::new().expect("create temp dir");
+        // Ensure the system temp directory exists before asking tempfile for a
+        // new subdirectory. Under the srt sandbox, `TMPDIR` can point at a path
+        // (e.g. `/tmp/claude`) that is created lazily, and a narrow race
+        // window can make `TempDir::new()` fail with `NotFound` when several
+        // tests run in parallel and `TempDir` probes the parent before it
+        // exists.
+        let tmp_root = std::env::temp_dir();
+        std::fs::create_dir_all(&tmp_root)
+            .unwrap_or_else(|e| panic!("create temp root {}: {e}", tmp_root.display()));
+        let dir = TempDir::new()
+            .unwrap_or_else(|e| panic!("create temp dir under {}: {e}", tmp_root.display()));
         let repo = Repository::init(dir.path()).expect("init repo");
 
         // Create initial commit so HEAD exists
