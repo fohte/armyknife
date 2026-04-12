@@ -471,6 +471,13 @@ impl App {
             _ => return Ok(()),
         };
 
+        // Get the session's cwd before removing it, for worktree cleanup
+        let session_cwd = self
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .map(|s| s.cwd.clone());
+
         if is_alive
             && let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id)
             && let Some(ref tmux_info) = session.tmux_info
@@ -480,6 +487,30 @@ impl App {
 
         store::delete_session(&session_id)?;
         self.remove_session(&session_id);
+
+        // If the session was running in a worktree, clean up all associated
+        // resources: worktree, branch, tmux windows, and sibling sessions.
+        // Best-effort: errors are ignored since the primary session is already
+        // deleted and we don't want to leave the TUI in an inconsistent state.
+        if let Some(ref cwd) = session_cwd {
+            use crate::shared::cleanup;
+            if let Ok(result) = cleanup::cleanup_worktree_resources(cwd)
+                && let Some(ref wt_root) = result.worktree_root
+            {
+                // Remove sibling sessions from the in-memory list using
+                // the resolved worktree root, not the raw cwd which may
+                // be a subdirectory
+                let to_remove: Vec<String> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.cwd.starts_with(wt_root))
+                    .map(|s| s.session_id.clone())
+                    .collect();
+                for id in &to_remove {
+                    self.remove_session(id);
+                }
+            }
+        }
 
         // Re-sort and rebuild
         store::sort_sessions(&mut self.sessions);

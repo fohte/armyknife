@@ -8,15 +8,12 @@ use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use super::error::{Result, WmError};
-use super::worktree::{
-    LinkedWorktree, delete_branch_if_exists, delete_worktree, get_main_repo, list_linked_worktrees,
-};
+use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
-use crate::infra::tmux;
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
@@ -32,12 +29,10 @@ pub struct CleanArgs {
     pub all: bool,
 }
 
-/// Worktree with merge status and associated tmux windows for clean command.
+/// Worktree with merge status for clean command.
 struct CleanWorktreeInfo {
     wt: LinkedWorktree,
     status: MergeStatus,
-    /// Tmux window IDs that are located in this worktree's path
-    window_ids: Vec<String>,
     /// Repository name (relative path from repos_root). Only set in --all mode.
     repo_name: Option<String>,
 }
@@ -206,12 +201,10 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
                 merge_status_from_git(&repo, &wt.branch)
             };
 
-            let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
             let should_delete = status.should_cleanup();
             let info = CleanWorktreeInfo {
                 wt: wt.clone(),
                 status,
-                window_ids,
                 repo_name: Some(rd.repo_name.clone()),
             };
 
@@ -379,19 +372,21 @@ fn delete_worktrees_single_repo(repo: &Repository, worktrees: &[CleanWorktreeInf
     let mut deleted_count = 0;
 
     for info in worktrees {
-        if delete_worktree(repo, &info.wt.name)? {
+        let result =
+            crate::shared::cleanup::cleanup_worktree_by_name(repo, &info.wt.name, &info.wt.path)?;
+
+        if result.worktree_deleted {
             println!("Deleted: {}", info.wt.name);
             deleted_count += 1;
 
-            if delete_branch_if_exists(repo, &info.wt.branch) {
-                println!("  Branch deleted: {}", info.wt.branch);
+            if let Some(branch) = &result.branch_deleted {
+                println!("  Branch deleted: {branch}");
             }
-
-            // Close tmux windows that were in the deleted worktree
-            for window_id in &info.window_ids {
-                if tmux::kill_window(window_id).is_ok() {
-                    println!("  Tmux window closed: {window_id}");
-                }
+            if result.windows_closed > 0 {
+                println!("  Tmux windows closed: {}", result.windows_closed);
+            }
+            if result.sessions_cleaned > 0 {
+                println!("  Sessions cleaned: {}", result.sessions_cleaned);
             }
         }
     }
@@ -426,18 +421,24 @@ fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]
         };
 
         for info in infos {
-            if delete_worktree(&repo, &info.wt.name)? {
+            let result = crate::shared::cleanup::cleanup_worktree_by_name(
+                &repo,
+                &info.wt.name,
+                &info.wt.path,
+            )?;
+
+            if result.worktree_deleted {
                 println!("Deleted: {repo_name}/{}", info.wt.name);
                 deleted_count += 1;
 
-                if delete_branch_if_exists(&repo, &info.wt.branch) {
-                    println!("  Branch deleted: {}", info.wt.branch);
+                if let Some(branch) = &result.branch_deleted {
+                    println!("  Branch deleted: {branch}");
                 }
-
-                for window_id in &info.window_ids {
-                    if tmux::kill_window(window_id).is_ok() {
-                        println!("  Tmux window closed: {window_id}");
-                    }
+                if result.windows_closed > 0 {
+                    println!("  Tmux windows closed: {}", result.windows_closed);
+                }
+                if result.sessions_cleaned > 0 {
+                    println!("  Sessions cleaned: {}", result.sessions_cleaned);
                 }
             }
         }
@@ -463,13 +464,10 @@ async fn collect_worktrees(
         }
 
         let status = get_merge_status_for_repo(repo, &wt.branch).await;
-        // Collect tmux window IDs while the worktree path still exists
-        let window_ids = tmux::get_window_ids_in_path(&wt.path.to_string_lossy());
         let should_delete = status.should_cleanup();
         let info = CleanWorktreeInfo {
             wt,
             status,
-            window_ids,
             repo_name: repo_name.map(|s| s.to_string()),
         };
 
@@ -505,7 +503,6 @@ mod tests {
                 commit: "abc1234".to_string(),
             },
             status,
-            window_ids: Vec::new(),
             repo_name: None,
         }
     }
@@ -525,53 +522,14 @@ mod tests {
                 commit: "abc1234".to_string(),
             },
             status,
-            window_ids: Vec::new(),
             repo_name: Some(repo_name.to_string()),
         }
     }
 
-    #[test]
-    fn delete_worktrees_deletes_all_worktrees() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("feature-a");
-        test_repo.create_worktree("feature-b");
-
-        let repo = test_repo.open();
-
-        let worktrees = vec![
-            make_clean_info(
-                "feature-a",
-                test_repo.worktree_path("feature-a"),
-                "feature-a",
-                MergeStatus::Merged {
-                    reason: "merged".to_string(),
-                },
-            ),
-            make_clean_info(
-                "feature-b",
-                test_repo.worktree_path("feature-b"),
-                "feature-b",
-                MergeStatus::Merged {
-                    reason: "merged".to_string(),
-                },
-            ),
-        ];
-
-        delete_worktrees_single_repo(&repo, &worktrees).unwrap();
-
-        // Verify worktrees are deleted
-        assert!(repo.find_worktree("feature-a").is_err());
-        assert!(repo.find_worktree("feature-b").is_err());
-    }
-
-    #[test]
-    fn delete_worktrees_handles_empty_list() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let result = delete_worktrees_single_repo(&repo, &[]);
-        assert!(result.is_ok());
-    }
+    // delete_worktrees_single_repo and delete_worktrees_all_repos are not
+    // directly tested here because they call cleanup_worktree_by_name which
+    // invokes external tmux commands. The core worktree deletion logic is
+    // tested in shared::cleanup::tests::delete_worktree_and_branch_*.
 
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, "✓")]
