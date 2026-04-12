@@ -189,7 +189,7 @@ mod tests {
             "in_progress_completes_both" => (
                 // Both reviews appear after polling; Gemini started (reaction present)
                 MockDetectionClient::new()
-                    .with_reaction("eyes")
+                    .with_reaction("EYES")
                     .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
                     .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
                     .with_check_run("devin-review", None)
@@ -212,7 +212,7 @@ mod tests {
             "one_unable_during_wait_other_completes" => (
                 // Gemini posts "unable" during polling, Devin review completes
                 MockDetectionClient::new()
-                    .with_reaction("eyes")
+                    .with_reaction("EYES")
                     .with_comment(
                         "gemini-code-assist",
                         "Gemini is unable to review this PR.",
@@ -290,7 +290,7 @@ mod tests {
             "timeout" => (
                 // Start signals present but no reviews ever appear
                 MockDetectionClient::new()
-                    .with_reaction("eyes")
+                    .with_reaction("EYES")
                     .with_check_run("devin-review", None),
                 make_args_both(1, 1), // 1 second timeout
             ),
@@ -362,7 +362,7 @@ mod tests {
         let now = Utc::now();
         let client = MockDetectionClient::new()
             .with_check_run("devin-review", None)
-            .with_reaction("eyes")
+            .with_reaction("EYES")
             .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
             .skip_first_n_review_calls(2);
@@ -390,7 +390,7 @@ mod tests {
         // When waiting for both, should wait until all complete (not just one)
         let now = Utc::now();
         let client = MockDetectionClient::new()
-            .with_reaction("eyes")
+            .with_reaction("EYES")
             .with_check_run("devin-review", None)
             .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))

@@ -18,7 +18,7 @@ impl ReviewDetector for GeminiDetector {
     }
 
     fn start_method(&self) -> StartDetection {
-        StartDetection::BodyReaction { emoji: "eyes" }
+        StartDetection::BodyReaction { emoji: "EYES" }
     }
 
     fn completion_method(&self) -> CompletionDetection {

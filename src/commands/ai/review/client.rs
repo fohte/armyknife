@@ -368,18 +368,12 @@ impl DetectionClient for OctocrabDetectionClient {
 
         let response: PrReactionsData = client.graphql(PR_REACTIONS_QUERY, variables).await?;
 
-        // GitHub GraphQL uses UPPER_SNAKE_CASE for reaction content (e.g., "EYES")
-        let graphql_emoji = emoji.to_uppercase();
-
+        // `emoji` must match GitHub GraphQL ReactionContent enum values
+        // (UPPER_SNAKE_CASE, e.g., "EYES", "THUMBS_UP", "HEART")
         Ok(response
             .repository
             .and_then(|r| r.pull_request)
-            .map(|pr| {
-                pr.reactions
-                    .nodes
-                    .iter()
-                    .any(|r| r.content == graphql_emoji)
-            })
+            .map(|pr| pr.reactions.nodes.iter().any(|r| r.content == emoji))
             .unwrap_or(false))
     }
 
@@ -420,6 +414,7 @@ impl DetectionClient for OctocrabDetectionClient {
 
         let check_runs = self.find_check_runs(&response, check_name);
 
+        let mut latest: Option<DateTime<Utc>> = None;
         for cr in check_runs {
             if cr.status == "COMPLETED"
                 && let Some(ref completed_at) = cr.completed_at
@@ -427,11 +422,11 @@ impl DetectionClient for OctocrabDetectionClient {
                 let t = completed_at
                     .parse::<DateTime<Utc>>()
                     .map_err(|_| ReviewError::TimestampParseError(completed_at.clone()))?;
-                return Ok(Some(t));
+                latest = Some(latest.map_or(t, |prev| prev.max(t)));
             }
         }
 
-        Ok(None)
+        Ok(latest)
     }
 }
 
@@ -821,11 +816,11 @@ pub mod mock {
         }
 
         #[rstest]
-        #[case::has_reaction("eyes", true)]
+        #[case::has_reaction("EYES", true)]
         #[case::no_reaction("thumbsup", false)]
         #[tokio::test]
         async fn has_body_reaction_checks_emoji(#[case] query: &str, #[case] expected: bool) {
-            let client = MockDetectionClient::new().with_reaction("eyes");
+            let client = MockDetectionClient::new().with_reaction("EYES");
 
             let result = client
                 .has_body_reaction("owner", "repo", 1, query)
