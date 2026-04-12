@@ -230,10 +230,14 @@ fn process_hook_event_impl(
     session.cwd.clone_from(&input.cwd);
     session.updated_at = now;
 
-    // Don't overwrite Paused status -- sweep set it and `cc resume` needs it.
-    // If Claude fires a Stop hook during SIGTERM shutdown, we must preserve
-    // the Paused marker so SessionEnd doesn't clobber it.
-    if session.status != SessionStatus::Paused {
+    // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
+    // Claude, its shutdown may fire Stop hooks that would overwrite Paused →
+    // Stopped, and then SessionEnd would see Stopped instead of Paused.
+    // However, when the user resumes (SessionStart → Running), the status
+    // must transition out of Paused so the TUI shows the session as active.
+    let keep_paused = session.status == SessionStatus::Paused
+        && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
+    if !keep_paused {
         session.status = status;
     }
 
@@ -1090,14 +1094,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stop_on_paused(HookEvent::Stop)]
-    #[case::pre_tool_use_on_paused(HookEvent::PreToolUse)]
-    #[case::user_prompt_submit_on_paused(HookEvent::UserPromptSubmit)]
-    fn hook_preserves_paused_status(#[case] event: HookEvent) {
+    #[case::stop_preserves_paused(HookEvent::Stop, SessionStatus::Paused)]
+    #[case::pre_tool_use_transitions_to_running(HookEvent::PreToolUse, SessionStatus::Running)]
+    #[case::user_prompt_submit_transitions_to_running(
+        HookEvent::UserPromptSubmit,
+        SessionStatus::Running
+    )]
+    fn hook_on_paused_session(#[case] event: HookEvent, #[case] expected: SessionStatus) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        // Pre-create a Paused session on disk
         let session = Session {
             session_id: "paused-sess".to_string(),
             cwd: "/tmp/test".into(),
@@ -1125,9 +1131,8 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(
-            reloaded.status,
-            SessionStatus::Paused,
-            "{event:?} hook must not overwrite Paused status"
+            reloaded.status, expected,
+            "{event:?} on Paused session should result in {expected:?}"
         );
     }
 
