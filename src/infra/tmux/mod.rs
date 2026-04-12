@@ -313,11 +313,23 @@ pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
 /// the pane is not closed by tmux). The caller must ensure the pane is
 /// currently sitting at a shell prompt.
 pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
-    // `send-keys -l` sends the literal string without tmux key-name
-    // interpretation, then a separate invocation sends C-m (Enter) so the
-    // shell actually runs it.
-    run_tmux(&["send-keys", "-t", pane_id, "-l", "--", command])?;
-    run_tmux(&["send-keys", "-t", pane_id, "C-m"])
+    // Batch two `send-keys` invocations into a single tmux call: the literal
+    // command string (`-l` disables key-name interpretation) followed by
+    // `C-m` (Enter) so the shell actually runs it. Tmux treats `;` as a
+    // command separator when it appears as its own argument.
+    run_tmux(&[
+        "send-keys",
+        "-t",
+        pane_id,
+        "-l",
+        "--",
+        command,
+        ";",
+        "send-keys",
+        "-t",
+        pane_id,
+        "C-m",
+    ])
 }
 
 /// Set a user option on a specific tmux pane.
