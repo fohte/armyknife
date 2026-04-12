@@ -147,8 +147,13 @@ impl SessionProbe for TmuxSessionProbe<'_> {
     fn resolve_pid(&self, session: &Session) -> Option<u32> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
         let pane_pid = tmux::get_pane_pid(pane_id)?;
+        // When claude is launched directly as the pane command (no shell
+        // wrapper), pane_pid itself is the claude process -- BFS from
+        // pane_pid (exclusive) would miss it. Use the inclusive variant so
+        // both "pane_pid is claude" and "pane_pid is zsh, child is claude"
+        // resolve correctly.
         self.snapshot?
-            .find_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
+            .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
     }
 
     fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
