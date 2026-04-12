@@ -253,7 +253,24 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
-    let help_text = match app.mode {
+    let help_text = match &app.mode {
+        AppMode::Confirm { is_alive, .. } => {
+            let prompt = if *is_alive {
+                "Stop and delete session?"
+            } else {
+                "Delete session?"
+            };
+            let warn_style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+            Line::from(vec![
+                Span::styled(format!("  {prompt} "), warn_style),
+                Span::styled("y", bold),
+                Span::raw(": yes  "),
+                Span::styled("n/Esc", bold),
+                Span::raw(": cancel"),
+            ])
+        }
         AppMode::Search => Line::from(vec![
             Span::styled("  C-n/C-p", bold),
             Span::raw(": move  "),
@@ -267,6 +284,8 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(": move  "),
             Span::styled("Enter/f", bold),
             Span::raw(": focus  "),
+            Span::styled("d", bold),
+            Span::raw(": delete  "),
             Span::styled("/", bold),
             Span::raw(": edit  "),
             Span::styled("r/w/s", bold),
@@ -281,6 +300,8 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(": move  "),
             Span::styled("Enter/f", bold),
             Span::raw(": focus  "),
+            Span::styled("d", bold),
+            Span::raw(": delete  "),
             Span::styled("1-9", bold),
             Span::raw(": quick  "),
             Span::styled("/", bold),
@@ -1083,7 +1104,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1101,7 +1122,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1131,7 +1152,7 @@ mod tests {
                ▎ I've updated the code as requested.
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1160,7 +1181,7 @@ mod tests {
                ▎
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1186,7 +1207,7 @@ mod tests {
                ▎
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1236,7 +1257,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 
@@ -1292,7 +1313,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  r/w/s: filter  q: quit"};
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  /: search  r/w/s: filter  q:"};
         assert_eq!(output, expected);
     }
 

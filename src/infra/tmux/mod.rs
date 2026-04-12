@@ -432,6 +432,13 @@ pub fn find_pane_id_by_position(
     }
 }
 
+/// Returns the PID of the process running in the given tmux pane.
+/// Returns None if the pane doesn't exist or the PID can't be parsed.
+pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
+    let output = run_tmux_output(&["list-panes", "-t", pane_id, "-F", "#{pane_pid}"]).ok()?;
+    output.lines().next()?.parse::<u32>().ok()
+}
+
 /// Gets tmux pane information for a given process ID.
 /// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
 /// Returns None if not running in tmux or if no matching pane is found.
