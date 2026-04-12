@@ -311,14 +311,14 @@ The `SessionStart` hook stores the session ID in the tmux pane title, allowing `
 
 Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused`, so `a cc resume` can restore the conversation by invoking `claude --resume`.
 
-`a cc sweep` scans every session file once, sends SIGTERM to any session whose `stopped` timeout has elapsed, and marks it as `paused`. Run it periodically (e.g., every minute) via a launchd agent so idle sessions get paused even while no hook is firing.
+`a cc sweep` scans every session file once, sends SIGTERM to any session whose `stopped` timeout has elapsed, and marks it as `paused`. Run it periodically via a launchd agent so idle sessions get paused even while no hook is firing.
 
-| Command                | Description                                                     |
-| ---------------------- | --------------------------------------------------------------- |
-| `a cc sweep`           | Run a single sweep pass (equivalent to `a cc sweep run`)        |
-| `a cc sweep install`   | Install and bootstrap a launchd agent that runs sweep each 60 s |
-| `a cc sweep status`    | Print the plist path and whether the agent is bootstrapped      |
-| `a cc sweep uninstall` | Bootout the agent and remove its plist                          |
+| Command                | Description                                                       |
+| ---------------------- | ----------------------------------------------------------------- |
+| `a cc sweep`           | Run a single sweep pass (equivalent to `a cc sweep run`)          |
+| `a cc sweep install`   | Install and bootstrap a launchd agent that runs sweep every 5 min |
+| `a cc sweep status`    | Print the plist path and whether the agent is bootstrapped        |
+| `a cc sweep uninstall` | Bootout the agent and remove its plist                            |
 
 Options for the run command:
 

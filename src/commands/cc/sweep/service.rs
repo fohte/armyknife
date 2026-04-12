@@ -17,10 +17,10 @@ use anyhow::{Context, Result, bail};
 use crate::infra::launchd;
 
 const SERVICE_LABEL: &str = "fohte.armyknife.cc-sweep";
-/// How often launchd should invoke `a cc sweep run`. One minute is short
-/// enough that a 30-minute idle timeout still feels responsive (worst-case
-/// user wait is timeout + 60s), and long enough not to drain battery.
-const START_INTERVAL_SECS: u32 = 60;
+/// How often launchd should invoke `a cc sweep run`. Five minutes keeps
+/// the overhead negligible while a 30-minute idle timeout remains responsive
+/// (worst-case pause delay is timeout + 5 min).
+const START_INTERVAL_SECS: u32 = 300;
 
 /// Install the LaunchAgent plist and bootstrap it.
 pub fn install() -> Result<()> {
@@ -140,6 +140,9 @@ fn render_plist(exe: &str) -> String {
     let log_path = log_path_string();
     let exe = escape_xml(exe);
     let log_path = escape_xml(&log_path);
+    // Launch via login shell so that PATH from .zprofile/.zshenv is available,
+    // ensuring Homebrew-installed tools like tmux are found regardless of
+    // launchd's minimal default PATH.
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -149,10 +152,9 @@ fn render_plist(exe: &str) -> String {
     <string>{SERVICE_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{exe}</string>
-        <string>cc</string>
-        <string>sweep</string>
-        <string>run</string>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>{exe} cc sweep run</string>
     </array>
     <key>StartInterval</key>
     <integer>{START_INTERVAL_SECS}</integer>
@@ -201,10 +203,9 @@ mod tests {
                 <string>{label}</string>
                 <key>ProgramArguments</key>
                 <array>
-                    <string>/usr/local/bin/a</string>
-                    <string>cc</string>
-                    <string>sweep</string>
-                    <string>run</string>
+                    <string>/bin/zsh</string>
+                    <string>-lc</string>
+                    <string>/usr/local/bin/a cc sweep run</string>
                 </array>
                 <key>StartInterval</key>
                 <integer>{interval}</integer>
@@ -227,7 +228,8 @@ mod tests {
     #[test]
     fn render_plist_escapes_xml_special_chars() {
         let plist = render_plist("/path/with <special> & \"chars\"");
-        let expected = "<string>/path/with &lt;special&gt; &amp; &quot;chars&quot;</string>";
+        let expected =
+            "<string>/path/with &lt;special&gt; &amp; &quot;chars&quot; cc sweep run</string>";
         let exe_line = plist
             .lines()
             .find(|l| l.trim_start().starts_with("<string>/path/with"))
