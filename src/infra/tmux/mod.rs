@@ -453,6 +453,25 @@ pub fn find_pane_id_by_position(
     }
 }
 
+/// Returns the PID of the process running in the given tmux pane.
+/// Returns None if the pane doesn't exist or the PID can't be parsed.
+pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
+    let output = run_tmux_output(&["list-panes", "-t", pane_id, "-F", "#{pane_pid}"]).ok()?;
+    output.lines().next()?.parse::<u32>().ok()
+}
+
+/// Sends SIGTERM to the process running in the given tmux pane.
+/// No-op if the pane doesn't exist or the PID can't be resolved.
+pub fn send_sigterm_to_pane(pane_id: &str) {
+    if let Some(pid) = get_pane_pid(pane_id) {
+        // SAFETY: libc::kill with SIGTERM is safe for any valid PID.
+        // Invalid PIDs cause kill to return -1 which we ignore.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+}
+
 /// Gets tmux pane information for a given process ID.
 /// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
 /// Returns None if not running in tmux or if no matching pane is found.
@@ -491,15 +510,6 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     }
 
     None
-}
-
-/// Returns the pane_pid (the top-of-pty process tmux launched in the pane) for
-/// the given pane_id, or `None` if the pane does not exist or tmux is not
-/// running. Typically used to locate the shell that hosts a long-running
-/// process such as `claude` so callers can walk its descendants.
-pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
-    let output = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_pid}"]).ok()?;
-    output.trim().parse::<u32>().ok()
 }
 
 /// Returns the last user-input timestamp for the pane identified by
