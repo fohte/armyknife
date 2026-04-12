@@ -359,16 +359,17 @@ where
             continue;
         };
 
-        // Ended sessions are retained for resume; only expire them via the
-        // 7-day retention check below, not the stale-pane heuristic.
+        // Ended and Paused sessions are retained for resume; only expire them
+        // via the 7-day retention check below, not the stale-pane heuristic.
         let stale_pane = session.status != SessionStatus::Ended
+            && session.status != SessionStatus::Paused
             && session
                 .tmux_info
                 .as_ref()
                 .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
-        let expired_ended =
-            session.status == SessionStatus::Ended && now - session.updated_at > retention;
+        let expired_ended = matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
+            && now - session.updated_at > retention;
 
         if stale_pane || expired_ended {
             let _ = fs::remove_file(&path);
@@ -554,6 +555,33 @@ mod tests {
             assert!(
                 !path.exists(),
                 "session with nonexistent pane should be removed"
+            );
+        }
+
+        #[rstest]
+        fn keeps_paused_session_with_dead_pane(temp_session_dir: TempSessionDir) {
+            let session_id = "paused-dead-pane";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+
+            let mut session = create_test_session(session_id);
+            session.status = SessionStatus::Paused;
+            session.tmux_info = Some(TmuxInfo {
+                session_name: "test".to_string(),
+                window_name: "test".to_string(),
+                window_index: 0,
+                pane_id: "%99999".to_string(),
+            });
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+            assert!(path.exists(), "session file should exist before cleanup");
+
+            cleanup_stale_sessions_in(&temp_session_dir.sessions_path, mock_pane_always_dead)
+                .expect("cleanup should succeed");
+
+            assert!(
+                path.exists(),
+                "paused session should be retained even with dead pane"
             );
         }
 

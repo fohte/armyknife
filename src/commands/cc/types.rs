@@ -50,6 +50,10 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
+    /// Stopped session that was automatically terminated (SIGTERM) after the
+    /// `auto_pause` timeout elapsed. The session file is preserved so that
+    /// `cc resume` / `claude --resume` can restore the conversation.
+    Paused,
     /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
     /// resume can restore label and ancestor chain. Garbage-collected after
     /// a retention period by `cleanup_stale_sessions`.
@@ -62,6 +66,7 @@ impl SessionStatus {
             Self::Running => "●",
             Self::WaitingInput => "◐",
             Self::Stopped | Self::Ended => "○",
+            Self::Paused => "⏸",
         }
     }
 
@@ -70,6 +75,7 @@ impl SessionStatus {
             Self::Running => "running",
             Self::WaitingInput => "waiting",
             Self::Stopped => "stopped",
+            Self::Paused => "paused",
             Self::Ended => "ended",
         }
     }

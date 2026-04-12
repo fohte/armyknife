@@ -109,6 +109,45 @@ fn focus_selected_session(app: &mut App) {
     }
 }
 
+const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
+
+fn resume_selected_session(app: &mut App) {
+    let Some(session) = app.selected_session() else {
+        return;
+    };
+    let Some(ref tmux_info) = session.tmux_info else {
+        app.set_error("No tmux pane for this session".to_string());
+        return;
+    };
+    if session.status != SessionStatus::Paused {
+        app.set_error("Session is not paused".to_string());
+        return;
+    }
+    let pane_id = &tmux_info.pane_id;
+
+    // Only respawn if the pane is sitting at a shell prompt. If the user
+    // started another program in the pane we must not kill it silently.
+    match tmux::get_pane_current_command(pane_id) {
+        Some(cmd) if SHELL_COMMANDS.iter().any(|s| cmd == *s) => {}
+        Some(cmd) => {
+            app.set_error(format!("Pane is running `{cmd}`, cannot resume"));
+            return;
+        }
+        None => {
+            app.set_error("Cannot read pane state".to_string());
+            return;
+        }
+    }
+
+    if let Err(e) = tmux::respawn_pane(pane_id, "a cc resume") {
+        app.set_error(format!("Failed to respawn pane: {e}"));
+        return;
+    }
+    if let Err(e) = tmux::focus_pane(pane_id) {
+        app.set_error(format!("Failed to focus pane: {e}"));
+    }
+}
+
 /// Handles key events in Search mode.
 fn handle_search_key_event(app: &mut App, key: KeyEvent) {
     match (key.code, key.modifiers) {
@@ -171,14 +210,14 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
     // Clear error message on any key press
     app.clear_error();
 
-    match key.code {
+    match (key.code, key.modifiers) {
         // Enter search mode
-        KeyCode::Char('/') => {
+        (KeyCode::Char('/'), _) => {
             app.enter_search_mode();
         }
 
         // Clear filter or quit
-        KeyCode::Esc => {
+        (KeyCode::Esc, _) => {
             if app.has_filter() {
                 app.clear_filter();
             } else {
@@ -187,41 +226,51 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         }
 
         // Quit
-        KeyCode::Char('q') => {
+        (KeyCode::Char('q'), KeyModifiers::NONE) => {
             app.quit();
         }
 
         // Navigation
-        KeyCode::Char('j') | KeyCode::Down => {
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
             app.select_next();
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
             app.select_previous();
         }
 
         // Focus on selected session's tmux pane
-        KeyCode::Enter | KeyCode::Char('f') => {
+        (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
             focus_selected_session(app);
         }
 
+        // Resume a paused session
+        (KeyCode::Char('r'), KeyModifiers::NONE) => {
+            resume_selected_session(app);
+        }
+
         // Delete selected session (with confirmation)
-        KeyCode::Char('d') => {
+        (KeyCode::Char('d'), KeyModifiers::NONE) => {
             app.request_delete();
         }
 
-        // Status filters (toggle)
-        KeyCode::Char('w') => {
+        // Status filters (toggle). Use Ctrl-prefixed bindings so that plain
+        // letters (`r`, `s`, `w`) remain available for other actions such as
+        // resuming a paused session.
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
             app.toggle_status_filter(SessionStatus::WaitingInput);
         }
-        KeyCode::Char('s') => {
+        (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
             app.toggle_status_filter(SessionStatus::Stopped);
         }
-        KeyCode::Char('r') => {
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
             app.toggle_status_filter(SessionStatus::Running);
+        }
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            app.toggle_status_filter(SessionStatus::Paused);
         }
 
         // Quick select (1-9)
-        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+        (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
             let num = c.to_digit(10).unwrap_or(0) as usize;
             app.select_by_number(num);
         }
@@ -510,21 +559,36 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
             },
+            Session {
+                session_id: "session-paused".to_string(),
+                cwd: PathBuf::from("/project/paused"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Paused,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+            },
         ];
         App::with_sessions(sessions)
     }
 
     #[rstest]
-    #[case::w_toggles_waiting('w', SessionStatus::WaitingInput)]
-    #[case::s_toggles_stopped('s', SessionStatus::Stopped)]
-    #[case::r_toggles_running('r', SessionStatus::Running)]
+    #[case::ctrl_w_toggles_waiting('w', SessionStatus::WaitingInput)]
+    #[case::ctrl_s_toggles_stopped('s', SessionStatus::Stopped)]
+    #[case::ctrl_r_toggles_running('r', SessionStatus::Running)]
+    #[case::ctrl_p_toggles_paused('p', SessionStatus::Paused)]
     fn test_handle_key_status_filter(
         app_with_statuses: App,
         #[case] c: char,
         #[case] expected_status: SessionStatus,
     ) {
         let mut app = app_with_statuses;
-        handle_key_event(&mut app, key(KeyCode::Char(c)));
+        handle_key_event(&mut app, key_ctrl(c));
 
         assert_eq!(app.status_filter, Some(expected_status));
         // All filtered sessions should have the expected status
@@ -534,18 +598,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case::plain_w('w')]
+    #[case::plain_s('s')]
+    #[case::plain_r('r')]
+    fn test_plain_wsr_do_not_filter(app_with_statuses: App, #[case] c: char) {
+        // Without Ctrl, these keys should not activate a status filter -- they
+        // are reserved for future actions (e.g., `r` = resume).
+        let mut app = app_with_statuses;
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+        assert!(app.status_filter.is_none());
+    }
+
+    #[rstest]
     fn test_status_filter_toggle_off(app_with_statuses: App) {
         let mut app = app_with_statuses;
 
-        // Press 'w' to set WaitingInput filter
-        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        // Press Ctrl+w to set WaitingInput filter
+        handle_key_event(&mut app, key_ctrl('w'));
         assert_eq!(app.status_filter, Some(SessionStatus::WaitingInput));
         assert_eq!(app.filtered_sessions().len(), 1);
 
-        // Press 'w' again to clear the filter
-        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        // Press Ctrl+w again to clear the filter
+        handle_key_event(&mut app, key_ctrl('w'));
         assert!(app.status_filter.is_none());
-        assert_eq!(app.filtered_sessions().len(), 3);
+        assert_eq!(app.filtered_sessions().len(), 4);
     }
 
     #[rstest]
@@ -553,7 +629,7 @@ mod tests {
         let mut app = app_with_statuses;
 
         // Set status filter
-        handle_key_event(&mut app, key(KeyCode::Char('w')));
+        handle_key_event(&mut app, key_ctrl('w'));
         assert!(app.has_filter());
 
         // Press Esc to clear filter (should not quit because filter is active)

@@ -669,8 +669,13 @@ impl App {
 }
 
 /// Checks if a session is stale (TTY no longer exists).
+/// Ended and Paused sessions are never considered stale -- they are retained
+/// for `claude -c` resume even after their pane dies.
 fn is_session_stale(session: &Session) -> bool {
     if !tmux::is_server_available() {
+        return false;
+    }
+    if matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) {
         return false;
     }
     session

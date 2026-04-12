@@ -13,6 +13,7 @@ pub mod color {
     pub const RED: &str = "\x1b[31m";
     pub const MAGENTA: &str = "\x1b[35m";
     pub const GRAY: &str = "\x1b[90m";
+    pub const DIM: &str = "\x1b[2m";
 }
 
 /// Truncates a string to fit within the specified display width.

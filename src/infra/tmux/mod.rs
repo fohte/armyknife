@@ -9,6 +9,8 @@ use std::process::Command;
 use indoc::writedoc;
 use thiserror::Error;
 
+use crate::infra::process;
+
 #[derive(Error, Debug)]
 pub enum TmuxError {
     #[error("{}", .0)]
@@ -290,6 +292,25 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
     }
 }
 
+/// Returns the current command running in the pane (e.g., `zsh`, `nvim`).
+pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
+    let output = run_tmux_output(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane_id,
+        "#{pane_current_command}",
+    ])
+    .ok()?;
+    let cmd = output.trim().to_string();
+    if cmd.is_empty() { None } else { Some(cmd) }
+}
+
+/// Kills the process in the pane and restarts it with `command`.
+pub fn respawn_pane(pane_id: &str, command: &str) -> Result<()> {
+    run_tmux(&["respawn-pane", "-k", "-t", pane_id, command])
+}
+
 /// Set a user option on a specific tmux pane.
 /// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.
@@ -482,7 +503,7 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
         }
 
         // Get parent PID
-        match get_parent_pid(current_pid) {
+        match process::get_parent_pid(current_pid) {
             Some(ppid) if ppid != current_pid && ppid != 0 => current_pid = ppid,
             _ => break,
         }
@@ -491,21 +512,25 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     None
 }
 
-/// Gets the parent process ID for a given process.
-fn get_parent_pid(pid: u32) -> Option<u32> {
-    let output = Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
+/// Returns the last user-input timestamp for the pane identified by
+/// `pane_id` by `stat`-ing its pty device's access time (atime).
+///
+/// On macOS's devfs, atime on `/dev/ttysNNN` is updated on every read
+/// (= user keystroke into the terminal), while mtime tracks writes
+/// (= program output). This gives pane-level granularity -- unlike
+/// `#{window_activity}` which is per-window.
+///
+/// Returns `None` if the pane doesn't exist, tmux isn't running, or the
+/// stat fails for any reason.
+pub fn get_pane_last_input(pane_id: &str) -> Option<i64> {
+    let tty = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_tty}"]).ok()?;
+    let tty = tty.trim();
+    if tty.is_empty() {
         return None;
     }
-
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
+    let meta = std::fs::metadata(tty).ok()?;
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.atime())
 }
 
 /// Parses a single line from tmux list-panes output for PID matching.

@@ -20,6 +20,10 @@ pub struct Config {
     #[serde(default)]
     pub notification: NotificationConfig,
 
+    /// Claude Code session monitoring settings.
+    #[serde(default)]
+    pub cc: CcConfig,
+
     /// Per-repository configuration, keyed by "owner/repo".
     #[serde(default)]
     pub repos: HashMap<String, RepoConfig>,
@@ -243,6 +247,52 @@ pub struct RepoConfig {
     /// Language for commit messages and PR content (e.g., "ja", "en").
     #[serde(default)]
     pub language: Option<String>,
+}
+
+/// Claude Code session monitoring configuration.
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CcConfig {
+    /// Automatic pause settings for long-stopped sessions.
+    #[serde(default)]
+    pub auto_pause: AutoPauseConfig,
+}
+
+/// Configuration for automatically pausing sessions that stay in the Stopped
+/// state for longer than `timeout`.
+///
+/// A periodic `a cc sweep` run (typically driven by launchd) scans all sessions,
+/// sends SIGTERM to any Claude Code process whose session has been Stopped for
+/// longer than `timeout`, and flips the session status to Paused so that
+/// `a cc resume` can restore it later.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoPauseConfig {
+    /// Whether automatic pausing is enabled (default: true).
+    #[serde(default = "default_true")]
+    #[schemars(default = "default_true")]
+    pub enabled: bool,
+
+    /// How long a session must stay in Stopped before being paused.
+    /// Accepts human-friendly durations parsed by the `humantime` style parser
+    /// built into armyknife, e.g., "30s", "10m", "1h30m".
+    /// Default: "30m".
+    #[serde(default = "default_auto_pause_timeout")]
+    #[schemars(default = "default_auto_pause_timeout")]
+    pub timeout: String,
+}
+
+impl Default for AutoPauseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            timeout: default_auto_pause_timeout(),
+        }
+    }
+}
+
+fn default_auto_pause_timeout() -> String {
+    "30m".to_string()
 }
 
 fn default_worktrees_dir() -> String {

@@ -247,12 +247,13 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration.
 
-| Action               | Description                                           |
-| -------------------- | ----------------------------------------------------- |
-| `hook <event>`       | Record session events (called from Claude Code hooks) |
-| `list`               | List all Claude Code sessions with status             |
-| `focus <session_id>` | Focus on a session's tmux pane                        |
-| `resume`             | Resume a session from tmux pane title after restart   |
+| Action               | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| `hook <event>`       | Record session events (called from Claude Code hooks)    |
+| `list`               | List all Claude Code sessions with status                |
+| `focus <session_id>` | Focus on a session's tmux pane                           |
+| `resume`             | Resume a session from tmux pane title after restart      |
+| `sweep`              | Pause long-stopped sessions (run periodically or manual) |
 
 #### Setup
 
@@ -305,6 +306,39 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
 
 The `SessionStart` hook stores the session ID in the tmux pane title, allowing `a cc resume` to restore the session after a tmux resurrect.
+
+#### Auto-pause
+
+Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused`, so `a cc resume` can restore the conversation by invoking `claude --resume`.
+
+`a cc sweep` scans every session file once, sends SIGTERM to any session whose `stopped` timeout has elapsed, and marks it as `paused`. Run it periodically via a launchd agent so idle sessions get paused even while no hook is firing.
+
+| Command                | Description                                                       |
+| ---------------------- | ----------------------------------------------------------------- |
+| `a cc sweep`           | Run a single sweep pass (equivalent to `a cc sweep run`)          |
+| `a cc sweep install`   | Install and bootstrap a launchd agent that runs sweep every 5 min |
+| `a cc sweep status`    | Print the plist path and whether the agent is bootstrapped        |
+| `a cc sweep uninstall` | Bootout the agent and remove its plist                            |
+
+Options for the run command:
+
+| Option             | Description                                                    |
+| ------------------ | -------------------------------------------------------------- |
+| `--timeout <spec>` | Override the config timeout for this run (e.g., `1m`, `1h30m`) |
+| `--dry-run`        | Print what would be paused without sending signals or saving   |
+
+The `install`, `uninstall`, and `status` subcommands require macOS. The launchd agent is installed at `~/Library/LaunchAgents/fohte.armyknife.cc-sweep.plist`.
+
+Configure via `~/.config/armyknife/config.yaml`:
+
+```yaml
+cc:
+  auto_pause:
+    enabled: true # default: true
+    timeout: 30m # default: "30m" (accepts "30s", "10m", "1h30m", etc.)
+```
+
+Set `enabled: false` to disable auto-pausing entirely. The launchd agent stays installed but exits immediately when `enabled` is false, so toggling via config does not require `uninstall`.
 
 #### Environment Variables
 

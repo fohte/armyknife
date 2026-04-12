@@ -4,6 +4,16 @@
   "description": "Top-level configuration for armyknife.",
   "type": "object",
   "properties": {
+    "cc": {
+      "description": "Claude Code session monitoring settings.",
+      "$ref": "#/$defs/CcConfig",
+      "default": {
+        "auto_pause": {
+          "enabled": true,
+          "timeout": "30m"
+        }
+      }
+    },
     "editor": {
       "description": "Terminal/editor settings for human-in-the-loop reviews.",
       "$ref": "#/$defs/EditorConfig",
@@ -52,6 +62,38 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "AutoPauseConfig": {
+      "description": "Configuration for automatically pausing sessions that stay in the Stopped\nstate for longer than `timeout`.\n\nA periodic `a cc sweep` run (typically driven by launchd) scans all sessions,\nsends SIGTERM to any Claude Code process whose session has been Stopped for\nlonger than `timeout`, and flips the session status to Paused so that\n`a cc resume` can restore it later.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether automatic pausing is enabled (default: true).",
+          "type": "boolean",
+          "default": true
+        },
+        "timeout": {
+          "description": "How long a session must stay in Stopped before being paused.\nAccepts human-friendly durations parsed by the `humantime` style parser\nbuilt into armyknife, e.g., \"30s\", \"10m\", \"1h30m\".\nDefault: \"30m\".",
+          "type": "string",
+          "default": "30m"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CcConfig": {
+      "description": "Claude Code session monitoring configuration.",
+      "type": "object",
+      "properties": {
+        "auto_pause": {
+          "description": "Automatic pause settings for long-stopped sessions.",
+          "$ref": "#/$defs/AutoPauseConfig",
+          "default": {
+            "enabled": true,
+            "timeout": "30m"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "EditorConfig": {
       "description": "Terminal/editor configuration for human-in-the-loop reviews.",
       "type": "object",
