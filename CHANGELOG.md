@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.144](https://github.com/fohte/armyknife/compare/v0.1.143...v0.1.144) (2026-04-12)
+
+
+### Features
+
+* **cc/watch:** unify session and worktree cleanup ([#487](https://github.com/fohte/armyknife/issues/487)) ([aeb1185](https://github.com/fohte/armyknife/commit/aeb1185ba185eab8cc855b187d677cb6ba3a5849))
+
 ## [0.1.143](https://github.com/fohte/armyknife/compare/v0.1.142...v0.1.143) (2026-04-12)
 
 
