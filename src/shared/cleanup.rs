@@ -81,17 +81,22 @@ pub fn cleanup_worktree_by_name(
     worktree_name: &str,
     worktree_path: &Path,
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    let mut result = delete_worktree_and_branch(repo, worktree_name);
-
+    // Collect tmux window IDs before deleting the worktree (paths still exist)
     let path_str = worktree_path.to_string_lossy();
     let window_ids = tmux::get_window_ids_in_path(&path_str);
-    for window_id in &window_ids {
-        if tmux::kill_window(window_id).is_ok() {
-            result.windows_closed += 1;
-        }
-    }
 
-    result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+    let mut result = delete_worktree_and_branch(repo, worktree_name);
+
+    // Only clean up tmux windows and sessions if worktree deletion succeeded
+    if result.worktree_deleted {
+        for window_id in &window_ids {
+            if tmux::kill_window(window_id).is_ok() {
+                result.windows_closed += 1;
+            }
+        }
+
+        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+    }
 
     Ok(result)
 }
