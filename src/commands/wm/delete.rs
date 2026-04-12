@@ -79,6 +79,13 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
         let _ = tmux::kill_window(&window_id);
     }
 
+    // Clean up Claude Code session files for sessions running in this worktree
+    let worktree_abs = std::path::Path::new(&worktree_path);
+    let cleaned = crate::shared::cleanup::cleanup_sessions_in_path(worktree_abs)?;
+    if cleaned > 0 {
+        println!("Sessions cleaned: {cleaned}");
+    }
+
     Ok(())
 }
 

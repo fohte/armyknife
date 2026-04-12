@@ -393,6 +393,12 @@ fn delete_worktrees_single_repo(repo: &Repository, worktrees: &[CleanWorktreeInf
                     println!("  Tmux window closed: {window_id}");
                 }
             }
+
+            // Clean up Claude Code session files for this worktree
+            match crate::shared::cleanup::cleanup_sessions_in_path(&info.wt.path) {
+                Ok(n) if n > 0 => println!("  Sessions cleaned: {n}"),
+                _ => {}
+            }
         }
     }
 
@@ -438,6 +444,12 @@ fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]
                     if tmux::kill_window(window_id).is_ok() {
                         println!("  Tmux window closed: {window_id}");
                     }
+                }
+
+                // Clean up Claude Code session files for this worktree
+                match crate::shared::cleanup::cleanup_sessions_in_path(&info.wt.path) {
+                    Ok(n) if n > 0 => println!("  Sessions cleaned: {n}"),
+                    _ => {}
                 }
             }
         }
