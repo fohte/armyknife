@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.142](https://github.com/fohte/armyknife/compare/v0.1.141...v0.1.142) (2026-04-12)
+
+
+### Bug Fixes
+
+* **ai/review:** extract bot-specific detection logic into ReviewDetector trait ([#483](https://github.com/fohte/armyknife/issues/483)) ([94c0096](https://github.com/fohte/armyknife/commit/94c0096baa688429bdaa8d83ec8d2b2862669cd0))
+
 ## [0.1.141](https://github.com/fohte/armyknife/compare/v0.1.140...v0.1.141) (2026-04-11)
 
 
