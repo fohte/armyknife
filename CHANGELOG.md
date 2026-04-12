@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.145](https://github.com/fohte/armyknife/compare/v0.1.144...v0.1.145) (2026-04-12)
+
+
+### Features
+
+* **cc:** auto-pause long-stopped sessions via periodic sweep ([#482](https://github.com/fohte/armyknife/issues/482)) ([8b31e8f](https://github.com/fohte/armyknife/commit/8b31e8f008b5efe6ba22151a073755d08faf2290))
+
 ## [0.1.144](https://github.com/fohte/armyknife/compare/v0.1.143...v0.1.144) (2026-04-12)
 
 
