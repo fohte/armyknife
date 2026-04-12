@@ -526,6 +526,9 @@ mod tests {
         }
     }
 
+    // Note: delete_worktrees_single_repo calls cleanup_worktree_by_name which
+    // invokes tmux commands internally. These are no-ops when tmux is unavailable
+    // (returns empty results), so the test only validates git worktree deletion.
     #[test]
     fn delete_worktrees_deletes_all_worktrees() {
         let test_repo = TestRepo::new();

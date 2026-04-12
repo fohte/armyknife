@@ -73,12 +73,27 @@ pub fn cleanup_worktree_by_name(
     worktree_name: &str,
     worktree_path: &Path,
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    let branch_name = get_worktree_branch(repo, worktree_name);
+    let mut result = delete_worktree_and_branch(repo, worktree_name);
 
     let path_str = worktree_path.to_string_lossy();
     let window_ids = tmux::get_window_ids_in_path(&path_str);
+    for window_id in &window_ids {
+        if tmux::kill_window(window_id).is_ok() {
+            result.windows_closed += 1;
+        }
+    }
 
-    let worktree_deleted = delete_worktree(repo, worktree_name)?;
+    result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+
+    Ok(result)
+}
+
+/// Deletes a git worktree and its associated branch.
+/// Pure git2 operation with no external command dependencies.
+fn delete_worktree_and_branch(repo: &Repository, worktree_name: &str) -> WorktreeCleanupResult {
+    let branch_name = get_worktree_branch(repo, worktree_name);
+
+    let worktree_deleted = delete_worktree(repo, worktree_name).unwrap_or(false);
 
     let branch_deleted = if worktree_deleted {
         branch_name.filter(|branch| delete_branch_if_exists(repo, branch))
@@ -86,21 +101,11 @@ pub fn cleanup_worktree_by_name(
         None
     };
 
-    let mut windows_closed = 0;
-    for window_id in &window_ids {
-        if tmux::kill_window(window_id).is_ok() {
-            windows_closed += 1;
-        }
-    }
-
-    let sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
-
-    Ok(WorktreeCleanupResult {
+    WorktreeCleanupResult {
         worktree_deleted,
         branch_deleted,
-        windows_closed,
-        sessions_cleaned,
-    })
+        ..WorktreeCleanupResult::default()
+    }
 }
 
 /// Cleans up Claude Code session files for sessions whose `cwd` is inside `worktree_path`.
@@ -144,8 +149,40 @@ mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
 
+    // Tests exercise delete_worktree_and_branch (pure git2 operations) to
+    // avoid depending on external commands like tmux or session store I/O.
+
+    #[test]
+    fn delete_worktree_and_branch_deletes_both() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("cleanup-test");
+
+        let repo = test_repo.open();
+        let result = delete_worktree_and_branch(&repo, "cleanup-test");
+
+        assert!(result.worktree_deleted);
+        assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
+        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.sessions_cleaned, 0);
+
+        assert!(repo.find_worktree("cleanup-test").is_err());
+    }
+
+    #[test]
+    fn delete_worktree_and_branch_returns_false_for_nonexistent() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let result = delete_worktree_and_branch(&repo, "nonexistent");
+
+        assert!(!result.worktree_deleted);
+        assert!(result.branch_deleted.is_none());
+    }
+
     #[test]
     fn cleanup_worktree_resources_on_non_worktree_returns_default() {
+        // Repository::open on a non-worktree returns is_worktree() == false,
+        // so no external commands are invoked.
         let test_repo = TestRepo::new();
         let result =
             cleanup_worktree_resources(&test_repo.path()).expect("should succeed on main repo");
@@ -158,6 +195,7 @@ mod tests {
 
     #[test]
     fn cleanup_worktree_resources_on_nonexistent_path_returns_default() {
+        // Repository::open fails, so no external commands are invoked.
         let result = cleanup_worktree_resources(Path::new("/nonexistent/path/to/repo"))
             .expect("should succeed on missing path");
 
@@ -165,52 +203,5 @@ mod tests {
         assert!(result.branch_deleted.is_none());
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
-    }
-
-    #[test]
-    fn cleanup_worktree_resources_deletes_worktree_and_branch() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("cleanup-test");
-
-        let wt_path = test_repo.worktree_path("cleanup-test");
-        let result = cleanup_worktree_resources(&wt_path).expect("should succeed");
-
-        assert!(result.worktree_deleted);
-        assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
-
-        let repo = test_repo.open();
-        assert!(repo.find_worktree("cleanup-test").is_err());
-    }
-
-    // Subdirectory test is not possible in srt sandbox because
-    // git2::Repository::open cannot discover worktrees from subdirectories
-    // in that environment. The worktree root resolution via repo.workdir()
-    // is covered by the root-path tests above.
-
-    #[test]
-    fn cleanup_worktree_by_name_deletes_worktree_and_branch() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("named-cleanup");
-
-        let repo = test_repo.open();
-        let wt_path = test_repo.worktree_path("named-cleanup");
-        let result =
-            cleanup_worktree_by_name(&repo, "named-cleanup", &wt_path).expect("should succeed");
-
-        assert!(result.worktree_deleted);
-        assert_eq!(result.branch_deleted, Some("named-cleanup".to_string()));
-        assert!(repo.find_worktree("named-cleanup").is_err());
-    }
-
-    #[test]
-    fn cleanup_worktree_by_name_returns_false_for_nonexistent() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let result = cleanup_worktree_by_name(&repo, "nonexistent", Path::new("/tmp/nonexistent"))
-            .expect("should succeed");
-
-        assert!(!result.worktree_deleted);
-        assert!(result.branch_deleted.is_none());
     }
 }
