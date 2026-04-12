@@ -18,11 +18,7 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
-<<<<<<< before updating
-      - uses: actions/create-github-app-token@7bd03711494f032dfa3be3558f7dc8787b0be333 # v3.1.0
-=======
       - uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
->>>>>>> after updating
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -158,11 +154,7 @@ jobs:
           cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-<<<<<<< before updating
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
-=======
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
->>>>>>> after updating
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
