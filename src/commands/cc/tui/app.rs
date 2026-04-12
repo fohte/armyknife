@@ -489,11 +489,14 @@ impl App {
         self.remove_session(&session_id);
 
         // If the session was running in a worktree, clean up all associated
-        // resources: worktree, branch, tmux windows, and sibling sessions
+        // resources: worktree, branch, tmux windows, and sibling sessions.
+        // Best-effort: errors are ignored since the primary session is already
+        // deleted and we don't want to leave the TUI in an inconsistent state.
         if let Some(ref cwd) = session_cwd {
             use crate::shared::cleanup;
-            let result = cleanup::cleanup_worktree_resources(cwd)?;
-            if result.worktree_deleted {
+            if let Ok(result) = cleanup::cleanup_worktree_resources(cwd)
+                && result.worktree_deleted
+            {
                 // Remove sibling sessions from the in-memory list
                 // (session files already deleted by cleanup_worktree_resources)
                 let to_remove: Vec<String> = self
