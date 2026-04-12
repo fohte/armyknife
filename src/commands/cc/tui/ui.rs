@@ -426,7 +426,12 @@ fn create_tree_session_item(
         format!("{}  {}", session_info, label)
     };
     let truncated_info = truncate(&combined_info, session_info_width);
-    let info_style = Style::default().add_modifier(Modifier::BOLD);
+    let is_paused = session.status == SessionStatus::Paused;
+    let info_style = if is_paused {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
 
     // Line 1: [tree_prefix] status ▎ session_info  label  time_ago
     let mut line1_spans = Vec::new();
@@ -439,7 +444,12 @@ fn create_tree_session_item(
     line1_spans.push(Span::raw(" "));
     line1_spans.extend(highlight_matches(&truncated_info, query, info_style));
     line1_spans.push(Span::raw("  "));
-    line1_spans.push(Span::styled(time_ago, Style::default().fg(time_ago_fg)));
+    let time_style = if is_paused {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(time_ago_fg)
+    };
+    line1_spans.push(Span::styled(time_ago, time_style));
     let line1 = Line::from(line1_spans);
 
     // Line 2: [tree_prefix_continuation]  ▎ current_tool or last_message
@@ -535,12 +545,15 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
     )
 }
 
-/// Returns the color for a session status.
+/// Returns the color for a session status icon.
 fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => Color::DarkGray,
+        // Paused gets a lighter gray than Stopped so the ⏸ icon stays
+        // readable; the text itself is dimmed separately.
+        SessionStatus::Paused => Color::Indexed(245),
+        SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
     }
 }
 
@@ -1014,6 +1027,7 @@ mod tests {
         assert_eq!(status_color(SessionStatus::Running), Color::Green);
         assert_eq!(status_color(SessionStatus::WaitingInput), Color::Yellow);
         assert_eq!(status_color(SessionStatus::Stopped), Color::DarkGray);
+        assert_eq!(status_color(SessionStatus::Paused), Color::Indexed(245));
     }
 
     #[rstest]

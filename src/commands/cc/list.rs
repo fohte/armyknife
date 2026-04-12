@@ -201,9 +201,8 @@ fn format_status(status: SessionStatus) -> String {
     let (col, reset) = match status {
         SessionStatus::Running => (color::GREEN, color::RESET),
         SessionStatus::WaitingInput => (color::YELLOW, color::RESET),
-        SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => {
-            (color::GRAY, color::RESET)
-        }
+        SessionStatus::Paused => (color::DIM, color::RESET),
+        SessionStatus::Stopped | SessionStatus::Ended => (color::GRAY, color::RESET),
     };
     format!("{col}{name:<8}{reset}")
 }
