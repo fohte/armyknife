@@ -265,11 +265,13 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         AppMode::Normal if app.has_filter() => Line::from(vec![
             Span::styled("  j/k", bold),
             Span::raw(": move  "),
-            Span::styled("Enter/f", bold),
+            Span::styled("f", bold),
             Span::raw(": focus  "),
+            Span::styled("r", bold),
+            Span::raw(": resume  "),
             Span::styled("/", bold),
             Span::raw(": edit  "),
-            Span::styled("C-r/w/s", bold),
+            Span::styled("C-rws", bold),
             Span::raw(": filter  "),
             Span::styled("Esc", bold),
             Span::raw(": clear  "),
@@ -279,13 +281,15 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         AppMode::Normal => Line::from(vec![
             Span::styled("  j/k", bold),
             Span::raw(": move  "),
-            Span::styled("Enter/f", bold),
+            Span::styled("f", bold),
             Span::raw(": focus  "),
+            Span::styled("r", bold),
+            Span::raw(": resume  "),
             Span::styled("1-9", bold),
             Span::raw(": quick  "),
             Span::styled("/", bold),
             Span::raw(": search  "),
-            Span::styled("C-r/w/s", bold),
+            Span::styled("C-rws", bold),
             Span::raw(": filter  "),
             Span::styled("q", bold),
             Span::raw(": quit"),
@@ -1097,7 +1101,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1115,7 +1119,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1145,7 +1149,7 @@ mod tests {
                ▎ I've updated the code as requested.
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1174,7 +1178,7 @@ mod tests {
                ▎
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1200,7 +1204,7 @@ mod tests {
                ▎
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1250,7 +1254,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1306,7 +1310,7 @@ mod tests {
 
 
 
-              j/k: move  Enter/f: focus  1-9: quick  /: search  C-r/w/s: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
         assert_eq!(output, expected);
     }
 

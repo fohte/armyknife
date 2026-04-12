@@ -292,6 +292,25 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
     }
 }
 
+/// Returns the current command running in the pane (e.g., `zsh`, `nvim`).
+pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
+    let output = run_tmux_output(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane_id,
+        "#{pane_current_command}",
+    ])
+    .ok()?;
+    let cmd = output.trim().to_string();
+    if cmd.is_empty() { None } else { Some(cmd) }
+}
+
+/// Kills the process in the pane and restarts it with `command`.
+pub fn respawn_pane(pane_id: &str, command: &str) -> Result<()> {
+    run_tmux(&["respawn-pane", "-k", "-t", pane_id, command])
+}
+
 /// Set a user option on a specific tmux pane.
 /// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.

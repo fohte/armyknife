@@ -298,7 +298,6 @@ fn pause_session<S: SignalSender>(
     }
 
     session.status = SessionStatus::Paused;
-    session.updated_at = Utc::now();
     store::save_session_to(sessions_dir, &session)?;
     Ok(())
 }

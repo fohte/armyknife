@@ -109,6 +109,45 @@ fn focus_selected_session(app: &mut App) {
     }
 }
 
+const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
+
+fn resume_selected_session(app: &mut App) {
+    let Some(session) = app.selected_session() else {
+        return;
+    };
+    let Some(ref tmux_info) = session.tmux_info else {
+        app.set_error("No tmux pane for this session".to_string());
+        return;
+    };
+    if session.status != SessionStatus::Paused {
+        app.set_error("Session is not paused".to_string());
+        return;
+    }
+    let pane_id = &tmux_info.pane_id;
+
+    // Only respawn if the pane is sitting at a shell prompt. If the user
+    // started another program in the pane we must not kill it silently.
+    match tmux::get_pane_current_command(pane_id) {
+        Some(cmd) if SHELL_COMMANDS.iter().any(|s| cmd.ends_with(s)) => {}
+        Some(cmd) => {
+            app.set_error(format!("Pane is running `{cmd}`, cannot resume"));
+            return;
+        }
+        None => {
+            app.set_error("Cannot read pane state".to_string());
+            return;
+        }
+    }
+
+    if let Err(e) = tmux::respawn_pane(pane_id, "a cc resume") {
+        app.set_error(format!("Failed to respawn pane: {e}"));
+        return;
+    }
+    if let Err(e) = tmux::focus_pane(pane_id) {
+        app.set_error(format!("Failed to focus pane: {e}"));
+    }
+}
+
 /// Handles key events in Search mode.
 fn handle_search_key_event(app: &mut App, key: KeyEvent) {
     match (key.code, key.modifiers) {
@@ -202,6 +241,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         // Focus on selected session's tmux pane
         (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
             focus_selected_session(app);
+        }
+
+        // Resume a paused session
+        (KeyCode::Char('r'), KeyModifiers::NONE) => {
+            resume_selected_session(app);
         }
 
         // Status filters (toggle). Use Ctrl-prefixed bindings so that plain
