@@ -26,6 +26,10 @@ pub struct WorktreeCleanupResult {
     pub windows_closed: usize,
     /// Number of Claude Code sessions cleaned up.
     pub sessions_cleaned: usize,
+    /// The resolved worktree root path (set when worktree_deleted is true).
+    /// Use this instead of raw cwd for path matching, since cwd may be a
+    /// subdirectory.
+    pub worktree_root: Option<std::path::PathBuf>,
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
@@ -60,7 +64,11 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
         Err(_) => return Ok(WorktreeCleanupResult::default()),
     };
 
-    cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root)
+    let mut result = cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root)?;
+    if result.worktree_deleted {
+        result.worktree_root = Some(worktree_root);
+    }
+    Ok(result)
 }
 
 /// Cleans up all resources for a worktree identified by `repo` and `worktree_name`:

@@ -495,14 +495,15 @@ impl App {
         if let Some(ref cwd) = session_cwd {
             use crate::shared::cleanup;
             if let Ok(result) = cleanup::cleanup_worktree_resources(cwd)
-                && result.worktree_deleted
+                && let Some(ref wt_root) = result.worktree_root
             {
-                // Remove sibling sessions from the in-memory list
-                // (session files already deleted by cleanup_worktree_resources)
+                // Remove sibling sessions from the in-memory list using
+                // the resolved worktree root, not the raw cwd which may
+                // be a subdirectory
                 let to_remove: Vec<String> = self
                     .sessions
                     .iter()
-                    .filter(|s| s.cwd.starts_with(cwd))
+                    .filter(|s| s.cwd.starts_with(wt_root))
                     .map(|s| s.session_id.clone())
                     .collect();
                 for id in &to_remove {

@@ -526,51 +526,10 @@ mod tests {
         }
     }
 
-    // Note: delete_worktrees_single_repo calls cleanup_worktree_by_name which
-    // invokes tmux commands internally. These are no-ops when tmux is unavailable
-    // (returns empty results), so the test only validates git worktree deletion.
-    #[test]
-    fn delete_worktrees_deletes_all_worktrees() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("feature-a");
-        test_repo.create_worktree("feature-b");
-
-        let repo = test_repo.open();
-
-        let worktrees = vec![
-            make_clean_info(
-                "feature-a",
-                test_repo.worktree_path("feature-a"),
-                "feature-a",
-                MergeStatus::Merged {
-                    reason: "merged".to_string(),
-                },
-            ),
-            make_clean_info(
-                "feature-b",
-                test_repo.worktree_path("feature-b"),
-                "feature-b",
-                MergeStatus::Merged {
-                    reason: "merged".to_string(),
-                },
-            ),
-        ];
-
-        delete_worktrees_single_repo(&repo, &worktrees).unwrap();
-
-        // Verify worktrees are deleted
-        assert!(repo.find_worktree("feature-a").is_err());
-        assert!(repo.find_worktree("feature-b").is_err());
-    }
-
-    #[test]
-    fn delete_worktrees_handles_empty_list() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let result = delete_worktrees_single_repo(&repo, &[]);
-        assert!(result.is_ok());
-    }
+    // delete_worktrees_single_repo and delete_worktrees_all_repos are not
+    // directly tested here because they call cleanup_worktree_by_name which
+    // invokes external tmux commands. The core worktree deletion logic is
+    // tested in shared::cleanup::tests::delete_worktree_and_branch_*.
 
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, "✓")]
