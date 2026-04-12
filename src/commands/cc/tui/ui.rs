@@ -271,7 +271,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(": resume  "),
             Span::styled("/", bold),
             Span::raw(": edit  "),
-            Span::styled("C-rws", bold),
+            Span::styled("C-rwsp", bold),
             Span::raw(": filter  "),
             Span::styled("Esc", bold),
             Span::raw(": clear  "),
@@ -289,7 +289,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(": quick  "),
             Span::styled("/", bold),
             Span::raw(": search  "),
-            Span::styled("C-rws", bold),
+            Span::styled("C-rwsp", bold),
             Span::raw(": filter  "),
             Span::styled("q", bold),
             Span::raw(": quit"),
@@ -1106,7 +1106,7 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1124,7 +1124,7 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1154,7 +1154,7 @@ mod tests {
                ▎ I've updated the code as requested.
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1183,7 +1183,7 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1209,7 +1209,7 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1259,7 +1259,7 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -1315,7 +1315,7 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rws: filter  q: quit"};
+              j/k: move  f: focus  r: resume  1-9: quick  /: search  C-rwsp: filter  q: quit"};
         assert_eq!(output, expected);
     }
 

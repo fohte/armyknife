@@ -260,6 +260,9 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
         (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
             app.toggle_status_filter(SessionStatus::Running);
         }
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            app.toggle_status_filter(SessionStatus::Paused);
+        }
 
         // Quick select (1-9)
         (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
@@ -535,6 +538,20 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
             },
+            Session {
+                session_id: "session-paused".to_string(),
+                cwd: PathBuf::from("/project/paused"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Paused,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+            },
         ];
         App::with_sessions(sessions)
     }
@@ -543,6 +560,7 @@ mod tests {
     #[case::ctrl_w_toggles_waiting('w', SessionStatus::WaitingInput)]
     #[case::ctrl_s_toggles_stopped('s', SessionStatus::Stopped)]
     #[case::ctrl_r_toggles_running('r', SessionStatus::Running)]
+    #[case::ctrl_p_toggles_paused('p', SessionStatus::Paused)]
     fn test_handle_key_status_filter(
         app_with_statuses: App,
         #[case] c: char,
@@ -582,7 +600,7 @@ mod tests {
         // Press Ctrl+w again to clear the filter
         handle_key_event(&mut app, key_ctrl('w'));
         assert!(app.status_filter.is_none());
-        assert_eq!(app.filtered_sessions().len(), 3);
+        assert_eq!(app.filtered_sessions().len(), 4);
     }
 
     #[rstest]
