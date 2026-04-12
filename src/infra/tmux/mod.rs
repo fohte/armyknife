@@ -483,18 +483,25 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
     output.trim().parse::<u32>().ok()
 }
 
-/// Returns the last-activity timestamp of the window that contains `pane_id`,
-/// as reported by tmux's `#{window_activity}` format. This is a unix
-/// timestamp (seconds) of the most recent I/O on any pane in that window --
-/// tmux does not track per-pane activity, only per-window.
+/// Returns the last user-input timestamp for the pane identified by
+/// `pane_id` by `stat`-ing its pty device's access time (atime).
 ///
-/// Used by `cc sweep` to avoid pausing a Stopped session while the user is
-/// still typing into its pane: if window_activity is newer than
-/// session.updated_at, the user is effectively still active.
-pub fn get_window_activity(pane_id: &str) -> Option<i64> {
-    let output =
-        run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{window_activity}"]).ok()?;
-    output.trim().parse::<i64>().ok()
+/// On macOS's devfs, atime on `/dev/ttysNNN` is updated on every read
+/// (= user keystroke into the terminal), while mtime tracks writes
+/// (= program output). This gives pane-level granularity -- unlike
+/// `#{window_activity}` which is per-window.
+///
+/// Returns `None` if the pane doesn't exist, tmux isn't running, or the
+/// stat fails for any reason.
+pub fn get_pane_last_input(pane_id: &str) -> Option<i64> {
+    let tty = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_tty}"]).ok()?;
+    let tty = tty.trim();
+    if tty.is_empty() {
+        return None;
+    }
+    let meta = std::fs::metadata(tty).ok()?;
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.atime())
 }
 
 /// Parses a single line from tmux list-panes output for PID matching.

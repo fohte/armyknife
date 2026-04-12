@@ -126,9 +126,9 @@ pub(crate) trait SessionProbe {
     /// can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
 
-    /// Returns the unix timestamp of the most recent I/O on the tmux window
-    /// containing `session`'s pane, or `None` if tmux cannot report it.
-    fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>>;
+    /// Returns the timestamp of the most recent user input in the
+    /// session's tmux pane, or `None` if unavailable.
+    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>>;
 }
 
 struct TmuxSessionProbe;
@@ -145,9 +145,9 @@ impl SessionProbe for TmuxSessionProbe {
         process::find_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
     }
 
-    fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>> {
+    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let ts = tmux::get_window_activity(pane_id)?;
+        let ts = tmux::get_pane_last_input(pane_id)?;
         Utc.timestamp_opt(ts, 0).single()
     }
 }
@@ -227,10 +227,9 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
 
         report.scanned += 1;
 
-        // Fold tmux's window activity into the effective "last touched" time
-        // so a user who's still typing into a Stopped pane doesn't get
-        // paused mid-prompt. This takes the max because window_activity can
-        // lag session.updated_at immediately after a hook write.
+        // Fold the pane's pty atime (last user input) into the effective
+        // "last touched" time so a user who's still typing into a Stopped
+        // pane doesn't get paused mid-prompt.
         let effective = effective_updated_at(&session, probe);
         let mut session = session;
         session.updated_at = effective;
@@ -269,12 +268,13 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
     Ok(report)
 }
 
-/// Returns the later of `session.updated_at` and the tmux window's last
-/// activity. If the probe can't report an activity timestamp (not in tmux,
-/// pane gone, etc.) we fall back to `session.updated_at` alone.
+/// Returns the later of `session.updated_at` and the tmux pane's last
+/// user-input timestamp (pty atime). If the probe can't report an input
+/// timestamp (not in tmux, pane gone, etc.) we fall back to
+/// `session.updated_at` alone.
 fn effective_updated_at<P: SessionProbe>(session: &Session, probe: &P) -> DateTime<Utc> {
-    match probe.last_activity(session) {
-        Some(activity) if activity > session.updated_at => activity,
+    match probe.last_input(session) {
+        Some(input_at) if input_at > session.updated_at => input_at,
         _ => session.updated_at,
     }
 }
@@ -350,7 +350,7 @@ mod tests {
             r
         }
 
-        fn with_activity(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
+        fn with_last_input(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
             for (id, ts) in pairs {
                 self.activity.get_mut().insert((*id).to_string(), *ts);
             }
@@ -363,7 +363,7 @@ mod tests {
             self.pids.borrow().get(&session.session_id).copied()
         }
 
-        fn last_activity(&self, session: &Session) -> Option<DateTime<Utc>> {
+        fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
             self.activity.borrow().get(&session.session_id).copied()
         }
     }
@@ -560,7 +560,7 @@ mod tests {
     #[rstest]
     fn recent_tmux_activity_blocks_pause(test_dir: TestDir) {
         // Session was marked Stopped an hour ago, so the naive timeout check
-        // would pause it. But the tmux window has seen I/O a few seconds
+        // would pause it. But the pane pty has seen user input a few seconds
         // ago -- the user is typing a long prompt -- and must not be
         // killed.
         let old = Utc::now() - TimeDelta::hours(1);
@@ -569,8 +569,8 @@ mod tests {
 
         let sender = RecordingSender::default();
         let recent_activity = Utc::now() - TimeDelta::seconds(5);
-        let probe =
-            FakeProbe::with_pids(&[("typing", 4242)]).with_activity(&[("typing", recent_activity)]);
+        let probe = FakeProbe::with_pids(&[("typing", 4242)])
+            .with_last_input(&[("typing", recent_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -605,7 +605,7 @@ mod tests {
         let sender = RecordingSender::default();
         let stale_activity = Utc::now() - TimeDelta::minutes(45);
         let probe =
-            FakeProbe::with_pids(&[("idle", 4242)]).with_activity(&[("idle", stale_activity)]);
+            FakeProbe::with_pids(&[("idle", 4242)]).with_last_input(&[("idle", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
