@@ -22,7 +22,7 @@ use super::auto_pause::{self, PauseDecision};
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::types::{Session, SessionStatus};
-use crate::infra::{process, tmux};
+use crate::infra::{process::ProcessSnapshot, tmux};
 use crate::shared::config;
 
 mod service;
@@ -88,7 +88,10 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 
     let sessions_dir = store::sessions_dir()?;
     let sender = LibcSignalSender;
-    let probe = TmuxSessionProbe;
+    let snapshot = ProcessSnapshot::capture();
+    let probe = TmuxSessionProbe {
+        snapshot: snapshot.as_ref(),
+    };
     let report = sweep_impl(&sessions_dir, timeout, &sender, &probe, args.dry_run)?;
 
     // Always print a summary in --dry-run so the user can see the reasoning.
@@ -131,18 +134,21 @@ pub(crate) trait SessionProbe {
     fn last_input(&self, session: &Session) -> Option<DateTime<Utc>>;
 }
 
-struct TmuxSessionProbe;
+struct TmuxSessionProbe<'a> {
+    snapshot: Option<&'a ProcessSnapshot>,
+}
 
 /// Descendant walks are bounded to this many processes. A shell hosting
 /// claude has at most a handful of children, so this is a safety cap rather
 /// than an expected limit.
 const MAX_DESCENDANT_NODES: usize = 64;
 
-impl SessionProbe for TmuxSessionProbe {
+impl SessionProbe for TmuxSessionProbe<'_> {
     fn resolve_pid(&self, session: &Session) -> Option<u32> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
         let pane_pid = tmux::get_pane_pid(pane_id)?;
-        process::find_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
+        self.snapshot?
+            .find_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
     }
 
     fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {

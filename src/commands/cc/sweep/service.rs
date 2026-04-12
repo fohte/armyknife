@@ -11,9 +11,10 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+
+use crate::infra::launchd;
 
 const SERVICE_LABEL: &str = "fohte.armyknife.cc-sweep";
 /// How often launchd should invoke `a cc sweep run`. One minute is short
@@ -45,11 +46,11 @@ pub fn install() -> Result<()> {
     // If the service is already bootstrapped, bootout first so we pick up
     // any changes to the plist (e.g., updated executable path after an
     // `a update`).
-    if is_bootstrapped(&target) {
-        run_launchctl(&["bootout", &target]).ok();
+    if launchd::is_bootstrapped(&target) {
+        launchd::run(&["bootout", &target]).ok();
     }
 
-    run_launchctl(&["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])
+    launchd::run(&["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])
         .context("bootstrapping launchd service")?;
 
     eprintln!("[armyknife] installed {}", plist_path.display());
@@ -65,9 +66,8 @@ pub fn uninstall() -> Result<()> {
     let domain = format!("gui/{uid}");
     let target = format!("{domain}/{SERVICE_LABEL}");
 
-    if is_bootstrapped(&target) {
-        // bootout may return non-zero if the service is already gone; ignore.
-        run_launchctl(&["bootout", &target]).ok();
+    if launchd::is_bootstrapped(&target) {
+        launchd::run(&["bootout", &target]).ok();
     }
 
     if plist_path.exists() {
@@ -96,7 +96,7 @@ pub fn status() -> Result<()> {
     );
     println!(
         "bootstrapped: {}",
-        if is_bootstrapped(&target) {
+        if launchd::is_bootstrapped(&target) {
             "yes"
         } else {
             "no"
@@ -120,29 +120,6 @@ fn plist_path() -> Result<PathBuf> {
         .join("Library")
         .join("LaunchAgents")
         .join(format!("{SERVICE_LABEL}.plist")))
-}
-
-fn is_bootstrapped(target: &str) -> bool {
-    // `launchctl print` exits 0 iff the service is currently bootstrapped.
-    Command::new("launchctl")
-        .args(["print", target])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn run_launchctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("launchctl")
-        .args(args)
-        .output()
-        .context("spawning launchctl")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("launchctl {:?} failed: {}", args, stderr.trim());
-    }
-    Ok(())
 }
 
 fn render_plist(exe: &str) -> String {
