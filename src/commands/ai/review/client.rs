@@ -1,4 +1,4 @@
-//! Review client trait and implementations.
+//! Production implementation of DetectionClient using GitHub API.
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -6,61 +6,13 @@ use indoc::indoc;
 use serde::Deserialize;
 use serde_json::json;
 
+use super::detector::DetectionClient;
 use super::error::{Result, ReviewError};
-use super::reviewer::Reviewer;
 use crate::commands::gh::pr_review::fetch_pr_data;
 use crate::infra::github::GitHubClient;
 
-/// Trait for review-related GitHub API operations.
-pub trait ReviewClient: Send + Sync {
-    /// Find the latest review timestamp from the specified reviewer.
-    async fn find_latest_review(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        reviewer: Reviewer,
-    ) -> Result<Option<DateTime<Utc>>>;
-
-    /// Check if the reviewer posted an "unable to" comment after start_time.
-    async fn check_reviewer_unable_comment(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        start_time: DateTime<Utc>,
-        reviewer: Reviewer,
-    ) -> Result<Option<String>>;
-
-    /// Check if the reviewer has any activity (comments) on the PR.
-    async fn has_reviewer_activity(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        reviewer: Reviewer,
-    ) -> Result<bool>;
-
-    /// Get the latest commit timestamp on the PR.
-    async fn get_latest_commit_time(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-    ) -> Result<Option<DateTime<Utc>>>;
-
-    /// Post a review request comment.
-    async fn post_review_comment(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        reviewer: Reviewer,
-    ) -> Result<()>;
-}
-
-/// Production implementation using reqwest via GitHubClient.
-pub struct OctocrabReviewClient;
+/// Production implementation using GitHub API via GitHubClient.
+pub struct OctocrabDetectionClient;
 
 // GraphQL query for PR comments and commits
 const PR_INFO_QUERY: &str = indoc! {"
@@ -78,6 +30,48 @@ const PR_INFO_QUERY: &str = indoc! {"
                     nodes {
                         commit {
                             committedDate
+                        }
+                    }
+                }
+            }
+        }
+    }
+"};
+
+// GraphQL query to check reactions on PR body
+const PR_REACTIONS_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $pr: Int!) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pr) {
+                reactions(first: 100) {
+                    nodes {
+                        content
+                    }
+                }
+            }
+        }
+    }
+"};
+
+// GraphQL query to check check runs on the PR's head commit
+const CHECK_RUNS_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $pr: Int!) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pr) {
+                commits(last: 1) {
+                    nodes {
+                        commit {
+                            checkSuites(first: 10) {
+                                nodes {
+                                    checkRuns(first: 50) {
+                                        nodes {
+                                            name
+                                            status
+                                            completedAt
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -137,7 +131,91 @@ struct PrInfoCommit {
     committed_date: String,
 }
 
-impl OctocrabReviewClient {
+// Reaction query types
+#[derive(Debug, Deserialize)]
+struct PrReactionsData {
+    repository: Option<PrReactionsRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrReactionsRepository {
+    pull_request: Option<PrReactionsPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrReactionsPullRequest {
+    reactions: PrReactions,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrReactions {
+    nodes: Vec<PrReaction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrReaction {
+    content: String,
+}
+
+// Check runs query types
+#[derive(Debug, Deserialize)]
+struct CheckRunsData {
+    repository: Option<CheckRunsRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRunsRepository {
+    pull_request: Option<CheckRunsPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckRunsPullRequest {
+    commits: CheckRunsCommits,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckRunsCommits {
+    nodes: Vec<CheckRunsCommitNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckRunsCommitNode {
+    commit: CheckRunsCommit,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRunsCommit {
+    check_suites: CheckSuites,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckSuites {
+    nodes: Vec<CheckSuite>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckSuite {
+    check_runs: CheckRuns,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckRuns {
+    nodes: Vec<CheckRun>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRun {
+    name: String,
+    status: String,
+    completed_at: Option<String>,
+}
+
+impl OctocrabDetectionClient {
     async fn fetch_pr_info(
         &self,
         owner: &str,
@@ -158,21 +236,35 @@ impl OctocrabReviewClient {
             .and_then(|r| r.pull_request)
             .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()).into())
     }
+
+    fn find_check_runs<'a>(
+        &self,
+        check_runs_data: &'a CheckRunsData,
+        check_name: &str,
+    ) -> Vec<&'a CheckRun> {
+        check_runs_data
+            .repository
+            .iter()
+            .flat_map(|r| r.pull_request.iter())
+            .flat_map(|pr| &pr.commits.nodes)
+            .flat_map(|cn| &cn.commit.check_suites.nodes)
+            .flat_map(|cs| &cs.check_runs.nodes)
+            .filter(|cr| cr.name == check_name)
+            .collect()
+    }
 }
 
-impl ReviewClient for OctocrabReviewClient {
+impl DetectionClient for OctocrabDetectionClient {
     async fn find_latest_review(
         &self,
         owner: &str,
         repo: &str,
         pr_number: u64,
-        reviewer: Reviewer,
+        bot_login: &str,
     ) -> Result<Option<DateTime<Utc>>> {
         let pr_data = fetch_pr_data(owner, repo, pr_number, true)
             .await
             .context("Failed to fetch PR data")?;
-
-        let bot_login = reviewer.bot_login();
 
         pr_data
             .reviews
@@ -189,17 +281,15 @@ impl ReviewClient for OctocrabReviewClient {
             })
     }
 
-    async fn check_reviewer_unable_comment(
+    async fn find_unable_comment(
         &self,
         owner: &str,
         repo: &str,
         pr_number: u64,
-        start_time: DateTime<Utc>,
-        reviewer: Reviewer,
+        bot_login: &str,
+        unable_marker: &str,
+        after: DateTime<Utc>,
     ) -> Result<Option<String>> {
-        let bot_login = reviewer.bot_login();
-        let unable_marker = reviewer.unable_marker();
-
         let pr_info = self.fetch_pr_info(owner, repo, pr_number).await?;
 
         Ok(pr_info
@@ -215,26 +305,9 @@ impl ReviewClient for OctocrabReviewClient {
                     && comment
                         .created_at
                         .parse::<DateTime<Utc>>()
-                        .is_ok_and(|created_at| created_at > start_time)
+                        .is_ok_and(|created_at| created_at > after)
             })
             .map(|comment| comment.body.clone()))
-    }
-
-    async fn has_reviewer_activity(
-        &self,
-        owner: &str,
-        repo: &str,
-        pr_number: u64,
-        reviewer: Reviewer,
-    ) -> Result<bool> {
-        let bot_login = reviewer.bot_login();
-        let pr_info = self.fetch_pr_info(owner, repo, pr_number).await?;
-
-        Ok(pr_info
-            .comments
-            .nodes
-            .iter()
-            .any(|c| c.author.as_ref().is_some_and(|a| a.login == bot_login)))
     }
 
     async fn get_latest_commit_time(
@@ -262,30 +335,109 @@ impl ReviewClient for OctocrabReviewClient {
             .transpose()
     }
 
-    async fn post_review_comment(
+    async fn post_comment(
         &self,
         owner: &str,
         repo: &str,
         pr_number: u64,
-        reviewer: Reviewer,
+        body: &str,
     ) -> Result<()> {
-        let review_command = reviewer
-            .review_command()
-            .ok_or(ReviewError::RequestNotSupported(reviewer))?;
         let client = GitHubClient::get()?;
 
         client
-            .create_comment(owner, repo, pr_number, review_command)
+            .create_comment(owner, repo, pr_number, body)
             .await
             .context("Failed to post comment")?;
 
         Ok(())
     }
+
+    async fn has_body_reaction(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        emoji: &str,
+    ) -> Result<bool> {
+        let client = GitHubClient::get()?;
+        let variables = json!({
+            "owner": owner,
+            "repo": repo,
+            "pr": pr_number,
+        });
+
+        let response: PrReactionsData = client.graphql(PR_REACTIONS_QUERY, variables).await?;
+
+        // GitHub GraphQL uses UPPER_SNAKE_CASE for reaction content (e.g., "EYES")
+        let graphql_emoji = emoji.to_uppercase();
+
+        Ok(response
+            .repository
+            .and_then(|r| r.pull_request)
+            .map(|pr| {
+                pr.reactions
+                    .nodes
+                    .iter()
+                    .any(|r| r.content == graphql_emoji)
+            })
+            .unwrap_or(false))
+    }
+
+    async fn has_check_run(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        check_name: &str,
+    ) -> Result<bool> {
+        let client = GitHubClient::get()?;
+        let variables = json!({
+            "owner": owner,
+            "repo": repo,
+            "pr": pr_number,
+        });
+
+        let response: CheckRunsData = client.graphql(CHECK_RUNS_QUERY, variables).await?;
+
+        Ok(!self.find_check_runs(&response, check_name).is_empty())
+    }
+
+    async fn check_run_completed_at(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        check_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let client = GitHubClient::get()?;
+        let variables = json!({
+            "owner": owner,
+            "repo": repo,
+            "pr": pr_number,
+        });
+
+        let response: CheckRunsData = client.graphql(CHECK_RUNS_QUERY, variables).await?;
+
+        let check_runs = self.find_check_runs(&response, check_name);
+
+        for cr in check_runs {
+            if cr.status == "COMPLETED"
+                && let Some(ref completed_at) = cr.completed_at
+            {
+                let t = completed_at
+                    .parse::<DateTime<Utc>>()
+                    .map_err(|_| ReviewError::TimestampParseError(completed_at.clone()))?;
+                return Ok(Some(t));
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 /// Get the default production client.
-pub fn get_client() -> OctocrabReviewClient {
-    OctocrabReviewClient
+pub fn get_client() -> OctocrabDetectionClient {
+    OctocrabDetectionClient
 }
 
 #[cfg(test)]
@@ -293,10 +445,13 @@ pub mod mock {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use crate::commands::ai::review::detector::ReviewDetector;
+    use crate::commands::ai::review::reviewer::Reviewer;
+
     /// Mock data for a PR review.
     #[derive(Clone, Debug)]
     pub struct MockReview {
-        pub reviewer: Reviewer,
+        pub bot_login: String,
         pub created_at: DateTime<Utc>,
     }
 
@@ -314,12 +469,25 @@ pub mod mock {
         pub owner: String,
         pub repo: String,
         pub pr_number: u64,
-        pub reviewer: Reviewer,
+        pub body: String,
+    }
+
+    /// Mock data for a check run.
+    #[derive(Clone, Debug)]
+    pub struct MockCheckRun {
+        pub name: String,
+        pub completed_at: Option<DateTime<Utc>>,
+    }
+
+    /// Mock data for a reaction on the PR body.
+    #[derive(Clone, Debug)]
+    pub struct MockReaction {
+        pub emoji: String,
     }
 
     /// Mock implementation for testing.
     #[derive(Clone, Default)]
-    pub struct MockReviewClient {
+    pub struct MockDetectionClient {
         /// Reviews on the PR.
         pub reviews: Arc<Mutex<Vec<MockReview>>>,
         /// Comments on the PR.
@@ -328,6 +496,10 @@ pub mod mock {
         pub latest_commit_time: Arc<Mutex<Option<DateTime<Utc>>>>,
         /// Posted comments (for assertions).
         pub posted_comments: Arc<Mutex<Vec<PostedComment>>>,
+        /// Check runs on the PR's head commit.
+        pub check_runs: Arc<Mutex<Vec<MockCheckRun>>>,
+        /// Reactions on the PR body.
+        pub reactions: Arc<Mutex<Vec<MockReaction>>>,
         /// Number of find_latest_review calls before returning reviews.
         /// If set, the first N calls will return None.
         pub skip_first_n_reviews: Arc<Mutex<usize>>,
@@ -339,14 +511,14 @@ pub mod mock {
         pub initial_review_cutoff_calls: Arc<Mutex<usize>>,
     }
 
-    impl MockReviewClient {
+    impl MockDetectionClient {
         pub fn new() -> Self {
             Self::default()
         }
 
         pub fn with_review(self, reviewer: Reviewer, created_at: DateTime<Utc>) -> Self {
             self.reviews.lock().unwrap().push(MockReview {
-                reviewer,
+                bot_login: reviewer.detector().bot_login().to_string(),
                 created_at,
             });
             self
@@ -371,6 +543,25 @@ pub mod mock {
             self
         }
 
+        pub fn with_check_run(
+            self,
+            name: impl Into<String>,
+            completed_at: Option<DateTime<Utc>>,
+        ) -> Self {
+            self.check_runs.lock().unwrap().push(MockCheckRun {
+                name: name.into(),
+                completed_at,
+            });
+            self
+        }
+
+        pub fn with_reaction(self, emoji: impl Into<String>) -> Self {
+            self.reactions.lock().unwrap().push(MockReaction {
+                emoji: emoji.into(),
+            });
+            self
+        }
+
         /// Skip the first N calls to find_latest_review (return None).
         /// Useful for simulating "no review initially, then review appears".
         pub fn skip_first_n_review_calls(self, n: usize) -> Self {
@@ -389,13 +580,13 @@ pub mod mock {
         }
     }
 
-    impl ReviewClient for MockReviewClient {
+    impl DetectionClient for MockDetectionClient {
         async fn find_latest_review(
             &self,
             _owner: &str,
             _repo: &str,
             _pr_number: u64,
-            reviewer: Reviewer,
+            bot_login: &str,
         ) -> Result<Option<DateTime<Utc>>> {
             // Increment call counter
             let mut call_count = self.find_review_call_count.lock().unwrap();
@@ -418,7 +609,7 @@ pub mod mock {
 
             let latest = reviews
                 .iter()
-                .filter(|r| r.reviewer == reviewer)
+                .filter(|r| r.bot_login == bot_login)
                 .filter(|r| {
                     // Apply cutoff filter on initial calls (up to cutoff_calls)
                     if effective_call > 0 && effective_call <= cutoff_calls {
@@ -433,41 +624,27 @@ pub mod mock {
             Ok(latest)
         }
 
-        async fn check_reviewer_unable_comment(
+        async fn find_unable_comment(
             &self,
             _owner: &str,
             _repo: &str,
             _pr_number: u64,
-            start_time: DateTime<Utc>,
-            reviewer: Reviewer,
+            bot_login: &str,
+            unable_marker: &str,
+            after: DateTime<Utc>,
         ) -> Result<Option<String>> {
-            let bot_login = reviewer.bot_login();
-            let unable_marker = reviewer.unable_marker();
             let comments = self.comments.lock().unwrap();
 
             for comment in comments.iter() {
                 if comment.author == bot_login
                     && comment.body.contains(unable_marker)
-                    && comment.created_at > start_time
+                    && comment.created_at > after
                 {
                     return Ok(Some(comment.body.clone()));
                 }
             }
 
             Ok(None)
-        }
-
-        async fn has_reviewer_activity(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _pr_number: u64,
-            reviewer: Reviewer,
-        ) -> Result<bool> {
-            let bot_login = reviewer.bot_login();
-            let comments = self.comments.lock().unwrap();
-
-            Ok(comments.iter().any(|c| c.author == bot_login))
         }
 
         async fn get_latest_commit_time(
@@ -479,21 +656,57 @@ pub mod mock {
             Ok(*self.latest_commit_time.lock().unwrap())
         }
 
-        async fn post_review_comment(
+        async fn post_comment(
             &self,
             owner: &str,
             repo: &str,
             pr_number: u64,
-            reviewer: Reviewer,
+            body: &str,
         ) -> Result<()> {
             self.posted_comments.lock().unwrap().push(PostedComment {
                 owner: owner.to_string(),
                 repo: repo.to_string(),
                 pr_number,
-                reviewer,
+                body: body.to_string(),
             });
 
             Ok(())
+        }
+
+        async fn has_body_reaction(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            emoji: &str,
+        ) -> Result<bool> {
+            let reactions = self.reactions.lock().unwrap();
+            Ok(reactions.iter().any(|r| r.emoji == emoji))
+        }
+
+        async fn has_check_run(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            check_name: &str,
+        ) -> Result<bool> {
+            let check_runs = self.check_runs.lock().unwrap();
+            Ok(check_runs.iter().any(|cr| cr.name == check_name))
+        }
+
+        async fn check_run_completed_at(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            check_name: &str,
+        ) -> Result<Option<DateTime<Utc>>> {
+            let check_runs = self.check_runs.lock().unwrap();
+            Ok(check_runs
+                .iter()
+                .find(|cr| cr.name == check_name && cr.completed_at.is_some())
+                .and_then(|cr| cr.completed_at))
         }
     }
 
@@ -504,9 +717,9 @@ pub mod mock {
 
         #[tokio::test]
         async fn find_latest_review_returns_none_when_empty() {
-            let client = MockReviewClient::new();
+            let client = MockDetectionClient::new();
             let result = client
-                .find_latest_review("owner", "repo", 1, Reviewer::Gemini)
+                .find_latest_review("owner", "repo", 1, "gemini-code-assist")
                 .await
                 .unwrap();
             assert!(result.is_none());
@@ -521,12 +734,12 @@ pub mod mock {
                 .unwrap()
                 .to_utc();
 
-            let client = MockReviewClient::new()
+            let client = MockDetectionClient::new()
                 .with_review(Reviewer::Gemini, t1)
                 .with_review(Reviewer::Gemini, t2);
 
             let result = client
-                .find_latest_review("owner", "repo", 1, Reviewer::Gemini)
+                .find_latest_review("owner", "repo", 1, "gemini-code-assist")
                 .await
                 .unwrap();
 
@@ -549,14 +762,21 @@ pub mod mock {
                 .unwrap()
                 .to_utc();
 
-            let client = MockReviewClient::new().with_comment(
+            let client = MockDetectionClient::new().with_comment(
                 "gemini-code-assist",
                 "Gemini is unable to review this PR",
                 comment_time,
             );
 
             let result = client
-                .check_reviewer_unable_comment("owner", "repo", 1, start_time, Reviewer::Gemini)
+                .find_unable_comment(
+                    "owner",
+                    "repo",
+                    1,
+                    "gemini-code-assist",
+                    "Gemini is unable to",
+                    start_time,
+                )
                 .await
                 .unwrap();
 
@@ -564,10 +784,10 @@ pub mod mock {
         }
 
         #[tokio::test]
-        async fn post_review_comment_tracks_calls() {
-            let client = MockReviewClient::new();
+        async fn post_comment_tracks_calls() {
+            let client = MockDetectionClient::new();
             client
-                .post_review_comment("owner", "repo", 42, Reviewer::Gemini)
+                .post_comment("owner", "repo", 42, "/gemini review")
                 .await
                 .unwrap();
 
@@ -579,7 +799,7 @@ pub mod mock {
                     owner: "owner".to_string(),
                     repo: "repo".to_string(),
                     pr_number: 42,
-                    reviewer: Reviewer::Gemini,
+                    body: "/gemini review".to_string(),
                 }
             );
         }
@@ -590,7 +810,7 @@ pub mod mock {
                 .unwrap()
                 .to_utc();
 
-            let client = MockReviewClient::new().with_latest_commit_time(commit_time);
+            let client = MockDetectionClient::new().with_latest_commit_time(commit_time);
 
             let result = client
                 .get_latest_commit_time("owner", "repo", 1)
@@ -601,18 +821,60 @@ pub mod mock {
         }
 
         #[rstest]
-        #[case::bot_comment("gemini-code-assist", true)]
-        #[case::other_user("other-user", false)]
+        #[case::has_reaction("eyes", true)]
+        #[case::no_reaction("thumbsup", false)]
         #[tokio::test]
-        async fn has_reviewer_activity_checks_author(#[case] author: &str, #[case] expected: bool) {
-            let client = MockReviewClient::new().with_comment(author, "Some comment", Utc::now());
+        async fn has_body_reaction_checks_emoji(#[case] query: &str, #[case] expected: bool) {
+            let client = MockDetectionClient::new().with_reaction("eyes");
 
-            let has_activity = client
-                .has_reviewer_activity("owner", "repo", 1, Reviewer::Gemini)
+            let result = client
+                .has_body_reaction("owner", "repo", 1, query)
                 .await
                 .unwrap();
 
-            assert_eq!(has_activity, expected);
+            assert_eq!(result, expected);
+        }
+
+        #[rstest]
+        #[case::exists("devin-review", true)]
+        #[case::missing("other-check", false)]
+        #[tokio::test]
+        async fn has_check_run_checks_name(#[case] query: &str, #[case] expected: bool) {
+            let client = MockDetectionClient::new().with_check_run("devin-review", None);
+
+            let result = client
+                .has_check_run("owner", "repo", 1, query)
+                .await
+                .unwrap();
+
+            assert_eq!(result, expected);
+        }
+
+        #[tokio::test]
+        async fn check_run_completed_at_returns_time_when_completed() {
+            let t = DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .to_utc();
+            let client = MockDetectionClient::new().with_check_run("devin-review", Some(t));
+
+            let result = client
+                .check_run_completed_at("owner", "repo", 1, "devin-review")
+                .await
+                .unwrap();
+
+            assert_eq!(result, Some(t));
+        }
+
+        #[tokio::test]
+        async fn check_run_completed_at_returns_none_when_in_progress() {
+            let client = MockDetectionClient::new().with_check_run("devin-review", None);
+
+            let result = client
+                .check_run_completed_at("owner", "repo", 1, "devin-review")
+                .await
+                .unwrap();
+
+            assert!(result.is_none());
         }
     }
 }

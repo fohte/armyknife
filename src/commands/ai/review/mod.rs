@@ -2,9 +2,11 @@
 
 pub mod client;
 mod common;
+pub mod detector;
+mod detectors;
 mod error;
 pub mod request;
-mod reviewer;
+pub mod reviewer;
 pub mod wait;
 
 use clap::Subcommand;
