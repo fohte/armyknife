@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.147](https://github.com/fohte/armyknife/compare/v0.1.146...v0.1.147) (2026-04-12)
+
+
+### Bug Fixes
+
+* **cc:** keep pane open after exiting claude in a resumed paused session ([#491](https://github.com/fohte/armyknife/issues/491)) ([48b1ffe](https://github.com/fohte/armyknife/commit/48b1ffe2227dbf5d4bc126f0c76bffca27774e27))
+
 ## [0.1.146](https://github.com/fohte/armyknife/compare/v0.1.145...v0.1.146) (2026-04-12)
 
 
