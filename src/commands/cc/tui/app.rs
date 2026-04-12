@@ -462,6 +462,7 @@ impl App {
     /// Executes the confirmed delete action.
     /// If the session is alive, sends SIGTERM to the pane process first.
     pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
+        let current_selection = self.list_state.selected();
         let (session_id, is_alive) = match &self.mode {
             AppMode::Confirm {
                 session_id,
@@ -470,17 +471,11 @@ impl App {
             _ => return Ok(()),
         };
 
-        if is_alive {
-            // Find the pane_id for this session to send SIGTERM
-            if let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id)
-                && let Some(ref tmux_info) = session.tmux_info
-                && let Some(pid) = tmux::get_pane_pid(&tmux_info.pane_id)
-            {
-                // Send SIGTERM to the pane's process
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
-                }
-            }
+        if is_alive
+            && let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id)
+            && let Some(ref tmux_info) = session.tmux_info
+        {
+            tmux::send_sigterm_to_pane(&tmux_info.pane_id);
         }
 
         store::delete_session(&session_id)?;
@@ -494,14 +489,14 @@ impl App {
         }
         self.apply_filter();
 
-        // Adjust selection
-        if self.tree_ordered_indices.is_empty() {
-            self.list_state.select(None);
-        } else if let Some(selected) = self.list_state.selected()
-            && selected >= self.tree_ordered_indices.len()
-        {
-            self.list_state
-                .select(Some(self.tree_ordered_indices.len() - 1));
+        // Restore selection to the same index, clamped to the new list length
+        if let Some(selected) = current_selection {
+            let new_len = self.tree_ordered_indices.len();
+            if new_len > 0 {
+                self.list_state.select(Some(selected.min(new_len - 1)));
+            } else {
+                self.list_state.select(None);
+            }
         }
 
         self.mode = AppMode::Normal;

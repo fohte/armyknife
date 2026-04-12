@@ -439,6 +439,18 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
     output.lines().next()?.parse::<u32>().ok()
 }
 
+/// Sends SIGTERM to the process running in the given tmux pane.
+/// No-op if the pane doesn't exist or the PID can't be resolved.
+pub fn send_sigterm_to_pane(pane_id: &str) {
+    if let Some(pid) = get_pane_pid(pane_id) {
+        // SAFETY: libc::kill with SIGTERM is safe for any valid PID.
+        // Invalid PIDs cause kill to return -1 which we ignore.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+}
+
 /// Gets tmux pane information for a given process ID.
 /// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
 /// Returns None if not running in tmux or if no matching pane is found.
