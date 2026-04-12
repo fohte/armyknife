@@ -1,6 +1,6 @@
 //! Common utilities for review commands.
 
-use super::client::ReviewClient;
+use super::detector::{DetectionClient, DetectionContext, ReviewDetector};
 use super::error::{Result, ReviewError};
 use super::reviewer::Reviewer;
 use crate::infra::git;
@@ -69,8 +69,8 @@ pub struct WaitConfig {
 /// Returns the list of reviewers that completed reviews.
 /// Reviewers that post "unable to" comments are skipped rather than causing an error.
 /// Returns Ok with an empty list if all reviewers are unable to review.
-pub async fn wait_for_all_reviews(
-    client: &impl ReviewClient,
+pub async fn wait_for_all_reviews<C: DetectionClient>(
+    client: &C,
     owner: &str,
     repo: &str,
     pr_number: u64,
@@ -80,6 +80,20 @@ pub async fn wait_for_all_reviews(
     let poll_interval = Duration::from_secs(config.interval);
     let timeout_duration = Duration::from_secs(config.timeout);
     let started_at = Instant::now();
+
+    let ctx = DetectionContext {
+        github: client,
+        owner,
+        repo,
+        pr: pr_number,
+    };
+
+    // Build detectors once
+    let detectors: Vec<_> = config
+        .reviewers
+        .iter()
+        .map(|r| (*r, r.detector()))
+        .collect();
 
     let mut completed: Vec<Reviewer> = Vec::new();
     let mut skipped: Vec<Reviewer> = Vec::new();
@@ -91,16 +105,14 @@ pub async fn wait_for_all_reviews(
             return Err(ReviewError::Timeout(config.timeout).into());
         }
 
-        // Check for new reviews from all reviewers
-        for reviewer in &config.reviewers {
+        // Check for completion from all reviewers
+        for (reviewer, detector) in &detectors {
             if completed.contains(reviewer) || skipped.contains(reviewer) {
                 continue;
             }
 
-            if let Some(review_time) = client
-                .find_latest_review(owner, repo, pr_number, *reviewer)
-                .await?
-                && review_time > start_time
+            if let Some(completed_at) = detector.is_completed(&ctx).await?
+                && completed_at > start_time
             {
                 completed.push(*reviewer);
                 println!("\n{:?} review completed!", reviewer);
@@ -113,15 +125,12 @@ pub async fn wait_for_all_reviews(
         }
 
         // Check if any reviewer posted an "unable to" comment
-        for reviewer in &config.reviewers {
+        for (reviewer, detector) in &detectors {
             if completed.contains(reviewer) || skipped.contains(reviewer) {
                 continue;
             }
 
-            if let Some(unable_msg) = client
-                .check_reviewer_unable_comment(owner, repo, pr_number, start_time, *reviewer)
-                .await?
-            {
+            if let Some(unable_msg) = detector.find_unable_comment(&ctx, start_time).await? {
                 println!(
                     "\n{:?} is unable to review this PR: {}. Skipping.",
                     reviewer, unable_msg
