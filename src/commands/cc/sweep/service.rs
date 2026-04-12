@@ -26,13 +26,12 @@ const START_INTERVAL_SECS: u32 = 300;
 pub fn install() -> Result<()> {
     ensure_macos()?;
     let plist_path = plist_path()?;
-    let exe = std::env::current_exe().context("locating current executable")?;
 
     if let Some(parent) = plist_path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
 
-    let plist = render_plist(&exe.to_string_lossy());
+    let plist = render_plist();
     fs::write(&plist_path, plist).with_context(|| format!("writing {}", plist_path.display()))?;
 
     // Bootstrap into the current GUI domain so it starts running now and at
@@ -132,16 +131,11 @@ fn escape_xml(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn render_plist(exe: &str) -> String {
-    // StandardErrorPath points at a file under the cache dir that armyknife
-    // already owns, so log rotation can be done externally (e.g., by user).
-    // We do not set StandardOutPath because `a cc sweep run` only prints on
-    // error (the per-run stderr summary is the only output when paused > 0).
+fn render_plist() -> String {
     let log_path = log_path_string();
-    let exe = escape_xml(exe);
     let log_path = escape_xml(&log_path);
-    // Launch via login shell so that PATH from .zprofile/.zshenv is available,
-    // ensuring Homebrew-installed tools like tmux are found regardless of
+    // Launch via login shell so PATH from .zprofile/.zshenv is available,
+    // ensuring Homebrew-installed `a` and `tmux` are found regardless of
     // launchd's minimal default PATH.
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -154,7 +148,7 @@ fn render_plist(exe: &str) -> String {
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>{exe} cc sweep run</string>
+        <string>a cc sweep run</string>
     </array>
     <key>StartInterval</key>
     <integer>{START_INTERVAL_SECS}</integer>
@@ -192,8 +186,6 @@ mod tests {
 
     #[test]
     fn render_plist_matches_expected_layout() {
-        // Full-text comparison keeps the test hermetic and catches drifts in
-        // any field (label, executable path, interval, log path) at once.
         let expected = formatdoc! {r#"
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -205,7 +197,7 @@ mod tests {
                 <array>
                     <string>/bin/zsh</string>
                     <string>-lc</string>
-                    <string>/usr/local/bin/a cc sweep run</string>
+                    <string>a cc sweep run</string>
                 </array>
                 <key>StartInterval</key>
                 <integer>{interval}</integer>
@@ -222,19 +214,7 @@ mod tests {
             interval = START_INTERVAL_SECS,
             log = log_path_string(),
         };
-        assert_eq!(render_plist("/usr/local/bin/a"), expected);
-    }
-
-    #[test]
-    fn render_plist_escapes_xml_special_chars() {
-        let plist = render_plist("/path/with <special> & \"chars\"");
-        let expected =
-            "<string>/path/with &lt;special&gt; &amp; &quot;chars&quot; cc sweep run</string>";
-        let exe_line = plist
-            .lines()
-            .find(|l| l.trim_start().starts_with("<string>/path/with"))
-            .expect("exe line should exist in plist");
-        assert_eq!(exe_line.trim(), expected);
+        assert_eq!(render_plist(), expected);
     }
 
     #[test]
