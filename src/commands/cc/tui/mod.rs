@@ -139,13 +139,8 @@ fn resume_selected_session(app: &mut App) {
         }
     }
 
-    // Send the command to the existing shell instead of respawning the pane.
-    // Respawning replaces the pane's root process with `a cc resume`, which
-    // execs into `claude`; when the user later exits claude normally, the
-    // pane's root process dies and tmux closes the pane. Sending keys keeps
-    // zsh as the pane's root, so exiting claude returns to a shell prompt.
-    if let Err(e) = tmux::send_command_to_pane(pane_id, "a cc resume") {
-        app.set_error(format!("Failed to send resume command to pane: {e}"));
+    if let Err(e) = tmux::respawn_pane(pane_id, "a cc resume") {
+        app.set_error(format!("Failed to respawn pane: {e}"));
         return;
     }
     if let Err(e) = tmux::focus_pane(pane_id) {
