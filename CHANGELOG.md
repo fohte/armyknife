@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.148](https://github.com/fohte/armyknife/compare/v0.1.147...v0.1.148) (2026-04-15)
+
+
+### Bug Fixes
+
+* **cc:** keep pane open after resuming paused session ([#494](https://github.com/fohte/armyknife/issues/494)) ([9cf8482](https://github.com/fohte/armyknife/commit/9cf84824105e7f1f5791f31d513f03fd1fcc5835))
+
 ## [0.1.147](https://github.com/fohte/armyknife/compare/v0.1.146...v0.1.147) (2026-04-12)
 
 
