@@ -139,7 +139,12 @@ fn resume_selected_session(app: &mut App) {
         }
     }
 
-    if let Err(e) = tmux::respawn_pane(pane_id, "a cc resume") {
+    // Wrap the resume command in the user's login shell so that when claude
+    // exits normally, control returns to a shell prompt instead of tmux
+    // closing the pane (respawn-pane replaces the pane's root process).
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let wrapped = format!("{shell} -i -c 'a cc resume; exec {shell} -i'");
+    if let Err(e) = tmux::respawn_pane(pane_id, &wrapped) {
         app.set_error(format!("Failed to respawn pane: {e}"));
         return;
     }
