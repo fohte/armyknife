@@ -142,8 +142,29 @@ fn resume_selected_session(app: &mut App) {
     // Wrap the resume command in the user's login shell so that when claude
     // exits normally, control returns to a shell prompt instead of tmux
     // closing the pane (respawn-pane replaces the pane's root process).
+    //
+    // `-i` is required on the outer shell: `a cc resume` looks up `claude`
+    // in $PATH via `find_command_path`, and many users only extend $PATH
+    // in their interactive rc file (e.g. `.zshrc`). Running without `-i`
+    // would inherit tmux's pre-rc $PATH and fail to locate `claude`.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let wrapped = format!("{shell} -i -c 'a cc resume; exec {shell} -i'");
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "a".to_string());
+    let Ok(inner) = shlex::try_join([exe.as_str(), "cc", "resume"]) else {
+        app.set_error("Failed to build resume command".to_string());
+        return;
+    };
+    let Ok(exec_shell) = shlex::try_join([shell.as_str(), "-i"]) else {
+        app.set_error("Failed to build shell exec command".to_string());
+        return;
+    };
+    let script = format!("{inner}; exec {exec_shell}");
+    let Ok(wrapped) = shlex::try_join([shell.as_str(), "-i", "-c", &script]) else {
+        app.set_error("Failed to build wrapped command".to_string());
+        return;
+    };
     if let Err(e) = tmux::respawn_pane(pane_id, &wrapped) {
         app.set_error(format!("Failed to respawn pane: {e}"));
         return;
