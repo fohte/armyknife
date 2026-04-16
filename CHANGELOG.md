@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.149](https://github.com/fohte/armyknife/compare/v0.1.148...v0.1.149) (2026-04-16)
+
+
+### Bug Fixes
+
+* **cc:** auto-resume Claude Code sessions after tmux-resurrect restore ([#496](https://github.com/fohte/armyknife/issues/496)) ([35c210a](https://github.com/fohte/armyknife/commit/35c210afda850f316c3f20e32d16bc0a939fef2e))
+
 ## [0.1.148](https://github.com/fohte/armyknife/compare/v0.1.147...v0.1.148) (2026-04-15)
 
 
