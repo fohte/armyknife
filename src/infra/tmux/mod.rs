@@ -318,6 +318,12 @@ pub fn set_pane_option(pane_id: &str, option: &str, value: &str) -> Result<()> {
     run_tmux(&["set-option", "-p", "-t", pane_id, option, value])
 }
 
+/// Types a command into the target pane and submits it with Enter.
+/// Intended for restoring a previously-running interactive process in a pane.
+pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
+    run_tmux(&["send-keys", "-t", pane_id, command, "Enter"])
+}
+
 /// Get a user option value from the current tmux pane.
 /// Returns None if not in tmux, the option is not set, or the command fails.
 pub fn get_current_pane_option(option: &str) -> Option<String> {
