@@ -440,17 +440,24 @@ pub fn find_pane_id_by_position(
     window_index: u32,
     pane_index: u32,
 ) -> Option<String> {
-    // Target format: session_name:window_index.pane_index
-    let target = format!("{}:{}.{}", session_name, window_index, pane_index);
+    // tmux's `-t session:window.pane` target resolves at the window level and lists all
+    // panes in that window, so narrow the result with a `-f` filter on pane_index.
+    let target = format!("{}:{}", session_name, window_index);
+    let filter = format!("#{{==:#{{pane_index}},{}}}", pane_index);
 
-    // Use list-panes with target to get pane_id
-    let output = run_tmux_output(&["list-panes", "-t", &target, "-F", "#{pane_id}"]).ok()?;
+    let output = run_tmux_output(&[
+        "list-panes",
+        "-t",
+        &target,
+        "-f",
+        &filter,
+        "-F",
+        "#{pane_id}",
+    ])
+    .ok()?;
 
-    if output.is_empty() {
-        None
-    } else {
-        Some(output)
-    }
+    // Defensive: the filter should yield at most one match, but only the first line is used.
+    output.lines().next().map(|s| s.to_string())
 }
 
 /// Returns the PID of the process running in the given tmux pane.
