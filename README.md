@@ -247,13 +247,15 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration.
 
-| Action               | Description                                              |
-| -------------------- | -------------------------------------------------------- |
-| `hook <event>`       | Record session events (called from Claude Code hooks)    |
-| `list`               | List all Claude Code sessions with status                |
-| `focus <session_id>` | Focus on a session's tmux pane                           |
-| `resume`             | Resume a session from tmux pane title after restart      |
-| `sweep`              | Pause long-stopped sessions (run periodically or manual) |
+| Action                | Description                                                              |
+| --------------------- | ------------------------------------------------------------------------ |
+| `hook <event>`        | Record session events (called from Claude Code hooks)                    |
+| `list`                | List all Claude Code sessions with status                                |
+| `focus <session_id>`  | Focus on a session's tmux pane                                           |
+| `resume [session_id]` | Resume the pane's Claude Code session (reads pane option if no argument) |
+| `resurrect save`      | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
+| `resurrect restore`   | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
+| `sweep`               | Pause long-stopped sessions (run periodically or manual)                 |
 
 #### Setup
 
@@ -305,7 +307,20 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 
 These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
 
-The `SessionStart` hook stores the session ID in the tmux pane title, allowing `a cc resume` to restore the session after a tmux resurrect.
+The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID in the tmux pane user option `@armyknife-last-claude-code-session-id`, so that `a cc resume` can relaunch `claude --resume <id>` inside that pane.
+
+#### tmux-resurrect integration
+
+Pane user options are not preserved by tmux-resurrect, so `a cc resurrect` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt` during save and re-applies them during restore. On restore the hook also types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart.
+
+Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
+
+```tmux
+set -g @resurrect-hook-post-save-all '$HOME/.cargo/bin/a cc resurrect save'
+set -g @resurrect-hook-post-restore-all '$HOME/.cargo/bin/a cc resurrect restore'
+```
+
+Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which prevents tilde expansion when tmux-resurrect `eval`s the hook.
 
 #### Auto-pause
 

@@ -161,7 +161,15 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 
 /// Restores pane session IDs from the state file.
 ///
-/// Reads the state file and sets the user option on each pane that still exists.
+/// Reads the state file and, for each pane that still exists, sets the user option
+/// and types `a cc resume <session-id>` into the pane to re-launch Claude Code.
+/// The session ID is passed as an argument (instead of relying on the pane option)
+/// so the resumed process is not racing against tmux to observe the just-set option.
+///
+/// tmux-resurrect's own `@resurrect-processes` is not used: its per-pane full-command
+/// field may contain multiple lines (one per shell child) which confuses the awk-based
+/// parser in `restore_all_pane_processes`, and process restoration runs before our
+/// post-restore hook, so the option would not yet be set anyway.
 fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let state_file = state_file_path()?;
 
@@ -176,19 +184,23 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Restore session IDs to panes
     let mut restore_count = 0;
     for (pane_position, session_id) in &pane_sessions {
-        if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position) {
-            // Find the pane_id for this position
-            if let Some(pane_id) =
+        if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position)
+            && let Some(pane_id) =
                 tmux::find_pane_id_by_position(session_name, window_index, pane_index)
-            {
-                // Set the user option on this pane
-                if tmux::set_pane_option(&pane_id, TMUX_SESSION_OPTION, session_id).is_ok() {
-                    restore_count += 1;
-                }
-            }
+            && tmux::set_pane_option(&pane_id, TMUX_SESSION_OPTION, session_id).is_ok()
+        {
+            // send-keys is best-effort: the option is already restored, so a failure
+            // here just means the user has to run `a cc resume` manually.
+            // session_id is quoted because `send-keys` types into an interactive shell
+            // where metacharacters (spaces, `;`, backticks) would otherwise be parsed.
+            let quoted_id = shlex::try_quote(session_id)
+                .map(|cow| cow.into_owned())
+                .unwrap_or_else(|_| session_id.clone());
+            let command = format!("a cc resume {}", quoted_id);
+            let _ = tmux::send_command_to_pane(&pane_id, &command);
+            restore_count += 1;
         }
     }
 
