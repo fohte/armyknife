@@ -193,7 +193,12 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         {
             // send-keys is best-effort: the option is already restored, so a failure
             // here just means the user has to run `a cc resume` manually.
-            let command = format!("a cc resume {}", session_id);
+            // session_id is quoted because `send-keys` types into an interactive shell
+            // where metacharacters (spaces, `;`, backticks) would otherwise be parsed.
+            let quoted_id = shlex::try_quote(session_id)
+                .map(|cow| cow.into_owned())
+                .unwrap_or_else(|_| session_id.clone());
+            let command = format!("a cc resume {}", quoted_id);
             let _ = tmux::send_command_to_pane(&pane_id, &command);
             restore_count += 1;
         }
