@@ -1,11 +1,8 @@
-use std::os::unix::process::CommandExt;
-use std::process::Command;
-
 use anyhow::{Result, bail};
 use clap::Args;
 
 use super::types::TMUX_SESSION_OPTION;
-use crate::infra::tmux;
+use crate::infra::{process, tmux};
 use crate::shared::command::find_command_path;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -28,12 +25,8 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
 
-    // Replace current process with `claude --resume <session_id>`
-    let err = Command::new(&claude_path)
-        .args(["--resume", &session_id])
-        .exec();
-
-    // exec() only returns if there was an error
+    // Replace current process with `claude --resume <session_id>`; only returns on failure.
+    let err = process::exec_replace(&claude_path, ["--resume", &session_id]);
     bail!("Failed to exec claude: {}", err)
 }
 

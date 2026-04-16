@@ -5,7 +5,20 @@
 //! can stub at the module boundary.
 
 use std::collections::{HashMap, VecDeque};
+use std::io;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
+
+/// Replaces the current process image with `program args...` via `execve(2)`.
+/// Returns only on failure; the returned `io::Error` describes why `exec` could not start the program.
+pub fn exec_replace<P, I, S>(program: P, args: I) -> io::Error
+where
+    P: AsRef<std::ffi::OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    Command::new(program).args(args).exec()
+}
 
 /// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
 /// Returns `None` if the process is gone or `ps` fails.
