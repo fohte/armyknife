@@ -853,14 +853,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_confirm_delete_with_sibling_in_same_worktree_returns_to_normal() {
-        // Two sessions share the same worktree. Deleting one must NOT trigger
-        // worktree cleanup — the sibling session is still using it.
+    /// Creates a TestRepo with a single worktree named `feat` and returns it
+    /// together with the resolved worktree path. Ownership of `TestRepo` is
+    /// returned so the TempDir survives for the lifetime of the test.
+    #[fixture]
+    fn worktree_feat() -> (TestRepo, PathBuf) {
         let repo = TestRepo::new();
         repo.create_worktree("feat");
         let wt_path = repo.worktree_path("feat");
+        (repo, wt_path)
+    }
 
+    #[rstest]
+    fn test_confirm_delete_with_sibling_in_same_worktree_returns_to_normal(
+        worktree_feat: (TestRepo, PathBuf),
+    ) {
+        // Two sessions share the same worktree. Deleting one must NOT trigger
+        // worktree cleanup — the sibling session is still using it.
+        let (_repo, wt_path) = worktree_feat;
         let s1 = session_with_cwd("s1", wt_path.join("src"));
         let s2 = session_with_cwd("s2", wt_path.clone());
         let mut app = App::with_sessions(vec![s1, s2]);
@@ -878,15 +888,14 @@ mod tests {
         assert_eq!(app.sessions.len(), 1);
     }
 
-    #[test]
-    fn test_confirm_delete_last_session_in_worktree_prompts_cleanup() {
+    #[rstest]
+    fn test_confirm_delete_last_session_in_worktree_prompts_cleanup(
+        worktree_feat: (TestRepo, PathBuf),
+    ) {
         // Only session in the worktree. After deletion, user should be asked
         // whether to also remove the worktree itself.
-        let repo = TestRepo::new();
-        repo.create_worktree("feat");
-        let wt_path = repo.worktree_path("feat");
-
-        let s1 = session_with_cwd("s1", wt_path.clone());
+        let (repo, wt_path) = worktree_feat;
+        let s1 = session_with_cwd("s1", wt_path);
         let mut app = App::with_sessions(vec![s1]);
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
@@ -907,11 +916,11 @@ mod tests {
     #[rstest]
     #[case::n_key(KeyCode::Char('n'))]
     #[case::esc_key(KeyCode::Esc)]
-    fn test_confirm_worktree_cleanup_cancel_keeps_worktree(#[case] cancel_key: KeyCode) {
-        let repo = TestRepo::new();
-        repo.create_worktree("feat");
-        let wt_path = repo.worktree_path("feat");
-
+    fn test_confirm_worktree_cleanup_cancel_keeps_worktree(
+        worktree_feat: (TestRepo, PathBuf),
+        #[case] cancel_key: KeyCode,
+    ) {
+        let (_repo, wt_path) = worktree_feat;
         let s1 = session_with_cwd("s1", wt_path.clone());
         let mut app = App::with_sessions(vec![s1]);
 
