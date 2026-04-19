@@ -9,6 +9,7 @@ use std::path::Path;
 use git2::Repository;
 
 use crate::commands::cc::store;
+use crate::commands::cc::types::SessionStatus;
 use crate::commands::wm::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
@@ -87,15 +88,20 @@ pub fn cleanup_worktree_by_name(
 
     let mut result = delete_worktree_and_branch(repo, worktree_name);
 
-    // Only clean up tmux windows and sessions if worktree deletion succeeded
+    // Only clean up tmux windows and sessions if worktree deletion succeeded.
+    //
+    // Clean up sessions BEFORE killing tmux windows: if the caller is running
+    // inside one of those windows (e.g. `a wm delete` invoked from the
+    // worktree's own pane), kill_window terminates the caller's pane and
+    // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
+        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+
         for window_id in &window_ids {
             if tmux::kill_window(window_id).is_ok() {
                 result.windows_closed += 1;
             }
         }
-
-        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
     }
 
     Ok(result)
@@ -121,10 +127,27 @@ fn delete_worktree_and_branch(repo: &Repository, worktree_name: &str) -> Worktre
     }
 }
 
+/// Returns true if the pane hosting this session still runs a live Claude
+/// process that needs SIGTERM before we drop the session file.
+///
+/// Paused sessions were already SIGTERM'd by `cc sweep`, and Ended sessions
+/// exited on their own. In both cases the pane's foreground process is the
+/// user's shell (possibly the shell that just invoked `a wm delete` from
+/// within the worktree). Signaling that shell would kill the very process we
+/// are running in, so restrict SIGTERM to statuses where a Claude process is
+/// still expected to be alive.
+fn should_sigterm_session(status: SessionStatus) -> bool {
+    match status {
+        SessionStatus::Running | SessionStatus::WaitingInput | SessionStatus::Stopped => true,
+        SessionStatus::Paused | SessionStatus::Ended => false,
+    }
+}
+
 /// Cleans up Claude Code session files for sessions whose `cwd` is inside `worktree_path`.
 ///
 /// For each matching session:
-/// 1. If the session has a tmux pane, sends SIGTERM to it
+/// 1. If the session's Claude process is still expected to be alive and the
+///    tmux pane is alive, sends SIGTERM to it
 /// 2. Deletes the session file
 ///
 /// Returns the number of sessions cleaned up.
@@ -137,7 +160,8 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
 
     for session in &sessions {
         if session.cwd.starts_with(worktree_path) {
-            if let Some(ref tmux_info) = session.tmux_info
+            if should_sigterm_session(session.status)
+                && let Some(ref tmux_info) = session.tmux_info
                 && alive_panes.contains(&tmux_info.pane_id)
             {
                 tmux::send_sigterm_to_pane(&tmux_info.pane_id);
@@ -161,9 +185,23 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
+    use rstest::rstest;
 
     // Tests exercise delete_worktree_and_branch (pure git2 operations) to
     // avoid depending on external commands like tmux or session store I/O.
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, true)]
+    #[case::waiting(SessionStatus::WaitingInput, true)]
+    #[case::stopped(SessionStatus::Stopped, true)]
+    #[case::paused(SessionStatus::Paused, false)]
+    #[case::ended(SessionStatus::Ended, false)]
+    fn should_sigterm_session_by_status(#[case] status: SessionStatus, #[case] expected: bool) {
+        // Paused sessions were already SIGTERM'd by `cc sweep` so the pane
+        // now hosts the user's shell -- signaling it would kill the caller
+        // when `a wm delete` runs from that same pane.
+        assert_eq!(should_sigterm_session(status), expected);
+    }
 
     #[test]
     fn delete_worktree_and_branch_deletes_both() {

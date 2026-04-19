@@ -10,7 +10,7 @@ mod signal;
 pub(crate) mod store;
 mod sweep;
 mod tui;
-mod types;
+pub(crate) mod types;
 mod watch;
 
 use clap::Subcommand;
