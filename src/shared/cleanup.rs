@@ -87,15 +87,20 @@ pub fn cleanup_worktree_by_name(
 
     let mut result = delete_worktree_and_branch(repo, worktree_name);
 
-    // Only clean up tmux windows and sessions if worktree deletion succeeded
+    // Only clean up tmux windows and sessions if worktree deletion succeeded.
+    //
+    // Clean up sessions BEFORE killing tmux windows: if the caller is running
+    // inside one of those windows (e.g. `a wm delete` invoked from the
+    // worktree's own pane), kill_window terminates the caller's pane and
+    // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
+        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+
         for window_id in &window_ids {
             if tmux::kill_window(window_id).is_ok() {
                 result.windows_closed += 1;
             }
         }
-
-        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
     }
 
     Ok(result)
