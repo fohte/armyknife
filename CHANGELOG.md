@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.150](https://github.com/fohte/armyknife/compare/v0.1.149...v0.1.150) (2026-04-19)
+
+
+### Bug Fixes
+
+* **cc/watch:** require a second confirm before deleting a worktree ([#498](https://github.com/fohte/armyknife/issues/498)) ([49b0c8b](https://github.com/fohte/armyknife/commit/49b0c8b2cf6257a91f54688cc2eefdc51f502f2e))
+
 ## [0.1.149](https://github.com/fohte/armyknife/compare/v0.1.148...v0.1.149) (2026-04-16)
 
 
