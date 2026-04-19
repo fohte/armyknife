@@ -283,6 +283,24 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
                 Line::from(""),
             ]
         }
+        AppMode::ConfirmWorktreeCleanup { .. } => {
+            let warn_style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+            vec![
+                Line::from(vec![
+                    Span::styled(
+                        "  Last session in this worktree. Also delete worktree, branch, and tmux windows? ",
+                        warn_style,
+                    ),
+                    Span::styled("y", bold),
+                    Span::raw(": yes  "),
+                    Span::styled("n/Esc", bold),
+                    Span::raw(": keep"),
+                ]),
+                Line::from(""),
+            ]
+        }
         AppMode::Search => vec![
             Line::from(vec![
                 Span::styled("  C-n/C-p", bold),
