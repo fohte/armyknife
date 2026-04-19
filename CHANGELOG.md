@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.151](https://github.com/fohte/armyknife/compare/v0.1.150...v0.1.151) (2026-04-19)
+
+
+### Bug Fixes
+
+* **wm:** clean up paused sessions when deleting their worktree ([#500](https://github.com/fohte/armyknife/issues/500)) ([7085914](https://github.com/fohte/armyknife/commit/70859140d566740407d94cf4db4039492d2ac932))
+
 ## [0.1.150](https://github.com/fohte/armyknife/compare/v0.1.149...v0.1.150) (2026-04-19)
 
 
