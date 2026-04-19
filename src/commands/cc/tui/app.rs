@@ -526,10 +526,14 @@ impl App {
             _ => return Ok(()),
         };
 
+        // Always leave Confirm mode so the TUI is usable again, even if
+        // cleanup fails. Errors propagate to the caller, which surfaces
+        // them via `set_error`.
+        self.mode = AppMode::Normal;
+
         use crate::shared::cleanup;
-        if let Ok(result) = cleanup::cleanup_worktree_resources(&worktree_root)
-            && let Some(ref wt_root) = result.worktree_root
-        {
+        let result = cleanup::cleanup_worktree_resources(&worktree_root)?;
+        if let Some(ref wt_root) = result.worktree_root {
             // A race is possible: new sessions may have been created inside
             // the worktree between the first confirmation and this one.
             // cleanup_worktree_resources already removed their files, so
@@ -546,7 +550,6 @@ impl App {
         }
 
         self.refresh_after_mutation(current_selection);
-        self.mode = AppMode::Normal;
         Ok(())
     }
 
