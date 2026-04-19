@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
@@ -21,6 +21,12 @@ pub enum AppMode {
     Confirm {
         session_id: String,
         is_alive: bool,
+    },
+    /// After deleting the last session in a worktree, ask whether to also
+    /// remove the worktree itself (branch, tmux windows, worktree dir).
+    /// `worktree_root` is the resolved worktree root path used for cleanup.
+    ConfirmWorktreeCleanup {
+        worktree_root: PathBuf,
     },
 }
 
@@ -459,8 +465,14 @@ impl App {
         }
     }
 
-    /// Executes the confirmed delete action.
+    /// Executes the confirmed delete action for a single session.
     /// If the session is alive, sends SIGTERM to the pane process first.
+    ///
+    /// After the session is removed, if it was the last session in its
+    /// worktree, transitions to `ConfirmWorktreeCleanup` so the user can
+    /// decide whether to also delete the worktree itself. Worktree cleanup
+    /// is never performed silently: sibling sessions in the same worktree
+    /// must not be touched by a single-session delete.
     pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
         let current_selection = self.list_state.selected();
         let (session_id, is_alive) = match &self.mode {
@@ -471,7 +483,8 @@ impl App {
             _ => return Ok(()),
         };
 
-        // Get the session's cwd before removing it, for worktree cleanup
+        // Capture cwd before removal so we can detect whether this session
+        // was the last one in its worktree.
         let session_cwd = self
             .sessions
             .iter()
@@ -488,31 +501,70 @@ impl App {
         store::delete_session(&session_id)?;
         self.remove_session(&session_id);
 
-        // If the session was running in a worktree, clean up all associated
-        // resources: worktree, branch, tmux windows, and sibling sessions.
-        // Best-effort: errors are ignored since the primary session is already
-        // deleted and we don't want to leave the TUI in an inconsistent state.
-        if let Some(ref cwd) = session_cwd {
-            use crate::shared::cleanup;
-            if let Ok(result) = cleanup::cleanup_worktree_resources(cwd)
-                && let Some(ref wt_root) = result.worktree_root
-            {
-                // Remove sibling sessions from the in-memory list using
-                // the resolved worktree root, not the raw cwd which may
-                // be a subdirectory
-                let to_remove: Vec<String> = self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.cwd.starts_with(wt_root))
-                    .map(|s| s.session_id.clone())
-                    .collect();
-                for id in &to_remove {
-                    self.remove_session(id);
-                }
+        // Decide whether to prompt for worktree cleanup. Only prompt when the
+        // deleted session was inside a git worktree AND no sibling sessions
+        // remain in that worktree. Otherwise, leave the worktree intact.
+        let next_mode = session_cwd
+            .as_deref()
+            .and_then(resolve_worktree_root)
+            .filter(|wt_root| !self.has_session_in_worktree(wt_root))
+            .map(|worktree_root| AppMode::ConfirmWorktreeCleanup { worktree_root });
+
+        self.refresh_after_mutation(current_selection);
+        self.mode = next_mode.unwrap_or(AppMode::Normal);
+        Ok(())
+    }
+
+    /// Executes worktree cleanup after the user confirmed it from
+    /// `ConfirmWorktreeCleanup` mode. Removes the worktree, its branch,
+    /// associated tmux windows, and any remaining session files inside
+    /// the worktree path (best-effort).
+    pub fn confirm_worktree_cleanup(&mut self) -> anyhow::Result<()> {
+        let current_selection = self.list_state.selected();
+        let worktree_root = match &self.mode {
+            AppMode::ConfirmWorktreeCleanup { worktree_root } => worktree_root.clone(),
+            _ => return Ok(()),
+        };
+
+        use crate::shared::cleanup;
+        if let Ok(result) = cleanup::cleanup_worktree_resources(&worktree_root)
+            && let Some(ref wt_root) = result.worktree_root
+        {
+            // A race is possible: new sessions may have been created inside
+            // the worktree between the first confirmation and this one.
+            // cleanup_worktree_resources already removed their files, so
+            // prune them from the in-memory list to stay consistent.
+            let to_remove: Vec<String> = self
+                .sessions
+                .iter()
+                .filter(|s| s.cwd.starts_with(wt_root))
+                .map(|s| s.session_id.clone())
+                .collect();
+            for id in &to_remove {
+                self.remove_session(id);
             }
         }
 
-        // Re-sort and rebuild
+        self.refresh_after_mutation(current_selection);
+        self.mode = AppMode::Normal;
+        Ok(())
+    }
+
+    /// Cancels the confirm-delete or confirm-worktree-cleanup dialog.
+    pub fn cancel_confirm(&mut self) {
+        self.mode = AppMode::Normal;
+    }
+
+    /// Returns true if any session's cwd is inside `worktree_root`.
+    fn has_session_in_worktree(&self, worktree_root: &Path) -> bool {
+        self.sessions
+            .iter()
+            .any(|s| s.cwd.starts_with(worktree_root))
+    }
+
+    /// Re-sorts sessions, rebuilds caches, reapplies filters, and restores
+    /// selection. Shared by `confirm_delete` and `confirm_worktree_cleanup`.
+    fn refresh_after_mutation(&mut self, previous_selection: Option<usize>) {
         store::sort_sessions(&mut self.sessions);
         self.rebuild_title_cache();
         if self.searchable_text_cache.is_some() {
@@ -520,8 +572,7 @@ impl App {
         }
         self.apply_filter();
 
-        // Restore selection to the same index, clamped to the new list length
-        if let Some(selected) = current_selection {
+        if let Some(selected) = previous_selection {
             let new_len = self.tree_ordered_indices.len();
             if new_len > 0 {
                 self.list_state.select(Some(selected.min(new_len - 1)));
@@ -529,14 +580,6 @@ impl App {
                 self.list_state.select(None);
             }
         }
-
-        self.mode = AppMode::Normal;
-        Ok(())
-    }
-
-    /// Cancels the confirm-delete dialog.
-    pub fn cancel_confirm(&mut self) {
-        self.mode = AppMode::Normal;
     }
 
     /// Clears the filter and shows all sessions.
@@ -832,6 +875,19 @@ fn resolve_repo_name_for_path(cwd: &std::path::Path) -> String {
             .map(String::from)
             .unwrap_or_else(|| cwd.display().to_string())
     })
+}
+
+/// Resolves the git worktree root for `cwd`. Returns `None` if `cwd` is not
+/// inside a repository opened as a worktree (bare main repo or non-git paths
+/// are treated as "not a worktree"). The returned path is the worktree's
+/// workdir, so matching sibling sessions via `starts_with` is safe even when
+/// `cwd` is a subdirectory.
+fn resolve_worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let repo = git2::Repository::open(cwd).ok()?;
+    if !repo.is_worktree() {
+        return None;
+    }
+    repo.workdir().map(|p| p.to_path_buf())
 }
 
 /// Loads sessions from disk with cleanup.

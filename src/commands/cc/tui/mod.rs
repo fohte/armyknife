@@ -320,12 +320,30 @@ fn handle_confirm_key_event(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles key events in ConfirmWorktreeCleanup mode.
+fn handle_confirm_worktree_cleanup_key_event(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('y') => {
+            if let Err(e) = app.confirm_worktree_cleanup() {
+                app.set_error(format!("Failed to clean up worktree: {e}"));
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.cancel_confirm();
+        }
+        _ => {}
+    }
+}
+
 /// Handles key events based on current mode.
 fn handle_key_event(app: &mut App, key: KeyEvent) {
     match app.mode {
         AppMode::Normal => handle_normal_key_event(app, key),
         AppMode::Search => handle_search_key_event(app, key),
         AppMode::Confirm { .. } => handle_confirm_key_event(app, key),
+        AppMode::ConfirmWorktreeCleanup { .. } => {
+            handle_confirm_worktree_cleanup_key_event(app, key);
+        }
     }
 }
 
@@ -806,5 +824,122 @@ mod tests {
         // Pressing 'j' or other keys should not change mode
         handle_key_event(&mut app, key(KeyCode::Char('j')));
         assert!(matches!(app.mode, AppMode::Confirm { .. }));
+    }
+
+    // =========================================================================
+    // Two-stage delete tests (worktree cleanup prompt)
+    //
+    // These verify the state machine only. They do not exercise the actual
+    // worktree cleanup path, which depends on external commands (tmux) and
+    // is covered by integration tests on `cleanup_worktree_resources`.
+    // =========================================================================
+
+    use crate::shared::testing::TestRepo;
+
+    fn session_with_cwd(id: &str, cwd: PathBuf) -> Session {
+        Session {
+            session_id: id.to_string(),
+            cwd,
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Running,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_confirm_delete_with_sibling_in_same_worktree_returns_to_normal() {
+        // Two sessions share the same worktree. Deleting one must NOT trigger
+        // worktree cleanup — the sibling session is still using it.
+        let repo = TestRepo::new();
+        repo.create_worktree("feat");
+        let wt_path = repo.worktree_path("feat");
+
+        let s1 = session_with_cwd("s1", wt_path.join("src"));
+        let s2 = session_with_cwd("s2", wt_path.clone());
+        let mut app = App::with_sessions(vec![s1, s2]);
+
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        assert!(matches!(app.mode, AppMode::Confirm { .. }));
+        handle_key_event(&mut app, key(KeyCode::Char('y')));
+
+        assert_eq!(
+            app.mode,
+            AppMode::Normal,
+            "sibling session exists; must not prompt for worktree cleanup"
+        );
+        // One session deleted, one remains
+        assert_eq!(app.sessions.len(), 1);
+    }
+
+    #[test]
+    fn test_confirm_delete_last_session_in_worktree_prompts_cleanup() {
+        // Only session in the worktree. After deletion, user should be asked
+        // whether to also remove the worktree itself.
+        let repo = TestRepo::new();
+        repo.create_worktree("feat");
+        let wt_path = repo.worktree_path("feat");
+
+        let s1 = session_with_cwd("s1", wt_path.clone());
+        let mut app = App::with_sessions(vec![s1]);
+
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        handle_key_event(&mut app, key(KeyCode::Char('y')));
+
+        match &app.mode {
+            AppMode::ConfirmWorktreeCleanup { worktree_root } => {
+                assert!(
+                    worktree_root.starts_with(repo.path()),
+                    "worktree_root should be inside the main repo path"
+                );
+            }
+            other => panic!("expected ConfirmWorktreeCleanup, got {other:?}"),
+        }
+        assert!(app.sessions.is_empty());
+    }
+
+    #[rstest]
+    #[case::n_key(KeyCode::Char('n'))]
+    #[case::esc_key(KeyCode::Esc)]
+    fn test_confirm_worktree_cleanup_cancel_keeps_worktree(#[case] cancel_key: KeyCode) {
+        let repo = TestRepo::new();
+        repo.create_worktree("feat");
+        let wt_path = repo.worktree_path("feat");
+
+        let s1 = session_with_cwd("s1", wt_path.clone());
+        let mut app = App::with_sessions(vec![s1]);
+
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        handle_key_event(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(app.mode, AppMode::ConfirmWorktreeCleanup { .. }));
+
+        handle_key_event(&mut app, key(cancel_key));
+        assert_eq!(app.mode, AppMode::Normal);
+
+        // Worktree directory must still exist on disk.
+        assert!(
+            wt_path.exists(),
+            "worktree directory should remain when cleanup is declined"
+        );
+    }
+
+    #[test]
+    fn test_confirm_delete_non_worktree_session_returns_to_normal() {
+        // cwd is outside any git repository. No prompt, just plain delete.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let s1 = session_with_cwd("s1", tmp.path().to_path_buf());
+        let mut app = App::with_sessions(vec![s1]);
+
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        handle_key_event(&mut app, key(KeyCode::Char('y')));
+
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(app.sessions.is_empty());
     }
 }
