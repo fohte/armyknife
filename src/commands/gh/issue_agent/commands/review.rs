@@ -175,8 +175,12 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document =
-        start_review::<SubmitSchema, _>(&path, &window_title, &IssueReviewHandler, &config.editor)?;
+    let document = exit_code::exit_on_terminal_launch_failure(start_review::<SubmitSchema, _>(
+        &path,
+        &window_title,
+        &IssueReviewHandler,
+        &config.editor,
+    ))?;
 
     if document.is_none() {
         std::process::exit(exit_code::ALREADY_OPEN);

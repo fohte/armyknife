@@ -106,14 +106,14 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     // Read frontmatter before review to detect changes
     let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
 
-    let document = start_review::<Frontmatter, _>(
+    use crate::shared::human_in_the_loop::exit_code;
+
+    let document = exit_code::exit_on_terminal_launch_failure(start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
-    )?;
-
-    use crate::shared::human_in_the_loop::exit_code;
+    ))?;
 
     // If the editor was already open, exit with a distinct code so callers
     // can distinguish "already open" from "user did not approve".

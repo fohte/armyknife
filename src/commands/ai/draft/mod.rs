@@ -112,7 +112,14 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
             format!("Draft: {}", file_name)
         });
 
-    start_review::<EmptySchema, _>(&path, &window_title, &DraftHandler, &config.editor)?;
+    use crate::shared::human_in_the_loop::exit_code;
+
+    exit_code::exit_on_terminal_launch_failure(start_review::<EmptySchema, _>(
+        &path,
+        &window_title,
+        &DraftHandler,
+        &config.editor,
+    ))?;
 
     Ok(())
 }

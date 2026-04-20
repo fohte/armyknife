@@ -16,6 +16,11 @@ pub enum HumanInTheLoopError {
     #[error("Command failed: {0}")]
     CommandFailed(String),
 
+    #[error(
+        "Terminal emulator failed to launch within {timeout_secs}s (likely sleeping or unavailable)"
+    )]
+    TerminalLaunchFailed { timeout_secs: u64 },
+
     #[error("Not approved. Run 'review' and set 'submit: true'")]
     NotApproved,
 
