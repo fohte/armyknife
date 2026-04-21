@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.152](https://github.com/fohte/armyknife/compare/v0.1.151...v0.1.152) (2026-04-21)
+
+
+### Bug Fixes
+
+* **hitl:** exit with a distinct code and skip the lock file when the terminal fails to launch ([#502](https://github.com/fohte/armyknife/issues/502)) ([a63a7d4](https://github.com/fohte/armyknife/commit/a63a7d4a67966a0a154d35b314e39dceb358538c))
+
 ## [0.1.151](https://github.com/fohte/armyknife/compare/v0.1.150...v0.1.151) (2026-04-19)
 
 
