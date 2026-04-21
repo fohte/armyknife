@@ -233,7 +233,11 @@ where
 /// Create a FIFO (named pipe) next to `document_path` with the given suffix.
 ///
 /// Example: suffix `.done` for `/tmp/foo.md` yields `/tmp/foo.md.done`.
+#[cfg(unix)]
 fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
     let mut p = document_path.as_os_str().to_os_string();
     p.push(suffix);
     let fifo_path = PathBuf::from(p);
@@ -241,15 +245,19 @@ fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf
     // Remove stale FIFO if it exists
     let _ = std::fs::remove_file(&fifo_path);
 
-    let status = std::process::Command::new("mkfifo")
-        .arg(&fifo_path)
-        .status()?;
+    let c_path = CString::new(fifo_path.as_os_str().as_bytes()).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("FIFO path contains interior NUL byte: {e}"),
+        )
+    })?;
 
-    if !status.success() {
-        return Err(HumanInTheLoopError::CommandFailed(format!(
-            "Failed to create FIFO at {}",
-            fifo_path.display(),
-        )));
+    // SAFETY: `c_path` is a valid NUL-terminated C string owned by this scope.
+    // Mode 0o600 restricts the FIFO to the current user, matching the access
+    // the document itself has.
+    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
 
     Ok(fifo_path)
@@ -435,23 +443,42 @@ fn signal_fifo(fifo_path: &Path) {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    #[test]
-    fn wait_for_fifo_signal_with_timeout_times_out_without_writer() {
+    struct FifoReaderFixture {
+        _temp: TempDir,
+        fifo_path: PathBuf,
+        reader: std::fs::File,
+    }
+
+    #[fixture]
+    fn fifo_reader() -> FifoReaderFixture {
         let temp = TempDir::new().expect("tempdir");
         let doc = temp.path().join("doc.md");
         std::fs::write(&doc, "").expect("write doc");
-
         let fifo_path = create_fifo_with_suffix(&doc, ".started").expect("create fifo");
         let reader = open_fifo_reader(&fifo_path).expect("open reader");
+        FifoReaderFixture {
+            _temp: temp,
+            fifo_path,
+            reader,
+        }
+    }
 
+    #[rstest]
+    fn wait_for_fifo_signal_with_timeout_times_out_without_writer(fifo_reader: FifoReaderFixture) {
         let start = std::time::Instant::now();
-        let err = wait_for_fifo_signal_with_timeout(reader, &fifo_path, Duration::from_millis(300))
-            .expect_err("expected timeout");
+        let err = wait_for_fifo_signal_with_timeout(
+            fifo_reader.reader,
+            &fifo_reader.fifo_path,
+            Duration::from_millis(300),
+        )
+        .expect_err("expected timeout");
         let elapsed = start.elapsed();
 
         assert!(matches!(
@@ -462,33 +489,26 @@ mod tests {
             elapsed >= Duration::from_millis(250),
             "returned too early: {elapsed:?}"
         );
-
-        let _ = std::fs::remove_file(&fifo_path);
     }
 
-    #[test]
-    fn wait_for_fifo_signal_with_timeout_returns_ok_when_signaled() {
-        let temp = TempDir::new().expect("tempdir");
-        let doc = temp.path().join("doc.md");
-        std::fs::write(&doc, "").expect("write doc");
-
-        let fifo_path = create_fifo_with_suffix(&doc, ".started").expect("create fifo");
-        let reader = open_fifo_reader(&fifo_path).expect("open reader");
-
+    #[rstest]
+    fn wait_for_fifo_signal_with_timeout_returns_ok_when_signaled(fifo_reader: FifoReaderFixture) {
         // Spawn a thread that signals the FIFO after a short delay.
-        let writer_path = fifo_path.clone();
+        let writer_path = fifo_reader.fifo_path.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             signal_fifo(&writer_path);
         });
 
-        wait_for_fifo_signal_with_timeout(reader, &fifo_path, Duration::from_secs(2))
-            .expect("expected Ok");
-
-        let _ = std::fs::remove_file(&fifo_path);
+        wait_for_fifo_signal_with_timeout(
+            fifo_reader.reader,
+            &fifo_reader.fifo_path,
+            Duration::from_secs(2),
+        )
+        .expect("expected Ok");
     }
 
-    #[test]
+    #[rstest]
     fn create_fifo_with_suffix_appends_suffix() {
         let temp = TempDir::new().expect("tempdir");
         let doc = temp.path().join("foo.md");
@@ -500,10 +520,8 @@ mod tests {
             Some("foo.md.started")
         );
 
-        let metadata = std::fs::metadata(&fifo).expect("stat fifo");
         use std::os::unix::fs::FileTypeExt;
+        let metadata = std::fs::metadata(&fifo).expect("stat fifo");
         assert!(metadata.file_type().is_fifo(), "expected FIFO file type");
-
-        let _ = std::fs::remove_file(&fifo);
     }
 }

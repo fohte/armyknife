@@ -140,9 +140,10 @@ fn launch_ghostty(
     started_fifo: Option<&Path>,
 ) -> std::io::Result<LaunchOutcome> {
     if cfg!(target_os = "macos") {
+        let signals_started = started_fifo.is_some();
         launch_ghostty_macos(options, command, args, started_fifo).map(|status| LaunchOutcome {
             status,
-            signals_started: true,
+            signals_started,
         })
     } else {
         launch_ghostty_linux(options, command, args).map(|status| LaunchOutcome {
