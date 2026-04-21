@@ -24,6 +24,17 @@ impl Default for LaunchOptions {
     }
 }
 
+/// Outcome of a `launch_terminal` call.
+///
+/// `signals_started` indicates whether the launched terminal strategy writes to
+/// `started_fifo` when the inner command begins executing. Callers that request
+/// a `started_fifo` should only wait on it when `signals_started` is true;
+/// otherwise they may hang forever.
+pub struct LaunchOutcome {
+    pub status: ExitStatus,
+    pub signals_started: bool,
+}
+
 /// Launch an editor to edit a file.
 ///
 /// The editor command is taken from config (default: "nvim").
@@ -51,15 +62,24 @@ pub fn run_editor(
 ///
 /// Dispatches to WezTerm or Ghostty based on the `Terminal` enum,
 /// using terminal-specific options for window size and title.
+///
+/// `started_fifo` is an optional path the launched shell writes to just before
+/// exec'ing the command, so the caller can detect that terminal initialization
+/// succeeded. Only the Ghostty macOS path currently honors it; other paths
+/// report `signals_started = false` in the returned outcome.
 pub fn launch_terminal(
     terminal: &Terminal,
     options: &LaunchOptions,
     command: impl AsRef<OsStr>,
     args: &[OsString],
-) -> std::io::Result<ExitStatus> {
+    started_fifo: Option<&Path>,
+) -> std::io::Result<LaunchOutcome> {
     match terminal {
-        Terminal::Wezterm => launch_wezterm(options, command, args),
-        Terminal::Ghostty => launch_ghostty(options, command, args),
+        Terminal::Wezterm => launch_wezterm(options, command, args).map(|status| LaunchOutcome {
+            status,
+            signals_started: false,
+        }),
+        Terminal::Ghostty => launch_ghostty(options, command, args, started_fifo),
     }
 }
 
@@ -117,11 +137,19 @@ fn launch_ghostty(
     options: &LaunchOptions,
     command: impl AsRef<OsStr>,
     args: &[OsString],
-) -> std::io::Result<ExitStatus> {
+    started_fifo: Option<&Path>,
+) -> std::io::Result<LaunchOutcome> {
     if cfg!(target_os = "macos") {
-        launch_ghostty_macos(options, command, args)
+        let signals_started = started_fifo.is_some();
+        launch_ghostty_macos(options, command, args, started_fifo).map(|status| LaunchOutcome {
+            status,
+            signals_started,
+        })
     } else {
-        launch_ghostty_linux(options, command, args)
+        launch_ghostty_linux(options, command, args).map(|status| LaunchOutcome {
+            status,
+            signals_started: false,
+        })
     }
 }
 
@@ -160,6 +188,7 @@ fn launch_ghostty_macos(
     _options: &LaunchOptions,
     command: impl AsRef<OsStr>,
     args: &[OsString],
+    started_fifo: Option<&Path>,
 ) -> std::io::Result<ExitStatus> {
     // Signal file: the wrapper script touches this when the command exits.
     // A background watcher polls for it to close the window and restore focus.
@@ -174,7 +203,8 @@ fn launch_ghostty_macos(
             .unwrap_or(0)
     ));
 
-    let wrapper_path = create_ghostty_wrapper_script(command, args, &signal_path_buf)?;
+    let wrapper_path =
+        create_ghostty_wrapper_script(command, args, &signal_path_buf, started_fifo)?;
 
     let wrapper_str = wrapper_path.display().to_string();
     let escaped_wrapper = wrapper_str.replace('\\', "\\\\").replace('"', "\\\"");
@@ -256,6 +286,7 @@ fn create_ghostty_wrapper_script(
     command: impl AsRef<OsStr>,
     args: &[OsString],
     signal_path: &Path,
+    started_fifo: Option<&Path>,
 ) -> std::io::Result<std::path::PathBuf> {
     let wrapper = tempfile::Builder::new()
         .prefix("armyknife-ghostty-")
@@ -281,12 +312,32 @@ fn create_ghostty_wrapper_script(
     let signal_str = signal_path.display().to_string();
     let quoted_signal = shlex::try_quote(&signal_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    // Write the started-fifo signal before running the command so the parent
+    // can detect that the terminal (and therefore this wrapper shell) actually
+    // started executing. The write is done in a detached background subshell
+    // so we never block on it — if the parent has already bailed out, the
+    // orphaned subshell exits harmlessly when the FIFO is unlinked.
+    let started_line = match started_fifo {
+        Some(fifo) => {
+            let fifo_str = fifo.display().to_string();
+            let quoted_fifo = shlex::try_quote(&fifo_str)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+                .into_owned();
+            formatdoc! {"
+                ( printf 0 > {quoted_fifo} ) </dev/null >/dev/null 2>&1 &
+                disown
+            "}
+        }
+        None => String::new(),
+    };
+
     let mut script = formatdoc! {"
         #!/bin/bash
         _SELF={quoted_self}
         _SIGNAL={quoted_signal}
         trap 'rm -f \"$_SELF\"; touch \"$_SIGNAL\"' EXIT
-        {quoted_cmd}"};
+        {started_line}{quoted_cmd}"};
     for arg in args {
         let arg_str = arg.to_string_lossy();
         let quoted_arg = shlex::try_quote(&arg_str)

@@ -23,8 +23,15 @@ pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::shared::config::EditorConfig;
+
+/// How long to wait for the terminal to signal it has started running the
+/// review-complete command before giving up. Covers cases like macOS being
+/// asleep when Claude Code invokes the command, where Ghostty's AppleScript
+/// call succeeds but the terminal window never initializes.
+const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -54,15 +61,19 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// Start a review session by launching a terminal with the configured editor.
 ///
 /// This function:
-/// 1. Checks for an existing lock (another editor open)
-/// 2. Creates a lock file
-/// 3. Creates a FIFO for completion signaling
-/// 4. Launches the configured terminal to run the review-complete command after the editor exits
+/// 1. Checks for an existing lock (another editor already open)
+/// 2. Creates FIFOs for startup and completion signaling
+/// 3. Launches the configured terminal to run the review-complete command
+/// 4. Waits (with timeout) for the terminal to signal it actually started
 /// 5. Blocks until the review-complete process signals completion via the FIFO
 ///
-/// The handler's `build_complete_args` is used to construct the command that the terminal will run.
-/// Returns the final document state after the user finishes editing, or `None` if the editor
-/// was already open (lock existed).
+/// The lock file is written by `complete_review`, not here, so a failed
+/// terminal launch never leaves a stale lock behind.
+///
+/// Returns the final document state after the user finishes editing, or `None`
+/// if the editor was already open. Returns `TerminalLaunchFailed` if the
+/// terminal emulator doesn't start within the startup timeout (e.g., macOS
+/// asleep).
 pub fn start_review<S, H>(
     document_path: &Path,
     window_title: &str,
@@ -79,26 +90,34 @@ where
         ));
     }
 
-    // Check for existing lock
+    // Check for existing lock. The lock is written by `complete_review` once
+    // the editor actually launches, so its presence means another session is
+    // in progress for this document.
     if LockGuard::is_locked(document_path) {
         eprintln!("Skipped: Editor is already open for this file.");
         return Ok(None);
     }
 
-    // Create lock file with RAII guard
-    let mut lock_guard = LockGuard::acquire(document_path)?;
-
     // Create a FIFO for the review-complete process to signal completion.
     // The FifoCleanupGuard ensures the FIFO is removed on early return.
-    let fifo_path = create_done_fifo(document_path)?;
-    let mut fifo_cleanup = FifoCleanupGuard::new(&fifo_path);
+    let done_fifo_path = create_fifo_with_suffix(document_path, ".done")?;
+    let mut done_fifo_cleanup = FifoCleanupGuard::new(&done_fifo_path);
+
+    // Create a second FIFO the wrapper shell writes to just before exec'ing
+    // the review-complete command. If the terminal emulator fails to launch
+    // (e.g., macOS is asleep and Ghostty can't initialize), this signal never
+    // arrives and we bail out with TerminalLaunchFailed instead of hanging
+    // forever waiting on the done FIFO.
+    let started_fifo_path = create_fifo_with_suffix(document_path, ".started")?;
+    let mut started_fifo_cleanup = FifoCleanupGuard::new(&started_fifo_path);
 
     // Open the FIFO reader *before* launching the terminal to prevent a race
     // condition: on Linux, launch_terminal blocks until the terminal closes,
     // so complete_review signals the FIFO before we reach the read call.
     // By opening the reader first (with O_NONBLOCK to avoid blocking on open),
     // the writer's signal is buffered in the pipe and read picks it up later.
-    let fifo_reader = open_fifo_reader(&fifo_path)?;
+    let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
+    let started_fifo_reader = open_fifo_reader(&started_fifo_path)?;
 
     // Get tmux session info for later restoration
     let tmux_target = get_tmux_target();
@@ -110,7 +129,7 @@ where
     let mut review_args =
         handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
     review_args.push("--done-fifo".into());
-    review_args.push(fifo_path.as_os_str().to_os_string());
+    review_args.push(done_fifo_path.as_os_str().to_os_string());
 
     // Launch terminal emulator
     let options = LaunchOptions {
@@ -118,25 +137,46 @@ where
         ..Default::default()
     };
 
-    let status = launch_terminal(&editor_config.terminal, &options, &exe_path, &review_args)?;
+    let outcome = launch_terminal(
+        &editor_config.terminal,
+        &options,
+        &exe_path,
+        &review_args,
+        Some(&started_fifo_path),
+    )?;
 
-    if !status.success() {
+    if !outcome.status.success() {
         return Err(HumanInTheLoopError::CommandFailed(format!(
-            "Terminal exited with status: {status}"
+            "Terminal exited with status: {}",
+            outcome.status
         )));
     }
 
-    // Terminal launched successfully - disarm guard so lock file remains
-    // (review-complete will handle cleanup when it finishes)
-    lock_guard.disarm();
+    // If the launcher supports started-FIFO signaling, wait up to the startup
+    // timeout for the wrapper shell to announce itself. A timeout here means
+    // the terminal window never actually opened — report that distinctly so
+    // callers can retry (and, since no lock was created, nothing to clean up).
+    if outcome.signals_started {
+        wait_for_fifo_signal_with_timeout(
+            started_fifo_reader,
+            &started_fifo_path,
+            TERMINAL_STARTUP_TIMEOUT,
+        )?;
+    } else {
+        drop(started_fifo_reader);
+    }
+
+    // Started FIFO has done its job — let the cleanup guard remove it.
+    started_fifo_cleanup.disarm();
+    let _ = std::fs::remove_file(&started_fifo_path);
 
     // Wait for the review-complete process to finish via FIFO.
     // This blocks with no CPU usage until the other process writes to the FIFO.
-    wait_for_fifo_signal(fifo_reader, &fifo_path)?;
+    wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
-    fifo_cleanup.disarm();
-    let _ = std::fs::remove_file(&fifo_path);
+    done_fifo_cleanup.disarm();
+    let _ = std::fs::remove_file(&done_fifo_path);
 
     // Review complete - read the final document state
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
@@ -167,7 +207,14 @@ where
     S: DocumentSchema,
     H: ReviewHandler<S>,
 {
-    // Ensure cleanup happens even on panic
+    // Create the lock file here (not in start_review) so it only exists once
+    // the terminal has actually launched and we're about to run the editor.
+    // If the terminal never starts (e.g., macOS asleep), no lock is written
+    // and the next invocation isn't blocked by a stale `.lock`.
+    let mut lock_guard = LockGuard::acquire(document_path)?;
+    lock_guard.disarm();
+
+    // Ensure cleanup happens even on panic.
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
 
     // Launch editor
@@ -183,33 +230,37 @@ where
     handler.on_review_complete(&document)
 }
 
-/// Create a FIFO (named pipe) for signaling review completion.
+/// Create a FIFO (named pipe) next to `document_path` with the given suffix.
 ///
-/// The FIFO path is derived from the document path with a `.done` extension.
-fn create_done_fifo(document_path: &Path) -> Result<PathBuf> {
-    let fifo_path = fifo_path_for(document_path);
+/// Example: suffix `.done` for `/tmp/foo.md` yields `/tmp/foo.md.done`.
+#[cfg(unix)]
+fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut p = document_path.as_os_str().to_os_string();
+    p.push(suffix);
+    let fifo_path = PathBuf::from(p);
 
     // Remove stale FIFO if it exists
     let _ = std::fs::remove_file(&fifo_path);
 
-    let status = std::process::Command::new("mkfifo")
-        .arg(&fifo_path)
-        .status()?;
+    let c_path = CString::new(fifo_path.as_os_str().as_bytes()).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("FIFO path contains interior NUL byte: {e}"),
+        )
+    })?;
 
-    if !status.success() {
-        return Err(HumanInTheLoopError::CommandFailed(
-            "Failed to create FIFO".to_string(),
-        ));
+    // SAFETY: `c_path` is a valid NUL-terminated C string owned by this scope.
+    // Mode 0o600 restricts the FIFO to the current user, matching the access
+    // the document itself has.
+    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
 
     Ok(fifo_path)
-}
-
-/// Derive the FIFO path from a document path.
-fn fifo_path_for(document_path: &Path) -> PathBuf {
-    let mut p = document_path.as_os_str().to_os_string();
-    p.push(".done");
-    PathBuf::from(p)
 }
 
 /// Open a FIFO for reading in non-blocking mode.
@@ -269,6 +320,47 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Like `wait_for_fifo_signal` but gives up after `timeout`, returning a
+/// `TerminalLaunchFailed` error. Used for the started-FIFO so a dead terminal
+/// emulator doesn't cause the parent process to hang.
+///
+/// On macOS a FIFO with no writer attached returns `Ok(0)` from `read` (spurious
+/// EOF). To handle that while honoring a deadline we stay in non-blocking mode
+/// and poll with short sleeps until either data arrives or the deadline passes.
+#[cfg(unix)]
+fn wait_for_fifo_signal_with_timeout(
+    file: std::fs::File,
+    _fifo_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    use std::io::{self, Read};
+    use std::thread::sleep;
+    use std::time::Instant;
+
+    let deadline = Instant::now() + timeout;
+    let mut file = file;
+    let mut buf = [0u8; 1];
+    let poll_interval = Duration::from_millis(100);
+    loop {
+        match file.read(&mut buf) {
+            Ok(n) if n > 0 => return Ok(()),
+            Ok(_) => {
+                // Ok(0) = no writer yet (macOS) or EOF. Keep waiting.
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.into()),
+        }
+        if Instant::now() >= deadline {
+            return Err(HumanInTheLoopError::TerminalLaunchFailed {
+                timeout_secs: timeout.as_secs(),
+            });
+        }
+        sleep(poll_interval);
+    }
 }
 
 /// RAII guard that removes the FIFO file on drop.
@@ -348,5 +440,88 @@ fn signal_fifo(fifo_path: &Path) {
         if let Ok(mut f) = file {
             let _ = f.write_all(b"0");
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use super::*;
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    struct FifoReaderFixture {
+        _temp: TempDir,
+        fifo_path: PathBuf,
+        reader: std::fs::File,
+    }
+
+    #[fixture]
+    fn fifo_reader() -> FifoReaderFixture {
+        let temp = TempDir::new().expect("tempdir");
+        let doc = temp.path().join("doc.md");
+        std::fs::write(&doc, "").expect("write doc");
+        let fifo_path = create_fifo_with_suffix(&doc, ".started").expect("create fifo");
+        let reader = open_fifo_reader(&fifo_path).expect("open reader");
+        FifoReaderFixture {
+            _temp: temp,
+            fifo_path,
+            reader,
+        }
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_with_timeout_times_out_without_writer(fifo_reader: FifoReaderFixture) {
+        let start = std::time::Instant::now();
+        let err = wait_for_fifo_signal_with_timeout(
+            fifo_reader.reader,
+            &fifo_reader.fifo_path,
+            Duration::from_millis(300),
+        )
+        .expect_err("expected timeout");
+        let elapsed = start.elapsed();
+
+        assert!(matches!(
+            err,
+            HumanInTheLoopError::TerminalLaunchFailed { .. }
+        ));
+        assert!(
+            elapsed >= Duration::from_millis(250),
+            "returned too early: {elapsed:?}"
+        );
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_with_timeout_returns_ok_when_signaled(fifo_reader: FifoReaderFixture) {
+        // Spawn a thread that signals the FIFO after a short delay.
+        let writer_path = fifo_reader.fifo_path.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            signal_fifo(&writer_path);
+        });
+
+        wait_for_fifo_signal_with_timeout(
+            fifo_reader.reader,
+            &fifo_reader.fifo_path,
+            Duration::from_secs(2),
+        )
+        .expect("expected Ok");
+    }
+
+    #[rstest]
+    fn create_fifo_with_suffix_appends_suffix() {
+        let temp = TempDir::new().expect("tempdir");
+        let doc = temp.path().join("foo.md");
+        std::fs::write(&doc, "").expect("write doc");
+
+        let fifo = create_fifo_with_suffix(&doc, ".started").expect("create fifo");
+        assert_eq!(
+            fifo.file_name().and_then(|s| s.to_str()),
+            Some("foo.md.started")
+        );
+
+        use std::os::unix::fs::FileTypeExt;
+        let metadata = std::fs::metadata(&fifo).expect("stat fifo");
+        assert!(metadata.file_type().is_fifo(), "expected FIFO file type");
     }
 }
