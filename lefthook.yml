@@ -1,11 +1,9 @@
 pre-commit:
   commands:
-<<<<<<< before updating
     ast-grep-test:
       glob: '.sg/{rules,tests}/*.yml'
       run: sg test
-    ast-grep-scan:
-=======
+
     format:
       # Remove trailing whitespace and ensure final newline
       run: basefmt {staged_files}
@@ -61,7 +59,6 @@ pre-commit:
         done
 
     ast-grep:
->>>>>>> after updating
       glob: '*.rs'
       run: ast-grep scan {staged_files}
 
