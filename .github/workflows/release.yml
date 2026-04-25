@@ -1,0 +1,170 @@
+name: release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Existing tag to upload assets to (e.g., v2026.425.0). Leave empty to create a new release.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  compute-version:
+    if: github.event_name != 'workflow_dispatch' || inputs.tag_name == ''
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag_name: ${{ steps.compute.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute next CalVer
+        id: compute
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Format: YYYY.<MMDD without leading zero>.MICRO
+          # e.g., 2026/4/5  -> 2026.405.0
+          #       2026/4/25 -> 2026.425.0
+          #       2026/10/5 -> 2026.1005.0
+          year=$(date -u +%Y)
+          month=$(date -u +%-m)
+          day=$(date -u +%d)
+          mmdd=$((10#$month * 100 + 10#$day))
+          date_part="${year}.${mmdd}"
+
+          # Find the highest MICRO for today's date among existing tags.
+          # Tags are formatted as v<YYYY>.<MMDD>.<MICRO>.
+          highest=$(git tag --list "v${date_part}.*" \
+            | sed -E "s/^v${date_part}\.//" \
+            | sort -n \
+            | tail -n 1 || true)
+
+          if [[ -z "${highest}" ]]; then
+            micro=0
+          else
+            micro=$((highest + 1))
+          fi
+
+          version="${date_part}.${micro}"
+          tag="v${version}"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Next version: ${version}"
+
+  create-tag:
+    needs: compute-version
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ needs.compute-version.outputs.tag_name }}
+    steps:
+      - uses: actions/create-github-app-token@7bd03711494f032dfa3be3558f7dc8787b0be333 # v3.1.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Create and push tag
+        env:
+          TAG_NAME: ${{ needs.compute-version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG_NAME: ${{ needs.compute-version.outputs.tag_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --notes "Compare: https://github.com/${{ github.repository }}/compare/...$TAG_NAME"
+
+  build-release:
+    needs: [compute-version, create-tag]
+    # Run when:
+    # - push to master (both compute-version and create-tag run)
+    # - workflow_dispatch with tag_name (compute-version is skipped, only need to upload)
+    if: |
+      always() && (
+        (github.event_name == 'push' && needs.create-tag.result == 'success') ||
+        (github.event_name == 'workflow_dispatch')
+      )
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
+      SCCACHE_LOG: 'debug'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # For workflow_dispatch with an existing tag, check out the tag so the
+          # release build matches what was tagged.
+          ref: ${{ inputs.tag_name || needs.create-tag.outputs.tag_name }}
+
+      - run: rustup show
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
+      - name: Inject release version into Cargo.toml
+        env:
+          # Strip leading "v" from tag to get the version string.
+          TAG_NAME: ${{ inputs.tag_name || needs.create-tag.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          # Replace the placeholder version in Cargo.toml. The package version
+          # is the first `version = "..."` line in [package].
+          sed -i.bak -E "0,/^version = \".*\"$/s//version = \"${version}\"/" Cargo.toml
+          rm Cargo.toml.bak
+          grep "^version" Cargo.toml
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../armyknife-${{ matrix.target }}.tar.gz a
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name || needs.create-tag.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG_NAME" \
+            armyknife-${{ matrix.target }}.tar.gz \
+            --clobber
