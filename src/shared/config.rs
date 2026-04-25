@@ -251,7 +251,7 @@ pub struct RepoConfig {
     /// Whether direct commits to the default branch (e.g., master/main) are allowed.
     /// Consumed by external git hooks; armyknife only stores and exposes the value.
     #[serde(default)]
-    pub direct_commit_to_default_branch: Option<bool>,
+    pub direct_commit: Option<bool>,
 }
 
 /// Claude Code session monitoring configuration.
@@ -654,16 +654,16 @@ mod tests {
     #[rstest]
     #[case::allowed(
         "fohte/dotfiles",
-        "repos:\n  fohte/dotfiles:\n    direct_commit_to_default_branch: true\n",
+        "repos:\n  fohte/dotfiles:\n    direct_commit: true\n",
         Some(true)
     )]
     #[case::denied(
         "fohte/some-repo",
-        "repos:\n  fohte/some-repo:\n    direct_commit_to_default_branch: false\n",
+        "repos:\n  fohte/some-repo:\n    direct_commit: false\n",
         Some(false)
     )]
     #[case::unset("fohte/another-repo", "repos:\n  fohte/another-repo: {}\n", None)]
-    fn parse_repos_config_direct_commit_to_default_branch(
+    fn parse_repos_config_direct_commit(
         #[case] repo_id: &str,
         #[case] yaml: &str,
         #[case] expected: Option<bool>,
@@ -671,10 +671,7 @@ mod tests {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.repos.len(), 1);
-        assert_eq!(
-            config.repos[repo_id].direct_commit_to_default_branch,
-            expected
-        );
+        assert_eq!(config.repos[repo_id].direct_commit, expected);
     }
 
     #[test]

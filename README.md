@@ -68,7 +68,7 @@ notification:
 repos: # per-repository overrides, keyed by "owner/repo"
   fohte/dotfiles:
     language: en # language for commit messages and PR content (default: "ja" for private repos, "en" for public repos)
-    direct_commit_to_default_branch: true # allow direct commits to the default branch; consumed by external git hooks
+    direct_commit: true # allow direct commits to the default branch; consumed by external git hooks
 ```
 
 ### Supported Terminal Emulators
@@ -459,7 +459,7 @@ $ a config get repo.language
 ja
 
 $ cd ~/ghq/github.com/fohte/dotfiles
-$ a config get repo.direct_commit_to_default_branch
+$ a config get repo.direct_commit
 true
 ```
 

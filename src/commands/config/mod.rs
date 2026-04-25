@@ -149,19 +149,16 @@ mod tests {
     #[case::allowed("fohte/dotfiles", Some("true"))]
     #[case::denied("fohte/blocked", Some("false"))]
     #[case::not_configured("fohte/unknown", None)]
-    fn get_value_repo_direct_commit_to_default_branch(
-        #[case] repo_id: &str,
-        #[case] expected: Option<&str>,
-    ) {
+    fn get_value_repo_direct_commit(#[case] repo_id: &str, #[case] expected: Option<&str>) {
         let cfg = config_from_yaml(indoc! {"
             repos:
               fohte/dotfiles:
-                direct_commit_to_default_branch: true
+                direct_commit: true
               fohte/blocked:
-                direct_commit_to_default_branch: false
+                direct_commit: false
         "});
         assert_eq!(
-            cfg.get_value("repo.direct_commit_to_default_branch", Some(repo_id))
+            cfg.get_value("repo.direct_commit", Some(repo_id))
                 .as_deref(),
             expected
         );
