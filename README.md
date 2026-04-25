@@ -64,6 +64,11 @@ editor:
 notification:
   enabled: true # enable desktop notifications (default: true)
   sound: Glass # notification sound name, empty string for silent (default: "Glass")
+
+repos: # per-repository overrides, keyed by "owner/repo"
+  fohte/dotfiles:
+    language: en # language for commit messages and PR content (default: "ja" for private repos, "en" for public repos)
+    direct_commit: true # allow direct commits to the default branch; consumed by external git hooks
 ```
 
 ### Supported Terminal Emulators
@@ -452,6 +457,10 @@ Glass
 $ cd ~/ghq/github.com/fohte/t-rader
 $ a config get repo.language
 ja
+
+$ cd ~/ghq/github.com/fohte/dotfiles
+$ a config get repo.direct_commit
+true
 ```
 
 ## License

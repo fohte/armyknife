@@ -172,6 +172,11 @@
       "description": "Per-repository configuration.",
       "type": "object",
       "properties": {
+        "direct_commit": {
+          "description": "Whether direct commits to the default branch (e.g., master/main) are allowed.\nConsumed by external git hooks; armyknife only stores and exposes the value.",
+          "type": "boolean",
+          "default": false
+        },
         "language": {
           "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
           "type": [

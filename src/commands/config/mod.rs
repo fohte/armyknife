@@ -146,6 +146,27 @@ mod tests {
     }
 
     #[rstest]
+    #[case::explicit_true("fohte/dotfiles", "true")]
+    #[case::explicit_false("fohte/blocked", "false")]
+    #[case::repo_entry_without_key_defaults_to_false("fohte/no-direct-commit-key", "false")]
+    #[case::repo_entry_absent_defaults_to_false("fohte/unknown", "false")]
+    fn get_value_repo_direct_commit(#[case] repo_id: &str, #[case] expected: &str) {
+        let cfg = config_from_yaml(indoc! {"
+            repos:
+              fohte/dotfiles:
+                direct_commit: true
+              fohte/blocked:
+                direct_commit: false
+              fohte/no-direct-commit-key: {}
+        "});
+        assert_eq!(
+            cfg.get_value("repo.direct_commit", Some(repo_id))
+                .as_deref(),
+            Some(expected)
+        );
+    }
+
+    #[rstest]
     #[case::private_repo(true, "ja")]
     #[case::public_repo(false, "en")]
     #[tokio::test]
