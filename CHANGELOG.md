@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.153](https://github.com/fohte/armyknife/compare/v0.1.152...v0.1.153) (2026-04-25)
+
+
+### Features
+
+* **config:** add repo.direct_commit setting ([#505](https://github.com/fohte/armyknife/issues/505)) ([b172a0d](https://github.com/fohte/armyknife/commit/b172a0dfb349bda8672cab5ac457042e389a01bb))
+
 ## [0.1.152](https://github.com/fohte/armyknife/compare/v0.1.151...v0.1.152) (2026-04-21)
 
 
