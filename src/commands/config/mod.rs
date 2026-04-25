@@ -146,6 +146,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::allowed("fohte/dotfiles", Some("true"))]
+    #[case::denied("fohte/blocked", Some("false"))]
+    #[case::not_configured("fohte/unknown", None)]
+    fn get_value_repo_direct_commit_to_default_branch(
+        #[case] repo_id: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let cfg = config_from_yaml(indoc! {"
+            repos:
+              fohte/dotfiles:
+                direct_commit_to_default_branch: true
+              fohte/blocked:
+                direct_commit_to_default_branch: false
+        "});
+        assert_eq!(
+            cfg.get_value("repo.direct_commit_to_default_branch", Some(repo_id))
+                .as_deref(),
+            expected
+        );
+    }
+
+    #[rstest]
     #[case::private_repo(true, "ja")]
     #[case::public_repo(false, "en")]
     #[tokio::test]
