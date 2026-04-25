@@ -35,8 +35,15 @@ impl Config {
     /// Returns the value as a string, or None if not found.
     pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<String> {
         if let Some(repo_key) = key.strip_prefix("repo.") {
-            let repo_id = repo_id?;
-            let repo_config = self.repos.get(repo_id)?;
+            // Fall back to RepoConfig::default() when no entry exists for this
+            // repo, so per-field serde defaults (e.g. direct_commit = false)
+            // are honored even for repos that have no `repos.<owner>/<repo>`
+            // section in the config file.
+            repo_id?;
+            let default_repo_config = RepoConfig::default();
+            let repo_config = repo_id
+                .and_then(|id| self.repos.get(id))
+                .unwrap_or(&default_repo_config);
             let value = serde_json::to_value(repo_config).ok()?;
             resolve_json_path(&value, repo_key)
         } else {
@@ -251,7 +258,8 @@ pub struct RepoConfig {
     /// Whether direct commits to the default branch (e.g., master/main) are allowed.
     /// Consumed by external git hooks; armyknife only stores and exposes the value.
     #[serde(default)]
-    pub direct_commit: Option<bool>,
+    #[schemars(default)]
+    pub direct_commit: bool,
 }
 
 /// Claude Code session monitoring configuration.
@@ -659,7 +667,7 @@ mod tests {
               fohte/dotfiles:
                 direct_commit: true
         "},
-        Some(true)
+        true
     )]
     #[case::denied(
         "fohte/some-repo",
@@ -668,20 +676,20 @@ mod tests {
               fohte/some-repo:
                 direct_commit: false
         "},
-        Some(false)
+        false
     )]
-    #[case::unset(
+    #[case::unset_defaults_to_false(
         "fohte/another-repo",
         indoc! {"
             repos:
               fohte/another-repo: {}
         "},
-        None
+        false
     )]
     fn parse_repos_config_direct_commit(
         #[case] repo_id: &str,
         #[case] yaml: &str,
-        #[case] expected: Option<bool>,
+        #[case] expected: bool,
     ) {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
