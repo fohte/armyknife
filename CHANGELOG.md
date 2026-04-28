@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.154](https://github.com/fohte/armyknife/compare/v0.1.153...v0.1.154) (2026-04-28)
+
+
+### Features
+
+* **cli:** add short aliases for frequent cc/wm subcommands ([#508](https://github.com/fohte/armyknife/issues/508)) ([c5588b6](https://github.com/fohte/armyknife/commit/c5588b619f6e581928065481e05bb28fcc498d58))
+
 ## [0.1.153](https://github.com/fohte/armyknife/compare/v0.1.152...v0.1.153) (2026-04-25)
 
 
