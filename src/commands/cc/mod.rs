@@ -29,6 +29,7 @@ pub enum CcCommands {
     Hook(HookArgs),
 
     /// List Claude Code sessions
+    #[command(visible_alias = "ls")]
     List(ListArgs),
 
     /// Watch Claude Code sessions in real-time (TUI)
@@ -38,6 +39,7 @@ pub enum CcCommands {
     Focus(FocusArgs),
 
     /// Resume a Claude Code session from tmux pane's user option
+    #[command(visible_alias = "r")]
     Resume(ResumeArgs),
 
     /// Save/restore session IDs for tmux-resurrect integration
