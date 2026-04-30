@@ -1,12 +1,10 @@
 //! Helpers for applying parent/sub-issue link changes via GitHub's Sub-issues API.
 //!
-//! These helpers are shared by both the existing-issue edit path (driven by
-//! [`super::changeset::ChangeSet::apply`]) and the new-issue create path.
-//! Centralizing the logic keeps the Sub-issues API contract in one place so
-//! that adding fields to `EditableIssueFields` does not require touching two
-//! independent code paths.
+//! Used by [`super::changeset::ChangeSet::apply`]. Both the existing-issue
+//! edit path and the new-issue create path go through `ChangeSet::apply`,
+//! so these helpers run for both.
 
-use crate::commands::gh::issue_agent::models::{Issue, SubIssueRef};
+use crate::commands::gh::issue_agent::models::SubIssueRef;
 use crate::infra::github::GitHubClient;
 
 /// Parse an issue reference string `owner/repo#number` into components.
@@ -101,83 +99,6 @@ pub(super) async fn unlink_from_parent(
     client
         .remove_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
         .await?;
-    Ok(())
-}
-
-/// Apply parent/sub-issue link changes by linking the locally-declared refs
-/// against the existing remote state.
-///
-/// Used after creating a new issue to reproduce the same Sub-issues API
-/// behavior the edit path provides.
-///
-/// - `local_sub_issues`: refs the user wants the issue to have as children
-/// - `local_parent_issue`: ref the user wants the issue to have as a parent
-/// - `remote_issue`: the freshly fetched issue (its existing sub_issues
-///   determine the diff for removals; for create paths this is empty)
-pub(super) async fn apply_links(
-    client: &GitHubClient,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    remote_issue: &Issue,
-    local_sub_issues: &[String],
-    local_parent_issue: Option<&str>,
-) -> anyhow::Result<()> {
-    use std::collections::HashSet;
-
-    let remote_sub_refs: HashSet<String> = remote_issue
-        .sub_issues
-        .iter()
-        .map(|r| r.to_ref_string())
-        .collect();
-    let local_sub_refs: HashSet<&str> = local_sub_issues.iter().map(|s| s.as_str()).collect();
-
-    let to_remove: Vec<String> = remote_sub_refs
-        .iter()
-        .filter(|r| !local_sub_refs.contains(r.as_str()))
-        .cloned()
-        .collect();
-    let to_add: Vec<&str> = local_sub_refs
-        .iter()
-        .filter(|r| !remote_sub_refs.contains(**r))
-        .copied()
-        .collect();
-
-    if !to_remove.is_empty() || !to_add.is_empty() {
-        println!();
-        println!("Updating sub-issues...");
-        for ref_str in &to_remove {
-            remove_sub_issue_by_ref(
-                client,
-                owner,
-                repo,
-                issue_number,
-                ref_str,
-                &remote_issue.sub_issues,
-            )
-            .await?;
-        }
-        for ref_str in to_add {
-            add_sub_issue_by_ref(client, owner, repo, issue_number, ref_str).await?;
-        }
-    }
-
-    let remote_parent = remote_issue
-        .parent_issue
-        .as_ref()
-        .map(|r| r.to_ref_string());
-    if local_parent_issue.map(str::to_string) != remote_parent {
-        println!();
-        println!("Updating parent issue...");
-        let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
-        if let Some(old_parent_ref) = remote_parent.as_deref() {
-            unlink_from_parent(client, old_parent_ref, this_issue_id).await?;
-        }
-        if let Some(new_parent_ref) = local_parent_issue {
-            link_to_parent(client, new_parent_ref, this_issue_id).await?;
-        }
-    }
-
     Ok(())
 }
 

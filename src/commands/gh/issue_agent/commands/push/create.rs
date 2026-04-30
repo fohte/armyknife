@@ -3,9 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use super::PushArgs;
-use super::links::apply_links;
+use super::changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
 use crate::commands::gh::issue_agent::commands::common;
-use crate::commands::gh::issue_agent::models::{IssueFrontmatter, NewIssue};
+use crate::commands::gh::issue_agent::models::{
+    EditableIssueFields, Issue, IssueFrontmatter, IssueMetadata, NewIssue,
+};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
 use crate::infra::github::GitHubClient;
@@ -67,27 +69,36 @@ pub async fn run_create_with_client(
     let issue_number = u64::try_from(created.number)
         .map_err(|_| anyhow::anyhow!("Invalid issue number returned: {}", created.number))?;
 
-    // Apply parent/sub-issue links via the same pipeline used by the edit
-    // path. The freshly created issue has no existing relationships, so
-    // `apply_links` only issues add operations here.
-    apply_links(
-        client,
-        &owner,
-        &repo_name,
-        issue_number,
-        &created,
-        new_issue.sub_issues(),
-        new_issue.parent_issue(),
-    )
-    .await?;
+    // Reuse the edit path's ChangeSet::detect → apply pipeline to reconcile
+    // any field the create API does not accept (currently parent/sub-issue
+    // refs). Title / body / labels / assignees were sent via `create_issue`
+    // above, so detect finds no diff for them and apply skips their update
+    // calls. New fields added to `EditableIssueFields` automatically flow
+    // through this same pipeline.
+    let local_metadata = build_local_metadata(&new_issue, &created);
+    let local_state = LocalState {
+        metadata: &local_metadata,
+        body: &new_issue.body,
+        comments: &[],
+    };
+    let remote_state = RemoteState {
+        issue: &created,
+        comments: &[],
+    };
+    let detect_options = DetectOptions {
+        // No comment work happens on create, so these flags are placeholders.
+        current_user: "",
+        edit_others: false,
+        allow_delete: false,
+    };
+    let changeset = ChangeSet::detect(&local_state, &remote_state, &detect_options)?;
 
-    // Rename directory from new/ to {issue_number}/
+    // Rename directory from new/ to {issue_number}/.
     let new_dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine parent directory"))?
         .join(issue_number.to_string());
 
-    // Check if destination already exists before rename
     if new_dir.exists() {
         anyhow::bail!(
             "Issue #{issue_number} created on GitHub, but directory '{}' already exists locally. \
@@ -103,16 +114,21 @@ pub async fn run_create_with_client(
         );
     }
 
-    // Re-fetch the created issue so the saved frontmatter reflects the parent/sub
-    // links applied above. Without this, the local issue.md would silently lack
-    // the links that are now present remotely.
-    let final_issue = if new_issue.parent_issue().is_some() || !new_issue.sub_issues().is_empty() {
+    let storage = IssueStorage::from_dir(&new_dir);
+    if changeset.has_changes() {
+        changeset
+            .apply(client, &owner, &repo_name, issue_number, &storage, &created)
+            .await?;
+    }
+
+    // Re-fetch when apply established new parent/sub links so the saved
+    // frontmatter mirrors the post-link remote state.
+    let final_issue = if changeset.has_changes() {
         common::fetch_issue_with_sub_issues(client, &owner, &repo_name, issue_number).await?
     } else {
         created
     };
 
-    let storage = IssueStorage::from_dir(&new_dir);
     let frontmatter = IssueFrontmatter::from_issue(&final_issue);
     if let Err(e) = storage.save_issue(&frontmatter, &new_issue.body) {
         // Directory was renamed successfully, so inform user about partial state
@@ -135,6 +151,42 @@ pub async fn run_create_with_client(
     );
 
     Ok(())
+}
+
+/// Build the local-side `IssueMetadata` used by `ChangeSet::detect`.
+///
+/// Editable fields come from the user's `NewIssue`, server-managed fields
+/// (number, state, timestamps, author) come from the freshly created remote
+/// issue. The result represents "what the user wants the issue to be" so
+/// that diffing against the remote surfaces only the fields the create API
+/// could not handle.
+fn build_local_metadata(new_issue: &NewIssue, created: &Issue) -> IssueMetadata {
+    let EditableIssueFields {
+        title,
+        labels,
+        assignees,
+        milestone,
+        parent_issue,
+        sub_issues,
+    } = new_issue.frontmatter.fields.clone();
+    IssueMetadata {
+        number: created.number,
+        title,
+        state: created.state.clone(),
+        labels,
+        assignees,
+        milestone,
+        author: created
+            .author
+            .as_ref()
+            .map(|a| a.login.clone())
+            .unwrap_or_default(),
+        created_at: created.created_at.to_rfc3339(),
+        updated_at: created.updated_at.to_rfc3339(),
+        last_edited_at: created.last_edited_at.map(|dt| dt.to_rfc3339()),
+        parent_issue,
+        sub_issues,
+    }
 }
 
 /// Get repository from path structure or -R argument.
