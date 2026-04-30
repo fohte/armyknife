@@ -64,6 +64,11 @@ impl NewIssue {
         &self.frontmatter.fields.assignees
     }
 
+    /// Get the milestone from frontmatter, if any.
+    pub fn milestone(&self) -> Option<&str> {
+        self.frontmatter.fields.milestone.as_deref()
+    }
+
     /// Get the parent issue reference from frontmatter, if any.
     pub fn parent_issue(&self) -> Option<&str> {
         self.frontmatter.fields.parent_issue.as_deref()
@@ -130,11 +135,18 @@ fn validate_known_keys(yaml: &str) -> Result<(), String> {
     let known: BTreeSet<&str> = EditableIssueFields::KNOWN_KEYS.iter().copied().collect();
     let mut unknown: Vec<String> = Vec::new();
     for (key, _) in &mapping {
-        if let Some(name) = key.as_str()
-            && !known.contains(name)
-        {
-            unknown.push(name.to_string());
-        }
+        // Treat non-string keys (e.g. `true: foo` or `42: foo`) as unknown so
+        // they cannot bypass validation. `serde_yaml::to_string` is the most
+        // faithful rendering for these cases since `Value` does not implement
+        // `Display` directly.
+        let rendered = match key.as_str() {
+            Some(name) if known.contains(name) => continue,
+            Some(name) => name.to_string(),
+            None => serde_yaml::to_string(key)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| format!("{key:?}")),
+        };
+        unknown.push(rendered);
     }
 
     if unknown.is_empty() {
@@ -404,9 +416,48 @@ mod tests {
             "Unknown frontmatter key(s): random_key. \
              Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
         )]
+        #[case::unknown_non_string_key_bool(
+            indoc! {"
+                ---
+                title: Non-string key
+                true: value
+                ---
+
+                Body.
+            "},
+            "Unknown frontmatter key(s): true. \
+             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+        )]
+        #[case::unknown_non_string_key_number(
+            indoc! {"
+                ---
+                title: Numeric key
+                42: value
+                ---
+
+                Body.
+            "},
+            "Unknown frontmatter key(s): 42. \
+             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+        )]
         fn test_parse_errors(#[case] content: &str, #[case] expected_error: &str) {
             let err = NewIssue::parse(content).unwrap_err();
             assert_eq!(err, expected_error);
+        }
+
+        #[rstest]
+        fn test_parse_with_milestone() {
+            let content = indoc! {"
+                ---
+                title: With Milestone
+                milestone: v1.0
+                ---
+
+                Body.
+            "};
+
+            let result = NewIssue::parse(content).unwrap();
+            assert_eq!(result.milestone(), Some("v1.0"));
         }
 
         /// Invalid YAML content from the user goes through serde_yaml, whose

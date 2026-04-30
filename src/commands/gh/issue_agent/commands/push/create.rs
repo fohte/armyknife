@@ -224,6 +224,7 @@ fn display_new_issue(issue: &NewIssue) {
 
     let has_metadata = !issue.labels().is_empty()
         || !issue.assignees().is_empty()
+        || issue.milestone().is_some()
         || issue.parent_issue().is_some()
         || !issue.sub_issues().is_empty();
 
@@ -232,6 +233,9 @@ fn display_new_issue(issue: &NewIssue) {
     }
     if !issue.assignees().is_empty() {
         println!("Assignees: {}", issue.assignees().join(", "));
+    }
+    if let Some(milestone) = issue.milestone() {
+        println!("Milestone: {}", milestone);
     }
     if let Some(parent) = issue.parent_issue() {
         println!("Parent issue: {}", parent);
