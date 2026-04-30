@@ -224,7 +224,6 @@ fn display_new_issue(issue: &NewIssue) {
 
     let has_metadata = !issue.labels().is_empty()
         || !issue.assignees().is_empty()
-        || issue.milestone().is_some()
         || issue.parent_issue().is_some()
         || !issue.sub_issues().is_empty();
 
@@ -233,9 +232,6 @@ fn display_new_issue(issue: &NewIssue) {
     }
     if !issue.assignees().is_empty() {
         println!("Assignees: {}", issue.assignees().join(", "));
-    }
-    if let Some(milestone) = issue.milestone() {
-        println!("Milestone: {}", milestone);
     }
     if let Some(parent) = issue.parent_issue() {
         println!("Parent issue: {}", parent);
@@ -587,7 +583,7 @@ mod tests {
             assert_eq!(
                 err,
                 "Failed to parse issue.md: Unknown frontmatter key(s): parentIssues. \
-                 Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+                 Allowed keys: title, labels, assignees, parentIssue, subIssues"
             );
             // Directory must remain unchanged on parse failure.
             assert!(new_dir.exists());

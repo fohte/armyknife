@@ -64,11 +64,6 @@ impl NewIssue {
         &self.frontmatter.fields.assignees
     }
 
-    /// Get the milestone from frontmatter, if any.
-    pub fn milestone(&self) -> Option<&str> {
-        self.frontmatter.fields.milestone.as_deref()
-    }
-
     /// Get the parent issue reference from frontmatter, if any.
     pub fn parent_issue(&self) -> Option<&str> {
         self.frontmatter.fields.parent_issue.as_deref()
@@ -132,7 +127,10 @@ fn validate_known_keys(yaml: &str) -> Result<(), String> {
         _ => return Err("Frontmatter must be a YAML mapping".to_string()),
     };
 
-    let known: BTreeSet<&str> = EditableIssueFields::KNOWN_KEYS.iter().copied().collect();
+    let known: BTreeSet<&str> = EditableIssueFields::KNOWN_KEYS_FOR_NEW_ISSUE
+        .iter()
+        .copied()
+        .collect();
     let mut unknown: Vec<String> = Vec::new();
     for (key, _) in &mapping {
         // Treat non-string keys (e.g. `true: foo` or `42: foo`) as unknown so
@@ -156,7 +154,7 @@ fn validate_known_keys(yaml: &str) -> Result<(), String> {
         Err(format!(
             "Unknown frontmatter key(s): {}. Allowed keys: {}",
             unknown.join(", "),
-            EditableIssueFields::KNOWN_KEYS.join(", ")
+            EditableIssueFields::KNOWN_KEYS_FOR_NEW_ISSUE.join(", ")
         ))
     }
 }
@@ -402,7 +400,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): parentIssues. \
-             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues"
         )]
         #[case::unknown_key_arbitrary(
             indoc! {"
@@ -414,7 +412,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): random_key. \
-             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues"
         )]
         #[case::unknown_non_string_key_bool(
             indoc! {"
@@ -426,7 +424,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): true. \
-             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues"
         )]
         #[case::unknown_non_string_key_number(
             indoc! {"
@@ -438,15 +436,18 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): 42. \
-             Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues"
         )]
         fn test_parse_errors(#[case] content: &str, #[case] expected_error: &str) {
             let err = NewIssue::parse(content).unwrap_err();
             assert_eq!(err, expected_error);
         }
 
+        /// `milestone` is intentionally not in the new-issue allow-list because
+        /// the create path cannot reconcile it. Putting it in frontmatter
+        /// must surface as an unknown-key error rather than be silently dropped.
         #[rstest]
-        fn test_parse_with_milestone() {
+        fn test_parse_milestone_is_unknown_for_new_issue() {
             let content = indoc! {"
                 ---
                 title: With Milestone
@@ -456,8 +457,12 @@ mod tests {
                 Body.
             "};
 
-            let result = NewIssue::parse(content).unwrap();
-            assert_eq!(result.milestone(), Some("v1.0"));
+            let err = NewIssue::parse(content).unwrap_err();
+            assert_eq!(
+                err,
+                "Unknown frontmatter key(s): milestone. \
+                 Allowed keys: title, labels, assignees, parentIssue, subIssues"
+            );
         }
 
         /// Invalid YAML content from the user goes through serde_yaml, whose
