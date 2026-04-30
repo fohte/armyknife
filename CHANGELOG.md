@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.155](https://github.com/fohte/armyknife/compare/v0.1.154...v0.1.155) (2026-04-30)
+
+
+### Features
+
+* **issue-agent:** allow parentIssue/subIssues in new-issue frontmatter ([#510](https://github.com/fohte/armyknife/issues/510)) ([414d2cf](https://github.com/fohte/armyknife/commit/414d2cf9568fd40eedffdc8433e40d644b9090b4))
+
 ## [0.1.154](https://github.com/fohte/armyknife/compare/v0.1.153...v0.1.154) (2026-04-28)
 
 
