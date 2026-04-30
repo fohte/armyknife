@@ -157,12 +157,14 @@ mod tests {
 
     fn make_frontmatter() -> IssueFrontmatter {
         IssueFrontmatter {
-            title: "Test Issue".to_string(),
-            labels: vec!["bug".to_string()],
-            assignees: vec!["user1".to_string()],
-            milestone: None,
-            parent_issue: None,
-            sub_issues: vec![],
+            fields: crate::commands::gh::issue_agent::models::EditableIssueFields {
+                title: "Test Issue".to_string(),
+                labels: vec!["bug".to_string()],
+                assignees: vec!["user1".to_string()],
+                milestone: None,
+                parent_issue: None,
+                sub_issues: vec![],
+            },
             submit: false,
             readonly: ReadonlyMetadata {
                 number: 123,

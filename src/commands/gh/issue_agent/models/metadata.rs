@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::author::WithAuthor;
+use super::editable::EditableIssueFields;
 use super::issue::Issue;
 
 /// Read-only metadata fields that should not be edited by users.
@@ -19,21 +20,12 @@ pub struct ReadonlyMetadata {
 }
 
 /// Issue frontmatter stored in issue.md.
-/// Editable fields are at the top level, read-only fields are nested under `readonly`.
+/// Editable fields are at the top level (shared with `NewIssueFrontmatter`),
+/// read-only fields are nested under `readonly`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct IssueFrontmatter {
-    pub title: String,
-    #[serde(default)]
-    pub labels: Vec<String>,
-    #[serde(default)]
-    pub assignees: Vec<String>,
-    #[serde(default)]
-    pub milestone: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_issue: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sub_issues: Vec<String>,
+    #[serde(flatten)]
+    pub fields: EditableIssueFields,
     /// Approval flag for push. Set to `true` via `a gh issue-agent review` to approve changes.
     #[serde(default)]
     pub submit: bool,
@@ -44,12 +36,14 @@ impl IssueFrontmatter {
     /// Create frontmatter from an Issue.
     pub fn from_issue(issue: &Issue) -> Self {
         Self {
-            title: issue.title.clone(),
-            labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
-            assignees: issue.assignees.iter().map(|a| a.login.clone()).collect(),
-            milestone: issue.milestone.as_ref().map(|m| m.title.clone()),
-            parent_issue: issue.parent_issue.as_ref().map(|r| r.to_ref_string()),
-            sub_issues: issue.sub_issues.iter().map(|r| r.to_ref_string()).collect(),
+            fields: EditableIssueFields {
+                title: issue.title.clone(),
+                labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                assignees: issue.assignees.iter().map(|a| a.login.clone()).collect(),
+                milestone: issue.milestone.as_ref().map(|m| m.title.clone()),
+                parent_issue: issue.parent_issue.as_ref().map(|r| r.to_ref_string()),
+                sub_issues: issue.sub_issues.iter().map(|r| r.to_ref_string()).collect(),
+            },
             submit: false,
             readonly: ReadonlyMetadata {
                 number: issue.number,
@@ -91,17 +85,17 @@ impl From<IssueFrontmatter> for IssueMetadata {
     fn from(fm: IssueFrontmatter) -> Self {
         Self {
             number: fm.readonly.number,
-            title: fm.title,
+            title: fm.fields.title,
             state: fm.readonly.state,
-            labels: fm.labels,
-            assignees: fm.assignees,
-            milestone: fm.milestone,
+            labels: fm.fields.labels,
+            assignees: fm.fields.assignees,
+            milestone: fm.fields.milestone,
             author: fm.readonly.author,
             created_at: fm.readonly.created_at,
             updated_at: fm.readonly.updated_at,
             last_edited_at: fm.readonly.last_edited_at,
-            parent_issue: fm.parent_issue,
-            sub_issues: fm.sub_issues,
+            parent_issue: fm.fields.parent_issue,
+            sub_issues: fm.fields.sub_issues,
         }
     }
 }

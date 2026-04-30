@@ -11,6 +11,9 @@ use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
     detect_sub_issue_change, detect_title_change,
 };
+use super::links::{
+    add_sub_issue_by_ref, link_to_parent, remove_sub_issue_by_ref, unlink_from_parent,
+};
 
 /// Local state for change detection.
 pub(crate) struct LocalState<'a> {
@@ -297,28 +300,18 @@ impl<'a> ChangeSet<'a> {
             println!();
             println!("Updating sub-issues...");
             for ref_str in &change.to_remove {
-                if let Some(sub_ref) = remote_issue
-                    .sub_issues
-                    .iter()
-                    .find(|r| r.to_ref_string() == *ref_str)
-                {
-                    client
-                        .remove_sub_issue(owner, repo, issue_number, sub_ref.id)
-                        .await?;
-                }
+                remove_sub_issue_by_ref(
+                    client,
+                    owner,
+                    repo,
+                    issue_number,
+                    ref_str,
+                    &remote_issue.sub_issues,
+                )
+                .await?;
             }
             for ref_str in &change.to_add {
-                let (ref_owner, ref_repo, ref_number) =
-                    parse_issue_ref(ref_str).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Invalid sub-issue reference: '{}'. Expected format: owner/repo#number",
-                            ref_str
-                        )
-                    })?;
-                let id = client
-                    .get_issue_id(&ref_owner, &ref_repo, ref_number)
-                    .await?;
-                client.add_sub_issue(owner, repo, issue_number, id).await?;
+                add_sub_issue_by_ref(client, owner, repo, issue_number, ref_str).await?;
             }
         }
 
@@ -326,44 +319,16 @@ impl<'a> ChangeSet<'a> {
             println!();
             println!("Updating parent issue...");
             let this_issue_id = client.get_issue_id(owner, repo, issue_number).await?;
-            // Remove old parent relationship
             if let Some(old_parent_ref) = &change.remote {
-                let (ref_owner, ref_repo, ref_number) =
-                    parse_issue_ref(old_parent_ref).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
-                            old_parent_ref
-                        )
-                    })?;
-                client
-                    .remove_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
-                    .await?;
+                unlink_from_parent(client, old_parent_ref, this_issue_id).await?;
             }
-            // Add new parent relationship
             if let Some(new_parent_ref) = &change.local {
-                let (ref_owner, ref_repo, ref_number) =
-                    parse_issue_ref(new_parent_ref).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Invalid parent issue reference: '{}'. Expected format: owner/repo#number",
-                            new_parent_ref
-                        )
-                    })?;
-                client
-                    .add_sub_issue(&ref_owner, &ref_repo, ref_number, this_issue_id)
-                    .await?;
+                link_to_parent(client, new_parent_ref, this_issue_id).await?;
             }
         }
 
         Ok(())
     }
-}
-
-/// Parse an issue reference string "owner/repo#number" into components.
-fn parse_issue_ref(ref_str: &str) -> Option<(String, String, u64)> {
-    let (repo_part, number_str) = ref_str.rsplit_once('#')?;
-    let (owner, repo) = repo_part.split_once('/')?;
-    let number = number_str.parse::<u64>().ok()?;
-    Some((owner.to_string(), repo.to_string(), number))
 }
 
 #[cfg(test)]
@@ -490,24 +455,6 @@ mod tests {
             assert!(cs.has_changes());
             cs.display()
                 .expect("display() should not error with all change types");
-        }
-    }
-
-    mod parse_issue_ref_tests {
-        use super::*;
-
-        #[rstest]
-        #[case::valid("owner/repo#123", Some(("owner".to_string(), "repo".to_string(), 123)))]
-        #[case::large_number("org/project#99999", Some(("org".to_string(), "project".to_string(), 99999)))]
-        #[case::missing_hash("owner/repo", None)]
-        #[case::missing_slash("ownerrepo#1", None)]
-        #[case::non_numeric_number("owner/repo#abc", None)]
-        #[case::empty_string("", None)]
-        fn test_parse_issue_ref(
-            #[case] input: &str,
-            #[case] expected: Option<(String, String, u64)>,
-        ) {
-            assert_eq!(parse_issue_ref(input), expected);
         }
     }
 

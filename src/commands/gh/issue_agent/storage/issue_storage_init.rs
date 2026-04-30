@@ -11,11 +11,17 @@ use super::issue_storage::IssueStorage;
 use crate::commands::gh::issue_agent::models::IssueTemplate;
 
 /// Default content for a new issue file.
+///
+/// `parentIssue` and `subIssues` are commented out to keep the boilerplate
+/// minimal while still documenting the available keys (uncomment to use).
 const NEW_ISSUE_TEMPLATE: &str = indoc! {r#"
     ---
     title: ""
     labels: []
     assignees: []
+    # parentIssue: owner/repo#1
+    # subIssues:
+    #   - owner/repo#2
     ---
 
     Body
@@ -104,6 +110,9 @@ mod tests {
                 title: ""
                 labels: []
                 assignees: []
+                # parentIssue: owner/repo#1
+                # subIssues:
+                #   - owner/repo#2
                 ---
 
                 Body

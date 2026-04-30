@@ -160,9 +160,9 @@ mod tests {
         fs::write(dir.path().join("issue.md"), issue_md).unwrap();
 
         let issue = storage.read_issue().unwrap();
-        assert_eq!(issue.frontmatter.title, "Test Issue");
-        assert_eq!(issue.frontmatter.labels, vec!["bug"]);
-        assert_eq!(issue.frontmatter.assignees, vec!["user1"]);
+        assert_eq!(issue.frontmatter.fields.title, "Test Issue");
+        assert_eq!(issue.frontmatter.fields.labels, vec!["bug"]);
+        assert_eq!(issue.frontmatter.fields.assignees, vec!["user1"]);
         assert_eq!(issue.frontmatter.readonly.number, 123);
         assert_eq!(issue.body, "Test issue body");
     }
