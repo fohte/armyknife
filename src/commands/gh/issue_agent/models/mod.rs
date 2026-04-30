@@ -1,5 +1,6 @@
 mod author;
 mod comment;
+mod editable;
 mod issue;
 mod issue_template;
 mod metadata;
@@ -8,6 +9,8 @@ mod timeline_event;
 
 pub use author::Author;
 pub use comment::Comment;
+#[cfg(test)]
+pub use editable::EditableIssueFields;
 pub use issue::{Issue, Label, Milestone, SubIssueRef};
 pub use issue_template::IssueTemplate;
 #[cfg(test)]

@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use super::PushArgs;
+use super::links::apply_links;
+use crate::commands::gh::issue_agent::commands::common;
 use crate::commands::gh::issue_agent::models::{IssueFrontmatter, NewIssue};
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
@@ -57,12 +59,27 @@ pub async fn run_create_with_client(
             &repo_name,
             new_issue.title(),
             &new_issue.body,
-            &new_issue.frontmatter.labels,
-            &new_issue.frontmatter.assignees,
+            new_issue.labels(),
+            new_issue.assignees(),
         )
         .await?;
 
-    let issue_number = created.number;
+    let issue_number = u64::try_from(created.number)
+        .map_err(|_| anyhow::anyhow!("Invalid issue number returned: {}", created.number))?;
+
+    // Apply parent/sub-issue links via the same pipeline used by the edit
+    // path. The freshly created issue has no existing relationships, so
+    // `apply_links` only issues add operations here.
+    apply_links(
+        client,
+        &owner,
+        &repo_name,
+        issue_number,
+        &created,
+        new_issue.sub_issues(),
+        new_issue.parent_issue(),
+    )
+    .await?;
 
     // Rename directory from new/ to {issue_number}/
     let new_dir = path
@@ -86,9 +103,17 @@ pub async fn run_create_with_client(
         );
     }
 
-    // Save issue.md with frontmatter (same format as pull)
+    // Re-fetch the created issue so the saved frontmatter reflects the parent/sub
+    // links applied above. Without this, the local issue.md would silently lack
+    // the links that are now present remotely.
+    let final_issue = if new_issue.parent_issue().is_some() || !new_issue.sub_issues().is_empty() {
+        common::fetch_issue_with_sub_issues(client, &owner, &repo_name, issue_number).await?
+    } else {
+        created
+    };
+
     let storage = IssueStorage::from_dir(&new_dir);
-    let frontmatter = IssueFrontmatter::from_issue(&created);
+    let frontmatter = IssueFrontmatter::from_issue(&final_issue);
     if let Err(e) = storage.save_issue(&frontmatter, &new_issue.body) {
         // Directory was renamed successfully, so inform user about partial state
         anyhow::bail!(
@@ -145,14 +170,25 @@ fn display_new_issue(issue: &NewIssue) {
     println!("Title: {}", issue.title());
     println!();
 
-    if !issue.frontmatter.labels.is_empty() {
-        println!("Labels: {}", issue.frontmatter.labels.join(", "));
+    let has_metadata = !issue.labels().is_empty()
+        || !issue.assignees().is_empty()
+        || issue.parent_issue().is_some()
+        || !issue.sub_issues().is_empty();
+
+    if !issue.labels().is_empty() {
+        println!("Labels: {}", issue.labels().join(", "));
     }
-    if !issue.frontmatter.assignees.is_empty() {
-        println!("Assignees: {}", issue.frontmatter.assignees.join(", "));
+    if !issue.assignees().is_empty() {
+        println!("Assignees: {}", issue.assignees().join(", "));
+    }
+    if let Some(parent) = issue.parent_issue() {
+        println!("Parent issue: {}", parent);
+    }
+    if !issue.sub_issues().is_empty() {
+        println!("Sub-issues: {}", issue.sub_issues().join(", "));
     }
 
-    if !issue.frontmatter.labels.is_empty() || !issue.frontmatter.assignees.is_empty() {
+    if has_metadata {
         println!();
     }
 
@@ -372,6 +408,137 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
+        async fn test_create_issue_with_sub_issues_links_via_api() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    title: Parent Issue
+                    subIssues:
+                      - owner/repo#10
+                    ---
+
+                    Body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            // Mock create-issue (POST /repos/{owner}/{repo}/issues).
+            mock.repo("owner", "repo")
+                .issue(50)
+                .title("Parent Issue")
+                .body("Body.\n")
+                .labels(vec![])
+                .create()
+                .await;
+            // Mock get_issue_id for the child reference (issue #10) so the
+            // create path can resolve it to an internal ID before linking.
+            mock.repo("owner", "repo").get_issue_id(10, 12345).await;
+            // Mock POST .../{50}/sub_issues for adding the sub-issue link.
+            mock.repo("owner", "repo").add_sub_issue(50).await;
+            // Re-fetch to refresh local frontmatter post-link.
+            mock.repo("owner", "repo")
+                .issue(50)
+                .title("Parent Issue")
+                .body("Body.")
+                .get()
+                .await;
+            mock.repo("owner", "repo").sub_issues_empty(50).await;
+
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert!(result.is_ok(), "expected ok, got: {:?}", result.err());
+            // Verify the directory was renamed to the assigned issue number.
+            let renamed_dir = temp.path().join("owner").join("repo").join("50");
+            assert!(renamed_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_with_parent_issue_links_via_api() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    title: Child Issue
+                    parentIssue: owner/repo#1
+                    ---
+
+                    Body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(60)
+                .title("Child Issue")
+                .body("Body.\n")
+                .labels(vec![])
+                .create()
+                .await;
+            // get_issue_id for "this" issue (60), then add_sub_issue on parent (#1).
+            mock.repo("owner", "repo").get_issue_id(60, 99999).await;
+            mock.repo("owner", "repo").add_sub_issue(1).await;
+            // Re-fetch after linking.
+            mock.repo("owner", "repo")
+                .issue(60)
+                .title("Child Issue")
+                .body("Body.")
+                .get()
+                .await;
+            mock.repo("owner", "repo").sub_issues_empty(60).await;
+
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert!(result.is_ok(), "expected ok, got: {:?}", result.err());
+            let renamed_dir = temp.path().join("owner").join("repo").join("60");
+            assert!(renamed_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_unknown_frontmatter_key_errors() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            // Typo: "parentIssues" (plural) instead of "parentIssue"
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    title: Typo
+                    parentIssues: owner/repo#1
+                    ---
+
+                    Body.
+                "},
+            );
+
+            let mock = GitHubMockServer::start().await;
+            // No mocks needed; parsing should fail before any API call.
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            let err = result.unwrap_err().to_string();
+            assert_eq!(
+                err,
+                "Failed to parse issue.md: Unknown frontmatter key(s): parentIssues. \
+                 Allowed keys: title, labels, assignees, milestone, parentIssue, subIssues"
+            );
+            // Directory must remain unchanged on parse failure.
+            assert!(new_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
         async fn test_create_issue_cannot_determine_repo() {
             let temp = TempDir::new().unwrap();
             // Create dir without owner/repo/new structure and no -R arg
@@ -446,18 +613,26 @@ mod tests {
 
     mod display_new_issue_tests {
         use super::*;
-        use crate::commands::gh::issue_agent::models::NewIssueFrontmatter;
+        use crate::commands::gh::issue_agent::models::{EditableIssueFields, NewIssueFrontmatter};
+
+        fn make_issue(fields: EditableIssueFields, body: &str) -> NewIssue {
+            NewIssue {
+                frontmatter: NewIssueFrontmatter { fields },
+                body: body.to_string(),
+            }
+        }
 
         #[rstest]
         fn test_display_with_labels_and_assignees() {
-            let issue = NewIssue {
-                frontmatter: NewIssueFrontmatter {
+            let issue = make_issue(
+                EditableIssueFields {
                     title: "Test Title".to_string(),
                     labels: vec!["bug".to_string(), "urgent".to_string()],
                     assignees: vec!["user1".to_string()],
+                    ..Default::default()
                 },
-                body: "Test body content.".to_string(),
-            };
+                "Test body content.",
+            );
 
             // Just verify it doesn't panic
             display_new_issue(&issue);
@@ -465,13 +640,13 @@ mod tests {
 
         #[rstest]
         fn test_display_with_empty_body() {
-            let issue = NewIssue {
-                frontmatter: NewIssueFrontmatter {
+            let issue = make_issue(
+                EditableIssueFields {
                     title: "Title Only".to_string(),
                     ..Default::default()
                 },
-                body: String::new(),
-            };
+                "",
+            );
 
             // Just verify it doesn't panic
             display_new_issue(&issue);
@@ -479,13 +654,29 @@ mod tests {
 
         #[rstest]
         fn test_display_minimal() {
-            let issue = NewIssue {
-                frontmatter: NewIssueFrontmatter {
+            let issue = make_issue(
+                EditableIssueFields {
                     title: "Minimal".to_string(),
                     ..Default::default()
                 },
-                body: "Body".to_string(),
-            };
+                "Body",
+            );
+
+            // Just verify it doesn't panic
+            display_new_issue(&issue);
+        }
+
+        #[rstest]
+        fn test_display_with_parent_and_sub_issues() {
+            let issue = make_issue(
+                EditableIssueFields {
+                    title: "Linked Issue".to_string(),
+                    parent_issue: Some("owner/repo#1".to_string()),
+                    sub_issues: vec!["owner/repo#10".to_string(), "owner/repo#20".to_string()],
+                    ..Default::default()
+                },
+                "Body",
+            );
 
             // Just verify it doesn't panic
             display_new_issue(&issue);

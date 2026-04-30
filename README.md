@@ -177,6 +177,19 @@ Create a new issue boilerplate file. Fetches issue templates from the repository
 | `--template <NAME>` | Use a specific issue template by name             |
 | `--no-template`     | Use default boilerplate (skip template selection) |
 
+The frontmatter accepts the same editable keys as pulled issues, so a new issue can declare `parentIssue` and `subIssues` and `push` will create the issue and link it via the Sub-issues API in one step:
+
+```yaml
+---
+title: Child Issue
+parentIssue: owner/repo#1
+subIssues:
+  - owner/repo#10
+---
+```
+
+Unknown frontmatter keys (e.g. `parentIssues` typo) are rejected with an error rather than silently ignored.
+
 ##### `a gh issue-agent init comment <issue-number>`
 
 Create a new comment boilerplate file for an existing issue.

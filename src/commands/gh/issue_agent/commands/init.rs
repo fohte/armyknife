@@ -356,6 +356,9 @@ mod tests {
                     title: ""
                     labels: []
                     assignees: []
+                    # parentIssue: owner/repo#1
+                    # subIssues:
+                    #   - owner/repo#2
                     ---
 
                     Body

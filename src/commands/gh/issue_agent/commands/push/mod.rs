@@ -5,6 +5,7 @@ mod create;
 pub(crate) mod detect;
 #[cfg(test)]
 mod integration_tests;
+mod links;
 
 use std::path::PathBuf;
 
