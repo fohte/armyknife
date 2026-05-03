@@ -279,17 +279,23 @@ fn process_hook_event_impl(
         _ => session.current_tool, // Keep existing value for other events
     };
 
-    // Track whether the most recent tool launched a background task. The
+    // Track whether a recent tool launched a background task. The
     // immediately-following Stop fires synthetically (Claude moves on as soon
     // as the bg task is spawned, not when it finishes), and there is no hook
     // for bg-task completion — so we use this flag to suppress auto-compact
     // for that single Stop without trying to chase the actual bg lifetime.
-    if event == HookEvent::PostToolUse {
-        session.last_bg_task_pending = input
+    //
+    // Set-only here (cleared by Stop): a turn that mixes a bg launch with
+    // other tools fires multiple PostToolUse hooks, and a non-bg one
+    // arriving after the bg one must not erase the flag the bg launch set.
+    if event == HookEvent::PostToolUse
+        && input
             .tool_response
             .as_ref()
             .and_then(|r| r.background_task_id.as_deref())
-            .is_some();
+            .is_some()
+    {
+        session.last_bg_task_pending = true;
     }
 
     // Save updated session
@@ -330,6 +336,10 @@ fn process_hook_event_impl(
     // is consumed (cleared) here so the *next* genuine Stop is honored.
     if side_effects.auto_compact && event == HookEvent::Stop {
         if session.last_bg_task_pending {
+            eprintln!(
+                "[armyknife] cc auto-compact: skipping session {} (bg task pending)",
+                session.session_id,
+            );
             session.last_bg_task_pending = false;
             store::save_session_to(sessions_dir, &session)?;
         } else {
@@ -1179,11 +1189,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::with_bg_id(Some(r#"{"backgroundTaskId":"bg-123"}"#), true)]
-    #[case::null_bg_id(Some(r#"{"backgroundTaskId":null}"#), false)]
-    #[case::no_bg_id(Some("{}"), false)]
-    #[case::no_tool_response(None, false)]
-    fn post_tool_use_sets_bg_pending(
+    // Initial flag is false; only PostToolUse carrying a backgroundTaskId
+    // should set it. PostToolUse for any other tool must leave it alone
+    // (set-only semantics; clearing happens at the next Stop).
+    #[case::sets_when_bg_id_present(false, Some(r#"{"backgroundTaskId":"bg-123"}"#), true)]
+    #[case::null_bg_id_does_not_set(false, Some(r#"{"backgroundTaskId":null}"#), false)]
+    #[case::no_bg_id_does_not_set(false, Some("{}"), false)]
+    #[case::no_tool_response_does_not_set(false, None, false)]
+    // Flag already set by an earlier bg launch in the same turn must not
+    // be cleared by a later non-bg PostToolUse; otherwise a turn that
+    // mixes a bg Bash with another tool would lose the suppression.
+    #[case::keeps_when_no_bg_id(true, Some("{}"), true)]
+    #[case::keeps_when_no_tool_response(true, None, true)]
+    fn post_tool_use_updates_bg_pending(
+        #[case] initial: bool,
         #[case] tool_response: Option<&str>,
         #[case] expected_pending: bool,
     ) {
@@ -1192,7 +1211,7 @@ mod tests {
 
         let mut existing = create_test_session(None);
         existing.session_id = "bg-sess".to_string();
-        existing.last_bg_task_pending = false;
+        existing.last_bg_task_pending = initial;
         store::save_session_to(sessions_dir, &existing).expect("save");
 
         let mut payload = String::from(r#"{"session_id":"bg-sess","cwd":"/tmp/test""#);
