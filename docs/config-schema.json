@@ -10,7 +10,8 @@
       "default": {
         "auto_compact": {
           "enabled": true,
-          "idle_timeout": "4m30s"
+          "idle_timeout": "4m30s",
+          "min_context_tokens": 180000
         },
         "auto_pause": {
           "enabled": true,
@@ -94,10 +95,7 @@
       "properties": {
         "reviewers": {
           "description": "Default reviewers for `a ai review wait` and `a ai review request`.\n`None` means \"fall back to the next layer\" (org -> built-in default).",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "default": null,
           "items": {
             "$ref": "#/$defs/Reviewer"
@@ -119,6 +117,13 @@
           "description": "How long a session must stay idle (since the last Stop hook) before\nauto-compact fires. Should be slightly less than the prompt cache TTL\nso the resulting `/compact` invocation hits a warm cache (Claude Code\nsubscriptions: 5m TTL → default 4m30s).",
           "type": "string",
           "default": "4m30s"
+        },
+        "min_context_tokens": {
+          "description": "Minimum context size (in tokens) required before auto-compact fires.\nSessions whose latest assistant turn shows a smaller prompt than this\nare skipped — compacting a tiny context wastes a turn and discards\nuseful state for no benefit. Measured against\n`input + cache_read + cache_creation + output` of the most recent\nassistant entry in the transcript, so it tracks the actual prompt the\nnext turn would send regardless of which model context window is in\nuse (200k vs 1M).\nDefault: 180000.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 180000,
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -149,7 +154,8 @@
           "$ref": "#/$defs/AutoCompactConfig",
           "default": {
             "enabled": true,
-            "idle_timeout": "4m30s"
+            "idle_timeout": "4m30s",
+            "min_context_tokens": 180000
           }
         },
         "auto_pause": {
@@ -174,10 +180,7 @@
         },
         "focus_app": {
           "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "terminal": {
@@ -249,9 +252,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "command"
-      ]
+      "required": ["command"]
     },
     "RepoConfig": {
       "description": "Per-repository configuration.",
@@ -273,10 +274,7 @@
         },
         "language": {
           "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         }
       },
@@ -314,11 +312,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "direction",
-        "first",
-        "second"
-      ]
+      "required": ["direction", "first", "second"]
     },
     "SplitDirection": {
       "description": "Split direction.",
@@ -376,10 +370,7 @@
         },
         "repos_root": {
           "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "worktrees_dir": {

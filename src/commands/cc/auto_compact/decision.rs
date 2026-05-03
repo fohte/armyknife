@@ -36,6 +36,15 @@ pub enum CompactDecision {
     /// a later Stop hook re-armed the timer but the schedule process from an
     /// earlier turn raced through to wake-up first.
     NotYetElapsed,
+    /// Context size on the most recent assistant turn is below
+    /// `min_context_tokens`, so compacting now would waste a turn on a
+    /// session that has plenty of room left.
+    ///
+    /// Also returned when the transcript could not be read or did not contain
+    /// a usable usage record. Skipping when the size is unknown is the
+    /// conservative choice for a feature whose entire point is "don't compact
+    /// unless it's worth it".
+    BelowThreshold,
 }
 
 /// Inputs to the decision, gathered by the caller before calling.
@@ -57,6 +66,16 @@ pub struct CompactInputs<'a> {
     /// we couldn't determine it (no git repo, GitHub call failed); treated as
     /// "not merged" so we err on the side of compacting.
     pub branch_merged: Option<bool>,
+    /// Context size (in tokens) on the most recent assistant turn:
+    /// `input + cache_read + cache_creation + output`. `None` when the
+    /// transcript was unreadable or held no usage record — treated as
+    /// "below threshold" so we don't compact a session whose state is
+    /// unknown.
+    pub context_tokens: Option<u64>,
+    /// Minimum context size (in tokens) required to fire `/compact`.
+    /// Compacting a tiny context discards useful state without freeing any
+    /// budget that mattered.
+    pub min_context_tokens: u64,
 }
 
 pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
@@ -79,10 +98,17 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::NotYetElapsed;
     };
 
-    if elapsed_std >= inputs.idle_timeout {
-        CompactDecision::Compact
-    } else {
-        CompactDecision::NotYetElapsed
+    if elapsed_std < inputs.idle_timeout {
+        return CompactDecision::NotYetElapsed;
+    }
+
+    // Threshold check is intentionally last: it relies on transcript I/O the
+    // caller may have skipped, and ordering it after the cheap checks keeps
+    // the unrelated abort reasons (NotStopped, BranchMerged, ...) reportable
+    // even when usage cannot be read.
+    match inputs.context_tokens {
+        Some(tokens) if tokens >= inputs.min_context_tokens => CompactDecision::Compact,
+        _ => CompactDecision::BelowThreshold,
     }
 }
 
@@ -124,6 +150,12 @@ mod tests {
             idle_timeout,
             last_input: None,
             branch_merged: None,
+            // Default the threshold check out of the way for the existing
+            // suite: each older test wants the corresponding cheap check to
+            // be the only thing under examination, so feed enough tokens to
+            // satisfy a low bar.
+            context_tokens: Some(1_000_000),
+            min_context_tokens: 1,
         }
     }
 
@@ -216,6 +248,55 @@ mod tests {
         let session = stopped_session(now + TimeDelta::seconds(60));
         let decision = decide_compact(inputs(&session, now, Duration::from_secs(10)));
         assert_eq!(decision, CompactDecision::NotYetElapsed);
+    }
+
+    #[rstest]
+    #[case::exactly_at_threshold(180_000, 180_000, CompactDecision::Compact)]
+    #[case::above_threshold(250_000, 180_000, CompactDecision::Compact)]
+    #[case::below_threshold(120_000, 180_000, CompactDecision::BelowThreshold)]
+    #[case::just_below_threshold(179_999, 180_000, CompactDecision::BelowThreshold)]
+    fn context_tokens_drive_threshold(
+        #[case] context_tokens: u64,
+        #[case] min_context_tokens: u64,
+        #[case] expected: CompactDecision,
+    ) {
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::hours(1));
+        let decision = decide_compact(CompactInputs {
+            context_tokens: Some(context_tokens),
+            min_context_tokens,
+            ..inputs(&session, now, Duration::from_secs(60))
+        });
+        assert_eq!(decision, expected);
+    }
+
+    #[rstest]
+    fn unknown_context_tokens_skips_compact() {
+        // Transcript unreadable / no usage record. The whole point of the
+        // threshold is "don't compact unless it's worth it", so an unknown
+        // size has to fall on the skip side.
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::hours(1));
+        let decision = decide_compact(CompactInputs {
+            context_tokens: None,
+            min_context_tokens: 180_000,
+            ..inputs(&session, now, Duration::from_secs(60))
+        });
+        assert_eq!(decision, CompactDecision::BelowThreshold);
+    }
+
+    #[rstest]
+    fn typing_takes_precedence_over_threshold() {
+        // Even a fully-loaded context must not preempt the user mid-keystroke.
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::hours(1));
+        let decision = decide_compact(CompactInputs {
+            last_input: Some(now - TimeDelta::seconds(2)),
+            context_tokens: Some(900_000),
+            min_context_tokens: 180_000,
+            ..inputs(&session, now, Duration::from_secs(60))
+        });
+        assert_eq!(decision, CompactDecision::UserTyping);
     }
 
     #[rstest]

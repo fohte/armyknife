@@ -54,6 +54,54 @@ struct MessageContent {
     text: Option<String>,
 }
 
+/// Assistant entry restricted to the fields auto-compact's threshold check
+/// needs. Kept separate from `AssistantJsonlEntry` because the message-text
+/// scanner is a hot path that should not pay the deserialization cost of the
+/// full `usage` object.
+#[derive(Debug, Deserialize)]
+struct AssistantUsageEntry {
+    #[serde(rename = "type")]
+    entry_type: Option<String>,
+    message: Option<UsageMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageMessage {
+    usage: Option<UsageRecord>,
+}
+
+/// Subset of Anthropic's usage object that maps to "tokens currently sitting
+/// in the prompt the next turn would send". The four fields together cover:
+/// fresh input tokens not eligible for caching, tokens already cached and
+/// replayed (`cache_read`), tokens written into the cache this turn
+/// (`cache_creation`), and the assistant's own response (which becomes input
+/// on the next turn).
+///
+/// Fields are `Option` because Claude Code occasionally emits assistant
+/// entries (e.g. tool-use-only turns mid-stream) where the usage block is
+/// partial; `unwrap_or(0)` at the call site treats missing as zero so a
+/// partial record still produces a usable, lower-bound estimate.
+#[derive(Debug, Deserialize)]
+struct UsageRecord {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+}
+
+impl UsageRecord {
+    fn total(&self) -> u64 {
+        self.input_tokens.unwrap_or(0)
+            + self.cache_read_input_tokens.unwrap_or(0)
+            + self.cache_creation_input_tokens.unwrap_or(0)
+            + self.output_tokens.unwrap_or(0)
+    }
+}
+
 /// Encodes a project path to Claude Code's directory format.
 ///
 /// Claude Code encodes paths by replacing '/' and '.' with '-'.
@@ -144,6 +192,18 @@ pub fn get_last_assistant_message(project_path: &Path, session_id: &str) -> Opti
     get_last_assistant_message_in_home(&home, project_path, session_id)
 }
 
+/// Returns the prompt-token total carried by the most recent assistant entry
+/// in the session's transcript, summing input + cache_read + cache_creation +
+/// output. Used by auto-compact to skip sessions whose context is still
+/// small enough that a `/compact` would be wasteful.
+///
+/// Returns `None` when the transcript file is missing/unreadable or when no
+/// assistant entry with a usage record was found.
+pub fn get_last_context_tokens(project_path: &Path, session_id: &str) -> Option<u64> {
+    let home = crate::shared::dirs::home_dir()?;
+    get_last_context_tokens_in_home(&home, project_path, session_id)
+}
+
 /// Retrieves all conversation text from a session's .jsonl file for search.
 ///
 /// Returns a concatenated string of all user messages and assistant text responses.
@@ -216,6 +276,120 @@ fn get_conversation_text_in_home(
     } else {
         Some(texts.join(" "))
     }
+}
+
+/// Internal function for testing: allows overriding the home directory.
+fn get_last_context_tokens_in_home(
+    home: &Path,
+    project_path: &Path,
+    session_id: &str,
+) -> Option<u64> {
+    let encoded = encode_project_path(project_path);
+    let jsonl_path = home
+        .join(".claude")
+        .join("projects")
+        .join(&encoded)
+        .join(format!("{session_id}.jsonl"));
+
+    if !jsonl_path.exists() {
+        return None;
+    }
+
+    let file = File::open(&jsonl_path).ok()?;
+
+    if let Some(tokens) = read_last_context_tokens_reverse(&file) {
+        return Some(tokens);
+    }
+
+    read_last_context_tokens_forward(&file)
+}
+
+/// Reverse-scan for the last assistant entry that carries a usage record.
+/// Mirrors `read_last_assistant_message_reverse`'s progressive buffer
+/// expansion so a tail of tool_use-only entries (which omit usage) doesn't
+/// silently drop us back to "unknown".
+fn read_last_context_tokens_reverse(file: &File) -> Option<u64> {
+    let metadata = file.metadata().ok()?;
+    let file_size = metadata.len();
+
+    if file_size < INITIAL_READ_SIZE as u64 {
+        return None;
+    }
+
+    let mut read_size = INITIAL_READ_SIZE;
+
+    while read_size <= MAX_READ_SIZE {
+        let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
+
+        if let Some(tokens) = try_read_last_lines_for_usage(file, actual_read, file_size) {
+            return Some(tokens);
+        }
+
+        read_size *= 2;
+    }
+
+    None
+}
+
+fn try_read_last_lines_for_usage(file: &File, read_size: usize, file_size: u64) -> Option<u64> {
+    let mut reader = BufReader::new(file);
+
+    reader.seek(SeekFrom::End(-(read_size as i64))).ok()?;
+
+    let mut buffer = vec![0u8; read_size];
+    reader.read_exact(&mut buffer).ok()?;
+
+    let content = String::from_utf8_lossy(&buffer);
+
+    let complete_content = if read_size as u64 >= file_size {
+        &content[..]
+    } else {
+        let first_newline = content.find('\n')?;
+        &content[first_newline + 1..]
+    };
+
+    let lines: Vec<&str> = complete_content.lines().collect();
+
+    for line in lines.iter().rev().take(MAX_LINES_TO_SCAN) {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(tokens) = usage_total_from_line(line) {
+            return Some(tokens);
+        }
+    }
+
+    None
+}
+
+fn read_last_context_tokens_forward(file: &File) -> Option<u64> {
+    let mut file = BufReader::new(file);
+    file.seek(SeekFrom::Start(0)).ok()?;
+
+    let mut last_total: Option<u64> = None;
+
+    for line in file.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(tokens) = usage_total_from_line(&line) {
+            last_total = Some(tokens);
+        }
+    }
+
+    last_total
+}
+
+fn usage_total_from_line(line: &str) -> Option<u64> {
+    let entry: AssistantUsageEntry = serde_json::from_str(line).ok()?;
+    if entry.entry_type.as_deref() != Some("assistant") {
+        return None;
+    }
+    let usage = entry.message?.usage?;
+    Some(usage.total())
 }
 
 /// Internal function for testing: allows overriding the home directory.
@@ -659,5 +833,97 @@ mod tests {
 
         // Should find the last message with text content, not tool_use
         assert_eq!(result, Some("This is the real last text".to_string()));
+    }
+
+    // =========================================================================
+    // Tests for get_last_context_tokens
+    // =========================================================================
+
+    #[rstest]
+    #[case::all_four_fields(
+        indoc! {r#"
+            {"type":"user","message":{"content":"hi"}}
+            {"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"output_tokens":20}}}
+        "#},
+        Some(1130)
+    )]
+    #[case::picks_last_assistant(
+        indoc! {r#"
+            {"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4}}}
+            {"type":"assistant","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":200,"cache_creation_input_tokens":300,"output_tokens":400}}}
+        "#},
+        Some(1000)
+    )]
+    #[case::missing_fields_treated_as_zero(
+        r#"{"type":"assistant","message":{"usage":{"cache_read_input_tokens":50000}}}"#,
+        Some(50000)
+    )]
+    #[case::no_assistant_entries(
+        indoc! {r#"
+            {"type":"user","message":{"content":"hi"}}
+        "#},
+        None
+    )]
+    #[case::assistant_without_usage(
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+        None
+    )]
+    fn test_get_last_context_tokens(#[case] jsonl_content: &str, #[case] expected: Option<u64>) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "tokens-session";
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
+
+        let result = get_last_context_tokens_in_home(home_dir, Path::new(project_path), session_id);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_last_context_tokens_handles_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let result = get_last_context_tokens_in_home(
+            home_dir,
+            Path::new("/nonexistent/path"),
+            "missing-session",
+        );
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_reverse_read_finds_usage_in_large_file() {
+        // Same shape as test_reverse_read_finds_last_message_in_large_file:
+        // make sure the reverse-scan path returns the usage of the last
+        // assistant entry, not an early one.
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "large-tokens-session";
+
+        let mut content = String::new();
+        for i in 0..500u64 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"Q{i}"}}}}"#
+            ));
+            content.push('\n');
+            content.push_str(&format!(
+                r#"{{"type":"assistant","message":{{"usage":{{"input_tokens":1,"cache_read_input_tokens":{i},"cache_creation_input_tokens":0,"output_tokens":0}}}}}}"#
+            ));
+            content.push('\n');
+        }
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, &content);
+
+        let result = get_last_context_tokens_in_home(home_dir, Path::new(project_path), session_id);
+
+        // Last assistant has cache_read_input_tokens=499, input_tokens=1.
+        assert_eq!(result, Some(500));
     }
 }
