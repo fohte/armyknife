@@ -5,9 +5,11 @@
 //! can stub at the module boundary.
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// Replaces the current process image with `program args...` via `execve(2)`.
 /// Returns only on failure; the returned `io::Error` describes why `exec` could not start the program.
@@ -18,6 +20,42 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     Command::new(program).args(args).exec()
+}
+
+/// Spawns `program args...` with stdio redirected to `/dev/null` and the
+/// child detached from our stdio handles, then returns immediately without
+/// waiting.
+///
+/// Used for fire-and-forget background workers (e.g., the auto-compact
+/// schedule worker spawned from the Stop hook): the parent process must be
+/// able to exit while the child keeps running, and the parent's pipes must
+/// not be held open by the child or upstream callers (Claude Code's hook
+/// runner) would block on EOF.
+///
+/// `cwd` and `extra_env` apply to the child only.
+pub fn spawn_detached<P, I, S>(
+    program: P,
+    args: I,
+    cwd: Option<&Path>,
+    extra_env: &[(&str, &str)],
+) -> io::Result<()>
+where
+    P: AsRef<OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.spawn().map(|_| ())
 }
 
 /// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.

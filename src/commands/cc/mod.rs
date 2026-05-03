@@ -1,3 +1,4 @@
+mod auto_compact;
 mod auto_pause;
 mod claude_sessions;
 mod error;
@@ -15,6 +16,7 @@ mod watch;
 
 use clap::Subcommand;
 
+pub use auto_compact::AutoCompactArgs;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
@@ -48,10 +50,14 @@ pub enum CcCommands {
 
     /// Pause long-stopped sessions by sending SIGTERM (run periodically)
     Sweep(SweepArgs),
+
+    /// Schedule a `/compact` for an idle session while the prompt cache is warm.
+    #[command(name = "auto-compact")]
+    AutoCompact(AutoCompactArgs),
 }
 
 impl CcCommands {
-    pub fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::Hook(args) => hook::run(args)?,
             Self::List(args) => list::run(args)?,
@@ -60,6 +66,7 @@ impl CcCommands {
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Sweep(args) => sweep::run(args)?,
+            Self::AutoCompact(args) => auto_compact::run(args).await?,
         }
         Ok(())
     }

@@ -8,6 +8,10 @@
       "description": "Claude Code session monitoring settings.",
       "$ref": "#/$defs/CcConfig",
       "default": {
+        "auto_compact": {
+          "enabled": true,
+          "idle_timeout": "4m30s"
+        },
         "auto_pause": {
           "enabled": true,
           "timeout": "30m"
@@ -102,6 +106,23 @@
       },
       "additionalProperties": false
     },
+    "AutoCompactConfig": {
+      "description": "Configuration for automatically running `/compact` against sessions that\nhave been idle for `idle_timeout` while the prompt cache is still warm.\n\nThe Stop hook spawns a detached `a cc auto-compact schedule` process for\neach Stop event. After `idle_timeout` of inactivity (anchored on the Stop\nhook fire time), it SIGTERMs the live `claude` process and then re-runs\n`claude -r <id> -p \"/compact\"` so that the compaction itself benefits from\nthe still-warm prompt cache.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether automatic compaction is enabled (default: true).",
+          "type": "boolean",
+          "default": true
+        },
+        "idle_timeout": {
+          "description": "How long a session must stay idle (since the last Stop hook) before\nauto-compact fires. Should be slightly less than the prompt cache TTL\nso the resulting `/compact` invocation hits a warm cache (Claude Code\nsubscriptions: 5m TTL → default 4m30s).",
+          "type": "string",
+          "default": "4m30s"
+        }
+      },
+      "additionalProperties": false
+    },
     "AutoPauseConfig": {
       "description": "Configuration for automatically pausing sessions that stay in the Stopped\nstate for longer than `timeout`.\n\nA periodic `a cc sweep` run (typically driven by launchd) scans all sessions,\nsends SIGTERM to any Claude Code process whose session has been Stopped for\nlonger than `timeout`, and flips the session status to Paused so that\n`a cc resume` can restore it later.",
       "type": "object",
@@ -123,6 +144,14 @@
       "description": "Claude Code session monitoring configuration.",
       "type": "object",
       "properties": {
+        "auto_compact": {
+          "description": "Automatic `/compact` settings for idle sessions while the prompt cache\nis still warm.",
+          "$ref": "#/$defs/AutoCompactConfig",
+          "default": {
+            "enabled": true,
+            "idle_timeout": "4m30s"
+          }
+        },
         "auto_pause": {
           "description": "Automatic pause settings for long-stopped sessions.",
           "$ref": "#/$defs/AutoPauseConfig",

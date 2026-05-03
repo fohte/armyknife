@@ -254,6 +254,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            last_bg_task_pending: false,
         }
     }
 
@@ -395,6 +396,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -409,6 +411,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -423,6 +426,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
         ];
 
@@ -688,6 +692,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -707,6 +712,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -721,6 +727,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
         ];
 

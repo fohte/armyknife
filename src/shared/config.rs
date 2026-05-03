@@ -332,6 +332,11 @@ pub struct CcConfig {
     /// Automatic pause settings for long-stopped sessions.
     #[serde(default)]
     pub auto_pause: AutoPauseConfig,
+
+    /// Automatic `/compact` settings for idle sessions while the prompt cache
+    /// is still warm.
+    #[serde(default)]
+    pub auto_compact: AutoCompactConfig,
 }
 
 /// Configuration for automatically pausing sessions that stay in the Stopped
@@ -369,6 +374,44 @@ impl Default for AutoPauseConfig {
 
 fn default_auto_pause_timeout() -> String {
     "30m".to_string()
+}
+
+/// Configuration for automatically running `/compact` against sessions that
+/// have been idle for `idle_timeout` while the prompt cache is still warm.
+///
+/// The Stop hook spawns a detached `a cc auto-compact schedule` process for
+/// each Stop event. After `idle_timeout` of inactivity (anchored on the Stop
+/// hook fire time), it SIGTERMs the live `claude` process and then re-runs
+/// `claude -r <id> -p "/compact"` so that the compaction itself benefits from
+/// the still-warm prompt cache.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoCompactConfig {
+    /// Whether automatic compaction is enabled (default: true).
+    #[serde(default = "default_true")]
+    #[schemars(default = "default_true")]
+    pub enabled: bool,
+
+    /// How long a session must stay idle (since the last Stop hook) before
+    /// auto-compact fires. Should be slightly less than the prompt cache TTL
+    /// so the resulting `/compact` invocation hits a warm cache (Claude Code
+    /// subscriptions: 5m TTL → default 4m30s).
+    #[serde(default = "default_auto_compact_idle_timeout")]
+    #[schemars(default = "default_auto_compact_idle_timeout")]
+    pub idle_timeout: String,
+}
+
+impl Default for AutoCompactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            idle_timeout: default_auto_compact_idle_timeout(),
+        }
+    }
+}
+
+fn default_auto_compact_idle_timeout() -> String {
+    "4m30s".to_string()
 }
 
 fn default_worktrees_dir() -> String {
@@ -563,6 +606,26 @@ mod tests {
         assert!(config.notification.enabled);
         assert_eq!(config.notification.sound, "Glass");
         assert!(config.repos.is_empty());
+    }
+
+    #[test]
+    fn auto_compact_default_is_enabled_with_cache_friendly_timeout() {
+        let cfg = AutoCompactConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.idle_timeout, "4m30s");
+    }
+
+    #[test]
+    fn parse_auto_compact_yaml() {
+        let yaml = indoc! {"
+            cc:
+              auto_compact:
+                enabled: true
+                idle_timeout: 3m
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.cc.auto_compact.enabled);
+        assert_eq!(config.cc.auto_compact.idle_timeout, "3m");
     }
 
     #[test]
