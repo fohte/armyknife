@@ -444,17 +444,19 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
             source: e,
         })?;
         let path = entry.path();
-        // file_type follows symlinks via metadata fallback below; we want symlinks
-        // pointing to regular files (private repo -> public dotfiles use case).
+        // Filter by extension first to skip syscalls and permission errors on
+        // unrelated files (README.md, .DS_Store, hooks/ subdirectory, etc.).
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if extension != "yaml" && extension != "yml" {
+            continue;
+        }
+        // metadata follows symlinks so a `*.yaml` symlink to a private repo
+        // file is honored, while symlinks to directories are still skipped.
         let metadata = std::fs::metadata(&path).map_err(|e| ConfigError::ReadError {
             path: path.clone(),
             source: e,
         })?;
         if !metadata.is_file() {
-            continue;
-        }
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if extension != "yaml" && extension != "yml" {
             continue;
         }
         paths.push(path);
