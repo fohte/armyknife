@@ -9,7 +9,7 @@
       "$ref": "#/$defs/CcConfig",
       "default": {
         "auto_compact": {
-          "enabled": false,
+          "enabled": true,
           "idle_timeout": "4m30s"
         },
         "auto_pause": {
@@ -107,13 +107,13 @@
       "additionalProperties": false
     },
     "AutoCompactConfig": {
-      "description": "Configuration for automatically running `/compact` against sessions that\nhave been idle for `idle_timeout` while the prompt cache is still warm.\n\nThe Stop hook spawns a detached `a cc auto-compact schedule` process for\neach Stop event. After `idle_timeout` of inactivity (anchored on the Stop\nhook fire time), it SIGTERMs the live `claude` process and then re-runs\n`claude -r <id> -p \"/compact\"` so that the compaction itself benefits from\nthe still-warm prompt cache.\n\nDisabled by default because compaction is destructive (the active context\nwindow is rewritten); users opt in once they're comfortable with the\ntrade-off.",
+      "description": "Configuration for automatically running `/compact` against sessions that\nhave been idle for `idle_timeout` while the prompt cache is still warm.\n\nThe Stop hook spawns a detached `a cc auto-compact schedule` process for\neach Stop event. After `idle_timeout` of inactivity (anchored on the Stop\nhook fire time), it SIGTERMs the live `claude` process and then re-runs\n`claude -r <id> -p \"/compact\"` so that the compaction itself benefits from\nthe still-warm prompt cache.",
       "type": "object",
       "properties": {
         "enabled": {
-          "description": "Whether automatic compaction is enabled (default: false).",
+          "description": "Whether automatic compaction is enabled (default: true).",
           "type": "boolean",
-          "default": false
+          "default": true
         },
         "idle_timeout": {
           "description": "How long a session must stay idle (since the last Stop hook) before\nauto-compact fires. Should be slightly less than the prompt cache TTL\nso the resulting `/compact` invocation hits a warm cache (Claude Code\nsubscriptions: 5m TTL → default 4m30s).",
@@ -148,7 +148,7 @@
           "description": "Automatic `/compact` settings for idle sessions while the prompt cache\nis still warm.",
           "$ref": "#/$defs/AutoCompactConfig",
           "default": {
-            "enabled": false,
+            "enabled": true,
             "idle_timeout": "4m30s"
           }
         },
