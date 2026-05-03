@@ -32,23 +32,6 @@ pub fn builtin_default_reviewers() -> Vec<Reviewer> {
     vec![Reviewer::Gemini, Reviewer::Devin]
 }
 
-/// Resolve which reviewers to use, applying the precedence
-/// CLI override > repo config > org config > built-in default.
-pub fn resolve_reviewers_with_default(
-    cli: Option<&[Reviewer]>,
-    config: &crate::shared::config::Config,
-    owner: &str,
-    repo: &str,
-) -> Vec<Reviewer> {
-    if let Some(reviewers) = cli {
-        return reviewers.to_vec();
-    }
-    if let Some(reviewers) = config.resolve_reviewers(owner, repo) {
-        return reviewers;
-    }
-    builtin_default_reviewers()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

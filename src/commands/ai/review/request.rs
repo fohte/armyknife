@@ -4,8 +4,8 @@ use super::client::get_client;
 use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::detector::{DetectionClient, DetectionContext, ReviewDetector};
 use super::error::Result;
-use super::reviewer::{Reviewer, resolve_reviewers_with_default};
-use crate::shared::config::Config;
+use super::reviewer::{Reviewer, builtin_default_reviewers};
+use crate::shared::config::load_config;
 use chrono::Utc;
 use clap::Args;
 
@@ -56,8 +56,12 @@ pub(crate) async fn run_request<C: DetectionClient>(
     repo: &str,
     pr_number: u64,
 ) -> Result<()> {
-    let config = Config::load_or_default();
-    let resolved = resolve_reviewers_with_default(args.reviewers.as_deref(), &config, owner, repo);
+    let resolved = match args.reviewers.as_deref() {
+        Some(r) => r.to_vec(),
+        None => load_config()?
+            .resolve_reviewers(owner, repo)
+            .unwrap_or_else(builtin_default_reviewers),
+    };
     let reviewers = &resolved;
     println!("Checking PR #{pr_number} for {:?} review(s)...", reviewers);
 

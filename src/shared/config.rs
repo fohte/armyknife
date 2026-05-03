@@ -65,12 +65,6 @@ impl Config {
         }
     }
 
-    /// Load the user's config, swallowing errors and returning `Config::default()` on failure.
-    /// Useful for non-fatal lookups (e.g., resolving CLI defaults).
-    pub fn load_or_default() -> Self {
-        load_config().unwrap_or_default()
-    }
-
     /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).
     /// Resolution order: repo (`repos.<owner>/<repo>.ai.review.reviewers`) -> org
     /// (`orgs.<owner>.ai.review.reviewers`) -> None (caller falls back to its own default).
@@ -1108,17 +1102,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::cli_overrides_repo_and_org(
-        Some(vec![Reviewer::Gemini]),
-        vec![Reviewer::Gemini],
-    )]
-    #[case::repo_beats_org(
-        None,
-        vec![Reviewer::Devin],
-    )]
-    fn resolve_reviewers_with_default_precedence(
-        #[case] cli: Option<Vec<Reviewer>>,
-        #[case] expected: Vec<Reviewer>,
+    #[case::repo_beats_org("fohte", "work-repo", Some(vec![Reviewer::Devin]))]
+    #[case::org_when_no_repo_entry("fohte", "any-repo", Some(vec![Reviewer::Gemini]))]
+    #[case::owner_unknown_returns_none("stranger", "any-repo", None)]
+    fn resolve_reviewers_precedence(
+        #[case] owner: &str,
+        #[case] repo: &str,
+        #[case] expected: Option<Vec<Reviewer>>,
     ) {
         let config: Config = serde_yaml::from_str(indoc! {"
             orgs:
@@ -1134,37 +1124,7 @@ mod tests {
         "})
         .unwrap();
 
-        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
-            cli.as_deref(),
-            &config,
-            "fohte",
-            "work-repo",
-        );
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn resolve_reviewers_falls_back_to_org_then_builtin() {
-        let config: Config = serde_yaml::from_str(indoc! {"
-            orgs:
-              fohte:
-                ai:
-                  review:
-                    reviewers: [gemini]
-        "})
-        .unwrap();
-
-        // owner has org config -> use it
-        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
-            None, &config, "fohte", "any-repo",
-        );
-        assert_eq!(result, vec![Reviewer::Gemini]);
-
-        // owner has no entry -> built-in default
-        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
-            None, &config, "stranger", "any-repo",
-        );
-        assert_eq!(result, vec![Reviewer::Gemini, Reviewer::Devin]);
+        assert_eq!(config.resolve_reviewers(owner, repo), expected);
     }
 
     #[fixture]
