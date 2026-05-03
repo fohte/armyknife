@@ -112,13 +112,24 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     // Cancel any previously-armed worker for this pane, then advertise
     // ourselves so the next Stop hook can cancel us in turn. Both ops are
     // best-effort — losing a race here just means an extra worker exits.
-    if let Some(pane_id) = session.tmux_info.as_ref().map(|t| t.pane_id.clone()) {
-        cancel_previous_timer(&pane_id, &LibcSignalSender);
+    let pane_id = session.tmux_info.as_ref().map(|t| t.pane_id.clone());
+    if let Some(ref pane_id) = pane_id {
+        cancel_previous_timer(pane_id, &LibcSignalSender);
         let pid = std::process::id().to_string();
-        let _ = tmux::set_pane_option(&pane_id, TIMER_PID_OPTION, &pid);
+        let _ = tmux::set_pane_option(pane_id, TIMER_PID_OPTION, &pid);
     }
 
     tokio::time::sleep(idle_timeout).await;
+
+    // Re-check the pane option: a later Stop hook may have replaced our pid
+    // with the next worker's. SIGTERM from `cancel_previous_timer` is
+    // asynchronous, so without this barrier our wake-up can race past the
+    // signal and double-fire `/compact` together with the new worker.
+    if let Some(ref pane_id) = pane_id
+        && !is_current_timer(pane_id)
+    {
+        return Ok(());
+    }
 
     // Reload the session: it may have moved out of Stopped (user resumed,
     // sweep paused it, …) while we slept.
@@ -162,6 +173,13 @@ fn cancel_previous_timer<S: SignalSender>(pane_id: &str, sender: &S) {
     let Some(target) = parse_cancellable_pid(&prev, std::process::id()) else {
         return;
     };
+    if !is_armyknife_process(target) {
+        // Pid was recycled by the OS into an unrelated process after the
+        // earlier worker died without clearing the pane option. Skipping
+        // is the safe move: SIGTERMing a stranger because we recognized a
+        // pid number is much worse than missing a cancellation.
+        return;
+    }
     if let Err(e) = sender.send(target, libc::SIGTERM)
         && e.raw_os_error() != Some(libc::ESRCH)
     {
@@ -180,6 +198,32 @@ fn cancel_previous_timer<S: SignalSender>(pane_id: &str, sender: &S) {
 fn parse_cancellable_pid(recorded: &str, self_pid: u32) -> Option<u32> {
     let pid: u32 = recorded.trim().parse().ok()?;
     (pid != self_pid).then_some(pid)
+}
+
+/// Returns true if `pid` currently belongs to an armyknife binary
+/// (`a`). Used as a PID-recycle guard before SIGTERMing a value we read out
+/// of a pane option.
+fn is_armyknife_process(pid: u32) -> bool {
+    let Some(snapshot) = ProcessSnapshot::capture() else {
+        // Capture failed — falling back to "trust the pid" would re-open
+        // the recycle hole we're trying to close, so refuse.
+        return false;
+    };
+    snapshot.comm_basename(pid) == Some("a")
+}
+
+/// Returns true if the pane option still records our pid as the active
+/// timer. Used after `tokio::time::sleep` so a worker whose cancellation
+/// SIGTERM was queued but not yet delivered exits instead of double-firing
+/// `/compact` alongside the worker that replaced it.
+fn is_current_timer(pane_id: &str) -> bool {
+    let Some(recorded) = tmux::get_pane_option(pane_id, TIMER_PID_OPTION) else {
+        // Option missing means either tmux is unavailable or the worker
+        // was launched without one. Both cases predate any "we got
+        // replaced" signal, so behave as if we're still current.
+        return true;
+    };
+    recorded.trim().parse::<u32>().ok() == Some(std::process::id())
 }
 
 /// Returns the pane's pty atime as a UTC timestamp, if available. Mirrors the
