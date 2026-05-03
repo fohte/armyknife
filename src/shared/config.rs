@@ -631,6 +631,7 @@ mod tests {
         let cfg = AutoCompactConfig::default();
         assert!(cfg.enabled);
         assert_eq!(cfg.idle_timeout, "4m30s");
+        assert_eq!(cfg.min_context_tokens, 180_000);
     }
 
     #[test]
@@ -640,10 +641,12 @@ mod tests {
               auto_compact:
                 enabled: true
                 idle_timeout: 3m
+                min_context_tokens: 200000
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.cc.auto_compact.enabled);
         assert_eq!(config.cc.auto_compact.idle_timeout, "3m");
+        assert_eq!(config.cc.auto_compact.min_context_tokens, 200_000);
     }
 
     #[test]
