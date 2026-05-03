@@ -422,11 +422,11 @@ Configure via `~/.config/armyknife/config.yaml`:
 ```yaml
 cc:
   auto_compact:
-    enabled: false # default: false (opt-in)
+    enabled: true # default: true
     idle_timeout: 4m30s # default: "4m30s" (slightly under the 5m prompt cache TTL)
 ```
 
-The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Claude Code subscriptions; tune it down (e.g. `idle_timeout: 50m`) if your Anthropic API account uses the 1-hour cache.
+The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Claude Code subscriptions; tune it up (e.g. `idle_timeout: 55m`) if your Anthropic API account uses the 1-hour cache.
 
 #### Environment Variables
 

@@ -384,16 +384,12 @@ fn default_auto_pause_timeout() -> String {
 /// hook fire time), it SIGTERMs the live `claude` process and then re-runs
 /// `claude -r <id> -p "/compact"` so that the compaction itself benefits from
 /// the still-warm prompt cache.
-///
-/// Disabled by default because compaction is destructive (the active context
-/// window is rewritten); users opt in once they're comfortable with the
-/// trade-off.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AutoCompactConfig {
-    /// Whether automatic compaction is enabled (default: false).
-    #[serde(default)]
-    #[schemars(default)]
+    /// Whether automatic compaction is enabled (default: true).
+    #[serde(default = "default_true")]
+    #[schemars(default = "default_true")]
     pub enabled: bool,
 
     /// How long a session must stay idle (since the last Stop hook) before
@@ -408,7 +404,7 @@ pub struct AutoCompactConfig {
 impl Default for AutoCompactConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_true(),
             idle_timeout: default_auto_compact_idle_timeout(),
         }
     }
@@ -613,9 +609,9 @@ mod tests {
     }
 
     #[test]
-    fn auto_compact_default_is_disabled_with_cache_friendly_timeout() {
+    fn auto_compact_default_is_enabled_with_cache_friendly_timeout() {
         let cfg = AutoCompactConfig::default();
-        assert!(!cfg.enabled);
+        assert!(cfg.enabled);
         assert_eq!(cfg.idle_timeout, "4m30s");
     }
 
