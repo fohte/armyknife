@@ -23,7 +23,6 @@
 //!    doesn't recursively schedule another compaction.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -36,7 +35,7 @@ use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
 use crate::commands::cc::store;
 use crate::commands::cc::types::{Session, SessionStatus};
 use crate::infra::git::{MergeStatus, get_merge_status_for_repo, open_repo_at};
-use crate::infra::process::ProcessSnapshot;
+use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
 use crate::shared::config;
 
@@ -67,16 +66,12 @@ pub fn spawn_in_background(session_id: &str) {
             return;
         }
     };
-    // We deliberately do NOT inherit stdin/stdout/stderr from the hook;
-    // detaching them lets the hook process exit while the child keeps
-    // running. Attaching them to /dev/null also avoids the child holding the
-    // hook's pipes open, which would block Claude Code from advancing.
-    let result = Command::new(exe)
-        .args(["cc", "auto-compact", "schedule", "--session", session_id])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    let result = process::spawn_detached(
+        exe,
+        ["cc", "auto-compact", "schedule", "--session", session_id],
+        None,
+        &[],
+    );
     if let Err(e) = result {
         eprintln!("[armyknife] cc auto-compact: failed to spawn schedule worker: {e}");
     }
@@ -150,7 +145,7 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     });
 
     match decision {
-        CompactDecision::Compact => execute_compaction(&session, &LibcSignalSender)?,
+        CompactDecision::Compact => execute_compaction(&session, &LibcSignalSender).await?,
         other => {
             eprintln!(
                 "[armyknife] cc auto-compact: skipping session {} ({:?})",
@@ -253,7 +248,7 @@ async fn branch_merged_for(session: &Session) -> Option<bool> {
 /// SIGTERMs the live `claude` process (so we don't collide with the
 /// foreground session) and runs `claude -r <id> -p "/compact"` so the
 /// compaction itself reuses the still-warm prompt cache.
-fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> Result<()> {
+async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> Result<()> {
     if let Some(pid) = resolve_claude_pid(session) {
         if let Err(e) = sender.send(pid, libc::SIGTERM)
             && e.raw_os_error() != Some(libc::ESRCH)
@@ -265,7 +260,8 @@ fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> Result<
         }
         // SIGTERM is asynchronous; give claude a beat to finish flushing
         // pending writes before we re-launch it on the same session_id.
-        std::thread::sleep(Duration::from_millis(500));
+        // Use tokio's sleep so we don't block the executor thread.
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     spawn_compact_resume(session)?;
@@ -281,28 +277,23 @@ fn resolve_claude_pid(session: &Session) -> Option<u32> {
 }
 
 fn spawn_compact_resume(session: &Session) -> Result<()> {
-    let result = Command::new("claude")
-        .args(["-r", &session.session_id, "-p", "/compact"])
-        // ARMYKNIFE_SKIP_HOOKS=1 makes the child's own Stop hook bail out at
-        // the top of `cc hook run`, so the compaction itself doesn't
-        // recursively schedule another auto-compact.
-        .env("ARMYKNIFE_SKIP_HOOKS", "1")
-        .current_dir(&session.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-
-    match result {
-        Ok(_child) => Ok(()),
-        Err(e) => {
-            eprintln!(
-                "[armyknife] cc auto-compact: failed to spawn `claude -r -p /compact` for {}: {e}",
-                session.session_id,
-            );
-            Err(e).context("spawn claude -r")
-        }
+    // ARMYKNIFE_SKIP_HOOKS=1 makes the child's own Stop hook bail out at the
+    // top of `cc hook run`, so the compaction itself doesn't recursively
+    // schedule another auto-compact.
+    let result = process::spawn_detached(
+        "claude",
+        ["-r", &session.session_id, "-p", "/compact"],
+        Some(&session.cwd),
+        &[("ARMYKNIFE_SKIP_HOOKS", "1")],
+    );
+    if let Err(e) = result {
+        eprintln!(
+            "[armyknife] cc auto-compact: failed to spawn `claude -r -p /compact` for {}: {e}",
+            session.session_id,
+        );
+        return Err(e).context("spawn claude -r");
     }
+    Ok(())
 }
 
 fn mark_paused(session: &Session) -> Result<()> {
