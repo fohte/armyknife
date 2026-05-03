@@ -371,6 +371,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             })
             .collect();
 
@@ -574,6 +575,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "session-waiting".to_string(),
@@ -588,6 +590,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "session-stopped".to_string(),
@@ -602,6 +605,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
             Session {
                 session_id: "session-paused".to_string(),
@@ -616,6 +620,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
             },
         ];
         App::with_sessions(sessions)
@@ -850,6 +855,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            last_bg_task_pending: false,
         }
     }
 

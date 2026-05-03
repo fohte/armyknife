@@ -229,6 +229,7 @@ fn process_hook_event_impl(
                 current_tool: None,
                 label: env.session_label.clone(),
                 ancestor_session_ids,
+                last_bg_task_pending: false,
             }
         });
 
@@ -278,6 +279,19 @@ fn process_hook_event_impl(
         _ => session.current_tool, // Keep existing value for other events
     };
 
+    // Track whether the most recent tool launched a background task. The
+    // immediately-following Stop fires synthetically (Claude moves on as soon
+    // as the bg task is spawned, not when it finishes), and there is no hook
+    // for bg-task completion — so we use this flag to suppress auto-compact
+    // for that single Stop without trying to chase the actual bg lifetime.
+    if event == HookEvent::PostToolUse {
+        session.last_bg_task_pending = input
+            .tool_response
+            .as_ref()
+            .and_then(|r| r.background_task_id.as_deref())
+            .is_some();
+    }
+
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
 
@@ -309,10 +323,20 @@ fn process_hook_event_impl(
     // `claude -r -p "/compact"` after the configured idle timeout. The
     // worker re-checks user activity / branch state on wake-up so a quick
     // follow-up turn cancels the compaction transparently.
+    //
+    // Skip when the Stop is just the synthetic one Claude fires right after
+    // launching a background task: the user is still mid-task, even if no
+    // further hook will tell us when the bg work actually finishes. The flag
+    // is consumed (cleared) here so the *next* genuine Stop is honored.
     if side_effects.auto_compact && event == HookEvent::Stop {
-        let config = config::load_config().unwrap_or_default();
-        if config.cc.auto_compact.enabled {
-            auto_compact::spawn_in_background(&session.session_id);
+        if session.last_bg_task_pending {
+            session.last_bg_task_pending = false;
+            store::save_session_to(sessions_dir, &session)?;
+        } else {
+            let config = config::load_config().unwrap_or_default();
+            if config.cc.auto_compact.enabled {
+                auto_compact::spawn_in_background(&session.session_id);
+            }
         }
     }
 
@@ -1134,6 +1158,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            last_bg_task_pending: false,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1153,6 +1178,82 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::with_bg_id(Some(r#"{"backgroundTaskId":"bg-123"}"#), true)]
+    #[case::null_bg_id(Some(r#"{"backgroundTaskId":null}"#), false)]
+    #[case::no_bg_id(Some("{}"), false)]
+    #[case::no_tool_response(None, false)]
+    fn post_tool_use_sets_bg_pending(
+        #[case] tool_response: Option<&str>,
+        #[case] expected_pending: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "bg-sess".to_string();
+        existing.last_bg_task_pending = false;
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let mut payload = String::from(r#"{"session_id":"bg-sess","cwd":"/tmp/test""#);
+        if let Some(tr) = tool_response {
+            payload.push_str(&format!(r#","tool_response":{tr}"#));
+        }
+        payload.push('}');
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "bg-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.last_bg_task_pending, expected_pending);
+    }
+
+    #[test]
+    fn stop_clears_bg_pending() {
+        // Stop fired right after the synthetic PostToolUse for a bg launch
+        // should reset the flag so the *next* genuine Stop is honored. We can
+        // assert this without exercising the auto_compact spawn path because
+        // SideEffects::none() disables it; the persisted flag is the
+        // observable outcome.
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "bg-stop".to_string();
+        existing.last_bg_task_pending = true;
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        // Auto-compact spawn is gated by SideEffects::auto_compact, but the
+        // flag-clear branch only runs when auto_compact is on. Use a custom
+        // SideEffects with auto_compact enabled and the rest off so the test
+        // exercises the clearing path without forking a real worker.
+        let side_effects = SideEffects {
+            tmux: false,
+            notifications: false,
+            auto_compact: true,
+        };
+
+        let input: HookInput =
+            serde_json::from_str(r#"{"session_id":"bg-stop","cwd":"/tmp/test"}"#)
+                .expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &side_effects)
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "bg-stop")
+            .expect("load")
+            .expect("session exists");
+        assert!(!reloaded.last_bg_task_pending);
+    }
+
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
             session_id: "test-123".to_string(),
@@ -1167,6 +1268,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
+            last_bg_task_pending: false,
         }
     }
 

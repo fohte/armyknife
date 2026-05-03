@@ -34,6 +34,13 @@ pub struct Session {
     /// child sessions can still find their nearest living ancestor.
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
+    /// True when the most recent tool call launched a background task whose
+    /// completion is observable only to the model (no hook fires). Set by
+    /// PostToolUse, consumed and cleared by the Stop hook so we skip
+    /// auto-compact for the Stop that is really just "I kicked off a
+    /// background command".
+    #[serde(default)]
+    pub last_bg_task_pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +112,14 @@ pub struct HookInput {
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
 
+    /// PostToolUse only. Carries Claude Code's per-call background task id
+    /// when the Bash tool was launched with `run_in_background: true`. The
+    /// background task itself fires no completion hook, so this is the only
+    /// signal armyknife has that "this Stop is just because the user kicked
+    /// off something to run in the background".
+    #[serde(default)]
+    pub tool_response: Option<ToolResponse>,
+
     // Ignore other fields from Claude Code hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
@@ -119,6 +134,16 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
+}
+
+/// Subset of the PostToolUse `tool_response` payload that armyknife consumes.
+#[derive(Debug, Deserialize)]
+pub struct ToolResponse {
+    /// Set by Claude Code only when the Bash tool was launched with
+    /// `run_in_background: true`. Identifies the background task whose
+    /// completion is delivered to the model out of band (i.e. not via hooks).
+    #[serde(rename = "backgroundTaskId")]
+    pub background_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
