@@ -4,7 +4,8 @@ use super::client::get_client;
 use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::detector::{DetectionClient, DetectionContext, ReviewDetector};
 use super::error::Result;
-use super::reviewer::Reviewer;
+use super::reviewer::{Reviewer, builtin_default_reviewers};
+use crate::shared::config::load_config;
 use chrono::Utc;
 use clap::Args;
 
@@ -22,8 +23,10 @@ pub struct RequestArgs {
 
     /// Reviewers to request (can specify multiple, waits for all to complete).
     /// Reviewers that don't support request (like Devin) will be waited for without requesting.
-    #[arg(short = 'r', long = "reviewer", value_enum, default_values_t = vec![Reviewer::Gemini, Reviewer::Devin])]
-    pub reviewers: Vec<Reviewer>,
+    /// Defaults to the configured reviewer set for the repo's org, or
+    /// `[gemini, devin]` if no config applies.
+    #[arg(short = 'r', long = "reviewer", value_enum)]
+    pub reviewers: Option<Vec<Reviewer>>,
 
     /// Polling interval in seconds
     #[arg(long, default_value_t = POLL_INTERVAL_SECS)]
@@ -53,7 +56,13 @@ pub(crate) async fn run_request<C: DetectionClient>(
     repo: &str,
     pr_number: u64,
 ) -> Result<()> {
-    let reviewers = &args.reviewers;
+    let resolved = match args.reviewers.as_deref() {
+        Some(r) => r.to_vec(),
+        None => load_config()?
+            .resolve_reviewers(owner, repo)
+            .unwrap_or_else(builtin_default_reviewers),
+    };
+    let reviewers = &resolved;
     println!("Checking PR #{pr_number} for {:?} review(s)...", reviewers);
 
     // Record start time to detect "new" reviews
@@ -146,7 +155,7 @@ mod tests {
         RequestArgs {
             pr: Some(1),
             repo: Some("owner/repo".to_string()),
-            reviewers: vec![Reviewer::Gemini, Reviewer::Devin],
+            reviewers: Some(vec![Reviewer::Gemini, Reviewer::Devin]),
             interval,
             timeout,
         }

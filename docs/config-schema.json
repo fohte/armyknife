@@ -31,6 +31,14 @@
         "sound": "Glass"
       }
     },
+    "orgs": {
+      "description": "Per-organization configuration, keyed by GitHub owner (org or user).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OrgConfig"
+      },
+      "default": {}
+    },
     "repos": {
       "description": "Per-repository configuration, keyed by \"owner/repo\".",
       "type": "object",
@@ -62,6 +70,38 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "AiConfig": {
+      "description": "Settings under the `ai` key (used in both org and repo scopes).",
+      "type": "object",
+      "properties": {
+        "review": {
+          "description": "Settings for `a ai review` commands.",
+          "$ref": "#/$defs/AiReviewConfig",
+          "default": {
+            "reviewers": null
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AiReviewConfig": {
+      "description": "Settings for `a ai review` commands.",
+      "type": "object",
+      "properties": {
+        "reviewers": {
+          "description": "Default reviewers for `a ai review wait` and `a ai review request`.\n`None` means \"fall back to the next layer\" (org -> built-in default).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "$ref": "#/$defs/Reviewer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "AutoPauseConfig": {
       "description": "Configuration for automatically pausing sessions that stay in the Stopped\nstate for longer than `timeout`.\n\nA periodic `a cc sweep` run (typically driven by launchd) scans all sessions,\nsends SIGTERM to any Claude Code process whose session has been Stopped for\nlonger than `timeout`, and flips the session status to Paused so that\n`a cc resume` can restore it later.",
       "type": "object",
@@ -149,6 +189,22 @@
       },
       "additionalProperties": false
     },
+    "OrgConfig": {
+      "description": "Per-organization (GitHub owner) configuration.",
+      "type": "object",
+      "properties": {
+        "ai": {
+          "description": "AI-related per-org defaults (e.g., reviewer set for `a ai review wait`).",
+          "$ref": "#/$defs/AiConfig",
+          "default": {
+            "review": {
+              "reviewers": null
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "PaneConfig": {
       "description": "Configuration for a single tmux pane.",
       "type": "object",
@@ -172,6 +228,15 @@
       "description": "Per-repository configuration.",
       "type": "object",
       "properties": {
+        "ai": {
+          "description": "AI-related per-repo overrides (e.g., reviewer set for `a ai review wait`).",
+          "$ref": "#/$defs/AiConfig",
+          "default": {
+            "review": {
+              "reviewers": null
+            }
+          }
+        },
         "direct_commit": {
           "description": "Whether direct commits to the default branch (e.g., master/main) are allowed.\nConsumed by external git hooks; armyknife only stores and exposes the value.",
           "type": "boolean",
@@ -187,6 +252,20 @@
         }
       },
       "additionalProperties": false
+    },
+    "Reviewer": {
+      "oneOf": [
+        {
+          "description": "Gemini Code Assist",
+          "type": "string",
+          "const": "gemini"
+        },
+        {
+          "description": "Devin AI",
+          "type": "string",
+          "const": "devin"
+        }
+      ]
     },
     "SplitConfig": {
       "description": "Split configuration with direction and two child nodes.",

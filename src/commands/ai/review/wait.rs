@@ -4,7 +4,8 @@ use super::client::get_client;
 use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::detector::{DetectionClient, DetectionContext, ReviewDetector};
 use super::error::{Result, ReviewError};
-use super::reviewer::Reviewer;
+use super::reviewer::{Reviewer, builtin_default_reviewers};
+use crate::shared::config::load_config;
 use chrono::{DateTime, Utc};
 use clap::Args;
 
@@ -20,9 +21,11 @@ pub struct WaitArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Reviewers to wait for (can specify multiple, waits for all to complete)
-    #[arg(short = 'r', long = "reviewer", value_enum, default_values_t = vec![Reviewer::Gemini, Reviewer::Devin])]
-    pub reviewers: Vec<Reviewer>,
+    /// Reviewers to wait for (can specify multiple, waits for all to complete).
+    /// Defaults to the configured reviewer set for the repo's org, or
+    /// `[gemini, devin]` if no config applies.
+    #[arg(short = 'r', long = "reviewer", value_enum)]
+    pub reviewers: Option<Vec<Reviewer>>,
 
     /// Polling interval in seconds
     #[arg(long, default_value_t = POLL_INTERVAL_SECS)]
@@ -52,7 +55,13 @@ pub(crate) async fn run_wait<C: DetectionClient>(
     repo: &str,
     pr_number: u64,
 ) -> Result<()> {
-    let reviewers = &args.reviewers;
+    let resolved = match args.reviewers.as_deref() {
+        Some(r) => r.to_vec(),
+        None => load_config()?
+            .resolve_reviewers(owner, repo)
+            .unwrap_or_else(builtin_default_reviewers),
+    };
+    let reviewers = &resolved;
     println!("Checking PR #{pr_number} for {:?} review(s)...", reviewers);
 
     let ctx = DetectionContext {
@@ -159,7 +168,7 @@ mod tests {
         WaitArgs {
             pr: Some(1),
             repo: Some("owner/repo".to_string()),
-            reviewers: vec![reviewer],
+            reviewers: Some(vec![reviewer]),
             interval,
             timeout,
         }
@@ -169,7 +178,7 @@ mod tests {
         WaitArgs {
             pr: Some(1),
             repo: Some("owner/repo".to_string()),
-            reviewers: vec![Reviewer::Gemini, Reviewer::Devin],
+            reviewers: Some(vec![Reviewer::Gemini, Reviewer::Devin]),
             interval,
             timeout,
         }

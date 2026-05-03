@@ -31,7 +31,9 @@ a <command>
 
 ## Configuration
 
-armyknife reads its configuration from `~/.config/armyknife/config.yaml` (or `config.yml`). If `XDG_CONFIG_HOME` is set, it reads from `$XDG_CONFIG_HOME/armyknife/config.yaml` instead. All fields are optional and fall back to sensible defaults.
+armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armyknife/` (or `$XDG_CONFIG_HOME/armyknife/` if set), sorts them alphabetically by file name, and deep-merges them in order so that later files override earlier ones. Subdirectories (e.g., `hooks/`) and other extensions are ignored. Symlinks pointing to YAML files are followed, so private/company-specific config can live in a separate repository and be linked into this directory.
+
+Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist, armyknife runs entirely on defaults.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -65,11 +67,30 @@ notification:
   enabled: true # enable desktop notifications (default: true)
   sound: Glass # notification sound name, empty string for silent (default: "Glass")
 
+orgs: # per-org defaults, keyed by GitHub owner (org or user)
+  fohte:
+    ai:
+      review:
+        reviewers: [gemini] # default reviewers for `a ai review wait`/`request` in this org
+
 repos: # per-repository overrides, keyed by "owner/repo"
   fohte/dotfiles:
     language: en # language for commit messages and PR content (default: "ja" for private repos, "en" for public repos)
     direct_commit: true # allow direct commits to the default branch; consumed by external git hooks
+    ai:
+      review:
+        reviewers: [gemini, devin] # repo-level reviewer override (takes precedence over org)
 ```
+
+### Splitting public and private config
+
+Because every YAML file in the directory is merged, you can keep public (dotfiles-tracked) and private (company-only) config separate. For example, drop a single file from a private repository as a symlink:
+
+```sh
+ln -s ~/work/dotfiles-private/armyknife.yaml ~/.config/armyknife/work.yaml
+```
+
+`config.yaml` is loaded first (alphabetical), `work.yaml` overrides it. Subdirectories such as `hooks/` are not scanned and remain unaffected.
 
 ### Supported Terminal Emulators
 
@@ -131,12 +152,20 @@ Request or wait for bot reviews on a PR.
 | `request` | Request a review from a bot reviewer and wait for completion          |
 | `wait`    | Wait for an existing review to complete (does not trigger new review) |
 
-| Option                  | Description                                      |
-| ----------------------- | ------------------------------------------------ |
-| `-R, --repo <repo>`     | Target repository (owner/repo)                   |
-| `-r, --reviewer <name>` | Reviewer to request/wait for (default: `gemini`) |
-| `--interval <seconds>`  | Polling interval (default: 15)                   |
-| `--timeout <seconds>`   | Timeout (default: 300)                           |
+| Option                  | Description                                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                    |
+| `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated. When omitted, falls back to repo > org config > `gemini, devin` |
+| `--interval <seconds>`  | Polling interval (default: 15)                                                                                    |
+| `--timeout <seconds>`   | Timeout (default: 300)                                                                                            |
+
+When `--reviewer` is omitted, the reviewer set is resolved in this order:
+
+1. `repos.<owner>/<repo>.ai.review.reviewers` (per-repo override)
+2. `orgs.<owner>.ai.review.reviewers` (per-org default)
+3. The built-in `[gemini, devin]`
+
+This makes it possible to disable a reviewer that isn't enabled in a given org (e.g., `reviewers: [gemini]` for a fohte-only repo) without passing `--reviewer` on every invocation.
 
 ### `a gh`
 
@@ -458,7 +487,7 @@ Print JSON Schema for the configuration file.
 
 Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). If the key has a value, it is printed to stdout. If not found, nothing is printed (exit 0).
 
-For `repo.*` keys, the current directory's git remote is used to identify the repository (`owner/repo`).
+For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. Only scalar leaves (string, bool, number) are printed; sequence/object values such as `ai.review.reviewers` print nothing.
 
 ```sh
 $ a config get wm.branch_prefix
