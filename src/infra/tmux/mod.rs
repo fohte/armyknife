@@ -341,6 +341,20 @@ pub fn get_current_pane_option(option: &str) -> Option<String> {
     }
 }
 
+/// Get a user option value from a specific tmux pane.
+/// Unlike `get_current_pane_option`, this does not require being inside tmux —
+/// it targets a pane by id, which is useful for detached background processes
+/// (e.g., the auto-compact schedule worker) that need to coordinate via pane
+/// options without inheriting a TMUX env var.
+pub fn get_pane_option(pane_id: &str, option: &str) -> Option<String> {
+    let output = run_tmux_output(&["show-options", "-p", "-t", pane_id, "-v", option]).ok()?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
 /// Refresh all tmux clients' status bars.
 /// Useful after session state changes to immediately reflect updates
 /// in `#()` status bar commands.

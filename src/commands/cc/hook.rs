@@ -11,6 +11,7 @@ use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
+use super::auto_compact;
 use super::claude_sessions;
 use super::error::CcError;
 use super::store;
@@ -89,6 +90,9 @@ struct SideEffects {
     tmux: bool,
     /// Send/remove notifications via hammerspoon
     notifications: bool,
+    /// Spawn the detached `a cc auto-compact schedule` worker on Stop events.
+    /// Off in tests (would fork a real process and survive past the test).
+    auto_compact: bool,
 }
 
 impl SideEffects {
@@ -96,6 +100,7 @@ impl SideEffects {
         Self {
             tmux: true,
             notifications: true,
+            auto_compact: true,
         }
     }
 
@@ -104,6 +109,7 @@ impl SideEffects {
         Self {
             tmux: false,
             notifications: false,
+            auto_compact: false,
         }
     }
 }
@@ -296,6 +302,17 @@ fn process_hook_event_impl(
         let config = config::load_config().unwrap_or_default();
         if should_notify(event, &config) {
             send_notification(event, &input, &session, &config);
+        }
+    }
+
+    // On Stop events, spawn a detached schedule worker that will SIGTERM +
+    // `claude -r -p "/compact"` after the configured idle timeout. The
+    // worker re-checks user activity / branch state on wake-up so a quick
+    // follow-up turn cancels the compaction transparently.
+    if side_effects.auto_compact && event == HookEvent::Stop {
+        let config = config::load_config().unwrap_or_default();
+        if config.cc.auto_compact.enabled {
+            auto_compact::spawn_in_background(&session.session_id);
         }
     }
 
