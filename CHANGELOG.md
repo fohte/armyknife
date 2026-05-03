@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.157](https://github.com/fohte/armyknife/compare/v0.1.156...v0.1.157) (2026-05-03)
+
+
+### Features
+
+* **cc:** trigger `/compact` after idle time ([#514](https://github.com/fohte/armyknife/issues/514)) ([403aed9](https://github.com/fohte/armyknife/commit/403aed9bbe0ed8cbd3da539245583841b15fbf17))
+
 ## [0.1.156](https://github.com/fohte/armyknife/compare/v0.1.155...v0.1.156) (2026-05-03)
 
 
