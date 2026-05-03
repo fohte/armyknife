@@ -1104,6 +1104,9 @@ mod tests {
     #[rstest]
     #[case::repo_beats_org("fohte", "work-repo", Some(vec![Reviewer::Devin]))]
     #[case::org_when_no_repo_entry("fohte", "any-repo", Some(vec![Reviewer::Gemini]))]
+    // Guards the inner `let`-chain: a repo entry that exists but leaves
+    // `ai.review.reviewers` unset must still fall through to the org default.
+    #[case::repo_entry_without_reviewers_falls_back_to_org("fohte", "no-reviewers", Some(vec![Reviewer::Gemini]))]
     #[case::owner_unknown_returns_none("stranger", "any-repo", None)]
     fn resolve_reviewers_precedence(
         #[case] owner: &str,
@@ -1121,6 +1124,9 @@ mod tests {
                 ai:
                   review:
                     reviewers: [devin]
+              fohte/no-reviewers:
+                ai:
+                  review: {}
         "})
         .unwrap();
 
