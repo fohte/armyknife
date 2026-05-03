@@ -1,10 +1,15 @@
 //! Reviewer definitions.
 
 use clap::ValueEnum;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use super::detectors::{AnyDetector, DevinDetector, GeminiDetector};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, JsonSchema, Hash,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Reviewer {
     /// Gemini Code Assist
     Gemini,
@@ -20,6 +25,28 @@ impl Reviewer {
             Self::Devin => AnyDetector::Devin(DevinDetector),
         }
     }
+}
+
+/// Built-in default reviewer set when no config or CLI override applies.
+pub fn builtin_default_reviewers() -> Vec<Reviewer> {
+    vec![Reviewer::Gemini, Reviewer::Devin]
+}
+
+/// Resolve which reviewers to use, applying the precedence
+/// CLI override > repo config > org config > built-in default.
+pub fn resolve_reviewers_with_default(
+    cli: Option<&[Reviewer]>,
+    config: &crate::shared::config::Config,
+    owner: &str,
+    repo: &str,
+) -> Vec<Reviewer> {
+    if let Some(reviewers) = cli {
+        return reviewers.to_vec();
+    }
+    if let Some(reviewers) = config.resolve_reviewers(owner, repo) {
+        return reviewers;
+    }
+    builtin_default_reviewers()
 }
 
 #[cfg(test)]

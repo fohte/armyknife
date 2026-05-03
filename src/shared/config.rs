@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::commands::ai::review::reviewer::Reviewer;
+
 /// Top-level configuration for armyknife.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -27,11 +29,16 @@ pub struct Config {
     /// Per-repository configuration, keyed by "owner/repo".
     #[serde(default)]
     pub repos: HashMap<String, RepoConfig>,
+
+    /// Per-organization configuration, keyed by GitHub owner (org or user).
+    #[serde(default)]
+    pub orgs: HashMap<String, OrgConfig>,
 }
 
 impl Config {
     /// Look up a config value by dot-separated key path.
     /// For `repo.*` keys, `repo_id` (e.g. "owner/repo") selects which repo entry to use.
+    /// For `org.*` keys, `repo_id` 's owner segment selects the org entry.
     /// Returns the value as a string, or None if not found.
     pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<String> {
         if let Some(repo_key) = key.strip_prefix("repo.") {
@@ -46,10 +53,40 @@ impl Config {
                 .unwrap_or(&default_repo_config);
             let value = serde_json::to_value(repo_config).ok()?;
             resolve_json_path(&value, repo_key)
+        } else if let Some(org_key) = key.strip_prefix("org.") {
+            let owner = repo_id.and_then(|id| id.split_once('/').map(|(o, _)| o))?;
+            let default_org_config = OrgConfig::default();
+            let org_config = self.orgs.get(owner).unwrap_or(&default_org_config);
+            let value = serde_json::to_value(org_config).ok()?;
+            resolve_json_path(&value, org_key)
         } else {
             let value = serde_json::to_value(self).ok()?;
             resolve_json_path(&value, key)
         }
+    }
+
+    /// Load the user's config, swallowing errors and returning `Config::default()` on failure.
+    /// Useful for non-fatal lookups (e.g., resolving CLI defaults).
+    pub fn load_or_default() -> Self {
+        load_config().unwrap_or_default()
+    }
+
+    /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).
+    /// Resolution order: repo (`repos.<owner>/<repo>.ai.review.reviewers`) -> org
+    /// (`orgs.<owner>.ai.review.reviewers`) -> None (caller falls back to its own default).
+    pub fn resolve_reviewers(&self, owner: &str, repo: &str) -> Option<Vec<Reviewer>> {
+        let repo_id = format!("{owner}/{repo}");
+        if let Some(repo_cfg) = self.repos.get(&repo_id)
+            && let Some(reviewers) = repo_cfg.ai.review.reviewers.as_ref()
+        {
+            return Some(reviewers.clone());
+        }
+        if let Some(org_cfg) = self.orgs.get(owner)
+            && let Some(reviewers) = org_cfg.ai.review.reviewers.as_ref()
+        {
+            return Some(reviewers.clone());
+        }
+        None
     }
 }
 
@@ -260,6 +297,38 @@ pub struct RepoConfig {
     #[serde(default)]
     #[schemars(default)]
     pub direct_commit: bool,
+
+    /// AI-related per-repo overrides (e.g., reviewer set for `a ai review wait`).
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+/// Per-organization (GitHub owner) configuration.
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OrgConfig {
+    /// AI-related per-org defaults (e.g., reviewer set for `a ai review wait`).
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+/// Settings under the `ai` key (used in both org and repo scopes).
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AiConfig {
+    /// Settings for `a ai review` commands.
+    #[serde(default)]
+    pub review: AiReviewConfig,
+}
+
+/// Settings for `a ai review` commands.
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AiReviewConfig {
+    /// Default reviewers for `a ai review wait` and `a ai review request`.
+    /// `None` means "fall back to the next layer" (org -> built-in default).
+    #[serde(default)]
+    pub reviewers: Option<Vec<Reviewer>>,
 }
 
 /// Claude Code session monitoring configuration.
@@ -342,8 +411,8 @@ pub enum ConfigError {
     ParseError { path: PathBuf, message: String },
 }
 
-/// Load configuration from ~/.config/armyknife/config.ya?ml.
-/// Returns Config::default() if no config file exists.
+/// Load configuration from ~/.config/armyknife/.
+/// Returns Config::default() if the directory doesn't exist or contains no YAML files.
 pub fn load_config() -> anyhow::Result<Config> {
     let Some(dir) = super::dirs::config_dir() else {
         return Ok(Config::default());
@@ -352,36 +421,110 @@ pub fn load_config() -> anyhow::Result<Config> {
 }
 
 /// Load configuration from a specific directory.
-/// Searches for config.yaml, then config.yml in the given directory.
-/// Returns Config::default() if neither file exists.
+///
+/// Reads every `*.yaml` / `*.yml` file directly under `dir` (subdirectories are
+/// ignored), sorts them by file name (case-sensitive), and deep-merges them in
+/// order so that later files override earlier ones. The merged value is then
+/// deserialized into `Config`, applying `deny_unknown_fields` over the merged
+/// document.
+///
+/// Returns `Config::default()` if `dir` does not exist or contains no matching
+/// files.
 pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
-    for filename in &["config.yaml", "config.yml"] {
-        let path = dir.join(filename);
-        match std::fs::read_to_string(&path) {
-            Ok(content) => return parse_config(&content, &path),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(ConfigError::ReadError { path, source: e }.into()),
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(e) => {
+            return Err(ConfigError::ReadError {
+                path: dir.to_path_buf(),
+                source: e,
+            }
+            .into());
         }
+    };
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| ConfigError::ReadError {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
+        let path = entry.path();
+        // file_type follows symlinks via metadata fallback below; we want symlinks
+        // pointing to regular files (private repo -> public dotfiles use case).
+        let metadata = std::fs::metadata(&path).map_err(|e| ConfigError::ReadError {
+            path: path.clone(),
+            source: e,
+        })?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if extension != "yaml" && extension != "yml" {
+            continue;
+        }
+        paths.push(path);
     }
+    paths.sort();
 
-    Ok(Config::default())
-}
-
-/// Parse YAML content into Config.
-fn parse_config(content: &str, path: &Path) -> anyhow::Result<Config> {
-    // Empty or comment-only YAML deserializes as null in serde_yaml,
-    // which fails for a struct. Treat as default config.
-    if content.trim().is_empty()
-        || serde_yaml::from_str::<serde_yaml::Value>(content).ok() == Some(serde_yaml::Value::Null)
-    {
+    if paths.is_empty() {
         return Ok(Config::default());
     }
-    serde_yaml::from_str(content)
+
+    let mut merged: Option<serde_yaml::Value> = None;
+    for path in &paths {
+        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadError {
+            path: path.clone(),
+            source: e,
+        })?;
+        // Empty or comment-only YAML deserializes as null; skip it so it doesn't
+        // wipe out values from earlier files.
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|e| ConfigError::ParseError {
+                path: path.clone(),
+                message: e.to_string(),
+            })?;
+        if value.is_null() {
+            continue;
+        }
+        merged = Some(match merged {
+            None => value,
+            Some(base) => merge_yaml(base, value),
+        });
+    }
+
+    let Some(value) = merged else {
+        return Ok(Config::default());
+    };
+
+    serde_yaml::from_value(value)
         .map_err(|e| ConfigError::ParseError {
-            path: path.to_path_buf(),
+            // Use the directory path here because the error reflects the merged
+            // document, not any single source file.
+            path: dir.to_path_buf(),
             message: e.to_string(),
         })
         .map_err(Into::into)
+}
+
+/// Recursively merge two YAML values. Mappings merge key-by-key; any other type
+/// (sequence, scalar, null) is replaced wholesale by `overlay`. This means
+/// `reviewers: [gemini]` cleanly overrides a previous `reviewers: [gemini, devin]`
+/// rather than appending.
+fn merge_yaml(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml::Value {
+    match (base, overlay) {
+        (serde_yaml::Value::Mapping(mut base_map), serde_yaml::Value::Mapping(overlay_map)) => {
+            for (k, v) in overlay_map {
+                let merged = match base_map.remove(&k) {
+                    Some(existing) => merge_yaml(existing, v),
+                    None => v,
+                };
+                base_map.insert(k, merged);
+            }
+            serde_yaml::Value::Mapping(base_map)
+        }
+        (_, overlay) => overlay,
+    }
 }
 
 /// Generate JSON Schema for the Config struct.
@@ -746,7 +889,9 @@ mod tests {
     }
 
     #[test]
-    fn load_config_from_dir_yaml_takes_precedence_over_yml() {
+    fn load_config_from_dir_alphabetical_later_wins() {
+        // Files are merged in alphabetical order so config.yml (later) overrides
+        // config.yaml (earlier) for the same key.
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("config.yaml"),
@@ -766,7 +911,7 @@ mod tests {
         .unwrap();
 
         let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config.notification.sound, "FromYaml");
+        assert_eq!(config.notification.sound, "FromYml");
     }
 
     #[rstest]
@@ -783,9 +928,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::syntax_error("wm:\n  - [broken\n")]
-    #[case::unknown_field("unknown_top_level_key: true\n")]
-    fn load_config_from_dir_parse_error(#[case] yaml: &str) {
+    // Per-file YAML syntax errors blame the offending file.
+    #[case::syntax_error("wm:\n  - [broken\n", true)]
+    // Merged-document level errors (e.g., unknown fields) blame the directory
+    // because they only surface after combining every file.
+    #[case::unknown_field("unknown_top_level_key: true\n", false)]
+    fn load_config_from_dir_parse_error(#[case] yaml: &str, #[case] blame_file: bool) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.yaml");
         fs::write(&path, yaml).unwrap();
@@ -797,7 +945,8 @@ mod tests {
                 path: err_path,
                 message,
             } => {
-                assert_eq!(err_path, &path);
+                let expected = if blame_file { &path } else { dir.path() };
+                assert_eq!(err_path, expected);
                 assert!(!message.is_empty(), "error message should not be empty");
             }
             other => panic!("expected ParseError, got: {other:?}"),
@@ -823,6 +972,199 @@ mod tests {
         // Other sections use defaults entirely
         assert_eq!(config.editor, EditorConfig::default());
         assert_eq!(config.notification, NotificationConfig::default());
+    }
+
+    #[rstest]
+    #[case::scalar_overrides_scalar("a: 1\n", "a: 2\n", "a: 2\n")]
+    #[case::sequence_replaces_sequence("a: [1, 2]\n", "a: [3]\n", "a: [3]\n")]
+    #[case::mapping_merges_recursively(
+        "a:\n  b: 1\n  c: 2\n",
+        "a:\n  c: 99\n  d: 4\n",
+        "a:\n  b: 1\n  c: 99\n  d: 4\n"
+    )]
+    #[case::scalar_overrides_mapping("a:\n  b: 1\n", "a: leaf\n", "a: leaf\n")]
+    fn merge_yaml_combines_documents(
+        #[case] base: &str,
+        #[case] overlay: &str,
+        #[case] expected: &str,
+    ) {
+        let base: serde_yaml::Value = serde_yaml::from_str(base).unwrap();
+        let overlay: serde_yaml::Value = serde_yaml::from_str(overlay).unwrap();
+        let expected: serde_yaml::Value = serde_yaml::from_str(expected).unwrap();
+        assert_eq!(merge_yaml(base, overlay), expected);
+    }
+
+    #[test]
+    fn load_config_from_dir_merges_multiple_yaml_files() {
+        let dir = TempDir::new().unwrap();
+        // Earlier file: org defaults across two orgs.
+        fs::write(
+            dir.path().join("base.yaml"),
+            indoc! {"
+                orgs:
+                  fohte:
+                    ai:
+                      review:
+                        reviewers: [gemini, devin]
+                  acme:
+                    ai:
+                      review:
+                        reviewers: [devin]
+            "},
+        )
+        .unwrap();
+        // Later file: override fohte (sequence is replaced wholesale, not concatenated)
+        // and add a new org.
+        fs::write(
+            dir.path().join("work.yaml"),
+            indoc! {"
+                orgs:
+                  fohte:
+                    ai:
+                      review:
+                        reviewers: [gemini]
+                  contoso:
+                    ai:
+                      review:
+                        reviewers: [devin]
+            "},
+        )
+        .unwrap();
+
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(
+            config.orgs["fohte"].ai.review.reviewers,
+            Some(vec![Reviewer::Gemini])
+        );
+        assert_eq!(
+            config.orgs["acme"].ai.review.reviewers,
+            Some(vec![Reviewer::Devin])
+        );
+        assert_eq!(
+            config.orgs["contoso"].ai.review.reviewers,
+            Some(vec![Reviewer::Devin])
+        );
+    }
+
+    #[test]
+    fn load_config_from_dir_ignores_subdirectories_and_other_extensions() {
+        // Only flat *.yaml/*.yml are read. A nested directory like `hooks/` and
+        // unrelated files (README, .json) must be skipped.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("hooks")).unwrap();
+        fs::write(
+            dir.path().join("hooks").join("post-worktree-create.yaml"),
+            "should: be ignored\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("README.md"), "ignored\n").unwrap();
+        fs::write(dir.path().join("config.json"), "{}\n").unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            indoc! {"
+                wm:
+                  worktrees_dir: kept
+            "},
+        )
+        .unwrap();
+
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(config.wm.worktrees_dir, "kept");
+    }
+
+    #[test]
+    fn load_config_from_dir_follows_symlinks_to_yaml_files() {
+        // Symlinks are how a private repo can ship company config without
+        // touching the public dotfiles tree, so they must be honored.
+        let dir = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let target = external.path().join("work.yaml");
+        fs::write(
+            &target,
+            indoc! {"
+                orgs:
+                  acme:
+                    ai:
+                      review:
+                        reviewers: [gemini]
+            "},
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("work.yaml")).unwrap();
+
+        let config = load_config_from_dir(dir.path()).unwrap();
+        assert_eq!(
+            config.orgs["acme"].ai.review.reviewers,
+            Some(vec![Reviewer::Gemini])
+        );
+    }
+
+    #[test]
+    fn load_config_from_dir_returns_default_for_missing_directory() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("nonexistent");
+        let config = load_config_from_dir(&missing).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[rstest]
+    #[case::cli_overrides_repo_and_org(
+        Some(vec![Reviewer::Gemini]),
+        vec![Reviewer::Gemini],
+    )]
+    #[case::repo_beats_org(
+        None,
+        vec![Reviewer::Devin],
+    )]
+    fn resolve_reviewers_with_default_precedence(
+        #[case] cli: Option<Vec<Reviewer>>,
+        #[case] expected: Vec<Reviewer>,
+    ) {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            orgs:
+              fohte:
+                ai:
+                  review:
+                    reviewers: [gemini]
+            repos:
+              fohte/work-repo:
+                ai:
+                  review:
+                    reviewers: [devin]
+        "})
+        .unwrap();
+
+        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
+            cli.as_deref(),
+            &config,
+            "fohte",
+            "work-repo",
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn resolve_reviewers_falls_back_to_org_then_builtin() {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            orgs:
+              fohte:
+                ai:
+                  review:
+                    reviewers: [gemini]
+        "})
+        .unwrap();
+
+        // owner has org config -> use it
+        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
+            None, &config, "fohte", "any-repo",
+        );
+        assert_eq!(result, vec![Reviewer::Gemini]);
+
+        // owner has no entry -> built-in default
+        let result = crate::commands::ai::review::reviewer::resolve_reviewers_with_default(
+            None, &config, "stranger", "any-repo",
+        );
+        assert_eq!(result, vec![Reviewer::Gemini, Reviewer::Devin]);
     }
 
     #[fixture]

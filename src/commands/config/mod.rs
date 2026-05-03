@@ -18,7 +18,7 @@ pub enum ConfigCommands {
 
     /// Get a configuration value by dot-separated key
     Get {
-        /// Configuration key (e.g., "wm.branch_prefix", "repo.language")
+        /// Configuration key (e.g., "wm.branch_prefix", "repo.language", "org.ai.review.reviewers")
         key: String,
     },
 }
@@ -45,8 +45,9 @@ impl ConfigCommands {
 async fn run_get(key: &str) -> anyhow::Result<()> {
     let cfg = config::load_config()?;
 
-    // For repo.* keys, resolve owner/repo from CWD git remote
-    let repo_id = if key.starts_with("repo.") {
+    // For repo.* and org.* keys, resolve owner/repo from CWD git remote.
+    // org.* uses the owner segment; repo.* uses the full "owner/repo".
+    let repo_id = if key.starts_with("repo.") || key.starts_with("org.") {
         git::get_owner_repo().map(|(owner, repo)| format!("{owner}/{repo}"))
     } else {
         None
