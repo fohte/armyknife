@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.156](https://github.com/fohte/armyknife/compare/v0.1.155...v0.1.156) (2026-05-03)
+
+
+### Features
+
+* **config:** deep-merge YAML files in the config directory and add per-org reviewer defaults ([#512](https://github.com/fohte/armyknife/issues/512)) ([6655916](https://github.com/fohte/armyknife/commit/665591618737b907c6a885a7c309837ef412ddf8))
+
 ## [0.1.155](https://github.com/fohte/armyknife/compare/v0.1.154...v0.1.155) (2026-04-30)
 
 
