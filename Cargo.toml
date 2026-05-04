@@ -15,7 +15,7 @@ path = "src/main.rs"
 anyhow = "=1.0.102"
 chrono = { version = "=0.4.44", features = ["serde"] }
 clap = { version = "=4.5.61", features = ["derive"] }
-clap_complete = "=4.5.67"
+clap_complete = "=4.6.3"
 git2 = { version = "=0.20.4", default-features = false, features = ["vendored-libgit2", "https"] }
 reqwest = { version = "=0.12.18", default-features = false, features = ["rustls-tls", "json"] }
 open = "=5.3.3"
