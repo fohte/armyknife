@@ -135,9 +135,10 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
     let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION);
     let state_file = state_file_path()?;
 
+    // Preserve the existing state file when no panes carry a session ID.
+    // The tmux server may simply have just restarted and not yet been restored,
+    // and the state file is consumed by tmux-resurrect's post-restore hook.
     if panes.is_empty() {
-        // No panes with session IDs to save; clean up any stale state file
-        let _ = fs::remove_file(&state_file);
         return Ok(());
     }
 
