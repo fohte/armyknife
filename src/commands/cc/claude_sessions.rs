@@ -348,9 +348,7 @@ fn try_read_last_lines_for_usage(file: &File, read_size: usize, file_size: u64) 
         &content[first_newline + 1..]
     };
 
-    let lines: Vec<&str> = complete_content.lines().collect();
-
-    for line in lines.iter().rev().take(MAX_LINES_TO_SCAN) {
+    for line in complete_content.lines().rev().take(MAX_LINES_TO_SCAN) {
         if line.is_empty() {
             continue;
         }
@@ -471,10 +469,7 @@ fn try_read_last_lines(file: &File, read_size: usize, file_size: u64) -> Option<
         &content[first_newline + 1..]
     };
 
-    // Collect lines and scan from the end
-    let lines: Vec<&str> = complete_content.lines().collect();
-
-    for line in lines.iter().rev().take(MAX_LINES_TO_SCAN) {
+    for line in complete_content.lines().rev().take(MAX_LINES_TO_SCAN) {
         if line.is_empty() {
             continue;
         }
