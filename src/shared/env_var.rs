@@ -12,6 +12,14 @@ const CC_NOTIFY: &str = "ARMYKNIFE_CC_NOTIFY";
 const WORKTREE_PATH: &str = "ARMYKNIFE_WORKTREE_PATH";
 const BRANCH_NAME: &str = "ARMYKNIFE_BRANCH_NAME";
 const REPO_ROOT: &str = "ARMYKNIFE_REPO_ROOT";
+const PR_TITLE: &str = "ARMYKNIFE_PR_TITLE";
+const PR_BODY_FILE: &str = "ARMYKNIFE_PR_BODY_FILE";
+const PR_OWNER: &str = "ARMYKNIFE_PR_OWNER";
+const PR_REPO: &str = "ARMYKNIFE_PR_REPO";
+const PR_HEAD: &str = "ARMYKNIFE_PR_HEAD";
+const PR_BASE: &str = "ARMYKNIFE_PR_BASE";
+const PR_NUMBER: &str = "ARMYKNIFE_PR_NUMBER";
+const PR_IS_UPDATE: &str = "ARMYKNIFE_PR_IS_UPDATE";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
 pub struct EnvVars {
@@ -80,5 +88,47 @@ impl EnvVars {
     /// Returns the env var name for REPO_ROOT (used as key in env var pairs).
     pub fn repo_root_name() -> &'static str {
         REPO_ROOT
+    }
+
+    /// Returns the env var name for PR_TITLE (passed to `pre-pr-submit` hook).
+    pub fn pr_title_name() -> &'static str {
+        PR_TITLE
+    }
+
+    /// Returns the env var name for PR_BODY_FILE.
+    /// Path to a temporary file containing the PR body so the hook can grep it
+    /// without worrying about environment variable size limits.
+    pub fn pr_body_file_name() -> &'static str {
+        PR_BODY_FILE
+    }
+
+    /// Returns the env var name for PR_OWNER (target repository owner).
+    pub fn pr_owner_name() -> &'static str {
+        PR_OWNER
+    }
+
+    /// Returns the env var name for PR_REPO (target repository name).
+    pub fn pr_repo_name() -> &'static str {
+        PR_REPO
+    }
+
+    /// Returns the env var name for PR_HEAD (head branch the PR is created from).
+    pub fn pr_head_name() -> &'static str {
+        PR_HEAD
+    }
+
+    /// Returns the env var name for PR_BASE (base branch; empty when defaulted).
+    pub fn pr_base_name() -> &'static str {
+        PR_BASE
+    }
+
+    /// Returns the env var name for PR_NUMBER (set only when updating an existing PR).
+    pub fn pr_number_name() -> &'static str {
+        PR_NUMBER
+    }
+
+    /// Returns the env var name for PR_IS_UPDATE ("1" when updating, "0" when creating).
+    pub fn pr_is_update_name() -> &'static str {
+        PR_IS_UPDATE
     }
 }

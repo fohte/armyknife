@@ -9,13 +9,13 @@ fn hook_path(hook_name: &str) -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("armyknife").join("hooks").join(hook_name))
 }
 
-/// Executes a hook script if it exists and is executable.
+/// Executes a hook script if one is configured.
 ///
-/// Follows git-style hook conventions:
-/// - If the hook file doesn't exist, silently returns Ok(())
-/// - If the file exists but isn't executable, prints a warning and returns Ok(())
-/// - If the hook exits with non-zero status, prints a warning and returns Ok(())
-///   (hook failure should not block the main operation)
+/// Follows git-style hook conventions, but treats hook failure as a hard error:
+/// - If the hook file doesn't exist, silently returns Ok(()) (hook is unconfigured)
+/// - If the file exists but isn't executable, returns Err (likely a misconfiguration)
+/// - If the hook exits with non-zero status, returns Err so callers can abort the
+///   operation (e.g., a `pre-pr-submit` hook can block submission)
 pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()> {
     let path = match hook_path(hook_name) {
         Some(p) => p,
@@ -29,11 +29,7 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
     let metadata = std::fs::metadata(&path)?;
     let permissions = metadata.permissions();
     if permissions.mode() & 0o111 == 0 {
-        eprintln!(
-            "warning: hook '{}' exists but is not executable, skipping",
-            path.display()
-        );
-        return Ok(());
+        anyhow::bail!("hook '{}' exists but is not executable", path.display());
     }
 
     let mut cmd = Command::new(&path);
@@ -47,11 +43,7 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
             .code()
             .map(|c| c.to_string())
             .unwrap_or_else(|| "signal".to_string());
-        eprintln!(
-            "warning: hook '{}' exited with status {}",
-            path.display(),
-            code
-        );
+        anyhow::bail!("hook '{}' exited with status {}", path.display(), code);
     }
 
     Ok(())
@@ -90,15 +82,22 @@ mod tests {
     }
 
     #[rstest]
-    fn run_hook_skips_non_executable_hook() {
+    fn run_hook_errors_on_non_executable_hook() {
         let dir = TempDir::new().unwrap();
-        setup_hook(&dir, "post-worktree-create", "#!/bin/sh\necho hello", false);
+        let hook_file = setup_hook(&dir, "post-worktree-create", "#!/bin/sh\necho hello", false);
 
         temp_env::with_vars(
             [("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap()))],
             || {
-                let result = run_hook("post-worktree-create", &[]);
-                assert!(result.is_ok());
+                let err = run_hook("post-worktree-create", &[])
+                    .expect_err("non-executable hook must error");
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "hook '{}' exists but is not executable",
+                        hook_file.display()
+                    )
+                );
             },
         );
     }
@@ -135,16 +134,19 @@ mod tests {
     }
 
     #[rstest]
-    fn run_hook_warns_on_nonzero_exit() {
+    fn run_hook_errors_on_nonzero_exit() {
         let dir = TempDir::new().unwrap();
-        setup_hook(&dir, "post-worktree-create", "#!/bin/sh\nexit 1", true);
+        let hook_file = setup_hook(&dir, "post-worktree-create", "#!/bin/sh\nexit 1", true);
 
         temp_env::with_vars(
             [("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap()))],
             || {
-                let result = run_hook("post-worktree-create", &[]);
-                // Should still return Ok even when hook exits non-zero
-                assert!(result.is_ok());
+                let err = run_hook("post-worktree-create", &[])
+                    .expect_err("non-zero exit must propagate");
+                assert_eq!(
+                    err.to_string(),
+                    format!("hook '{}' exited with status 1", hook_file.display())
+                );
             },
         );
     }

@@ -540,10 +540,10 @@ fn run_worktree_creation(
         prompt.map(String::from)
     };
 
-    // Run post-worktree-create hook
+    // Run post-worktree-create hook (failures abort `wm new`).
     let worktree_abs =
         std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
-    if let Err(e) = hooks::run_hook(
+    hooks::run_hook(
         "post-worktree-create",
         &[
             (
@@ -553,9 +553,7 @@ fn run_worktree_creation(
             (EnvVars::branch_name_name(), &actual_branch),
             (EnvVars::repo_root_name(), repo_root),
         ],
-    ) {
-        eprintln!("warning: post-worktree-create hook error: {e}");
-    }
+    )?;
 
     // Build environment variables for child session
     let mut env_vars: Vec<(String, String)> = Vec::new();
