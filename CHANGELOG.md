@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.158](https://github.com/fohte/armyknife/compare/v0.1.157...v0.1.158) (2026-05-04)
+
+
+### Features
+
+* **cc:** add minimum context size threshold for auto-compact ([#516](https://github.com/fohte/armyknife/issues/516)) ([83c6a5e](https://github.com/fohte/armyknife/commit/83c6a5e86ebb5a47ca2a226209647941844d140c))
+
 ## [0.1.157](https://github.com/fohte/armyknife/compare/v0.1.156...v0.1.157) (2026-05-03)
 
 
