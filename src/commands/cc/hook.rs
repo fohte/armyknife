@@ -288,13 +288,7 @@ fn process_hook_event_impl(
     // Set-only here (cleared by Stop): a turn that mixes a bg launch with
     // other tools fires multiple PostToolUse hooks, and a non-bg one
     // arriving after the bg one must not erase the flag the bg launch set.
-    if event == HookEvent::PostToolUse
-        && input
-            .tool_response
-            .as_ref()
-            .and_then(|r| r.background_task_id.as_deref())
-            .is_some()
-    {
+    if event == HookEvent::PostToolUse && input.background_task_id().is_some() {
         session.last_bg_task_pending = true;
     }
 
@@ -1196,11 +1190,31 @@ mod tests {
     #[case::null_bg_id_does_not_set(false, Some(r#"{"backgroundTaskId":null}"#), false)]
     #[case::no_bg_id_does_not_set(false, Some("{}"), false)]
     #[case::no_tool_response_does_not_set(false, None, false)]
+    // tool_response shape varies per tool and Anthropic does not document
+    // a schema (anthropics/claude-code#3671). Anything that is not an
+    // object with backgroundTaskId must deserialize cleanly and leave the
+    // flag alone — historically these crashed the hook.
+    #[case::mcp_array_does_not_set(
+        false,
+        Some(r#"[{"type":"text","text":"{\"total\":1}"}]"#),
+        false
+    )]
+    #[case::string_does_not_set(false, Some(r#""ok""#), false)]
+    #[case::number_does_not_set(false, Some("42"), false)]
+    #[case::bool_does_not_set(false, Some("true"), false)]
+    #[case::null_does_not_set(false, Some("null"), false)]
+    // Read/Edit etc. ship object payloads without backgroundTaskId.
+    #[case::read_object_does_not_set(
+        false,
+        Some(r#"{"file_path":"/tmp/x","content":"hi"}"#),
+        false
+    )]
     // Flag already set by an earlier bg launch in the same turn must not
     // be cleared by a later non-bg PostToolUse; otherwise a turn that
     // mixes a bg Bash with another tool would lose the suppression.
     #[case::keeps_when_no_bg_id(true, Some("{}"), true)]
     #[case::keeps_when_no_tool_response(true, None, true)]
+    #[case::keeps_when_mcp_array(true, Some(r#"[{"type":"text","text":"x"}]"#), true)]
     fn post_tool_use_updates_bg_pending(
         #[case] initial: bool,
         #[case] tool_response: Option<&str>,

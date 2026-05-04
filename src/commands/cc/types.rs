@@ -112,17 +112,32 @@ pub struct HookInput {
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
 
-    /// PostToolUse only. Carries Claude Code's per-call background task id
-    /// when the Bash tool was launched with `run_in_background: true`. The
-    /// background task itself fires no completion hook, so this is the only
-    /// signal armyknife has that "this Stop is just because the user kicked
-    /// off something to run in the background".
+    /// PostToolUse only. Claude Code does not document a stable schema for
+    /// this field — its shape varies per tool (object for Bash/Read/Write,
+    /// array of content blocks for MCP tools, etc.) and Anthropic has
+    /// declined to publish one (anthropics/claude-code#3671). Accept any
+    /// JSON value and extract only what we need at the call site.
     #[serde(default)]
-    pub tool_response: Option<ToolResponse>,
+    pub tool_response: Option<serde_json::Value>,
 
     // Ignore other fields from Claude Code hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
+}
+
+impl HookInput {
+    /// Background task id set by Claude Code when the Bash tool was launched
+    /// with `run_in_background: true`. The background task itself fires no
+    /// completion hook, so this is the only signal armyknife has that the
+    /// next Stop is "I kicked off a background command", not the end of a
+    /// real turn. Returns `None` for any tool_response shape that does not
+    /// carry the field (MCP arrays, Read/Write objects, missing field, etc.).
+    pub fn background_task_id(&self) -> Option<&str> {
+        self.tool_response
+            .as_ref()?
+            .get("backgroundTaskId")?
+            .as_str()
+    }
 }
 
 /// Tool input data from pre-tool-use events.
@@ -134,16 +149,6 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
-}
-
-/// Subset of the PostToolUse `tool_response` payload that armyknife consumes.
-#[derive(Debug, Deserialize)]
-pub struct ToolResponse {
-    /// Set by Claude Code only when the Bash tool was launched with
-    /// `run_in_background: true`. Identifies the background task whose
-    /// completion is delivered to the model out of band (i.e. not via hooks).
-    #[serde(rename = "backgroundTaskId")]
-    pub background_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
