@@ -492,16 +492,16 @@ jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
 
 Runs immediately before `a ai pr-draft submit` creates or updates a PR on GitHub. A non-zero exit aborts submission, so this is the natural place to enforce custom lint rules on the PR title and body.
 
-| Variable                 | Description                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `ARMYKNIFE_PR_TITLE`     | Draft PR title                                                                 |
-| `ARMYKNIFE_PR_BODY_FILE` | Path to a temp file containing the draft PR body (removed once submit returns) |
-| `ARMYKNIFE_PR_OWNER`     | Target repository owner                                                        |
-| `ARMYKNIFE_PR_REPO`      | Target repository name                                                         |
-| `ARMYKNIFE_PR_HEAD`      | Head branch the PR is created from                                             |
-| `ARMYKNIFE_PR_BASE`      | Base branch (`--base`); empty string when defaulted by GitHub                  |
-| `ARMYKNIFE_PR_NUMBER`    | Existing PR number when updating; empty string when creating                   |
-| `ARMYKNIFE_PR_IS_UPDATE` | `1` when updating an existing open PR, `0` when creating a new PR              |
+| Variable                 | Description                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `ARMYKNIFE_PR_TITLE`     | Draft PR title                                                                   |
+| `ARMYKNIFE_PR_BODY_FILE` | Path to a temp file containing the draft PR body (removed when the hook returns) |
+| `ARMYKNIFE_PR_OWNER`     | Target repository owner                                                          |
+| `ARMYKNIFE_PR_REPO`      | Target repository name                                                           |
+| `ARMYKNIFE_PR_HEAD`      | Head branch the PR is created from                                               |
+| `ARMYKNIFE_PR_BASE`      | Base branch (`--base`); empty string when defaulted by GitHub                    |
+| `ARMYKNIFE_PR_NUMBER`    | Existing PR number when updating; empty string when creating                     |
+| `ARMYKNIFE_PR_IS_UPDATE` | `1` when updating an existing open PR, `0` when creating a new PR                |
 
 Example: forbid links to issues or PRs in other organizations.
 

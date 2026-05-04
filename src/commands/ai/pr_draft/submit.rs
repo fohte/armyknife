@@ -121,7 +121,15 @@ async fn run_impl(
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
-    let _body_file = run_pre_submit_hook(&draft, &target, args, update_target, run_hook)?;
+    // The temp body file is dropped (and thus deleted) as soon as the hook
+    // returns, so hook scripts must not rely on it persisting afterwards.
+    drop(run_pre_submit_hook(
+        &draft,
+        &target,
+        args,
+        update_target,
+        run_hook,
+    )?);
 
     let pr_url = match update_target {
         Some(number) => {
