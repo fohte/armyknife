@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.161](https://github.com/fohte/armyknife/compare/v0.1.160...v0.1.161) (2026-05-04)
+
+
+### Features
+
+* **ai/pr-draft:** support pre-pr-review / pre-pr-submit hooks for draft linting ([#522](https://github.com/fohte/armyknife/issues/522)) ([0e63025](https://github.com/fohte/armyknife/commit/0e6302597f94c6ac2285fd9947f547dc5629c230))
+
 ## [0.1.160](https://github.com/fohte/armyknife/compare/v0.1.159...v0.1.160) (2026-05-04)
 
 
