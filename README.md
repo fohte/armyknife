@@ -414,6 +414,7 @@ The worker re-checks state at wake-up and aborts in any of these cases:
 - The session is no longer `stopped` (user resumed, sweep paused it, …).
 - The pane's pty atime is newer than the Stop time (user is mid-prompt).
 - The session's branch has a merged PR (the conversation is shipped work; compacting it is wasteful).
+- The most recent assistant turn's prompt is smaller than `min_context_tokens` (compacting a tiny context discards useful state without freeing meaningful budget). Sessions whose transcript or usage record cannot be read are also skipped on this check.
 
 Each new Stop hook cancels the previously-armed worker for the same pane via the `@armyknife-auto-compact-timer-pid` pane option, so a quick follow-up turn transparently re-arms the timer rather than firing a stale compaction.
 
@@ -424,9 +425,12 @@ cc:
   auto_compact:
     enabled: true # default: true
     idle_timeout: 4m30s # default: "4m30s" (slightly under the 5m prompt cache TTL)
+    min_context_tokens: 180000 # default: 180000 (input + cache_read + cache_creation + output of the latest assistant turn)
 ```
 
 The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Claude Code subscriptions; tune it up (e.g. `idle_timeout: 55m`) if your Anthropic API account uses the 1-hour cache.
+
+`min_context_tokens` is measured against the actual prompt size of the latest assistant turn (input + cache_read + cache_creation + output), so it tracks effective context use independent of which model context window (200k vs 1M) is in play.
 
 #### Environment Variables
 

@@ -399,6 +399,19 @@ pub struct AutoCompactConfig {
     #[serde(default = "default_auto_compact_idle_timeout")]
     #[schemars(default = "default_auto_compact_idle_timeout")]
     pub idle_timeout: String,
+
+    /// Minimum context size (in tokens) required before auto-compact fires.
+    /// Sessions whose latest assistant turn shows a smaller prompt than this
+    /// are skipped — compacting a tiny context wastes a turn and discards
+    /// useful state for no benefit. Measured against
+    /// `input + cache_read + cache_creation + output` of the most recent
+    /// assistant entry in the transcript, so it tracks the actual prompt the
+    /// next turn would send regardless of which model context window is in
+    /// use (200k vs 1M).
+    /// Default: 180000.
+    #[serde(default = "default_auto_compact_min_context_tokens")]
+    #[schemars(default = "default_auto_compact_min_context_tokens")]
+    pub min_context_tokens: u64,
 }
 
 impl Default for AutoCompactConfig {
@@ -406,12 +419,17 @@ impl Default for AutoCompactConfig {
         Self {
             enabled: default_true(),
             idle_timeout: default_auto_compact_idle_timeout(),
+            min_context_tokens: default_auto_compact_min_context_tokens(),
         }
     }
 }
 
 fn default_auto_compact_idle_timeout() -> String {
     "4m30s".to_string()
+}
+
+fn default_auto_compact_min_context_tokens() -> u64 {
+    180_000
 }
 
 fn default_worktrees_dir() -> String {
@@ -613,6 +631,7 @@ mod tests {
         let cfg = AutoCompactConfig::default();
         assert!(cfg.enabled);
         assert_eq!(cfg.idle_timeout, "4m30s");
+        assert_eq!(cfg.min_context_tokens, 180_000);
     }
 
     #[test]
@@ -622,10 +641,12 @@ mod tests {
               auto_compact:
                 enabled: true
                 idle_timeout: 3m
+                min_context_tokens: 200000
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.cc.auto_compact.enabled);
         assert_eq!(config.cc.auto_compact.idle_timeout, "3m");
+        assert_eq!(config.cc.auto_compact.min_context_tokens, 200_000);
     }
 
     #[test]

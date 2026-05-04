@@ -31,6 +31,7 @@ use clap::Args;
 
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::cc::auto_pause;
+use crate::commands::cc::claude_sessions;
 use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
 use crate::commands::cc::store;
 use crate::commands::cc::types::{Session, SessionStatus};
@@ -135,6 +136,8 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
 
     let last_input = pty_last_input_for(&session);
     let branch_merged = branch_merged_for(&session).await;
+    let context_tokens =
+        claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
 
     let decision = decide_compact(CompactInputs {
         session: &session,
@@ -142,10 +145,26 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         idle_timeout,
         last_input,
         branch_merged,
+        context_tokens,
+        min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
     });
 
     match decision {
         CompactDecision::Compact => execute_compaction(&session, &LibcSignalSender).await?,
+        // BelowThreshold gets a verbose log because it is the only decision
+        // that is the result of a comparison: tuning `min_context_tokens` is
+        // impossible without seeing both sides of it. The other variants are
+        // observable from their name alone.
+        CompactDecision::BelowThreshold => {
+            eprintln!(
+                "[armyknife] cc auto-compact: skipping session {} (BelowThreshold: tokens={}, min={})",
+                session.session_id,
+                context_tokens
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                cfg.cc.auto_compact.min_context_tokens,
+            );
+        }
         other => {
             eprintln!(
                 "[armyknife] cc auto-compact: skipping session {} ({:?})",
