@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.160](https://github.com/fohte/armyknife/compare/v0.1.159...v0.1.160) (2026-05-04)
+
+
+### Bug Fixes
+
+* **cc:** preserve resurrect state file when no panes match ([#518](https://github.com/fohte/armyknife/issues/518)) ([f8a5dde](https://github.com/fohte/armyknife/commit/f8a5ddec334e2e338138edb6605d173c5dc2b3c2))
+
 ## [0.1.159](https://github.com/fohte/armyknife/compare/v0.1.158...v0.1.159) (2026-05-04)
 
 
