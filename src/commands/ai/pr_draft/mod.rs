@@ -1,4 +1,5 @@
 mod common;
+mod hooks;
 mod new;
 mod review;
 mod submit;

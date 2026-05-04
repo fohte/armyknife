@@ -488,9 +488,12 @@ jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
   ~/.claude.json | sponge ~/.claude.json
 ```
 
-#### `pre-pr-submit`
+#### `pre-pr-review` and `pre-pr-submit`
 
-Runs immediately before `a ai pr-draft submit` creates or updates a PR on GitHub. A non-zero exit aborts submission, so this is the natural place to enforce custom lint rules on the PR title and body.
+Both hooks share the same environment-variable contract and let user scripts lint the draft PR title and body. They differ only in when they fire:
+
+- `pre-pr-review` runs right before `a ai pr-draft review` opens the editor. A non-zero exit aborts the review, surfacing violations early so they can be fixed in the same editor session before `submit`.
+- `pre-pr-submit` runs right before `a ai pr-draft submit` creates or updates a PR on GitHub. A non-zero exit aborts submission and acts as the final gate.
 
 | Variable                 | Description                                                                      |
 | ------------------------ | -------------------------------------------------------------------------------- |
@@ -499,20 +502,20 @@ Runs immediately before `a ai pr-draft submit` creates or updates a PR on GitHub
 | `ARMYKNIFE_PR_OWNER`     | Target repository owner                                                          |
 | `ARMYKNIFE_PR_REPO`      | Target repository name                                                           |
 | `ARMYKNIFE_PR_HEAD`      | Head branch the PR is created from                                               |
-| `ARMYKNIFE_PR_BASE`      | Base branch (`--base`); empty string when defaulted by GitHub                    |
-| `ARMYKNIFE_PR_NUMBER`    | Existing PR number when updating; empty string when creating                     |
-| `ARMYKNIFE_PR_IS_UPDATE` | `1` when updating an existing open PR, `0` when creating a new PR                |
+| `ARMYKNIFE_PR_BASE`      | Base branch (`--base`); empty string at review time or when defaulted by GitHub  |
+| `ARMYKNIFE_PR_NUMBER`    | Existing PR number when updating; empty string at review time or when creating   |
+| `ARMYKNIFE_PR_IS_UPDATE` | `1` when updating an existing open PR, `0` at review time or when creating       |
 
-Example: forbid links to issues or PRs in other organizations.
+Example: forbid links to issues or PRs in other organizations. Symlinking the same script to both hook names enforces the rule at review time and again at submit time.
 
 ```sh
 #!/bin/sh
-# ~/.config/armyknife/hooks/pre-pr-submit
+# ~/.config/armyknife/hooks/pre-pr-review (symlink the same file to pre-pr-submit)
 # Match any github.com link to an issue/PR, then filter out the allow-listed owner.
 if grep -oE 'https?://github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+' \
     "$ARMYKNIFE_PR_BODY_FILE" \
     | grep -vE '^https?://github\.com/fohte/'; then
-  echo "pre-pr-submit: cross-org issue/PR links are not allowed" >&2
+  echo "cross-org issue/PR links are not allowed" >&2
   exit 1
 fi
 ```

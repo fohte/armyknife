@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use super::common::{DraftFile, Frontmatter, RepoInfo};
+use super::hooks::{HookContext, HookRunner, PRE_PR_REVIEW_HOOK, default_runner, run_pr_hook};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
@@ -85,6 +86,10 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
 }
 
 pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
+    run_impl(args, default_runner())
+}
+
+fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
     let (draft_path, owner, repo, branch) = match &args.filepath {
         Some(path) => {
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
@@ -105,6 +110,19 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
     // Read frontmatter before review to detect changes
     let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
+
+    // Fire pre-pr-review before opening the editor so user-defined lints
+    // surface here (where the user is about to edit the file) rather than
+    // later at submit time, which would force a round-trip back into review.
+    let draft_for_hook = DraftFile::from_path(draft_path.clone())?;
+    let context = HookContext {
+        owner: &owner,
+        repo: &repo,
+        head_branch: &branch,
+        base_branch: "",
+        update_pr_number: None,
+    };
+    run_pr_hook(PRE_PR_REVIEW_HOOK, &draft_for_hook, &context, run_hook)?;
 
     use crate::shared::human_in_the_loop::exit_code;
 
@@ -154,6 +172,10 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::env_var::EnvVars;
+    use indoc::indoc;
+    use std::fs;
+    use std::sync::Mutex;
 
     #[cfg(unix)]
     #[test]
@@ -176,5 +198,89 @@ mod tests {
             draft_path.as_os_str(),
             "Path should survive argument building without loss"
         );
+    }
+
+    /// Write a minimal draft file under [`DraftFile::draft_dir`] so `run_impl`
+    /// can locate it via the `--filepath` argument.
+    fn write_draft(owner: &str, repo: &str, branch: &str, body: &str) -> PathBuf {
+        let repo_info = RepoInfo {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            branch: branch.to_string(),
+            is_private: true,
+        };
+        let path = DraftFile::path_for(&repo_info);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        let content = format!(
+            indoc! {r#"
+                ---
+                title: "Review hook test"
+                steps:
+                  submit: false
+                ---
+                {body}
+            "#},
+            body = body,
+        );
+        fs::write(&path, content).expect("write draft");
+        path
+    }
+
+    #[test]
+    fn run_impl_invokes_pre_pr_review_with_body_file() {
+        let draft_path = write_draft(
+            "owner",
+            "repo_review_hook",
+            "feature/review",
+            "Body referencing #999",
+        );
+
+        let captured = Mutex::new(None);
+        let hook = |name: &str, env: &[(&str, &str)]| -> anyhow::Result<()> {
+            let body_path = env
+                .iter()
+                .find(|(k, _)| *k == EnvVars::pr_body_file_name())
+                .map(|(_, v)| (*v).to_string())
+                .expect("body file env var present");
+            let body_contents = fs::read_to_string(&body_path).expect("body file readable");
+            *captured.lock().expect("capture mutex") = Some((name.to_string(), body_contents));
+            // Abort before reaching start_review (which would try to launch a
+            // terminal in the test environment).
+            anyhow::bail!("stop after hook")
+        };
+
+        let args = ReviewArgs {
+            filepath: Some(draft_path.clone()),
+        };
+        let err = run_impl(&args, &hook).expect_err("hook bail must abort run_impl");
+        assert_eq!(err.to_string(), "stop after hook");
+
+        let (name, body_contents) = captured
+            .lock()
+            .expect("capture mutex")
+            .clone()
+            .expect("hook must have been invoked");
+        assert_eq!(name, PRE_PR_REVIEW_HOOK);
+        assert_eq!(body_contents, "Body referencing #999\n");
+
+        let _ = fs::remove_file(&draft_path);
+    }
+
+    #[test]
+    fn run_impl_returns_hook_error_to_caller() {
+        let draft_path = write_draft("owner", "repo_review_hook_err", "feature/err", "body");
+
+        let hook =
+            |_name: &str, _env: &[(&str, &str)]| -> anyhow::Result<()> { anyhow::bail!("nope") };
+
+        let args = ReviewArgs {
+            filepath: Some(draft_path.clone()),
+        };
+        let err = run_impl(&args, &hook).expect_err("hook failure must propagate");
+        assert_eq!(err.to_string(), "nope");
+
+        let _ = fs::remove_file(&draft_path);
     }
 }
