@@ -462,15 +462,15 @@ Git worktree management with tmux integration.
 | `-n, --dry-run` | Show what would be deleted without actually deleting       |
 | `--all`         | Clean worktrees across all repositories under `repos_root` |
 
-#### Hooks
+### Hooks
 
-armyknife supports git-style hooks for worktree lifecycle events. Place executable scripts in `~/.config/armyknife/hooks/` (or `$XDG_CONFIG_HOME/armyknife/hooks/`).
+armyknife supports git-style hooks for command lifecycle events. Place executable scripts in `~/.config/armyknife/hooks/` (or `$XDG_CONFIG_HOME/armyknife/hooks/`).
 
-| Hook                   | Trigger                             |
-| ---------------------- | ----------------------------------- |
-| `post-worktree-create` | After `a wm new` creates a worktree |
+A hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped.
 
-The following environment variables are available in hook scripts:
+#### `post-worktree-create`
+
+Runs after `a wm new` finishes creating a worktree.
 
 | Variable                  | Description                           |
 | ------------------------- | ------------------------------------- |
@@ -478,9 +478,7 @@ The following environment variables are available in hook scripts:
 | `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree           |
 | `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository    |
 
-Hook failures (non-zero exit or missing execute permission) produce a warning but do not block the main operation.
-
-**Example**: Auto-trust worktrees for Claude Code
+Example: auto-trust worktrees for Claude Code.
 
 ```sh
 #!/bin/sh
@@ -488,6 +486,35 @@ Hook failures (non-zero exit or missing execute permission) produce a warning bu
 jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
   '.projects[$path].hasTrustDialogAccepted = true' \
   ~/.claude.json | sponge ~/.claude.json
+```
+
+#### `pre-pr-submit`
+
+Runs immediately before `a ai pr-draft submit` creates or updates a PR on GitHub. A non-zero exit aborts submission, so this is the natural place to enforce custom lint rules on the PR title and body.
+
+| Variable                 | Description                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `ARMYKNIFE_PR_TITLE`     | Draft PR title                                                                 |
+| `ARMYKNIFE_PR_BODY_FILE` | Path to a temp file containing the draft PR body (removed once submit returns) |
+| `ARMYKNIFE_PR_OWNER`     | Target repository owner                                                        |
+| `ARMYKNIFE_PR_REPO`      | Target repository name                                                         |
+| `ARMYKNIFE_PR_HEAD`      | Head branch the PR is created from                                             |
+| `ARMYKNIFE_PR_BASE`      | Base branch (`--base`); empty string when defaulted by GitHub                  |
+| `ARMYKNIFE_PR_NUMBER`    | Existing PR number when updating; empty string when creating                   |
+| `ARMYKNIFE_PR_IS_UPDATE` | `1` when updating an existing open PR, `0` when creating a new PR              |
+
+Example: forbid links to issues or PRs in other organizations.
+
+```sh
+#!/bin/sh
+# ~/.config/armyknife/hooks/pre-pr-submit
+# Match any github.com link to an issue/PR, then filter out the allow-listed owner.
+if grep -oE 'https?://github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+' \
+    "$ARMYKNIFE_PR_BODY_FILE" \
+    | grep -vE '^https?://github\.com/fohte/'; then
+  echo "pre-pr-submit: cross-org issue/PR links are not allowed" >&2
+  exit 1
+fi
 ```
 
 ### `a completions <shell>`
