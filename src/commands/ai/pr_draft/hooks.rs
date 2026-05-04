@@ -7,7 +7,6 @@
 
 use std::io::Write;
 
-use super::common::DraftFile;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
@@ -45,9 +44,14 @@ pub struct HookContext<'a> {
 /// scripts can grep/match it without worrying about argv/env size limits and
 /// so that embedded newlines round-trip exactly. The temp file is deleted as
 /// soon as this function returns.
+///
+/// Title and body are passed as `&str` (rather than `&DraftFile`) so callers
+/// that already hold the parsed frontmatter / body in memory can reuse it
+/// without re-reading the draft file from disk.
 pub fn run_pr_hook(
     hook_name: &str,
-    draft: &DraftFile,
+    title: &str,
+    body: &str,
     context: &HookContext<'_>,
     run_hook: HookRunner<'_>,
 ) -> anyhow::Result<()> {
@@ -55,7 +59,7 @@ pub fn run_pr_hook(
         .prefix("armyknife-pr-body-")
         .suffix(".md")
         .tempfile()?;
-    body_file.write_all(draft.body.as_bytes())?;
+    body_file.write_all(body.as_bytes())?;
     body_file.flush()?;
 
     let body_path = body_file
@@ -76,7 +80,7 @@ pub fn run_pr_hook(
     run_hook(
         hook_name,
         &[
-            (EnvVars::pr_title_name(), draft.frontmatter.title.as_str()),
+            (EnvVars::pr_title_name(), title),
             (EnvVars::pr_body_file_name(), body_path.as_str()),
             (EnvVars::pr_owner_name(), context.owner),
             (EnvVars::pr_repo_name(), context.repo),

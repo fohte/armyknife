@@ -117,7 +117,13 @@ async fn run_impl(
         base_branch: args.base.as_deref().unwrap_or(""),
         update_pr_number: update_target,
     };
-    run_pr_hook(PRE_PR_SUBMIT_HOOK, &draft, &context, run_hook)?;
+    run_pr_hook(
+        PRE_PR_SUBMIT_HOOK,
+        &draft.frontmatter.title,
+        &draft.body,
+        &context,
+        run_hook,
+    )?;
 
     let pr_url = match update_target {
         Some(number) => {

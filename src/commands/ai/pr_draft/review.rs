@@ -108,13 +108,14 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
     let config = load_config()?;
     let window_title = format!("PR: {owner}/{repo} @ {branch}");
 
-    // Read frontmatter before review to detect changes
-    let before = Document::<Frontmatter>::from_path(draft_path.clone())?;
+    // Read the draft once and reuse it for both the pre-review hook (which
+    // needs title + body) and the post-review steps comparison (which only
+    // needs frontmatter).
+    let before = DraftFile::from_path(draft_path.clone())?;
 
     // Fire pre-pr-review before opening the editor so user-defined lints
     // surface here (where the user is about to edit the file) rather than
     // later at submit time, which would force a round-trip back into review.
-    let draft_for_hook = DraftFile::from_path(draft_path.clone())?;
     let context = HookContext {
         owner: &owner,
         repo: &repo,
@@ -122,7 +123,13 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
         base_branch: "",
         update_pr_number: None,
     };
-    run_pr_hook(PRE_PR_REVIEW_HOOK, &draft_for_hook, &context, run_hook)?;
+    run_pr_hook(
+        PRE_PR_REVIEW_HOOK,
+        &before.frontmatter.title,
+        &before.body,
+        &context,
+        run_hook,
+    )?;
 
     use crate::shared::human_in_the_loop::exit_code;
 
