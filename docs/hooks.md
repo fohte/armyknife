@@ -4,6 +4,8 @@ armyknife supports git-style hooks for command lifecycle events. Place executabl
 
 A hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped.
 
+> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. All hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file.
+
 ## `post-worktree-create`
 
 Runs after `a wm new` finishes creating a worktree.
