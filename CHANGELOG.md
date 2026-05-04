@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.159](https://github.com/fohte/armyknife/compare/v0.1.158...v0.1.159) (2026-05-04)
+
+
+### Bug Fixes
+
+* **cc:** accept any JSON shape for PostToolUse `tool_response` ([#519](https://github.com/fohte/armyknife/issues/519)) ([1c0cb88](https://github.com/fohte/armyknife/commit/1c0cb884074f2e57ad2b84808707b71432bc0140))
+
 ## [0.1.158](https://github.com/fohte/armyknife/compare/v0.1.157...v0.1.158) (2026-05-04)
 
 
