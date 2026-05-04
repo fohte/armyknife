@@ -84,16 +84,19 @@ mod tests {
     #[rstest]
     fn run_hook_errors_on_non_executable_hook() {
         let dir = TempDir::new().unwrap();
-        setup_hook(&dir, "post-worktree-create", "#!/bin/sh\necho hello", false);
+        let hook_file = setup_hook(&dir, "post-worktree-create", "#!/bin/sh\necho hello", false);
 
         temp_env::with_vars(
             [("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap()))],
             || {
                 let err = run_hook("post-worktree-create", &[])
                     .expect_err("non-executable hook must error");
-                assert!(
-                    err.to_string().contains("not executable"),
-                    "unexpected error: {err}"
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "hook '{}' exists but is not executable",
+                        hook_file.display()
+                    )
                 );
             },
         );
@@ -133,16 +136,16 @@ mod tests {
     #[rstest]
     fn run_hook_errors_on_nonzero_exit() {
         let dir = TempDir::new().unwrap();
-        setup_hook(&dir, "post-worktree-create", "#!/bin/sh\nexit 1", true);
+        let hook_file = setup_hook(&dir, "post-worktree-create", "#!/bin/sh\nexit 1", true);
 
         temp_env::with_vars(
             [("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap()))],
             || {
                 let err = run_hook("post-worktree-create", &[])
                     .expect_err("non-zero exit must propagate");
-                assert!(
-                    err.to_string().contains("exited with status"),
-                    "unexpected error: {err}"
+                assert_eq!(
+                    err.to_string(),
+                    format!("hook '{}' exited with status 1", hook_file.display())
                 );
             },
         );
