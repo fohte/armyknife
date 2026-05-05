@@ -539,35 +539,13 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     None
 }
 
-/// Returns the last user-input timestamp for the pane identified by
-/// `pane_id` by `stat`-ing its pty device's access time (atime).
-///
-/// On macOS's devfs, atime on `/dev/ttysNNN` is updated on every read
-/// (= user keystroke into the terminal), while mtime tracks writes
-/// (= program output). This gives pane-level granularity -- unlike
-/// `#{window_activity}` which is per-window.
-///
-/// Returns `None` if the pane doesn't exist, tmux isn't running, or the
-/// stat fails for any reason.
-pub fn get_pane_last_input(pane_id: &str) -> Option<i64> {
-    let tty = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_tty}"]).ok()?;
-    let tty = tty.trim();
-    if tty.is_empty() {
-        return None;
-    }
-    let meta = std::fs::metadata(tty).ok()?;
-    use std::os::unix::fs::MetadataExt;
-    Some(meta.atime())
-}
-
 /// Returns the current `(cursor_x, cursor_y)` for the pane.
 ///
 /// Tracks the live terminal cursor: on a normal interactive prompt this
 /// moves whenever the user types or the foreground program writes. We use
 /// it as a "did anything happen in this pane" probe between two points in
-/// time (Stop hook arm vs. idle-timeout wake), since pty atime turned out
-/// to drift on macOS devfs in ways that didn't actually correlate with
-/// user input.
+/// time. Replaces an earlier pty-atime probe that turned out to drift on
+/// macOS devfs in ways that didn't actually correlate with user input.
 ///
 /// Returns `None` if tmux isn't running, the pane doesn't exist, or the
 /// output can't be parsed.

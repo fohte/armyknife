@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
@@ -24,6 +24,11 @@ use super::store;
 use super::types::{Session, SessionStatus};
 use crate::infra::{process::ProcessSnapshot, tmux};
 use crate::shared::config;
+
+/// Pane option where we record the last observed `(cursor_x, cursor_y,
+/// unix_seconds)` so the next sweep pass can tell whether the pane has been
+/// active since. Stored as `<x>,<y>,<ts>` for cheap parse/format.
+const PANE_ACTIVITY_OPTION: &str = "@armyknife-pane-activity";
 
 mod service;
 
@@ -118,9 +123,10 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 /// process ancestry. Instead it asks the probe two questions about each
 /// candidate session:
 ///
-/// - **What was the last time the user touched this pane?**
-///   Returned by `last_activity`. We max this against `session.updated_at`
-///   so we never pause a Stopped session whose user is still typing.
+/// - **When did this pane last show signs of activity?**
+///   Returned by `last_activity_at`. We max this against `session.updated_at`
+///   so we never pause a Stopped session whose pane is still being touched
+///   (user typing or claude still streaming output).
 /// - **Which pid should we SIGTERM?**
 ///   Returned by `resolve_pid`. Implemented by looking up the pane's
 ///   pane_pid and walking its descendants for a `claude` process.
@@ -129,9 +135,11 @@ pub(crate) trait SessionProbe {
     /// can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
 
-    /// Returns the timestamp of the most recent user input in the
-    /// session's tmux pane, or `None` if unavailable.
-    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>>;
+    /// Returns the timestamp at which we last observed the pane's terminal
+    /// cursor change, or `None` if unavailable. Implementations may persist
+    /// the previous cursor reading and compare against the live one to
+    /// produce this value; callers must not depend on side effects.
+    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>>;
 }
 
 struct TmuxSessionProbe<'a> {
@@ -156,11 +164,42 @@ impl SessionProbe for TmuxSessionProbe<'_> {
             .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
     }
 
-    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
+    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let ts = tmux::get_pane_last_input(pane_id)?;
-        Utc.timestamp_opt(ts, 0).single()
+        let live = tmux::get_pane_cursor_position(pane_id)?;
+        let prior = tmux::get_pane_option(pane_id, PANE_ACTIVITY_OPTION)
+            .as_deref()
+            .and_then(parse_pane_activity);
+
+        let observed_at = match prior {
+            Some((px, py, ts)) if (px, py) == live => ts,
+            _ => now,
+        };
+
+        // Persist the live reading so the next sweep pass can detect
+        // movement against it. Errors are non-fatal: a missed write just
+        // means the next pass treats it as "first observation".
+        let _ = tmux::set_pane_option(
+            pane_id,
+            PANE_ACTIVITY_OPTION,
+            &format_pane_activity(live, observed_at),
+        );
+
+        Some(observed_at)
     }
+}
+
+fn parse_pane_activity(raw: &str) -> Option<(u32, u32, DateTime<Utc>)> {
+    let mut parts = raw.trim().splitn(3, ',');
+    let x: u32 = parts.next()?.trim().parse().ok()?;
+    let y: u32 = parts.next()?.trim().parse().ok()?;
+    let ts: i64 = parts.next()?.trim().parse().ok()?;
+    let observed_at = chrono::TimeZone::timestamp_opt(&Utc, ts, 0).single()?;
+    Some((x, y, observed_at))
+}
+
+fn format_pane_activity(cursor: (u32, u32), observed_at: DateTime<Utc>) -> String {
+    format!("{},{},{}", cursor.0, cursor.1, observed_at.timestamp())
 }
 
 /// Result of a single sweep pass. Exposed for tests and for the CLI summary.
@@ -238,13 +277,14 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
 
         report.scanned += 1;
 
-        // Fold the pane's pty atime (last user input) into the effective
-        // "last touched" time so a user who's still typing into a Stopped
-        // pane doesn't get paused mid-prompt.
+        // Fold the pane's last observed cursor-movement time into the
+        // effective "last touched" time so a user who's still typing into a
+        // Stopped pane (or a claude that's still streaming output) doesn't
+        // get paused mid-stream.
         // N.B. We intentionally do NOT mutate session.updated_at here --
         // the effective timestamp is only for the timeout decision, not for
         // persisting to disk.
-        let effective = effective_updated_at(&session, probe);
+        let effective = effective_updated_at(&session, probe, now);
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => {
@@ -280,13 +320,17 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
     Ok(report)
 }
 
-/// Returns the later of `session.updated_at` and the tmux pane's last
-/// user-input timestamp (pty atime). If the probe can't report an input
-/// timestamp (not in tmux, pane gone, etc.) we fall back to
-/// `session.updated_at` alone.
-fn effective_updated_at<P: SessionProbe>(session: &Session, probe: &P) -> DateTime<Utc> {
-    match probe.last_input(session) {
-        Some(input_at) if input_at > session.updated_at => input_at,
+/// Returns the later of `session.updated_at` and the pane's last observed
+/// cursor-movement time. If the probe can't report an activity timestamp
+/// (not in tmux, pane gone, etc.) we fall back to `session.updated_at`
+/// alone.
+fn effective_updated_at<P: SessionProbe>(
+    session: &Session,
+    probe: &P,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    match probe.last_activity_at(session, now) {
+        Some(activity_at) if activity_at > session.updated_at => activity_at,
         _ => session.updated_at,
     }
 }
@@ -361,7 +405,7 @@ mod tests {
             r
         }
 
-        fn with_last_input(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
+        fn with_last_activity(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
             for (id, ts) in pairs {
                 self.activity.get_mut().insert((*id).to_string(), *ts);
             }
@@ -374,7 +418,11 @@ mod tests {
             self.pids.borrow().get(&session.session_id).copied()
         }
 
-        fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
+        fn last_activity_at(
+            &self,
+            session: &Session,
+            _now: DateTime<Utc>,
+        ) -> Option<DateTime<Utc>> {
             self.activity.borrow().get(&session.session_id).copied()
         }
     }
@@ -569,9 +617,9 @@ mod tests {
     #[rstest]
     fn recent_tmux_activity_blocks_pause(test_dir: TestDir) {
         // Session was marked Stopped an hour ago, so the naive timeout check
-        // would pause it. But the pane pty has seen user input a few seconds
-        // ago -- the user is typing a long prompt -- and must not be
-        // killed.
+        // would pause it. But the pane's terminal cursor moved a few seconds
+        // ago -- the user is typing a long prompt or the foreground program
+        // is still streaming output -- and must not be killed.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("typing", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
@@ -579,7 +627,7 @@ mod tests {
         let sender = RecordingSender::default();
         let recent_activity = Utc::now() - TimeDelta::seconds(5);
         let probe = FakeProbe::with_pids(&[("typing", 4242)])
-            .with_last_input(&[("typing", recent_activity)]);
+            .with_last_activity(&[("typing", recent_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -616,7 +664,7 @@ mod tests {
         // Tmux activity is old enough that the session still gets paused.
         let stale_activity = Utc::now() - TimeDelta::hours(1);
         let probe = FakeProbe::with_pids(&[("persist-check", 4242)])
-            .with_last_input(&[("persist-check", stale_activity)]);
+            .with_last_activity(&[("persist-check", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -652,7 +700,7 @@ mod tests {
         let sender = RecordingSender::default();
         let stale_activity = Utc::now() - TimeDelta::minutes(45);
         let probe =
-            FakeProbe::with_pids(&[("idle", 4242)]).with_last_input(&[("idle", stale_activity)]);
+            FakeProbe::with_pids(&[("idle", 4242)]).with_last_activity(&[("idle", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -746,5 +794,30 @@ mod tests {
         let report = sweep_impl(&nonexistent, Duration::from_secs(1), &sender, &probe, false)
             .expect("sweep should succeed even if dir is missing");
         assert_eq!(report, SweepReport::default());
+    }
+
+    #[rstest]
+    fn pane_activity_round_trip() {
+        // The pane option payload is hand-rolled CSV; round-tripping through
+        // both helpers guards the format against drift on either side.
+        let observed_at = chrono::TimeZone::timestamp_opt(&Utc, 1_700_000_000, 0)
+            .single()
+            .expect("ts");
+        let raw = format_pane_activity((42, 7), observed_at);
+        let parsed = parse_pane_activity(&raw).expect("parse");
+        assert_eq!(parsed, (42, 7, observed_at));
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::missing_ts("10,5")]
+    // splitn(3) leaves "1700000000,extra" as the third field, which then
+    // fails i64 parse — guarding against future format changes that might
+    // accept a trailer.
+    #[case::trailing_garbage("10,5,1700000000,extra")]
+    #[case::non_numeric_x("a,5,1700000000")]
+    #[case::non_numeric_ts("10,5,now")]
+    fn parse_pane_activity_rejects_malformed(#[case] raw: &str) {
+        assert!(parse_pane_activity(raw).is_none());
     }
 }
