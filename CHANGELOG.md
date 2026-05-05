@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.164](https://github.com/fohte/armyknife/compare/v0.1.163...v0.1.164) (2026-05-05)
+
+
+### Features
+
+* **human-in-the-loop:** emit edit diff to stdout when the editor exits ([#525](https://github.com/fohte/armyknife/issues/525)) ([b60f86a](https://github.com/fohte/armyknife/commit/b60f86a24d10e819a7fe706a8c933366674a0351))
+
 ## [0.1.163](https://github.com/fohte/armyknife/compare/v0.1.162...v0.1.163) (2026-05-05)
 
 
