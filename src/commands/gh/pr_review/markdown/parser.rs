@@ -1,14 +1,25 @@
 use lazy_regex::regex_captures;
 
+use super::markers;
 use super::serializer::ThreadsFrontmatter;
 use crate::commands::gh::pr_review::error::PrReviewError;
+use crate::commands::gh::pr_review::models::ReviewState;
 
 pub struct MarkdownParser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedThreadsFile {
     pub frontmatter: ThreadsFrontmatter,
+    pub reviews: Vec<ParsedReview>,
     pub threads: Vec<ParsedThread>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedReview {
+    pub author: String,
+    pub state: Option<ReviewState>,
+    pub created_at: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,10 +35,12 @@ impl MarkdownParser {
     /// Parse threads.md content into structured data.
     pub fn parse(content: &str) -> Result<ParsedThreadsFile, PrReviewError> {
         let (frontmatter, body) = parse_frontmatter(content)?;
-        let threads = parse_threads(body)?;
+        let (reviews, body_after_reviews) = extract_reviews_section(body)?;
+        let threads = parse_threads(body_after_reviews)?;
 
         Ok(ParsedThreadsFile {
             frontmatter,
+            reviews,
             threads,
         })
     }
@@ -93,6 +106,130 @@ fn parse_frontmatter(content: &str) -> Result<(ThreadsFrontmatter, &str), PrRevi
         })?;
 
     Ok((frontmatter, body))
+}
+
+/// Extract the `<!-- reviews -->` ... `<!-- /reviews -->` section, returning the parsed
+/// reviews and the body content with that section removed (so thread parsing can proceed).
+///
+/// Markers must appear at the start of a line. Review bodies that quote a marker mid-line
+/// must not split parsing — that's the whole reason for the line-prefix rule.
+fn extract_reviews_section(body: &str) -> Result<(Vec<ParsedReview>, &str), PrReviewError> {
+    let Some(open_idx) = find_line_start(body, markers::REVIEWS_OPEN) else {
+        return Ok((Vec::new(), body));
+    };
+    // Require the open marker to occupy the whole line (followed by '\n' or EOF).
+    let after_open_marker = &body[open_idx + markers::REVIEWS_OPEN.len()..];
+    if !(after_open_marker.is_empty() || after_open_marker.starts_with('\n')) {
+        return Ok((Vec::new(), body));
+    }
+    let after_open = after_open_marker.strip_prefix('\n').unwrap_or("");
+
+    let close_idx = find_line_start(after_open, markers::REVIEWS_CLOSE).ok_or_else(|| {
+        PrReviewError::ThreadParseError {
+            line: 0,
+            details: "unclosed reviews section".to_string(),
+        }
+    })?;
+    let inner = &after_open[..close_idx];
+
+    let after_close_marker = &after_open[close_idx + markers::REVIEWS_CLOSE.len()..];
+    let rest = after_close_marker.strip_prefix('\n').unwrap_or("");
+
+    let reviews = parse_reviews_inner(inner)?;
+    Ok((reviews, rest))
+}
+
+/// Find `needle` only when it starts at the beginning of a line (start-of-string or
+/// immediately after '\n'). Returns the byte offset of the match.
+fn find_line_start(haystack: &str, needle: &str) -> Option<usize> {
+    let mut search_from = 0;
+    while let Some(rel) = haystack[search_from..].find(needle) {
+        let abs = search_from + rel;
+        if abs == 0 || haystack.as_bytes()[abs - 1] == b'\n' {
+            return Some(abs);
+        }
+        search_from = abs + 1;
+    }
+    None
+}
+
+fn parse_reviews_inner(inner: &str) -> Result<Vec<ParsedReview>, PrReviewError> {
+    let mut reviews = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < inner.len() {
+        let Some(open_rel) = find_line_start(&inner[cursor..], markers::REVIEW_OPEN_PREFIX) else {
+            break;
+        };
+        let header_start = cursor + open_rel + markers::REVIEW_OPEN_PREFIX.len();
+
+        // Header runs to the first " -->" on the same line.
+        let line_end = inner[header_start..]
+            .find('\n')
+            .map(|n| header_start + n)
+            .unwrap_or(inner.len());
+        let header_line = &inner[header_start..line_end];
+        let header =
+            header_line
+                .strip_suffix(" -->")
+                .ok_or_else(|| PrReviewError::ThreadParseError {
+                    line: 0,
+                    details: "unclosed review header comment".to_string(),
+                })?;
+        let (author, state, created_at) = parse_review_header(header.trim())?;
+
+        // Body starts after the newline that ends the header line.
+        let body_start = if line_end < inner.len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+        let close_rel =
+            find_line_start(&inner[body_start..], markers::REVIEW_CLOSE).ok_or_else(|| {
+                PrReviewError::ThreadParseError {
+                    line: 0,
+                    details: "unclosed review body".to_string(),
+                }
+            })?;
+        let body_end = body_start + close_rel;
+        let body = inner[body_start..body_end]
+            .trim_end_matches('\n')
+            .to_string();
+
+        reviews.push(ParsedReview {
+            author,
+            state,
+            created_at,
+            body,
+        });
+
+        // Advance past the closing marker line.
+        let after_close = body_end + markers::REVIEW_CLOSE.len();
+        cursor = if after_close < inner.len() && inner.as_bytes()[after_close] == b'\n' {
+            after_close + 1
+        } else {
+            after_close
+        };
+    }
+
+    Ok(reviews)
+}
+
+fn parse_review_header(
+    header: &str,
+) -> Result<(String, Option<ReviewState>, String), PrReviewError> {
+    // header format: "@{author} state={STATE} {timestamp}"
+    if let Some((_, author, state_str, created_at)) =
+        regex_captures!(r"^@(\S+)\s+state=(\S+)\s+(\S+)$", header)
+    {
+        let state = ReviewState::from_graphql_str(state_str);
+        return Ok((author.to_string(), state, created_at.to_string()));
+    }
+
+    Err(PrReviewError::ThreadParseError {
+        line: 0,
+        details: format!("invalid review header: {header}"),
+    })
 }
 
 fn parse_threads(body: &str) -> Result<Vec<ParsedThread>, PrReviewError> {
@@ -458,6 +595,223 @@ mod tests {
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.path, expected_path);
         assert_eq!(thread.line, expected_line);
+    }
+
+    #[rstest]
+    fn test_parse_reviews_section() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=APPROVED 2024-01-15T10:00:00Z -->
+            LGTM!
+            <!-- /review -->
+            <!-- review: @gemini-code-assist state=COMMENTED 2024-01-15T11:00:00Z -->
+            Looks fine overall.
+            One nit below.
+            <!-- /review -->
+            <!-- /reviews -->
+
+            <!-- thread: RT_abc path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert_eq!(parsed.reviews.len(), 2);
+
+        assert_eq!(parsed.reviews[0].author, "alice");
+        assert_eq!(parsed.reviews[0].state, Some(ReviewState::Approved));
+        assert_eq!(parsed.reviews[0].created_at, "2024-01-15T10:00:00Z");
+        assert_eq!(parsed.reviews[0].body, "LGTM!");
+
+        assert_eq!(parsed.reviews[1].author, "gemini-code-assist");
+        assert_eq!(parsed.reviews[1].state, Some(ReviewState::Commented));
+        assert_eq!(
+            parsed.reviews[1].body,
+            "Looks fine overall.\nOne nit below."
+        );
+
+        // Threads must still parse correctly after the reviews section.
+        assert_eq!(parsed.threads.len(), 1);
+        assert_eq!(parsed.threads[0].thread_id, "RT_abc");
+    }
+
+    #[rstest]
+    fn test_parse_no_reviews_section() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert!(parsed.reviews.is_empty());
+        assert_eq!(parsed.threads.len(), 1);
+    }
+
+    #[rstest]
+    fn test_parse_empty_reviews_section() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- /reviews -->
+
+            <!-- thread: RT_abc path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert!(parsed.reviews.is_empty());
+        assert_eq!(parsed.threads.len(), 1);
+    }
+
+    #[rstest]
+    fn test_parse_review_body_quoting_marker_does_not_split() {
+        // A reviewer literally quotes the marker in their body (e.g., explaining the
+        // format). The line-start rule means it should not be treated as a new review.
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=COMMENTED 2024-01-15T10:00:00Z -->
+            See `<!-- review: @x state=COMMENTED 2024 -->` -- this is just an inline quote.
+            Still part of the same review body.
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert_eq!(parsed.reviews.len(), 1);
+        assert_eq!(parsed.reviews[0].author, "alice");
+        assert!(parsed.reviews[0].body.contains("inline quote"));
+        assert!(parsed.reviews[0].body.contains("Still part of the same"));
+    }
+
+    #[rstest]
+    fn test_parse_unclosed_reviews_section_errors() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=COMMENTED 2024-01-15T10:00:00Z -->
+            no closing markers
+        "#};
+
+        let result = MarkdownParser::parse(content);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_unclosed_review_body_errors() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=COMMENTED 2024-01-15T10:00:00Z -->
+            forgot to close
+            <!-- /reviews -->
+        "#};
+
+        let result = MarkdownParser::parse(content);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_review_with_unknown_state() {
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=UNKNOWN_STATE 2024-01-15T10:00:00Z -->
+            Body
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        assert_eq!(parsed.reviews.len(), 1);
+        assert_eq!(parsed.reviews[0].state, None);
+    }
+
+    #[rstest]
+    fn test_roundtrip_reviews_serialize_parse() {
+        use super::super::serializer::{MarkdownSerializer, ThreadsFrontmatter};
+        use crate::commands::gh::pr_review::models::PrData;
+        use crate::commands::gh::pr_review::models::Review;
+        use crate::commands::gh::pr_review::models::comment::Author;
+
+        let body_text = indoc! {"
+            Multi
+            line
+            body
+        "}
+        .trim_end_matches('\n');
+
+        let pr_data = PrData {
+            reviews: vec![Review {
+                database_id: 7,
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
+                body: body_text.to_string(),
+                state: ReviewState::ChangesRequested,
+                created_at: "2024-01-15T09:00:00Z".to_string(),
+            }],
+            threads: vec![],
+        };
+        let frontmatter = ThreadsFrontmatter {
+            pr: 42,
+            repo: "fohte/armyknife".to_string(),
+            pulled_at: "2024-01-15T10:00:00Z".to_string(),
+            submit: false,
+        };
+        let serialized = MarkdownSerializer::serialize(&pr_data, &frontmatter);
+        let parsed = MarkdownParser::parse(&serialized).unwrap();
+
+        assert_eq!(parsed.reviews.len(), 1);
+        assert_eq!(parsed.reviews[0].author, "alice");
+        assert_eq!(parsed.reviews[0].state, Some(ReviewState::ChangesRequested));
+        assert_eq!(parsed.reviews[0].created_at, "2024-01-15T09:00:00Z");
+        assert_eq!(parsed.reviews[0].body, body_text);
     }
 
     #[rstest]

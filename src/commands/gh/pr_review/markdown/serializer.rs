@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
+use super::markers;
+use crate::commands::gh::pr_review::models::{PrData, Review, ReviewThread};
 use crate::shared::human_in_the_loop::DocumentSchema;
 
 /// YAML frontmatter for the threads.md file.
@@ -46,6 +47,11 @@ impl MarkdownSerializer {
         output.push_str(&format!("submit: {}\n", frontmatter.submit));
         output.push_str("---\n");
 
+        if let Some(section) = serialize_reviews_section(&pr_data.reviews) {
+            output.push('\n');
+            output.push_str(&section);
+        }
+
         for thread in &pr_data.threads {
             output.push('\n');
             output.push_str(&serialize_thread(thread, existing_drafts));
@@ -53,6 +59,45 @@ impl MarkdownSerializer {
 
         output
     }
+}
+
+/// Serialize the reviews section. Returns `None` when no review has a non-empty body
+/// (empty-body reviews are skipped, since GitHub creates one for every approve/comment).
+fn serialize_reviews_section(reviews: &[Review]) -> Option<String> {
+    let mut sorted: Vec<&Review> = reviews
+        .iter()
+        .filter(|r| !r.body.trim().is_empty())
+        .collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let mut output = String::new();
+    output.push_str(markers::REVIEWS_OPEN);
+    output.push('\n');
+    for review in sorted {
+        let author = review
+            .author
+            .as_ref()
+            .map(|a| a.login.as_str())
+            .unwrap_or("ghost");
+        let state = review.state.as_graphql_str();
+        let timestamp = &review.created_at;
+        output.push_str(&format!(
+            "{prefix}@{author} state={state} {timestamp} -->\n",
+            prefix = markers::REVIEW_OPEN_PREFIX,
+        ));
+        output.push_str(&review.body);
+        if !review.body.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(markers::REVIEW_CLOSE);
+        output.push('\n');
+    }
+    output.push_str(markers::REVIEWS_CLOSE);
+    output.push('\n');
+    Some(output)
 }
 
 fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, String>) -> String {
@@ -130,12 +175,24 @@ fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, Str
 mod tests {
     use super::*;
     use crate::commands::gh::pr_review::models::{
-        Comment,
+        Comment, ReviewState,
         comment::{Author, PullRequestReview, ReplyTo},
         thread::CommentsNode,
     };
     use indoc::indoc;
     use rstest::rstest;
+
+    fn make_review(author: &str, state: ReviewState, body: &str, created_at: &str) -> Review {
+        Review {
+            database_id: 1,
+            author: Some(Author {
+                login: author.to_string(),
+            }),
+            body: body.to_string(),
+            state,
+            created_at: created_at.to_string(),
+        }
+    }
 
     fn make_comment(id: i64, author: &str, body: &str) -> Comment {
         Comment {
@@ -343,6 +400,158 @@ mod tests {
             Fix this
             <!-- /comment -->
             My draft reply
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_reviews_with_body() {
+        let pr_data = PrData {
+            reviews: vec![
+                make_review(
+                    "alice",
+                    ReviewState::Approved,
+                    "LGTM!",
+                    "2024-01-15T10:00:00Z",
+                ),
+                make_review(
+                    "gemini-code-assist",
+                    ReviewState::Commented,
+                    indoc! {"
+                        Looks fine overall.
+                        One nit below."},
+                    "2024-01-15T11:00:00Z",
+                ),
+            ],
+            threads: vec![],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=APPROVED 2024-01-15T10:00:00Z -->
+            LGTM!
+            <!-- /review -->
+            <!-- review: @gemini-code-assist state=COMMENTED 2024-01-15T11:00:00Z -->
+            Looks fine overall.
+            One nit below.
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_skips_empty_review_bodies() {
+        let pr_data = PrData {
+            reviews: vec![
+                make_review("alice", ReviewState::Approved, "", "2024-01-15T10:00:00Z"),
+                make_review(
+                    "bob",
+                    ReviewState::Commented,
+                    "   \n  ",
+                    "2024-01-15T10:30:00Z",
+                ),
+            ],
+            threads: vec![],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_reviews_sorted_by_created_at() {
+        let pr_data = PrData {
+            reviews: vec![
+                make_review(
+                    "later",
+                    ReviewState::Commented,
+                    "second",
+                    "2024-01-15T12:00:00Z",
+                ),
+                make_review(
+                    "earlier",
+                    ReviewState::Commented,
+                    "first",
+                    "2024-01-15T10:00:00Z",
+                ),
+            ],
+            threads: vec![],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- reviews -->
+            <!-- review: @earlier state=COMMENTED 2024-01-15T10:00:00Z -->
+            first
+            <!-- /review -->
+            <!-- review: @later state=COMMENTED 2024-01-15T12:00:00Z -->
+            second
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_reviews_before_threads() {
+        let pr_data = PrData {
+            reviews: vec![make_review(
+                "alice",
+                ReviewState::ChangesRequested,
+                "Please address.",
+                "2024-01-15T09:00:00Z",
+            )],
+            threads: vec![make_thread(
+                Some("RT_xyz"),
+                vec![Comment {
+                    path: Some("a.rs".to_string()),
+                    line: Some(1),
+                    ..make_comment(1, "alice", "nit")
+                }],
+                false,
+            )],
+        };
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=CHANGES_REQUESTED 2024-01-15T09:00:00Z -->
+            Please address.
+            <!-- /review -->
+            <!-- /reviews -->
+
+            <!-- thread: RT_xyz path: a.rs:1 author: @alice -->
+            - [ ] resolve
+            <!-- comment: @alice 2024-01-15T10:30:00Z -->
+            nit
+            <!-- /comment -->
         "#};
         assert_eq!(result, expected);
     }
