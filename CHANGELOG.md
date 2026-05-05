@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.162](https://github.com/fohte/armyknife/compare/v0.1.161...v0.1.162) (2026-05-05)
+
+
+### Features
+
+* **gh/pr-review:** include review bodies in `pull` output ([#524](https://github.com/fohte/armyknife/issues/524)) ([3c84b16](https://github.com/fohte/armyknife/commit/3c84b1680d26a2c70a0f6772591376daabf0982d))
+
 ## [0.1.161](https://github.com/fohte/armyknife/compare/v0.1.160...v0.1.161) (2026-05-04)
 
 
