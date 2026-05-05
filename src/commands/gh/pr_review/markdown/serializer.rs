@@ -531,6 +531,52 @@ mod tests {
     }
 
     #[rstest]
+    #[case::no_diff_hunk(None, None, vec![])]
+    #[case::header_present(
+        Some("@@ -1,1 +1,1 @@\n a\n".to_string()),
+        Some(1),
+        vec![],
+    )]
+    #[case::header_unparseable_with_line(
+        Some("garbage line\n".to_string()),
+        Some(7),
+        vec!["src/foo.rs:7".to_string()],
+    )]
+    #[case::header_unparseable_without_line(
+        Some("garbage line\n".to_string()),
+        None,
+        vec!["src/foo.rs".to_string()],
+    )]
+    fn test_serialize_records_parse_failed_thread_locations(
+        #[case] diff_hunk: Option<String>,
+        #[case] line: Option<i64>,
+        #[case] expected_locations: Vec<String>,
+    ) {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_pf"),
+                vec![Comment {
+                    path: Some("src/foo.rs".to_string()),
+                    line,
+                    diff_hunk,
+                    ..make_comment(1, "reviewer", "Fix")
+                }],
+                false,
+            )],
+        };
+
+        let outcome = MarkdownSerializer::serialize_with_options(
+            &pr_data,
+            &default_frontmatter(),
+            &HashMap::new(),
+            &SerializeOptions::default(),
+        );
+
+        assert_eq!(outcome.parse_failed_threads, expected_locations);
+    }
+
+    #[rstest]
     fn test_serialize_collapses_details_in_comment_body() {
         let body = "<details><summary>Prompt for agents</summary>secret</details>";
         let pr_data = PrData {
