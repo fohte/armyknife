@@ -94,17 +94,20 @@ pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
     let options = SerializeOptions {
         open_details: args.open_details,
     };
-    let content = MarkdownSerializer::serialize_with_options(
+    let outcome = MarkdownSerializer::serialize_with_options(
         &pr_data,
         &frontmatter,
         &existing_drafts,
         &options,
     );
 
-    storage.write_threads(&content)?;
+    storage.write_threads(&outcome.text)?;
 
     println!("Saved to: {}", storage.threads_path().display());
     println!("  {} thread(s) pulled", pr_data.threads.len());
+    for location in &outcome.parse_failed_threads {
+        eprintln!("warning: diff hunk parse failed for {location}");
+    }
 
     Ok(())
 }
