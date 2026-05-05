@@ -108,18 +108,19 @@ fn try_compress<'a>(input: &'a CompressInput<'a>) -> Result<String, FallbackReas
             // emit a precise warning. Only `line` (new side) is reported
             // here — outdated comments on the old side fall through to the
             // generic parse-failed branch since the warning is shaped
-            // around the new-side range.
-            let new_end = new_start + new_len.saturating_sub(1).max(0);
+            // around the new-side range. An empty new side (`+0,0`) has no
+            // sensible range to display, so route those through ParseFailed
+            // as well.
             let comment_line = input.line.or(input.original_line);
             return match comment_line {
-                Some(line) => Err(FallbackReason::OutsideHunkRange {
+                Some(line) if new_len > 0 => Err(FallbackReason::OutsideHunkRange {
                     header,
                     body,
                     comment_line: line,
                     new_start,
-                    new_end,
+                    new_end: new_start + new_len - 1,
                 }),
-                None => Err(FallbackReason::ParseFailed),
+                _ => Err(FallbackReason::ParseFailed),
             };
         }
     };
@@ -605,6 +606,41 @@ mod tests {
              a
              b
              c
+        "};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::with_explicit_new_len("@@ -1,3 +5,7 @@", Some((5, 7, 1)))]
+    #[case::omitted_new_len_defaults_to_one("@@ -1,3 +5 @@", Some((5, 1, 1)))]
+    #[case::omitted_old_len("@@ -1 +5,7 @@", Some((5, 7, 1)))]
+    #[case::empty_new_side("@@ -1,5 +0,0 @@", Some((0, 0, 1)))]
+    #[case::with_function_suffix("@@ -1,3 +5,7 @@ fn foo()", Some((5, 7, 1)))]
+    #[case::missing_at_signs("not a header", None)]
+    fn test_parse_hunk_header(#[case] header: &str, #[case] expected: Option<(i64, i64, i64)>) {
+        assert_eq!(parse_hunk_header(header), expected);
+    }
+
+    #[rstest]
+    fn test_fallback_when_new_side_empty_routes_to_parse_failed() {
+        // `+0,0` is a pure deletion — there are no new-side lines to anchor
+        // a comment range against, so the out-of-range warning would be
+        // nonsensical (`(0-0)`). Verify we route through parse-failed
+        // instead.
+        let hunk = indoc! {"
+            @@ -1,3 +0,0 @@
+            -line 1
+            -line 2
+            -line 3
+        "};
+        let result = compress_diff_hunk(&input_for(hunk, 5));
+
+        let expected = indoc! {"
+            <!-- diff hunk parse failed, showing last 30 lines -->
+            @@ -1,3 +0,0 @@
+            -line 1
+            -line 2
+            -line 3
         "};
         assert_eq!(result, expected);
     }
