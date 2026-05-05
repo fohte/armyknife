@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.165](https://github.com/fohte/armyknife/compare/v0.1.164...v0.1.165) (2026-05-05)
+
+
+### Bug Fixes
+
+* **cc:** stop auto-compact and sweep from being skipped by a false activity signal ([#529](https://github.com/fohte/armyknife/issues/529)) ([447ad55](https://github.com/fohte/armyknife/commit/447ad55c9bde902e650bd67b8f35e1fdb201ca8e))
+
 ## [0.1.164](https://github.com/fohte/armyknife/compare/v0.1.163...v0.1.164) (2026-05-05)
 
 
