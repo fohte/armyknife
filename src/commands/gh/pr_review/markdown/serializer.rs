@@ -2,8 +2,18 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::diff_compress::{CompressInput, compress_diff_hunk};
+use crate::commands::gh::pr_review::details::{clean_review_body, strip_noise_keep_details};
 use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
 use crate::shared::human_in_the_loop::DocumentSchema;
+
+/// Output options for `MarkdownSerializer`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SerializeOptions {
+    /// When `true`, leave `<details>` blocks intact. Otherwise collapse them
+    /// to a single-line marker so bot reviews don't dominate the file.
+    pub open_details: bool,
+}
 
 /// YAML frontmatter for the threads.md file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,6 +46,22 @@ impl MarkdownSerializer {
         frontmatter: &ThreadsFrontmatter,
         existing_drafts: &HashMap<String, String>,
     ) -> String {
+        Self::serialize_with_options(
+            pr_data,
+            frontmatter,
+            existing_drafts,
+            &SerializeOptions::default(),
+        )
+    }
+
+    /// Full-form serializer used by `reply pull`. `existing_drafts` preserves
+    /// the user's in-progress reply text across re-pulls.
+    pub fn serialize_with_options(
+        pr_data: &PrData,
+        frontmatter: &ThreadsFrontmatter,
+        existing_drafts: &HashMap<String, String>,
+        options: &SerializeOptions,
+    ) -> String {
         let mut output = String::new();
 
         // YAML frontmatter
@@ -48,14 +74,18 @@ impl MarkdownSerializer {
 
         for thread in &pr_data.threads {
             output.push('\n');
-            output.push_str(&serialize_thread(thread, existing_drafts));
+            output.push_str(&serialize_thread(thread, existing_drafts, options));
         }
 
         output
     }
 }
 
-fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, String>) -> String {
+fn serialize_thread(
+    thread: &ReviewThread,
+    existing_drafts: &HashMap<String, String>,
+    options: &SerializeOptions,
+) -> String {
     let mut output = String::new();
 
     let root = match thread.root_comment() {
@@ -89,14 +119,18 @@ fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, Str
         output.push_str("- [ ] resolve\n");
     }
 
-    // Diff hunk from root comment
+    // Diff hunk from root comment, compressed around the commented region.
     if let Some(diff_hunk) = &root.diff_hunk {
+        let compressed = compress_diff_hunk(&CompressInput {
+            diff_hunk,
+            line: root.line,
+            start_line: root.start_line,
+            original_line: root.original_line,
+            original_start_line: root.original_start_line,
+        });
         output.push_str("<!-- diff -->\n");
         output.push_str("```diff\n");
-        output.push_str(diff_hunk);
-        if !diff_hunk.ends_with('\n') {
-            output.push('\n');
-        }
+        output.push_str(&compressed);
         output.push_str("```\n");
         output.push_str("<!-- /diff -->\n");
     }
@@ -105,9 +139,14 @@ fn serialize_thread(thread: &ReviewThread, existing_drafts: &HashMap<String, Str
     for comment in &thread.comments.nodes {
         let author = comment.author_login();
         let timestamp = &comment.created_at;
+        let body = if options.open_details {
+            strip_noise_keep_details(&comment.body)
+        } else {
+            clean_review_body(&comment.body)
+        };
         output.push_str(&format!("<!-- comment: @{author} {timestamp} -->\n"));
-        output.push_str(&comment.body);
-        if !comment.body.ends_with('\n') {
+        output.push_str(&body);
+        if !body.ends_with('\n') {
             output.push('\n');
         }
         output.push_str("<!-- /comment -->\n");
@@ -147,7 +186,9 @@ mod tests {
             created_at: "2024-01-15T10:30:00Z".to_string(),
             path: None,
             line: None,
+            start_line: None,
             original_line: None,
+            original_start_line: None,
             diff_hunk: None,
             reply_to: None,
             pull_request_review: None,
@@ -201,8 +242,8 @@ mod tests {
                 Some("RT_abc123"),
                 vec![Comment {
                     path: Some("src/main.rs".to_string()),
-                    line: Some(42),
-                    diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old\n+new".to_string()),
+                    line: Some(41),
+                    diff_hunk: Some("@@ -40,3 +40,3 @@\n context\n-old\n+new".to_string()),
                     pull_request_review: Some(PullRequestReview { database_id: 100 }),
                     ..make_comment(1, "reviewer", "Fix this bug")
                 }],
@@ -218,11 +259,11 @@ mod tests {
             submit: false
             ---
 
-            <!-- thread: RT_abc123 path: src/main.rs:42 author: @reviewer -->
+            <!-- thread: RT_abc123 path: src/main.rs:41 author: @reviewer -->
             - [ ] resolve
             <!-- diff -->
             ```diff
-            @@ -40,3 +40,5 @@
+            @@ -40,3 +40,3 @@
              context
             -old
             +new
@@ -345,6 +386,121 @@ mod tests {
             My draft reply
         "#};
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_compresses_long_diff_hunk() {
+        // Build a 30-line context-only hunk so the compressor has predictable
+        // arithmetic: comment on new line 20 → keep idx 14..=22 (5 before,
+        // 3 after), drop the rest with omission markers.
+        let mut hunk = String::from("@@ -1,30 +1,30 @@\n");
+        for i in 1..=30 {
+            hunk.push_str(&format!(" line {i}\n"));
+        }
+
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_long"),
+                vec![Comment {
+                    path: Some("a.rs".to_string()),
+                    line: Some(20),
+                    diff_hunk: Some(hunk),
+                    ..make_comment(1, "reviewer", "Fix")
+                }],
+                false,
+            )],
+        };
+
+        let result = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- thread: RT_long path: a.rs:20 author: @reviewer -->
+            - [ ] resolve
+            <!-- diff -->
+            ```diff
+            @@ -1,30 +1,30 @@
+            ... [14 lines omitted] ...
+             line 15
+             line 16
+             line 17
+             line 18
+             line 19
+             line 20
+             line 21
+             line 22
+             line 23
+            ... [7 lines omitted] ...
+            ```
+            <!-- /diff -->
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix
+            <!-- /comment -->
+        "#};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_collapses_details_in_comment_body() {
+        let body = "<details><summary>Prompt for agents</summary>secret</details>";
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_d"),
+                vec![Comment {
+                    path: Some("a.rs".to_string()),
+                    line: Some(1),
+                    ..make_comment(1, "bot", body)
+                }],
+                false,
+            )],
+        };
+
+        let collapsed_default = MarkdownSerializer::serialize(&pr_data, &default_frontmatter());
+        let expected_collapsed = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- thread: RT_d path: a.rs:1 author: @bot -->
+            - [ ] resolve
+            <!-- comment: @bot 2024-01-15T10:30:00Z -->
+            [▶ Prompt for agents]
+            <!-- /comment -->
+        "#};
+        assert_eq!(collapsed_default, expected_collapsed);
+
+        let opts = SerializeOptions { open_details: true };
+        let preserved = MarkdownSerializer::serialize_with_options(
+            &pr_data,
+            &default_frontmatter(),
+            &HashMap::new(),
+            &opts,
+        );
+        let expected_preserved = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- thread: RT_d path: a.rs:1 author: @bot -->
+            - [ ] resolve
+            <!-- comment: @bot 2024-01-15T10:30:00Z -->
+            <details><summary>Prompt for agents</summary>secret</details>
+            <!-- /comment -->
+        "#};
+        assert_eq!(preserved, expected_preserved);
     }
 
     #[rstest]

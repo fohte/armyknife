@@ -41,7 +41,9 @@ const GRAPHQL_QUERY: &str = indoc! {"
                   createdAt
                   path
                   line
+                  startLine
                   originalLine
+                  originalStartLine
                   diffHunk
                   replyTo { databaseId }
                   pullRequestReview { databaseId }
