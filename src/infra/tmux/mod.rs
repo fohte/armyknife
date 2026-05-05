@@ -539,25 +539,17 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     None
 }
 
-/// Returns the last user-input timestamp for the pane identified by
-/// `pane_id` by `stat`-ing its pty device's access time (atime).
+/// Captures the current visible contents of `pane_id` as plain text.
 ///
-/// On macOS's devfs, atime on `/dev/ttysNNN` is updated on every read
-/// (= user keystroke into the terminal), while mtime tracks writes
-/// (= program output). This gives pane-level granularity -- unlike
-/// `#{window_activity}` which is per-window.
+/// Thin wrapper over `tmux capture-pane -p -t <pane>`; ANSI styling is
+/// stripped by tmux when `-p` is used without `-e`. Callers that need to
+/// extract structure from the capture (e.g. parsing a TUI's input box)
+/// should do so on top of this function.
 ///
-/// Returns `None` if the pane doesn't exist, tmux isn't running, or the
-/// stat fails for any reason.
-pub fn get_pane_last_input(pane_id: &str) -> Option<i64> {
-    let tty = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{pane_tty}"]).ok()?;
-    let tty = tty.trim();
-    if tty.is_empty() {
-        return None;
-    }
-    let meta = std::fs::metadata(tty).ok()?;
-    use std::os::unix::fs::MetadataExt;
-    Some(meta.atime())
+/// Returns `None` when tmux isn't running, the pane no longer exists, or
+/// the command fails for any other reason.
+pub fn capture_pane(pane_id: &str) -> Option<String> {
+    run_tmux_output(&["capture-pane", "-p", "-t", pane_id]).ok()
 }
 
 /// Parses a single line from tmux list-panes output for PID matching.

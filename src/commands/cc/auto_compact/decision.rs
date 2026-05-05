@@ -25,8 +25,11 @@ pub enum CompactDecision {
     /// paused it, or it ended). Cancelling silently is the right move because
     /// either the user resumed work or another worker handled the session.
     NotStopped,
-    /// User has typed something into the pane after the Stop hook fired
-    /// (pty atime > Stop time). Killing them mid-prompt would be hostile.
+    /// The text inside the Claude Code TUI input box changed between
+    /// arm time (Stop hook fired) and wake time (idle_timeout elapsed),
+    /// meaning the user has typed something into the prompt. Compacting
+    /// now would SIGTERM the live claude and discard whatever they were
+    /// composing.
     UserTyping,
     /// The session's branch already has a merged PR. Compacting work the user
     /// has shipped is wasteful, and the next session on this branch is likely
@@ -52,16 +55,19 @@ pub enum CompactDecision {
 /// Kept as an explicit struct (rather than a long parameter list) because
 /// schedule's wake-up path collects each value from a different subsystem
 /// (store, tmux, git/github) and the named fields make the call site readable.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CompactInputs<'a> {
     pub session: &'a Session,
     pub now: DateTime<Utc>,
     pub idle_timeout: Duration,
-    /// PTY atime for the session's tmux pane, if available. `None` means we
-    /// could not query it (no tmux info, pane gone, stat failed). Treated as
-    /// "no recent input" rather than "definitely typing" — falsely cancelling
-    /// would defeat the whole feature.
-    pub last_input: Option<DateTime<Utc>>,
+    /// Text inside the Claude Code TUI input box, captured at arm time
+    /// (Stop hook fired) and again at wake time (idle_timeout elapsed).
+    /// `None` on either side means we couldn't read it (no tmux info,
+    /// permission prompt overlay, capture failed); the decision treats
+    /// unknown as "no input observed" so a transient tmux failure doesn't
+    /// permanently disable auto-compact.
+    pub arm_input: Option<String>,
+    pub wake_input: Option<String>,
     /// Whether the branch backing this session has a merged PR. `None` when
     /// we couldn't determine it (no git repo, GitHub call failed); treated as
     /// "not merged" so we err on the side of compacting.
@@ -87,8 +93,13 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::BranchMerged;
     }
 
-    if let Some(input_at) = inputs.last_input
-        && input_at > inputs.session.updated_at
+    // Input box text changed between arm and wake → user typed
+    // something into the prompt while we were sleeping. Missing readings
+    // on either side are treated as "no input observed" so a one-off
+    // tmux failure (or a permission prompt overlay covering the input
+    // box) doesn't permanently block compact.
+    if let (Some(arm), Some(wake)) = (inputs.arm_input.as_ref(), inputs.wake_input.as_ref())
+        && arm != wake
     {
         return CompactDecision::UserTyping;
     }
@@ -148,7 +159,8 @@ mod tests {
             session,
             now,
             idle_timeout,
-            last_input: None,
+            arm_input: None,
+            wake_input: None,
             branch_merged: None,
             // Default the threshold check out of the way for the existing
             // suite: each older test wants the corresponding cheap check to
@@ -188,30 +200,52 @@ mod tests {
     }
 
     #[rstest]
-    fn user_typing_aborts_even_when_elapsed() {
-        // Stop fired an hour ago, but the user hit a key 5s ago — they're
-        // composing a follow-up prompt. Killing them mid-keystroke is exactly
-        // the rude behavior we're trying to avoid.
+    #[case::empty_to_typed("", "hello")]
+    #[case::edited("draft v1", "draft v2")]
+    #[case::cleared("a follow-up message", "")]
+    fn input_change_aborts(#[case] arm: &str, #[case] wake: &str) {
+        // Stop fired an hour ago and idle_timeout has long since elapsed,
+        // but the input box text changed during the sleep — the user is
+        // composing a follow-up. Compacting now would SIGTERM live claude
+        // and discard the in-flight prompt.
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
-        let last_input = now - TimeDelta::seconds(5);
         let decision = decide_compact(CompactInputs {
-            last_input: Some(last_input),
+            arm_input: Some(arm.to_string()),
+            wake_input: Some(wake.to_string()),
             ..inputs(&session, now, Duration::from_secs(60))
         });
         assert_eq!(decision, CompactDecision::UserTyping);
     }
 
     #[rstest]
-    fn last_input_at_or_before_stop_does_not_block() {
-        // last_input that predates updated_at (or equals it, e.g. when claude
-        // wrote its own prompt to the pane during Stop) must not be treated
-        // as "user typing".
+    #[case::both_empty("", "")]
+    #[case::both_unchanged("waiting on a follow-up", "waiting on a follow-up")]
+    #[case::multiline("first line\nsecond line", "first line\nsecond line")]
+    fn unchanged_input_does_not_block(#[case] arm: &str, #[case] wake: &str) {
         let now = Utc::now();
-        let stop_time = now - TimeDelta::hours(1);
-        let session = stopped_session(stop_time);
+        let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(stop_time),
+            arm_input: Some(arm.to_string()),
+            wake_input: Some(wake.to_string()),
+            ..inputs(&session, now, Duration::from_secs(60))
+        });
+        assert_eq!(decision, CompactDecision::Compact);
+    }
+
+    #[rstest]
+    #[case::arm_missing(None, Some("anything".to_string()))]
+    #[case::wake_missing(Some("anything".to_string()), None)]
+    #[case::both_missing(None, None)]
+    fn missing_input_does_not_block(#[case] arm: Option<String>, #[case] wake: Option<String>) {
+        // A transient tmux failure or a permission-prompt overlay on
+        // either side must not be treated as "definitely typing", or a
+        // single hiccup would permanently disable auto-compact.
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::hours(1));
+        let decision = decide_compact(CompactInputs {
+            arm_input: arm,
+            wake_input: wake,
             ..inputs(&session, now, Duration::from_secs(60))
         });
         assert_eq!(decision, CompactDecision::Compact);
@@ -287,11 +321,13 @@ mod tests {
 
     #[rstest]
     fn typing_takes_precedence_over_threshold() {
-        // Even a fully-loaded context must not preempt the user mid-keystroke.
+        // Even a fully-loaded context must not preempt the user
+        // mid-prompt; the typed text is still in their input box.
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(now - TimeDelta::seconds(2)),
+            arm_input: Some(String::new()),
+            wake_input: Some("a follow-up".to_string()),
             context_tokens: Some(900_000),
             min_context_tokens: 180_000,
             ..inputs(&session, now, Duration::from_secs(60))
@@ -301,14 +337,15 @@ mod tests {
 
     #[rstest]
     fn merged_takes_precedence_over_typing() {
-        // The branch is merged, so we cancel regardless of pty activity.
+        // The branch is merged, so we cancel regardless of pane activity.
         // BranchMerged is a stronger signal than UserTyping: typing into a
         // session whose work has already shipped is most likely a stale pane
         // the user forgot about, not in-flight work.
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(now - TimeDelta::seconds(2)),
+            arm_input: Some(String::new()),
+            wake_input: Some("a follow-up".to_string()),
             branch_merged: Some(true),
             ..inputs(&session, now, Duration::from_secs(60))
         });

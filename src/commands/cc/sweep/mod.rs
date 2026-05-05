@@ -19,11 +19,19 @@ use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
+use super::pane_input;
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::types::{Session, SessionStatus};
 use crate::infra::{process::ProcessSnapshot, tmux};
 use crate::shared::config;
+
+/// Pane option where we record a `<input-hash>,<unix_seconds>` snapshot
+/// so the next sweep pass can tell whether the user has typed in the
+/// Claude Code TUI input box since. We persist a hash, not the input
+/// text itself, so the prompt content (which may include secrets) never
+/// leaves the user's session.
+const PANE_ACTIVITY_OPTION: &str = "@armyknife-pane-activity";
 
 mod service;
 
@@ -118,9 +126,10 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 /// process ancestry. Instead it asks the probe two questions about each
 /// candidate session:
 ///
-/// - **What was the last time the user touched this pane?**
-///   Returned by `last_activity`. We max this against `session.updated_at`
-///   so we never pause a Stopped session whose user is still typing.
+/// - **When did this pane last show signs of activity?**
+///   Returned by `last_activity_at`. We max this against `session.updated_at`
+///   so we never pause a Stopped session whose user is still composing a
+///   prompt in the input box.
 /// - **Which pid should we SIGTERM?**
 ///   Returned by `resolve_pid`. Implemented by looking up the pane's
 ///   pane_pid and walking its descendants for a `claude` process.
@@ -129,9 +138,11 @@ pub(crate) trait SessionProbe {
     /// can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
 
-    /// Returns the timestamp of the most recent user input in the
-    /// session's tmux pane, or `None` if unavailable.
-    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>>;
+    /// Returns the timestamp at which we last observed the pane's input
+    /// box text change, or `None` if unavailable. Implementations may
+    /// persist the prior reading and compare against the live one to
+    /// produce this value; callers must not depend on side effects.
+    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>>;
 }
 
 struct TmuxSessionProbe<'a> {
@@ -156,11 +167,49 @@ impl SessionProbe for TmuxSessionProbe<'_> {
             .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
     }
 
-    fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
+    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let ts = tmux::get_pane_last_input(pane_id)?;
-        Utc.timestamp_opt(ts, 0).single()
+        let live = pane_input::get_pane_input_text(pane_id)?;
+        let live_hash = hash_input_text(&live);
+        let prior = tmux::get_pane_option(pane_id, PANE_ACTIVITY_OPTION)
+            .as_deref()
+            .and_then(parse_pane_activity);
+
+        let observed_at = match prior {
+            Some((prior_hash, ts)) if prior_hash == live_hash => ts,
+            _ => now,
+        };
+
+        // Persist the live hash so the next sweep pass can detect a
+        // change against it. Errors are non-fatal: a missed write just
+        // means the next pass treats it as "first observation".
+        let _ = tmux::set_pane_option(
+            pane_id,
+            PANE_ACTIVITY_OPTION,
+            &format_pane_activity(live_hash, observed_at),
+        );
+
+        Some(observed_at)
     }
+}
+
+fn hash_input_text(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn parse_pane_activity(raw: &str) -> Option<(u64, DateTime<Utc>)> {
+    let (hash_str, ts_str) = raw.trim().split_once(',')?;
+    let hash: u64 = hash_str.trim().parse().ok()?;
+    let ts: i64 = ts_str.trim().parse().ok()?;
+    let observed_at = Utc.timestamp_opt(ts, 0).single()?;
+    Some((hash, observed_at))
+}
+
+fn format_pane_activity(hash: u64, observed_at: DateTime<Utc>) -> String {
+    format!("{},{}", hash, observed_at.timestamp())
 }
 
 /// Result of a single sweep pass. Exposed for tests and for the CLI summary.
@@ -238,13 +287,14 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
 
         report.scanned += 1;
 
-        // Fold the pane's pty atime (last user input) into the effective
-        // "last touched" time so a user who's still typing into a Stopped
-        // pane doesn't get paused mid-prompt.
+        // Fold the pane's last observed cursor-movement time into the
+        // effective "last touched" time so a user who's still typing into a
+        // Stopped pane (or a claude that's still streaming output) doesn't
+        // get paused mid-stream.
         // N.B. We intentionally do NOT mutate session.updated_at here --
         // the effective timestamp is only for the timeout decision, not for
         // persisting to disk.
-        let effective = effective_updated_at(&session, probe);
+        let effective = effective_updated_at(&session, probe, now);
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => {
@@ -280,13 +330,17 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
     Ok(report)
 }
 
-/// Returns the later of `session.updated_at` and the tmux pane's last
-/// user-input timestamp (pty atime). If the probe can't report an input
-/// timestamp (not in tmux, pane gone, etc.) we fall back to
-/// `session.updated_at` alone.
-fn effective_updated_at<P: SessionProbe>(session: &Session, probe: &P) -> DateTime<Utc> {
-    match probe.last_input(session) {
-        Some(input_at) if input_at > session.updated_at => input_at,
+/// Returns the later of `session.updated_at` and the pane's last observed
+/// cursor-movement time. If the probe can't report an activity timestamp
+/// (not in tmux, pane gone, etc.) we fall back to `session.updated_at`
+/// alone.
+fn effective_updated_at<P: SessionProbe>(
+    session: &Session,
+    probe: &P,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    match probe.last_activity_at(session, now) {
+        Some(activity_at) if activity_at > session.updated_at => activity_at,
         _ => session.updated_at,
     }
 }
@@ -320,7 +374,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use chrono::{DateTime, TimeDelta, Utc};
+    use chrono::{DateTime, TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
@@ -361,7 +415,7 @@ mod tests {
             r
         }
 
-        fn with_last_input(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
+        fn with_last_activity(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
             for (id, ts) in pairs {
                 self.activity.get_mut().insert((*id).to_string(), *ts);
             }
@@ -374,7 +428,11 @@ mod tests {
             self.pids.borrow().get(&session.session_id).copied()
         }
 
-        fn last_input(&self, session: &Session) -> Option<DateTime<Utc>> {
+        fn last_activity_at(
+            &self,
+            session: &Session,
+            _now: DateTime<Utc>,
+        ) -> Option<DateTime<Utc>> {
             self.activity.borrow().get(&session.session_id).copied()
         }
     }
@@ -568,10 +626,10 @@ mod tests {
 
     #[rstest]
     fn recent_tmux_activity_blocks_pause(test_dir: TestDir) {
-        // Session was marked Stopped an hour ago, so the naive timeout check
-        // would pause it. But the pane pty has seen user input a few seconds
-        // ago -- the user is typing a long prompt -- and must not be
-        // killed.
+        // Session was marked Stopped an hour ago, so the naive timeout
+        // check would pause it. But the pane's input box text changed a
+        // few seconds ago -- the user is composing a follow-up prompt --
+        // and must not be killed.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("typing", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
@@ -579,7 +637,7 @@ mod tests {
         let sender = RecordingSender::default();
         let recent_activity = Utc::now() - TimeDelta::seconds(5);
         let probe = FakeProbe::with_pids(&[("typing", 4242)])
-            .with_last_input(&[("typing", recent_activity)]);
+            .with_last_activity(&[("typing", recent_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -616,7 +674,7 @@ mod tests {
         // Tmux activity is old enough that the session still gets paused.
         let stale_activity = Utc::now() - TimeDelta::hours(1);
         let probe = FakeProbe::with_pids(&[("persist-check", 4242)])
-            .with_last_input(&[("persist-check", stale_activity)]);
+            .with_last_activity(&[("persist-check", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -652,7 +710,7 @@ mod tests {
         let sender = RecordingSender::default();
         let stale_activity = Utc::now() - TimeDelta::minutes(45);
         let probe =
-            FakeProbe::with_pids(&[("idle", 4242)]).with_last_input(&[("idle", stale_activity)]);
+            FakeProbe::with_pids(&[("idle", 4242)]).with_last_activity(&[("idle", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -746,5 +804,42 @@ mod tests {
         let report = sweep_impl(&nonexistent, Duration::from_secs(1), &sender, &probe, false)
             .expect("sweep should succeed even if dir is missing");
         assert_eq!(report, SweepReport::default());
+    }
+
+    #[rstest]
+    fn pane_activity_round_trip() {
+        // The pane option payload is hand-rolled CSV; round-tripping
+        // through both helpers guards the format against drift on either
+        // side.
+        let observed_at = Utc.timestamp_opt(1_700_000_000, 0).single().expect("ts");
+        let raw = format_pane_activity(0xdeadbeef_u64, observed_at);
+        let parsed = parse_pane_activity(&raw).expect("parse");
+        assert_eq!(parsed, (0xdeadbeef_u64, observed_at));
+    }
+
+    #[rstest]
+    fn hash_input_text_distinguishes_typed_changes() {
+        // Empty box vs typed prompt must collide-resist with overwhelming
+        // probability for the activity probe to do its job.
+        assert_ne!(hash_input_text(""), hash_input_text("hello"));
+        assert_ne!(hash_input_text("draft v1"), hash_input_text("draft v2"));
+    }
+
+    #[rstest]
+    fn hash_input_text_is_deterministic() {
+        // The persisted hash is compared against a fresh hash on the
+        // next sweep pass, so the function must return the same value
+        // for the same input within a single binary build.
+        assert_eq!(hash_input_text("hello"), hash_input_text("hello"));
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::missing_ts("12345")]
+    #[case::trailing_garbage("12345,1700000000,extra")]
+    #[case::non_numeric_hash("abc,1700000000")]
+    #[case::non_numeric_ts("12345,now")]
+    fn parse_pane_activity_rejects_malformed(#[case] raw: &str) {
+        assert!(parse_pane_activity(raw).is_none());
     }
 }

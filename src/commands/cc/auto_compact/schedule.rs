@@ -12,10 +12,13 @@
 //! 3. Schedule writes its own pid into the same option so the next Stop hook
 //!    can find and cancel it.
 //! 4. Schedule sleeps for `idle_timeout` (cache-friendly default of 4m30s).
-//! 5. On wake-up it re-reads the session, the pty atime, and the branch
-//!    merge state, and asks `decision::decide_compact` what to do. Only
-//!    `Compact` triggers side effects; every other variant is logged and the
-//!    worker exits cleanly.
+//! 5. It captures the current Claude Code TUI input-box text, sleeps for
+//!    `idle_timeout`, then re-reads the session, the input box, and the
+//!    branch merge state, and asks `decision::decide_compact` what to do.
+//!    Input box text differing between arm and wake means the user typed
+//!    a follow-up while we were asleep, so we abort. Only `Compact`
+//!    triggers side effects; every other variant is logged and the worker
+//!    exits cleanly.
 //! 6. SIGTERM the live `claude` process (so the next `claude -r` doesn't
 //!    collide with a running interactive session) and exec
 //!    `claude -r <id> -p "/compact"` to perform the compaction in print
@@ -26,12 +29,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
 use clap::Args;
 
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::cc::auto_pause;
 use crate::commands::cc::claude_sessions;
+use crate::commands::cc::pane_input;
 use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
 use crate::commands::cc::store;
 use crate::commands::cc::types::{Session, SessionStatus};
@@ -115,6 +119,12 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         let _ = tmux::set_pane_option(pane_id, TIMER_PID_OPTION, &pid);
     }
 
+    // Snapshot the input box now (before sleeping). The TUI redraw
+    // chatter that plagued the cursor-based probe doesn't matter here:
+    // input box text is content, not layout, so it stays stable across
+    // frames as long as the user isn't typing.
+    let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
+
     tokio::time::sleep(idle_timeout).await;
 
     // Re-check the pane option: a later Stop hook may have replaced our pid
@@ -134,7 +144,7 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         None => return Ok(()),
     };
 
-    let last_input = pty_last_input_for(&session);
+    let wake_input = wake_input_for(&session);
     let branch_merged = branch_merged_for(&session).await;
     let context_tokens =
         claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
@@ -143,7 +153,8 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         session: &session,
         now: Utc::now(),
         idle_timeout,
-        last_input,
+        arm_input,
+        wake_input,
         branch_merged,
         context_tokens,
         min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
@@ -240,12 +251,12 @@ fn is_current_timer(pane_id: &str) -> bool {
     recorded.trim().parse::<u32>().ok() == Some(std::process::id())
 }
 
-/// Returns the pane's pty atime as a UTC timestamp, if available. Mirrors the
-/// reading sweep does in `effective_updated_at`.
-fn pty_last_input_for(session: &Session) -> Option<DateTime<Utc>> {
+/// Reads the current input-box text for the session's pane. Returns
+/// `None` when the session has no tmux info, the pane is in a non-input
+/// mode (permission prompt, mode picker), or capture-pane fails.
+fn wake_input_for(session: &Session) -> Option<String> {
     let pane_id = &session.tmux_info.as_ref()?.pane_id;
-    let ts = tmux::get_pane_last_input(pane_id)?;
-    Utc.timestamp_opt(ts, 0).single()
+    pane_input::get_pane_input_text(pane_id)
 }
 
 /// Returns Some(true) if the session's branch has a merged PR, Some(false)
