@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.163](https://github.com/fohte/armyknife/compare/v0.1.162...v0.1.163) (2026-05-05)
+
+
+### Features
+
+* **gh/pr-review:** compress reply pull output ([#526](https://github.com/fohte/armyknife/issues/526)) ([046f6a3](https://github.com/fohte/armyknife/commit/046f6a315a136ee509f0e42f46ebaf1bfb409e3f))
+
 ## [0.1.162](https://github.com/fohte/armyknife/compare/v0.1.161...v0.1.162) (2026-05-05)
 
 
