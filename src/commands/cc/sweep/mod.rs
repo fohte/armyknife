@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
+use super::pane_input;
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::types::{Session, SessionStatus};
@@ -168,7 +169,7 @@ impl SessionProbe for TmuxSessionProbe<'_> {
 
     fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let live = tmux::get_pane_input_text(pane_id)?;
+        let live = pane_input::get_pane_input_text(pane_id)?;
         let live_hash = hash_input_text(&live);
         let prior = tmux::get_pane_option(pane_id, PANE_ACTIVITY_OPTION)
             .as_deref()

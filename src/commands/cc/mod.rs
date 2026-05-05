@@ -5,6 +5,7 @@ mod error;
 mod focus;
 mod hook;
 mod list;
+pub(crate) mod pane_input;
 mod resume;
 mod resurrect;
 mod signal;

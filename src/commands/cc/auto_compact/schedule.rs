@@ -35,6 +35,7 @@ use clap::Args;
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::cc::auto_pause;
 use crate::commands::cc::claude_sessions;
+use crate::commands::cc::pane_input;
 use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
 use crate::commands::cc::store;
 use crate::commands::cc::types::{Session, SessionStatus};
@@ -122,7 +123,7 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     // chatter that plagued the cursor-based probe doesn't matter here:
     // input box text is content, not layout, so it stays stable across
     // frames as long as the user isn't typing.
-    let arm_input = pane_id.as_deref().and_then(tmux::get_pane_input_text);
+    let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
 
     tokio::time::sleep(idle_timeout).await;
 
@@ -255,7 +256,7 @@ fn is_current_timer(pane_id: &str) -> bool {
 /// mode (permission prompt, mode picker), or capture-pane fails.
 fn wake_input_for(session: &Session) -> Option<String> {
     let pane_id = &session.tmux_info.as_ref()?.pane_id;
-    tmux::get_pane_input_text(pane_id)
+    pane_input::get_pane_input_text(pane_id)
 }
 
 /// Returns Some(true) if the session's branch has a merged PR, Some(false)
