@@ -8,6 +8,7 @@ use super::markdown::serializer::ThreadsFrontmatter;
 use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
+use crate::shared::diff::write_diff;
 use crate::shared::human_in_the_loop::{
     Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
     start_review,
@@ -109,6 +110,22 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     }
 }
 
+/// Emit a diff between `pre` and `post` to `writer`, or a "(no edits)" notice
+/// when they match. Used after the editor exits to summarize what changed
+/// without forcing the caller to re-read the file.
+fn write_edit_diff<W: std::io::Write>(
+    writer: &mut W,
+    pre: &str,
+    post: &str,
+    use_color: bool,
+) -> std::io::Result<()> {
+    if pre == post {
+        writeln!(writer, "(no edits)")?;
+        return Ok(());
+    }
+    write_diff(writer, pre, post, use_color)
+}
+
 pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
@@ -129,6 +146,11 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
+    // Snapshot the document before launching the editor so we can emit a diff
+    // afterwards. The skill consumer can then learn what changed without
+    // re-reading the entire file.
+    let pre_edit = std::fs::read_to_string(&threads_path)?;
+
     let document =
         exit_code::exit_on_terminal_launch_failure(start_review::<ThreadsFrontmatter, _>(
             &threads_path,
@@ -139,6 +161,18 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
     if document.is_none() {
         std::process::exit(exit_code::ALREADY_OPEN);
+    }
+
+    let post_edit = std::fs::read_to_string(&threads_path)?;
+    {
+        use crossterm::tty::IsTty;
+        let use_color = std::io::stdout().is_tty();
+        let mut stdout = std::io::stdout().lock();
+        if let Err(e) = write_edit_diff(&mut stdout, &pre_edit, &post_edit, use_color)
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(e.into());
+        }
     }
 
     let approved = document
@@ -222,5 +256,36 @@ mod tests {
             .map(|a| a.to_string_lossy().to_string())
             .collect();
         assert_eq!(args_str, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::no_change("same\n", "same\n", "(no edits)\n")]
+    #[case::added_line("a\n", indoc::indoc! {"
+        a
+        b
+    "}, indoc::indoc! {"
+         a
+        +b
+    "})]
+    #[case::deleted_line(indoc::indoc! {"
+        a
+        b
+    "}, "a\n", indoc::indoc! {"
+         a
+        -b
+    "})]
+    #[case::modified_line("old\n", "new\n", indoc::indoc! {"
+        -old
+        +new
+    "})]
+    #[case::both_empty("", "", "(no edits)\n")]
+    fn write_edit_diff_emits_expected_output(
+        #[case] pre: &str,
+        #[case] post: &str,
+        #[case] expected: &str,
+    ) {
+        let mut buf = Vec::new();
+        write_edit_diff(&mut buf, pre, post, false).expect("write");
+        assert_eq!(String::from_utf8(buf).expect("utf8"), expected);
     }
 }
