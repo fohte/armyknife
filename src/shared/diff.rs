@@ -55,6 +55,44 @@ pub fn write_diff<W: Write>(
     Ok(())
 }
 
+/// Write a hunk-based unified diff between old and new text to a writer.
+/// Only changed regions and `n_context` surrounding lines are emitted, with
+/// standard `@@ -a,b +c,d @@` hunk headers. Returns `Ok(())` and writes nothing
+/// when the inputs are identical.
+pub fn write_unified_diff<W: Write>(
+    writer: &mut W,
+    old: &str,
+    new: &str,
+    n_context: usize,
+    use_color: bool,
+) -> io::Result<()> {
+    let diff = TextDiff::from_lines(old, new);
+    for hunk in diff.unified_diff().context_radius(n_context).iter_hunks() {
+        if use_color {
+            write!(writer, "{}", SetForegroundColor(Color::Cyan))?;
+        }
+        writeln!(writer, "{}", hunk.header())?;
+        if use_color {
+            write!(writer, "{}", ResetColor)?;
+        }
+        for change in hunk.iter_changes() {
+            let (sign, color) = match change.tag() {
+                ChangeTag::Delete => ("-", Some(Color::Red)),
+                ChangeTag::Insert => ("+", Some(Color::Green)),
+                ChangeTag::Equal => (" ", None),
+            };
+            if use_color && let Some(c) = color {
+                write!(writer, "{}", SetForegroundColor(c))?;
+            }
+            write!(writer, "{}{}", sign, change)?;
+            if use_color && color.is_some() {
+                write!(writer, "{}", ResetColor)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Format unified diff as a string.
 /// If `use_color` is true, deleted lines are red and inserted lines are green.
 #[cfg(test)]
@@ -154,5 +192,53 @@ mod tests {
                 \x1b[0m\x1b[38;5;10m+new
                 \x1b[0m"}
         );
+    }
+
+    #[rstest]
+    fn test_write_unified_diff_emits_hunk_only() {
+        let old = indoc! {"
+            line1
+            line2
+            line3
+            line4
+            line5
+            line6
+            line7
+            line8
+            line9
+            line10
+        "};
+        let new = indoc! {"
+            line1
+            line2
+            line3
+            line4
+            line5
+            CHANGED
+            line7
+            line8
+            line9
+            line10
+        "};
+        let mut out = Vec::new();
+        write_unified_diff(&mut out, old, new, 1, false).unwrap();
+        // Hunk-based diff omits unchanged regions outside the context window.
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            indoc! {"
+                @@ -5,3 +5,3 @@
+                 line5
+                -line6
+                +CHANGED
+                 line7
+            "}
+        );
+    }
+
+    #[rstest]
+    fn test_write_unified_diff_no_hunks_when_identical() {
+        let mut out = Vec::new();
+        write_unified_diff(&mut out, "same\n", "same\n", 3, false).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "");
     }
 }

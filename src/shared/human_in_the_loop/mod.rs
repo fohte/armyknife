@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::shared::config::EditorConfig;
-use crate::shared::diff::write_diff;
+use crate::shared::diff::write_unified_diff;
+
+const DIFF_CONTEXT_LINES: usize = 3;
 
 /// How long to wait for the terminal to signal it has started running the
 /// review-complete command before giving up. Covers cases like macOS being
@@ -196,8 +198,9 @@ where
         return Err(e.into());
     }
 
-    // Review complete - read the final document state
-    let document = Document::<S>::from_path(document_path.to_path_buf())?;
+    // Reuse the in-memory `post_edit` for the document parse to avoid a
+    // second read of the same file.
+    let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
     Ok(Some(document))
 }
 
@@ -210,8 +213,8 @@ fn print_edit_diff(pre: &str, post: &str) -> std::io::Result<()> {
     write_edit_diff(&mut stdout, pre, post, use_color)
 }
 
-/// Emit a diff between `pre` and `post` to `writer`, or a "(no edits)" notice
-/// when they match. Factored out for unit testing.
+/// Emit a hunk-based unified diff between `pre` and `post` to `writer`, or a
+/// "(no edits)" notice when they match. Factored out for unit testing.
 fn write_edit_diff<W: Write>(
     writer: &mut W,
     pre: &str,
@@ -222,7 +225,7 @@ fn write_edit_diff<W: Write>(
         writeln!(writer, "(no edits)")?;
         return Ok(());
     }
-    write_diff(writer, pre, post, use_color)
+    write_unified_diff(writer, pre, post, DIFF_CONTEXT_LINES, use_color)
 }
 
 /// Complete a review session after the user closes the editor.
@@ -581,12 +584,13 @@ mod tests {
     }
 
     #[rstest]
-    fn write_edit_diff_delegates_to_write_diff_when_changed() {
+    fn write_edit_diff_emits_hunk_when_changed() {
         let mut buf = Vec::new();
         write_edit_diff(&mut buf, "old\n", "new\n", false).expect("write");
         assert_eq!(
             String::from_utf8(buf).expect("utf8"),
             indoc::indoc! {"
+                @@ -1 +1 @@
                 -old
                 +new
             "}
