@@ -7,9 +7,11 @@
 //! Strategy: keep the hunk header, the commented line(s), `LINES_BEFORE`
 //! lines of leading context, and `LINES_AFTER` lines of trailing context.
 //! Replace anything else with a single `... [N lines omitted] ...` marker.
-//! On parse failure (missing/invalid header, or a target line that does not
-//! appear in the hunk), fall back to the last `FALLBACK_TAIL_LINES` lines so
-//! the reader still gets the most-relevant context.
+//! When the comment line cannot be located in the hunk (e.g. GitHub
+//! truncates the hunk before the comment line, or the header is malformed),
+//! fall back to the hunk header followed by the last `FALLBACK_TAIL_LINES`
+//! body lines so the reader still gets function context plus the most
+//! recent diff content.
 
 use lazy_regex::regex_captures;
 
@@ -35,22 +37,42 @@ pub struct CompressInput<'a> {
 /// fenced code block without worrying about trailing newlines.
 pub fn compress_diff_hunk(input: &CompressInput) -> String {
     match try_compress(input) {
-        Some(out) => out,
-        None => fallback(input.diff_hunk),
+        Ok(out) => out,
+        Err(reason) => fallback(input.diff_hunk, reason),
     }
 }
 
-fn try_compress(input: &CompressInput) -> Option<String> {
+/// Why compression bailed out. Drives both the fallback warning text and
+/// whether we have enough information to emit a proper hunk header.
+enum FallbackReason<'a> {
+    /// Header was missing or malformed, so we have neither line ranges nor
+    /// a header line to surface. The fallback reverts to "show the tail".
+    ParseFailed,
+    /// Header parsed cleanly but the comment line lies outside the hunk's
+    /// new-side range. This happens when GitHub truncates a long diffHunk
+    /// before the line being commented on. The fallback keeps the header
+    /// (for function context) and shows the tail of the body.
+    OutsideHunkRange {
+        header: &'a str,
+        body: Vec<&'a str>,
+        comment_line: i64,
+        new_start: i64,
+        new_end: i64,
+    },
+}
+
+fn try_compress<'a>(input: &'a CompressInput<'a>) -> Result<String, FallbackReason<'a>> {
     let lines: Vec<&str> = input.diff_hunk.lines().collect();
-    let header_idx = last_hunk_header(&lines)?;
+    let header_idx = last_hunk_header(&lines).ok_or(FallbackReason::ParseFailed)?;
 
     // Only keep content from the last hunk header onward — multi-hunk
     // diffHunks (rare, but possible after rebases) collapse to the most
     // recent one, which is the one that actually contains the comment.
     let header = lines[header_idx];
-    let body = &lines[header_idx + 1..];
+    let body: Vec<&str> = lines[header_idx + 1..].to_vec();
 
-    let (new_start, old_start) = parse_hunk_header(header)?;
+    let (new_start, new_len, old_start) =
+        parse_hunk_header(header).ok_or(FallbackReason::ParseFailed)?;
 
     // Decide which side anchors the comment. `line` is the post-image (`+`)
     // line and is canonical for live comments. `originalLine` appears on
@@ -67,18 +89,43 @@ fn try_compress(input: &CompressInput) -> Option<String> {
             let start = input.original_start_line.unwrap_or(end);
             vec![(start, end, true), (start, end, false)]
         }
-        (None, None) => return None,
+        (None, None) => return Err(FallbackReason::ParseFailed),
     };
 
     let target_indices = candidates
         .into_iter()
         .map(|(start, end, use_new)| {
-            collect_target_indices(body, new_start, old_start, start, end, use_new)
+            collect_target_indices(&body, new_start, old_start, start, end, use_new)
         })
-        .find(|hits| !hits.is_empty())?;
+        .find(|hits| !hits.is_empty());
 
-    let min_idx = *target_indices.first()?;
-    let max_idx = *target_indices.last()?;
+    let target_indices = match target_indices {
+        Some(hits) => hits,
+        None => {
+            // The comment line is not present in the hunk body. The most
+            // common cause is GitHub truncating the diffHunk before the
+            // commented line; signal that explicitly so the fallback can
+            // emit a precise warning. Only `line` (new side) is reported
+            // here — outdated comments on the old side fall through to the
+            // generic parse-failed branch since the warning is shaped
+            // around the new-side range.
+            let new_end = new_start + new_len.saturating_sub(1).max(0);
+            let comment_line = input.line.or(input.original_line);
+            return match comment_line {
+                Some(line) => Err(FallbackReason::OutsideHunkRange {
+                    header,
+                    body,
+                    comment_line: line,
+                    new_start,
+                    new_end,
+                }),
+                None => Err(FallbackReason::ParseFailed),
+            };
+        }
+    };
+
+    let min_idx = *target_indices.first().ok_or(FallbackReason::ParseFailed)?;
+    let max_idx = *target_indices.last().ok_or(FallbackReason::ParseFailed)?;
 
     let keep_start = min_idx.saturating_sub(LINES_BEFORE);
     let keep_end = (max_idx + LINES_AFTER + 1).min(body.len());
@@ -101,20 +148,27 @@ fn try_compress(input: &CompressInput) -> Option<String> {
         out.push_str(&format!("... [{omitted_after} lines omitted] ...\n"));
     }
 
-    Some(out)
+    Ok(out)
 }
 
 fn last_hunk_header(lines: &[&str]) -> Option<usize> {
     lines.iter().rposition(|l| l.starts_with("@@"))
 }
 
-/// Parse a hunk header `@@ -OLD,len +NEW,len @@ ...` into `(new_start, old_start)`.
-fn parse_hunk_header(header: &str) -> Option<(i64, i64)> {
-    let (_, old_start_str, new_start_str) =
-        regex_captures!(r"@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@", header)?;
+/// Parse a hunk header `@@ -OLD,len +NEW,len @@ ...` into
+/// `(new_start, new_len, old_start)`. Lengths default to 1 when omitted, per
+/// the unified diff convention.
+fn parse_hunk_header(header: &str) -> Option<(i64, i64, i64)> {
+    let (_, old_start_str, new_start_str, new_len_str) =
+        regex_captures!(r"@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@", header)?;
     let old_start = old_start_str.parse().ok()?;
     let new_start = new_start_str.parse().ok()?;
-    Some((new_start, old_start))
+    let new_len = if new_len_str.is_empty() {
+        1
+    } else {
+        new_len_str.parse().ok()?
+    };
+    Some((new_start, new_len, old_start))
 }
 
 fn collect_target_indices(
@@ -161,7 +215,45 @@ fn collect_target_indices(
     hits
 }
 
-fn fallback(diff_hunk: &str) -> String {
+fn fallback(diff_hunk: &str, reason: FallbackReason<'_>) -> String {
+    match reason {
+        FallbackReason::OutsideHunkRange {
+            header,
+            body,
+            comment_line,
+            new_start,
+            new_end,
+        } => fallback_with_header(header, &body, comment_line, new_start, new_end),
+        FallbackReason::ParseFailed => fallback_parse_failed(diff_hunk),
+    }
+}
+
+fn fallback_with_header(
+    header: &str,
+    body: &[&str],
+    comment_line: i64,
+    new_start: i64,
+    new_end: i64,
+) -> String {
+    let tail_start = body.len().saturating_sub(FALLBACK_TAIL_LINES);
+
+    let mut out = String::new();
+    out.push_str(header);
+    out.push('\n');
+    out.push_str(&format!(
+        "<!-- comment line {comment_line} outside hunk range ({new_start}-{new_end}); showing last {FALLBACK_TAIL_LINES} lines -->\n"
+    ));
+    if tail_start > 0 {
+        out.push_str(&format!("... [{tail_start} lines omitted] ...\n"));
+    }
+    for line in &body[tail_start..] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn fallback_parse_failed(diff_hunk: &str) -> String {
     let lines: Vec<&str> = diff_hunk.lines().collect();
     let tail_start = lines.len().saturating_sub(FALLBACK_TAIL_LINES);
 
@@ -397,11 +489,12 @@ mod tests {
     }
 
     #[rstest]
-    fn test_fallback_when_target_not_in_hunk() {
-        // Hunk contains 5 body lines but the comment claims line 999 — out
-        // of range, so the compressor falls back to the warning + tail.
+    fn test_fallback_when_target_outside_hunk_range_short_body() {
+        // Hunk declares new lines 1..=5 but the comment claims line 999 — out
+        // of range, so the compressor preserves the header (so the reader
+        // keeps function context) and emits the out-of-range warning.
         let hunk = indoc! {"
-            @@ -1,5 +1,5 @@
+            @@ -1,5 +1,5 @@ fn foo()
              line 1
              line 2
              line 3
@@ -411,14 +504,41 @@ mod tests {
         let result = compress_diff_hunk(&input_for(hunk, 999));
 
         let expected = indoc! {"
-            <!-- diff hunk parse failed, showing last 30 lines -->
-            @@ -1,5 +1,5 @@
+            @@ -1,5 +1,5 @@ fn foo()
+            <!-- comment line 999 outside hunk range (1-5); showing last 30 lines -->
              line 1
              line 2
              line 3
              line 4
              line 5
         "};
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_fallback_when_target_outside_hunk_range_truncates_body() {
+        // Reproduces the real-world case: GitHub returned a hunk header
+        // claiming 703 added lines but truncated the body. The comment line
+        // (300) sits past the actual body length, so we expect: header line
+        // first, then the warning, then an omission marker, then the last
+        // FALLBACK_TAIL_LINES of the body.
+        let body_len = 50usize;
+        let mut hunk = String::from("@@ -0,0 +1,703 @@ fn truncated()\n");
+        for i in 0..body_len {
+            hunk.push_str(&format!("+body {i}\n"));
+        }
+
+        let result = compress_diff_hunk(&input_for(&hunk, 300));
+
+        let omitted = body_len - FALLBACK_TAIL_LINES;
+        let mut expected = String::from(
+            "@@ -0,0 +1,703 @@ fn truncated()\n\
+             <!-- comment line 300 outside hunk range (1-703); showing last 30 lines -->\n",
+        );
+        expected.push_str(&format!("... [{omitted} lines omitted] ...\n"));
+        for i in omitted..body_len {
+            expected.push_str(&format!("+body {i}\n"));
+        }
         assert_eq!(result, expected);
     }
 
@@ -436,10 +556,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_fallback_truncates_to_tail_window() {
-        // No `@@` header → fallback path. Build 50 lines so we exercise the
-        // tail truncation: the warning + an omission marker + the last
-        // `FALLBACK_TAIL_LINES` lines of the input.
+    fn test_fallback_when_no_header_truncates_to_tail_window() {
+        // No `@@` header → parse-failed fallback. Build 50 lines so we
+        // exercise the tail truncation.
         let total = 50usize;
         let mut hunk = String::new();
         for i in 0..total {
@@ -456,6 +575,37 @@ mod tests {
         for i in omitted..total {
             expected.push_str(&format!("garbage {i}\n"));
         }
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_fallback_when_no_line_information() {
+        // Neither `line` nor `original_line` is set: there is no anchor to
+        // locate, so the compressor must fall back. Without a usable line we
+        // cannot describe a range, so this routes through parse-failed.
+        let hunk = indoc! {"
+            @@ -1,3 +1,3 @@
+             a
+             b
+             c
+        "};
+        let input = CompressInput {
+            diff_hunk: hunk,
+            line: None,
+            start_line: None,
+            original_line: None,
+            original_start_line: None,
+        };
+
+        let result = compress_diff_hunk(&input);
+
+        let expected = indoc! {"
+            <!-- diff hunk parse failed, showing last 30 lines -->
+            @@ -1,3 +1,3 @@
+             a
+             b
+             c
+        "};
         assert_eq!(result, expected);
     }
 
