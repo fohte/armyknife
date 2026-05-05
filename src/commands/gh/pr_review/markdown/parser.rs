@@ -192,8 +192,14 @@ fn parse_reviews_inner(inner: &str) -> Result<Vec<ParsedReview>, PrReviewError> 
                 }
             })?;
         let body_end = body_start + close_rel;
-        let body = inner[body_start..body_end]
-            .trim_end_matches('\n')
+        // Strip exactly one trailing newline (the separator before `<!-- /review -->`),
+        // mirroring the serializer which inserts at most one. Anything more is preserved
+        // as-is so user-authored blank lines survive a roundtrip.
+        let raw = &inner[body_start..body_end];
+        let body = raw
+            .strip_suffix("\r\n")
+            .or_else(|| raw.strip_suffix('\n'))
+            .unwrap_or(raw)
             .to_string();
 
         reviews.push(ParsedReview {
@@ -749,6 +755,60 @@ mod tests {
 
         let result = MarkdownParser::parse(content);
         assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_review_preserves_trailing_blank_lines() {
+        // The serializer adds at most one trailing newline before `<!-- /review -->`.
+        // The parser must strip exactly one — extra blank lines authored by the user
+        // (or quoted from a real review body) need to round-trip intact.
+        let content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=COMMENTED 2024-01-15T10:00:00Z -->
+            line one
+
+            line three
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+        let expected_body = indoc! {"
+            line one
+
+            line three"};
+        assert_eq!(parsed.reviews[0].body, expected_body);
+    }
+
+    #[rstest]
+    fn test_parse_review_handles_crlf_separator() {
+        // Mixed-line-ending file: the body is followed by `\r\n<!-- /review -->`.
+        // The parser must strip the whole `\r\n`, not just the `\n`, otherwise a
+        // stray `\r` leaks into the body.
+        let body = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=COMMENTED 2024-01-15T10:00:00Z -->
+            hello world
+            <!-- /review -->
+            <!-- /reviews -->
+        "#};
+        // Convert just the body separator before `<!-- /review -->` to CRLF.
+        let content = body.replacen("hello world\n", "hello world\r\n", 1);
+
+        let parsed = MarkdownParser::parse(&content).unwrap();
+        assert_eq!(parsed.reviews[0].body, "hello world");
     }
 
     #[rstest]
