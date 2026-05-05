@@ -280,8 +280,6 @@ a gh pr-review reply push <pr-number> [options]
 
 Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open.
 
-After the editor exits, the diff between the pre-edit and post-edit content is written to stdout (or `(no edits)` when unchanged) so callers can inspect the changes without re-reading the file.
-
 Requires `reply pull` to have been run first.
 
 ```sh
