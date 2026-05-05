@@ -239,12 +239,12 @@ Fetch PR review comments in a concise format for AI agents.
 a gh pr-review check <pr-number> [options]
 ```
 
-| Option           | Description                           |
-| ---------------- | ------------------------------------- |
-| `--review <n>`   | Show details for a specific review    |
-| `--full`         | Show full details for all reviews     |
-| `-a, --all`      | Include resolved threads              |
-| `--open-details` | Expand `<details>` blocks in comments |
+| Option           | Description                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `--review <n>`   | Show details for a specific review                                                                     |
+| `--full`         | Show full details for all reviews                                                                      |
+| `-a, --all`      | Include resolved threads                                                                               |
+| `--open-details` | Expand `<details>` blocks in comments (HTML comments and `<picture>` badge blocks are always stripped) |
 
 > `a gh check-pr-review` is a deprecated alias for `a gh pr-review check`.
 
@@ -256,11 +256,18 @@ Fetch review threads to a local Markdown file for editing.
 a gh pr-review reply pull <pr-number> [options]
 ```
 
-| Option               | Description                              |
-| -------------------- | ---------------------------------------- |
-| `-R, --repo <REPO>`  | Target repository (owner/repo)           |
-| `--include-resolved` | Include resolved threads                 |
-| `--force`            | Overwrite local changes without checking |
+| Option               | Description                                 |
+| -------------------- | ------------------------------------------- |
+| `-R, --repo <REPO>`  | Target repository (owner/repo)              |
+| `--include-resolved` | Include resolved threads                    |
+| `--force`            | Overwrite local changes without checking    |
+| `-d, --open-details` | Expand `<details>` blocks in comment bodies |
+
+The Markdown file compresses each diff hunk to the lines surrounding the
+commented region (5 before, 3 after). HTML comments and `<picture>` badge
+blocks (commonly emitted by review bots) are stripped from comment bodies, and
+`<details>` blocks are collapsed to a single-line marker by default; pass
+`--open-details` to keep them expanded.
 
 ##### `a gh pr-review reply push`
 

@@ -1,3 +1,4 @@
+mod diff_compress;
 mod parser;
 pub mod serializer;
 

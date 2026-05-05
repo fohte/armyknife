@@ -5,7 +5,7 @@ use clap::Args;
 use super::api::fetch_pr_data;
 use super::changeset::ReplyChangeSet;
 use super::error::PrReviewError;
-use super::markdown::serializer::ThreadsFrontmatter;
+use super::markdown::serializer::{SerializeOptions, ThreadsFrontmatter};
 use super::markdown::{MarkdownParser, MarkdownSerializer};
 use super::storage::ThreadStorage;
 use crate::infra::git;
@@ -28,6 +28,10 @@ pub struct ReplyPullArgs {
     /// Overwrite local changes without confirmation
     #[arg(long = "force")]
     pub force: bool,
+
+    /// Expand HTML details blocks in comment bodies (default: collapse them)
+    #[arg(short = 'd', long = "open-details")]
+    pub open_details: bool,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -87,8 +91,15 @@ pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
         submit: false,
     };
 
-    let content =
-        MarkdownSerializer::serialize_with_drafts(&pr_data, &frontmatter, &existing_drafts);
+    let options = SerializeOptions {
+        open_details: args.open_details,
+    };
+    let content = MarkdownSerializer::serialize_with_options(
+        &pr_data,
+        &frontmatter,
+        &existing_drafts,
+        &options,
+    );
 
     storage.write_threads(&content)?;
 

@@ -9,12 +9,10 @@ pub use full::format_review_details;
 #[cfg(test)]
 pub use summary::format_summary;
 
+use super::details::{clean_review_body, strip_noise_keep_details};
 use super::models::{Review, ReviewState};
-use lazy_regex::{Lazy, Regex, lazy_regex, regex_captures};
 use std::io::Write;
 use std::process::{Command, Stdio};
-
-static DETAILS_RE: Lazy<Regex> = lazy_regex!(r"(?s)<details[^>]*>(.*?)</details>");
 
 #[derive(Default)]
 pub struct FormatOptions {
@@ -33,26 +31,11 @@ pub(super) mod color {
     pub const BG_GRAY: &str = "\x1b[48;5;238m";
 }
 
-fn collapse_details(text: &str) -> String {
-    DETAILS_RE
-        .replace_all(text, |caps: &regex::Captures| {
-            let inner = &caps[1];
-            if let Some((_, summary)) =
-                regex_captures!(r"(?s)^\s*<summary[^>]*>(.*?)</summary>", inner)
-            {
-                format!("[▶ {summary}]")
-            } else {
-                "[▶ ...]".to_string()
-            }
-        })
-        .to_string()
-}
-
 pub(super) fn process_body(body: &str, options: &FormatOptions) -> String {
     let text = if options.open_details {
-        body.to_string()
+        strip_noise_keep_details(body)
     } else {
-        collapse_details(body)
+        clean_review_body(body)
     };
     render_markdown(&text)
 }
@@ -244,7 +227,9 @@ mod tests {
                 created_at: "2024-01-15T10:30:00Z".to_string(),
                 path: Some("src/main.rs".to_string()),
                 line: Some(42),
+                start_line: None,
                 original_line: None,
+                original_start_line: None,
                 diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old line\n+new line".to_string()),
                 reply_to: if is_reply { Some(ReplyTo {}) } else { None },
                 pull_request_review: review_id.map(|id| PullRequestReview { database_id: id }),
@@ -274,34 +259,6 @@ mod tests {
         pub fn make_pr_data(reviews: Vec<Review>, threads: Vec<ReviewThread>) -> PrData {
             PrData { reviews, threads }
         }
-    }
-
-    #[rstest]
-    #[case::with_summary(
-        "Before <details><summary>Click me</summary>Hidden content</details> After",
-        "Before [▶ Click me] After"
-    )]
-    #[case::multiline(
-        indoc! {"
-            Text
-            <details>
-            <summary>Summary</summary>
-            Lots of
-            hidden
-            stuff
-            </details>
-            More"},
-        indoc! {"
-            Text
-            [▶ Summary]
-            More"},
-    )]
-    #[case::without_summary(
-        "Before <details>Hidden content</details> After",
-        "Before [▶ ...] After"
-    )]
-    fn test_collapse_details(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(collapse_details(input), expected);
     }
 
     #[rstest]

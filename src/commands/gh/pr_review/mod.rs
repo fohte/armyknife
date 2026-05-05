@@ -1,5 +1,6 @@
 mod api;
 mod changeset;
+mod details;
 mod error;
 mod format;
 mod markdown;
