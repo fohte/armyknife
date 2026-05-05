@@ -258,34 +258,25 @@ mod tests {
         assert_eq!(args_str, expected);
     }
 
+    // The exact diff format is covered by `shared::diff` tests; here we only
+    // verify the unique behavior layered on top: emit "(no edits)" for
+    // identical content, otherwise delegate to the underlying diff writer.
+
     #[rstest::rstest]
-    #[case::no_change("same\n", "same\n", "(no edits)\n")]
-    #[case::added_line("a\n", indoc::indoc! {"
-        a
-        b
-    "}, indoc::indoc! {"
-         a
-        +b
-    "})]
-    #[case::deleted_line(indoc::indoc! {"
-        a
-        b
-    "}, "a\n", indoc::indoc! {"
-         a
-        -b
-    "})]
-    #[case::modified_line("old\n", "new\n", indoc::indoc! {"
-        -old
-        +new
-    "})]
-    #[case::both_empty("", "", "(no edits)\n")]
-    fn write_edit_diff_emits_expected_output(
-        #[case] pre: &str,
-        #[case] post: &str,
-        #[case] expected: &str,
-    ) {
+    #[case::identical_content("same\n", "same\n")]
+    #[case::both_empty("", "")]
+    fn write_edit_diff_emits_no_edits_marker_when_unchanged(#[case] pre: &str, #[case] post: &str) {
         let mut buf = Vec::new();
         write_edit_diff(&mut buf, pre, post, false).expect("write");
-        assert_eq!(String::from_utf8(buf).expect("utf8"), expected);
+        assert_eq!(String::from_utf8(buf).expect("utf8"), "(no edits)\n");
+    }
+
+    #[rstest::rstest]
+    fn write_edit_diff_delegates_to_write_diff_when_changed() {
+        let mut buf = Vec::new();
+        write_edit_diff(&mut buf, "old\n", "new\n", false).expect("write");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert_ne!(out, "(no edits)\n");
+        assert_ne!(out, "");
     }
 }
