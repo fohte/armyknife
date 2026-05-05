@@ -7,9 +7,12 @@
 //! Strategy: keep the hunk header, the commented line(s), `LINES_BEFORE`
 //! lines of leading context, and `LINES_AFTER` lines of trailing context.
 //! Replace anything else with a single `... [N lines omitted] ...` marker.
-//! On parse failure (missing/invalid header, or a target line that does not
-//! appear in the hunk), fall back to the last `FALLBACK_TAIL_LINES` lines so
-//! the reader still gets the most-relevant context.
+//! When the comment line cannot be located in the hunk body — most often
+//! because GitHub truncates the hunk before the comment line — keep the
+//! hunk header and show the last `FALLBACK_TAIL_LINES` body lines so the
+//! reader still gets function context plus the most recent diff content.
+//! Only when the hunk header itself cannot be parsed is the result flagged
+//! as `parse_failed = true`, so the caller can surface a CLI warning.
 
 use lazy_regex::regex_captures;
 
@@ -29,14 +32,27 @@ pub struct CompressInput<'a> {
     pub original_start_line: Option<i64>,
 }
 
+/// Result of compressing a single `diffHunk`.
+pub struct CompressOutcome {
+    /// Compressed diff text. Always ends with `\n`.
+    pub text: String,
+    /// True when the hunk header could not be parsed and the body was
+    /// emitted verbatim (tail-truncated). Callers may use this to emit a
+    /// CLI warning.
+    pub parse_failed: bool,
+}
+
 /// Compress a `diffHunk` to the relevant window around the commented line.
-///
-/// Always returns a string ending with `\n` so callers can append it to a
-/// fenced code block without worrying about trailing newlines.
-pub fn compress_diff_hunk(input: &CompressInput) -> String {
+pub fn compress_diff_hunk(input: &CompressInput) -> CompressOutcome {
     match try_compress(input) {
-        Some(out) => out,
-        None => fallback(input.diff_hunk),
+        Some(text) => CompressOutcome {
+            text,
+            parse_failed: false,
+        },
+        None => CompressOutcome {
+            text: tail_only(input.diff_hunk),
+            parse_failed: true,
+        },
     }
 }
 
@@ -48,40 +64,27 @@ fn try_compress(input: &CompressInput) -> Option<String> {
     // diffHunks (rare, but possible after rebases) collapse to the most
     // recent one, which is the one that actually contains the comment.
     let header = lines[header_idx];
-    let body = &lines[header_idx + 1..];
+    let body: &[&str] = &lines[header_idx + 1..];
 
     let (new_start, old_start) = parse_hunk_header(header)?;
 
-    // Decide which side anchors the comment. `line` is the post-image (`+`)
-    // line and is canonical for live comments. `originalLine` appears on
-    // resolved/outdated comments where `line` is null; it can refer to
-    // either side depending on whether the comment was attached to an added
-    // or deleted line, and the GraphQL response does not expose the side
-    // directly. Try the new side first and fall back to the old side. If
-    // both sides happen to contain the same line number on context lines,
-    // the new side wins — acceptable since the chosen window will still
-    // surround a real instance of that line in the hunk.
-    let candidates: Vec<(i64, i64, bool)> = match (input.line, input.original_line) {
-        (Some(end), _) => vec![(input.start_line.unwrap_or(end), end, true)],
-        (None, Some(end)) => {
-            let start = input.original_start_line.unwrap_or(end);
-            vec![(start, end, true), (start, end, false)]
+    let target_indices = locate_target(input, body, new_start, old_start);
+
+    let (keep_start, keep_end) = match target_indices {
+        Some(indices) => {
+            // `indices` is non-empty by construction in `locate_target`.
+            let min_idx = *indices.first()?;
+            let max_idx = *indices.last()?;
+            let keep_start = min_idx.saturating_sub(LINES_BEFORE);
+            let keep_end = (max_idx + LINES_AFTER + 1).min(body.len());
+            (keep_start, keep_end)
         }
-        (None, None) => return None,
+        // Comment line falls outside the body (commonly: GitHub truncated
+        // the hunk before the commented line, or the comment is not tied
+        // to a specific line). Keep the header for function context and
+        // surface the tail of whatever body we did receive.
+        None => (body.len().saturating_sub(FALLBACK_TAIL_LINES), body.len()),
     };
-
-    let target_indices = candidates
-        .into_iter()
-        .map(|(start, end, use_new)| {
-            collect_target_indices(body, new_start, old_start, start, end, use_new)
-        })
-        .find(|hits| !hits.is_empty())?;
-
-    let min_idx = *target_indices.first()?;
-    let max_idx = *target_indices.last()?;
-
-    let keep_start = min_idx.saturating_sub(LINES_BEFORE);
-    let keep_end = (max_idx + LINES_AFTER + 1).min(body.len());
 
     let mut out = String::new();
     out.push_str(header);
@@ -102,6 +105,41 @@ fn try_compress(input: &CompressInput) -> Option<String> {
     }
 
     Some(out)
+}
+
+/// Locate the body indices that match the comment line range. Returns
+/// `None` when no anchor exists (no `line` / `original_line`) or when the
+/// comment line is not present in the body.
+fn locate_target(
+    input: &CompressInput,
+    body: &[&str],
+    new_start: i64,
+    old_start: i64,
+) -> Option<Vec<usize>> {
+    // Decide which side anchors the comment. `line` is the post-image (`+`)
+    // line and is canonical for live comments. `originalLine` appears on
+    // resolved/outdated comments where `line` is null; it can refer to
+    // either side depending on whether the comment was attached to an added
+    // or deleted line, and the GraphQL response does not expose the side
+    // directly. Try the new side first and fall back to the old side. If
+    // both sides happen to contain the same line number on context lines,
+    // the new side wins — acceptable since the chosen window will still
+    // surround a real instance of that line in the hunk.
+    let candidates: Vec<(i64, i64, bool)> = match (input.line, input.original_line) {
+        (Some(end), _) => vec![(input.start_line.unwrap_or(end), end, true)],
+        (None, Some(end)) => {
+            let start = input.original_start_line.unwrap_or(end);
+            vec![(start, end, true), (start, end, false)]
+        }
+        (None, None) => return None,
+    };
+
+    candidates
+        .into_iter()
+        .map(|(start, end, use_new)| {
+            collect_target_indices(body, new_start, old_start, start, end, use_new)
+        })
+        .find(|hits| !hits.is_empty())
 }
 
 fn last_hunk_header(lines: &[&str]) -> Option<usize> {
@@ -161,19 +199,24 @@ fn collect_target_indices(
     hits
 }
 
-fn fallback(diff_hunk: &str) -> String {
+/// Last-ditch rendering for hunks whose header could not be parsed:
+/// emit at most the trailing `FALLBACK_TAIL_LINES` lines verbatim, with
+/// an `omitted` marker when the body is longer. Always ends with `\n` so
+/// the caller can append it inside a fenced code block without special
+/// casing empty input.
+fn tail_only(diff_hunk: &str) -> String {
     let lines: Vec<&str> = diff_hunk.lines().collect();
     let tail_start = lines.len().saturating_sub(FALLBACK_TAIL_LINES);
 
     let mut out = String::new();
-    out.push_str(&format!(
-        "<!-- diff hunk parse failed, showing last {FALLBACK_TAIL_LINES} lines -->\n"
-    ));
     if tail_start > 0 {
         out.push_str(&format!("... [{tail_start} lines omitted] ...\n"));
     }
     for line in &lines[tail_start..] {
         out.push_str(line);
+        out.push('\n');
+    }
+    if out.is_empty() {
         out.push('\n');
     }
     out
@@ -195,6 +238,10 @@ mod tests {
         }
     }
 
+    fn compress(input: &CompressInput) -> CompressOutcome {
+        compress_diff_hunk(input)
+    }
+
     #[rstest]
     fn test_keeps_window_around_target_line() {
         // Header says new side starts at 1. Lines 1..=20 are all context.
@@ -204,11 +251,8 @@ mod tests {
             hunk.push_str(&format!(" line {i}\n"));
         }
 
-        let result = compress_diff_hunk(&input_for(&hunk, 15));
+        let result = compress(&input_for(&hunk, 15));
 
-        // Expect: header, "9 lines omitted" marker (lines 1..=9 dropped),
-        // lines 10..=18 retained (5 before + target + 3 after), "2 lines
-        // omitted" trailer (lines 19..=20).
         let expected = indoc! {"
             @@ -1,20 +1,20 @@
             ... [9 lines omitted] ...
@@ -223,7 +267,8 @@ mod tests {
              line 18
             ... [2 lines omitted] ...
         "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
+        assert!(!result.parse_failed);
     }
 
     #[rstest]
@@ -233,9 +278,8 @@ mod tests {
             hunk.push_str(&format!(" line {i}\n"));
         }
 
-        let result = compress_diff_hunk(&input_for(&hunk, 5));
+        let result = compress(&input_for(&hunk, 5));
 
-        // Window: 5 before + line 5 = entire body kept, no omission markers.
         let expected = indoc! {"
             @@ -1,5 +1,5 @@
              line 1
@@ -244,12 +288,12 @@ mod tests {
              line 4
              line 5
         "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
+        assert!(!result.parse_failed);
     }
 
     #[rstest]
     fn test_handles_added_lines() {
-        // 3 context, then add 2 lines, then 3 context.
         let hunk = indoc! {"
             @@ -1,6 +1,8 @@
              ctx 1
@@ -262,9 +306,7 @@ mod tests {
              ctx 6
         "};
 
-        // Comment on new line 4 (which is `+added 1`, body index 3).
-        // Window: idx 0..=6 (5 before saturates, 3 after), so `ctx 6` (idx 7) is omitted.
-        let result = compress_diff_hunk(&input_for(hunk, 4));
+        let result = compress(&input_for(hunk, 4));
 
         let expected = indoc! {"
             @@ -1,6 +1,8 @@
@@ -277,7 +319,7 @@ mod tests {
              ctx 5
             ... [1 lines omitted] ...
         "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
     }
 
     #[rstest]
@@ -294,9 +336,8 @@ mod tests {
             original_line: None,
             original_start_line: None,
         };
-        let result = compress_diff_hunk(&input);
+        let result = compress(&input);
 
-        // Range 18..=20, plus 5 before (13..) and 3 after (..=23).
         let expected = indoc! {"
             @@ -1,30 +1,30 @@
             ... [12 lines omitted] ...
@@ -313,14 +354,11 @@ mod tests {
              line 23
             ... [7 lines omitted] ...
         "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
     }
 
     #[rstest]
     fn test_outdated_comment_with_original_line_on_new_side() {
-        // Resolved/outdated thread on an added line: `line` is None but
-        // `originalLine` was the new-side line at the time the comment was
-        // posted. The compressor must try the new side as a fallback.
         let hunk = indoc! {"
             @@ -80,3 +80,5 @@
              ctx 80
@@ -337,15 +375,13 @@ mod tests {
             original_line: Some(84),
             original_start_line: None,
         };
-        let result = compress_diff_hunk(&input);
+        let result = compress(&input);
 
-        // Whole hunk fits in window (5 body lines, target at idx 4).
-        assert_eq!(result, hunk);
+        assert_eq!(result.text, hunk);
     }
 
     #[rstest]
     fn test_outdated_comment_uses_original_line() {
-        // Hunk represents a deletion at old line 12.
         let hunk = indoc! {"
             @@ -10,5 +10,4 @@
              ctx 10
@@ -362,10 +398,9 @@ mod tests {
             original_line: Some(12),
             original_start_line: None,
         };
-        let result = compress_diff_hunk(&input);
+        let result = compress(&input);
 
-        // Whole hunk fits in window — keeps everything verbatim.
-        assert_eq!(result, hunk);
+        assert_eq!(result.text, hunk);
     }
 
     #[rstest]
@@ -383,7 +418,7 @@ mod tests {
              bot 104
         "};
 
-        let result = compress_diff_hunk(&input_for(hunk, 102));
+        let result = compress(&input_for(hunk, 102));
 
         let expected = indoc! {"
             @@ -100,5 +100,5 @@
@@ -393,70 +428,123 @@ mod tests {
              bot 103
              bot 104
         "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
     }
 
     #[rstest]
-    fn test_fallback_when_target_not_in_hunk() {
-        // Hunk contains 5 body lines but the comment claims line 999 — out
-        // of range, so the compressor falls back to the warning + tail.
+    fn test_target_outside_hunk_keeps_header_and_tails_body() {
+        // GitHub truncates a long diffHunk before the comment line. We keep
+        // the header (function context) and the tail of the body the API
+        // did return — no warning embedded, the leading omitted marker
+        // already conveys "something was cut".
+        let body_len = 50usize;
+        let mut hunk = String::from("@@ -0,0 +1,703 @@ fn truncated()\n");
+        for i in 0..body_len {
+            hunk.push_str(&format!("+body {i}\n"));
+        }
+
+        let result = compress(&input_for(&hunk, 300));
+
+        let omitted = body_len - FALLBACK_TAIL_LINES;
+        let mut expected = String::from("@@ -0,0 +1,703 @@ fn truncated()\n");
+        expected.push_str(&format!("... [{omitted} lines omitted] ...\n"));
+        for i in omitted..body_len {
+            expected.push_str(&format!("+body {i}\n"));
+        }
+        assert_eq!(result.text, expected);
+        assert!(!result.parse_failed);
+    }
+
+    #[rstest]
+    fn test_target_outside_short_body_keeps_header_no_marker() {
+        // Body shorter than FALLBACK_TAIL_LINES: header + body only, no
+        // leading omitted marker.
         let hunk = indoc! {"
-            @@ -1,5 +1,5 @@
+            @@ -1,5 +1,5 @@ fn foo()
              line 1
              line 2
              line 3
              line 4
              line 5
         "};
-        let result = compress_diff_hunk(&input_for(hunk, 999));
+        let result = compress(&input_for(hunk, 999));
 
-        let expected = indoc! {"
-            <!-- diff hunk parse failed, showing last 30 lines -->
-            @@ -1,5 +1,5 @@
-             line 1
-             line 2
-             line 3
-             line 4
-             line 5
-        "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, hunk);
+        assert!(!result.parse_failed);
     }
 
     #[rstest]
-    fn test_fallback_when_no_header() {
+    fn test_no_line_information_keeps_header_and_tails_body() {
+        // No `line` / `original_line`: nothing to anchor on, but the header
+        // is still useful — emit it followed by the tail.
+        let hunk = indoc! {"
+            @@ -1,3 +1,3 @@
+             a
+             b
+             c
+        "};
+        let input = CompressInput {
+            diff_hunk: hunk,
+            line: None,
+            start_line: None,
+            original_line: None,
+            original_start_line: None,
+        };
+
+        let result = compress(&input);
+
+        assert_eq!(result.text, hunk);
+        assert!(!result.parse_failed);
+    }
+
+    #[rstest]
+    fn test_parse_failed_when_no_header() {
         let hunk = " line 1\n line 2\n";
-        let result = compress_diff_hunk(&input_for(hunk, 1));
+        let result = compress(&input_for(hunk, 1));
 
-        let expected = indoc! {"
-            <!-- diff hunk parse failed, showing last 30 lines -->
-             line 1
-             line 2
-        "};
-        assert_eq!(result, expected);
+        assert_eq!(result.text, hunk);
+        assert!(result.parse_failed);
     }
 
     #[rstest]
-    fn test_fallback_truncates_to_tail_window() {
-        // No `@@` header → fallback path. Build 50 lines so we exercise the
-        // tail truncation: the warning + an omission marker + the last
-        // `FALLBACK_TAIL_LINES` lines of the input.
+    fn test_parse_failed_truncates_to_tail_window() {
         let total = 50usize;
         let mut hunk = String::new();
         for i in 0..total {
             hunk.push_str(&format!("garbage {i}\n"));
         }
 
-        let result = compress_diff_hunk(&input_for(&hunk, 1));
+        let result = compress(&input_for(&hunk, 1));
 
         let omitted = total - FALLBACK_TAIL_LINES;
-        let mut expected = format!(
-            "<!-- diff hunk parse failed, showing last {FALLBACK_TAIL_LINES} lines -->\n\
-             ... [{omitted} lines omitted] ...\n"
-        );
+        let mut expected = format!("... [{omitted} lines omitted] ...\n");
         for i in omitted..total {
             expected.push_str(&format!("garbage {i}\n"));
         }
-        assert_eq!(result, expected);
+        assert_eq!(result.text, expected);
+        assert!(result.parse_failed);
+    }
+
+    #[rstest]
+    fn test_parse_failed_on_empty_hunk() {
+        // The real-world payload from a free-floating PR comment with no
+        // anchored line: empty diffHunk. Result is the parse-failed branch;
+        // we still emit a trailing newline so the fenced code block stays
+        // well-formed.
+        let result = compress(&input_for("", 1));
+        assert_eq!(result.text, "\n");
+        assert!(result.parse_failed);
+    }
+
+    #[rstest]
+    #[case::with_explicit_new_len("@@ -1,3 +5,7 @@", Some((5, 1)))]
+    #[case::omitted_new_len("@@ -1,3 +5 @@", Some((5, 1)))]
+    #[case::omitted_old_len("@@ -1 +5,7 @@", Some((5, 1)))]
+    #[case::empty_new_side("@@ -1,5 +0,0 @@", Some((0, 1)))]
+    #[case::with_function_suffix("@@ -1,3 +5,7 @@ fn foo()", Some((5, 1)))]
+    #[case::missing_at_signs("not a header", None)]
+    fn test_parse_hunk_header(#[case] header: &str, #[case] expected: Option<(i64, i64)>) {
+        assert_eq!(parse_hunk_header(header), expected);
     }
 
     #[rstest]
@@ -473,10 +561,8 @@ mod tests {
              e
         "};
 
-        // Comment on new line 12 (idx 2 = `c`). With 5-before saturating to
-        // 0 and 3-after capped at body length, the whole body is kept.
-        let result = compress_diff_hunk(&input_for(hunk, 12));
+        let result = compress(&input_for(hunk, 12));
 
-        assert_eq!(result, hunk);
+        assert_eq!(result.text, hunk);
     }
 }

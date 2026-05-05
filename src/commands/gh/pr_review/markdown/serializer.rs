@@ -35,6 +35,14 @@ impl DocumentSchema for ThreadsFrontmatter {
 
 pub struct MarkdownSerializer;
 
+/// Result of a serialize call. `parse_failed_threads` lists the location
+/// (e.g. `src/foo.rs:42`) of threads whose `diffHunk` could not be parsed,
+/// so the caller can surface a CLI warning.
+pub struct SerializeOutcome {
+    pub text: String,
+    pub parse_failed_threads: Vec<String>,
+}
+
 impl MarkdownSerializer {
     /// Generate a Markdown string from PrData and frontmatter metadata.
     pub fn serialize(pr_data: &PrData, frontmatter: &ThreadsFrontmatter) -> String {
@@ -53,6 +61,7 @@ impl MarkdownSerializer {
             existing_drafts,
             &SerializeOptions::default(),
         )
+        .text
     }
 
     /// Full-form serializer used by `reply pull`. `existing_drafts` preserves
@@ -62,8 +71,9 @@ impl MarkdownSerializer {
         frontmatter: &ThreadsFrontmatter,
         existing_drafts: &HashMap<String, String>,
         options: &SerializeOptions,
-    ) -> String {
+    ) -> SerializeOutcome {
         let mut output = String::new();
+        let mut parse_failed_threads = Vec::new();
 
         // YAML frontmatter
         output.push_str("---\n");
@@ -80,10 +90,18 @@ impl MarkdownSerializer {
 
         for thread in &pr_data.threads {
             output.push('\n');
-            output.push_str(&serialize_thread(thread, existing_drafts, options));
+            output.push_str(&serialize_thread(
+                thread,
+                existing_drafts,
+                options,
+                &mut parse_failed_threads,
+            ));
         }
 
-        output
+        SerializeOutcome {
+            text: output,
+            parse_failed_threads,
+        }
     }
 }
 
@@ -135,6 +153,7 @@ fn serialize_thread(
     thread: &ReviewThread,
     existing_drafts: &HashMap<String, String>,
     options: &SerializeOptions,
+    parse_failed_threads: &mut Vec<String>,
 ) -> String {
     let mut output = String::new();
 
@@ -178,9 +197,12 @@ fn serialize_thread(
             original_line: root.original_line,
             original_start_line: root.original_start_line,
         });
+        if compressed.parse_failed {
+            parse_failed_threads.push(location.clone());
+        }
         output.push_str("<!-- diff -->\n");
         output.push_str("```diff\n");
-        output.push_str(&compressed);
+        output.push_str(&compressed.text);
         output.push_str("```\n");
         output.push_str("<!-- /diff -->\n");
     }
@@ -509,6 +531,52 @@ mod tests {
     }
 
     #[rstest]
+    #[case::no_diff_hunk(None, None, vec![])]
+    #[case::header_present(
+        Some("@@ -1,1 +1,1 @@\n a\n".to_string()),
+        Some(1),
+        vec![],
+    )]
+    #[case::header_unparseable_with_line(
+        Some("garbage line\n".to_string()),
+        Some(7),
+        vec!["src/foo.rs:7".to_string()],
+    )]
+    #[case::header_unparseable_without_line(
+        Some("garbage line\n".to_string()),
+        None,
+        vec!["src/foo.rs".to_string()],
+    )]
+    fn test_serialize_records_parse_failed_thread_locations(
+        #[case] diff_hunk: Option<String>,
+        #[case] line: Option<i64>,
+        #[case] expected_locations: Vec<String>,
+    ) {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_pf"),
+                vec![Comment {
+                    path: Some("src/foo.rs".to_string()),
+                    line,
+                    diff_hunk,
+                    ..make_comment(1, "reviewer", "Fix")
+                }],
+                false,
+            )],
+        };
+
+        let outcome = MarkdownSerializer::serialize_with_options(
+            &pr_data,
+            &default_frontmatter(),
+            &HashMap::new(),
+            &SerializeOptions::default(),
+        );
+
+        assert_eq!(outcome.parse_failed_threads, expected_locations);
+    }
+
+    #[rstest]
     fn test_serialize_collapses_details_in_comment_body() {
         let body = "<details><summary>Prompt for agents</summary>secret</details>";
         let pr_data = PrData {
@@ -562,7 +630,7 @@ mod tests {
             <details><summary>Prompt for agents</summary>secret</details>
             <!-- /comment -->
         "#};
-        assert_eq!(preserved, expected_preserved);
+        assert_eq!(preserved.text, expected_preserved);
     }
 
     #[rstest]
