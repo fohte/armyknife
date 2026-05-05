@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
@@ -204,7 +204,7 @@ fn parse_pane_activity(raw: &str) -> Option<(u64, DateTime<Utc>)> {
     let (hash_str, ts_str) = raw.trim().split_once(',')?;
     let hash: u64 = hash_str.trim().parse().ok()?;
     let ts: i64 = ts_str.trim().parse().ok()?;
-    let observed_at = chrono::TimeZone::timestamp_opt(&Utc, ts, 0).single()?;
+    let observed_at = Utc.timestamp_opt(ts, 0).single()?;
     Some((hash, observed_at))
 }
 
@@ -374,7 +374,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use chrono::{DateTime, TimeDelta, Utc};
+    use chrono::{DateTime, TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
@@ -811,9 +811,7 @@ mod tests {
         // The pane option payload is hand-rolled CSV; round-tripping
         // through both helpers guards the format against drift on either
         // side.
-        let observed_at = chrono::TimeZone::timestamp_opt(&Utc, 1_700_000_000, 0)
-            .single()
-            .expect("ts");
+        let observed_at = Utc.timestamp_opt(1_700_000_000, 0).single().expect("ts");
         let raw = format_pane_activity(0xdeadbeef_u64, observed_at);
         let parsed = parse_pane_activity(&raw).expect("parse");
         assert_eq!(parsed, (0xdeadbeef_u64, observed_at));
