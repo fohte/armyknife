@@ -12,14 +12,13 @@
 //! 3. Schedule writes its own pid into the same option so the next Stop hook
 //!    can find and cancel it.
 //! 4. Schedule sleeps for `idle_timeout` (cache-friendly default of 4m30s).
-//! 5. After a short settle window (so claude's post-Stop redraws have
-//!    landed), it snapshots the pane's terminal cursor as the arm
-//!    reference, then sleeps for the rest of `idle_timeout`. On wake-up it
-//!    re-reads the session, the cursor, and the branch merge state, and
-//!    asks `decision::decide_compact` what to do. Cursor movement between
-//!    arm and wake means the pane has been active during the sleep, so we
-//!    abort. Only `Compact` triggers side effects; every other variant is
-//!    logged and the worker exits cleanly.
+//! 5. It captures the current Claude Code TUI input-box text, sleeps for
+//!    `idle_timeout`, then re-reads the session, the input box, and the
+//!    branch merge state, and asks `decision::decide_compact` what to do.
+//!    Input box text differing between arm and wake means the user typed
+//!    a follow-up while we were asleep, so we abort. Only `Compact`
+//!    triggers side effects; every other variant is logged and the worker
+//!    exits cleanly.
 //! 6. SIGTERM the live `claude` process (so the next `claude -r` doesn't
 //!    collide with a running interactive session) and exec
 //!    `claude -r <id> -p "/compact"` to perform the compaction in print
@@ -33,7 +32,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Args;
 
-use super::decision::{CompactDecision, CompactInputs, CursorPosition, decide_compact};
+use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::cc::auto_pause;
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
@@ -52,16 +51,6 @@ const TIMER_PID_OPTION: &str = "@armyknife-auto-compact-timer-pid";
 /// process from a pane_pid. Same value sweep uses; a shell hosting claude has
 /// at most a handful of children.
 const MAX_DESCENDANT_NODES: usize = 64;
-
-/// Time we wait after the Stop hook before snapshotting the arm cursor.
-///
-/// Claude Code's TUI keeps issuing redraws (status line, prompt cursor)
-/// for a short tail after it emits the Stop event; sampling the cursor
-/// the instant the worker spawns would capture an in-flight value that
-/// the very next frame would already invalidate, leading every wake-time
-/// comparison to look like activity. Empirically these tail frames land
-/// well under a second.
-const ARM_SETTLE: Duration = Duration::from_secs(1);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ScheduleArgs {
@@ -129,15 +118,13 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         let _ = tmux::set_pane_option(pane_id, TIMER_PID_OPTION, &pid);
     }
 
-    // Let claude's post-Stop redraw tail land before sampling the arm
-    // cursor; otherwise wake-time comparison would always see "movement".
-    // Cap the settle at the configured timeout so a deliberately tiny
-    // `idle_timeout` (e.g. integration tests) still completes within it.
-    let settle = ARM_SETTLE.min(idle_timeout);
-    tokio::time::sleep(settle).await;
-    let arm_cursor = pane_id.as_deref().and_then(tmux::get_pane_cursor_position);
+    // Snapshot the input box now (before sleeping). The TUI redraw
+    // chatter that plagued the cursor-based probe doesn't matter here:
+    // input box text is content, not layout, so it stays stable across
+    // frames as long as the user isn't typing.
+    let arm_input = pane_id.as_deref().and_then(tmux::get_pane_input_text);
 
-    tokio::time::sleep(idle_timeout - settle).await;
+    tokio::time::sleep(idle_timeout).await;
 
     // Re-check the pane option: a later Stop hook may have replaced our pid
     // with the next worker's. SIGTERM from `cancel_previous_timer` is
@@ -156,7 +143,7 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         None => return Ok(()),
     };
 
-    let wake_cursor = wake_cursor_for(&session);
+    let wake_input = wake_input_for(&session);
     let branch_merged = branch_merged_for(&session).await;
     let context_tokens =
         claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
@@ -165,8 +152,8 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         session: &session,
         now: Utc::now(),
         idle_timeout,
-        arm_cursor,
-        wake_cursor,
+        arm_input,
+        wake_input,
         branch_merged,
         context_tokens,
         min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
@@ -263,11 +250,12 @@ fn is_current_timer(pane_id: &str) -> bool {
     recorded.trim().parse::<u32>().ok() == Some(std::process::id())
 }
 
-/// Reads the pane's terminal cursor right now. Returns `None` when the
-/// session has no tmux info or tmux can't tell us the value.
-fn wake_cursor_for(session: &Session) -> Option<CursorPosition> {
+/// Reads the current input-box text for the session's pane. Returns
+/// `None` when the session has no tmux info, the pane is in a non-input
+/// mode (permission prompt, mode picker), or capture-pane fails.
+fn wake_input_for(session: &Session) -> Option<String> {
     let pane_id = &session.tmux_info.as_ref()?.pane_id;
-    tmux::get_pane_cursor_position(pane_id)
+    tmux::get_pane_input_text(pane_id)
 }
 
 /// Returns Some(true) if the session's branch has a merged PR, Some(false)
