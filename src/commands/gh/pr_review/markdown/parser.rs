@@ -113,16 +113,16 @@ fn parse_frontmatter(content: &str) -> Result<(ThreadsFrontmatter, &str), PrRevi
 ///
 /// Markers must appear at the start of a line. Review bodies that quote a marker mid-line
 /// must not split parsing — that's the whole reason for the line-prefix rule.
+/// Both LF and CRLF line endings are accepted (any of `\r\n`, `\n` after a marker).
 fn extract_reviews_section(body: &str) -> Result<(Vec<ParsedReview>, &str), PrReviewError> {
     let Some(open_idx) = find_line_start(body, markers::REVIEWS_OPEN) else {
         return Ok((Vec::new(), body));
     };
-    // Require the open marker to occupy the whole line (followed by '\n' or EOF).
+    // Require the open marker to occupy the whole line (followed by a line ending or EOF).
     let after_open_marker = &body[open_idx + markers::REVIEWS_OPEN.len()..];
-    if !(after_open_marker.is_empty() || after_open_marker.starts_with('\n')) {
+    let Some(after_open) = strip_one_line_ending_or_empty(after_open_marker) else {
         return Ok((Vec::new(), body));
-    }
-    let after_open = after_open_marker.strip_prefix('\n').unwrap_or("");
+    };
 
     let close_idx = find_line_start(after_open, markers::REVIEWS_CLOSE).ok_or_else(|| {
         PrReviewError::ThreadParseError {
@@ -133,14 +133,16 @@ fn extract_reviews_section(body: &str) -> Result<(Vec<ParsedReview>, &str), PrRe
     let inner = &after_open[..close_idx];
 
     let after_close_marker = &after_open[close_idx + markers::REVIEWS_CLOSE.len()..];
-    let rest = after_close_marker.strip_prefix('\n').unwrap_or("");
+    let rest = strip_one_line_ending(after_close_marker);
 
     let reviews = parse_reviews_inner(inner)?;
     Ok((reviews, rest))
 }
 
 /// Find `needle` only when it starts at the beginning of a line (start-of-string or
-/// immediately after '\n'). Returns the byte offset of the match.
+/// immediately after `\n`). Returns the byte offset of the match. The byte before
+/// `\n` may be `\r` (CRLF), which is fine because `find_line_start` only inspects
+/// the byte immediately preceding the candidate position.
 fn find_line_start(haystack: &str, needle: &str) -> Option<usize> {
     let mut search_from = 0;
     while let Some(rel) = haystack[search_from..].find(needle) {
@@ -153,6 +155,29 @@ fn find_line_start(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
+/// Strip exactly one trailing line ending (`\r\n` or `\n`) from `s`. Returns the
+/// remainder. If `s` has no line ending, returns `s` unchanged.
+fn strip_one_line_ending(s: &str) -> &str {
+    s.strip_prefix("\r\n")
+        .or_else(|| s.strip_prefix('\n'))
+        .unwrap_or(s)
+}
+
+/// Like `strip_one_line_ending` but rejects (returns `None`) if `s` is non-empty
+/// and does not start with a line ending. Used to enforce that a marker occupies
+/// its own line: the marker must be followed immediately by `\r\n`, `\n`, or EOF.
+fn strip_one_line_ending_or_empty(s: &str) -> Option<&str> {
+    if s.is_empty() {
+        Some("")
+    } else if let Some(rest) = s.strip_prefix("\r\n") {
+        Some(rest)
+    } else if let Some(rest) = s.strip_prefix('\n') {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 fn parse_reviews_inner(inner: &str) -> Result<Vec<ParsedReview>, PrReviewError> {
     let mut reviews = Vec::new();
     let mut cursor = 0;
@@ -163,12 +188,13 @@ fn parse_reviews_inner(inner: &str) -> Result<Vec<ParsedReview>, PrReviewError> 
         };
         let header_start = cursor + open_rel + markers::REVIEW_OPEN_PREFIX.len();
 
-        // Header runs to the first " -->" on the same line.
+        // Header runs to the first newline. CRLF (`\r\n`) is treated as the same
+        // line terminator as LF; the trailing `\r` is stripped before validation.
         let line_end = inner[header_start..]
             .find('\n')
             .map(|n| header_start + n)
             .unwrap_or(inner.len());
-        let header_line = &inner[header_start..line_end];
+        let header_line = inner[header_start..line_end].trim_end_matches('\r');
         let header =
             header_line
                 .strip_suffix(" -->")
@@ -209,13 +235,17 @@ fn parse_reviews_inner(inner: &str) -> Result<Vec<ParsedReview>, PrReviewError> 
             body,
         });
 
-        // Advance past the closing marker line.
+        // Advance past the closing marker line. Accept `\r\n` or `\n`.
         let after_close = body_end + markers::REVIEW_CLOSE.len();
-        cursor = if after_close < inner.len() && inner.as_bytes()[after_close] == b'\n' {
-            after_close + 1
+        let trailer = &inner[after_close..];
+        let trailer_skip = if trailer.starts_with("\r\n") {
+            2
+        } else if trailer.starts_with('\n') {
+            1
         } else {
-            after_close
+            0
         };
+        cursor = after_close + trailer_skip;
     }
 
     Ok(reviews)
@@ -809,6 +839,48 @@ mod tests {
 
         let parsed = MarkdownParser::parse(&content).unwrap();
         assert_eq!(parsed.reviews[0].body, "hello world");
+    }
+
+    #[rstest]
+    fn test_parse_reviews_section_with_crlf_line_endings() {
+        // Whole-file CRLF: every newline is `\r\n`. Reviews must round-trip cleanly
+        // — no stray `\r` left in body, header still parses, threads after the
+        // section still parse.
+        let lf_content = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- reviews -->
+            <!-- review: @alice state=APPROVED 2024-01-15T10:00:00Z -->
+            LGTM!
+            <!-- /review -->
+            <!-- review: @bob state=COMMENTED 2024-01-15T11:00:00Z -->
+            second review
+            <!-- /review -->
+            <!-- /reviews -->
+
+            <!-- thread: RT_abc path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+        "#};
+        let content = lf_content.replace('\n', "\r\n");
+
+        let parsed = MarkdownParser::parse(&content).unwrap();
+        assert_eq!(parsed.reviews.len(), 2);
+        assert_eq!(parsed.reviews[0].author, "alice");
+        assert_eq!(parsed.reviews[0].state, Some(ReviewState::Approved));
+        assert_eq!(parsed.reviews[0].body, "LGTM!");
+        assert_eq!(parsed.reviews[1].author, "bob");
+        assert_eq!(parsed.reviews[1].body, "second review");
+
+        // Threads after the reviews section must still parse.
+        assert_eq!(parsed.threads.len(), 1);
+        assert_eq!(parsed.threads[0].thread_id, "RT_abc");
     }
 
     #[rstest]
