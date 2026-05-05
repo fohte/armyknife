@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.166](https://github.com/fohte/armyknife/compare/v0.1.165...v0.1.166) (2026-05-05)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** keep hunk header on diff fallback to reduce body noise ([#532](https://github.com/fohte/armyknife/issues/532)) ([7412263](https://github.com/fohte/armyknife/commit/7412263849846e577e1aafd9f6b470ba17ef4d01))
+
 ## [0.1.165](https://github.com/fohte/armyknife/compare/v0.1.164...v0.1.165) (2026-05-05)
 
 
