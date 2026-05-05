@@ -12,6 +12,9 @@ use chrono::{DateTime, Utc};
 
 use crate::commands::cc::types::{Session, SessionStatus};
 
+/// `(cursor_x, cursor_y)` snapshot of a tmux pane's terminal cursor.
+pub type CursorPosition = (u32, u32);
+
 /// What the schedule subcommand should do at wake-up time.
 ///
 /// `Compact` is the happy path; every other variant explains why we bailed,
@@ -25,8 +28,10 @@ pub enum CompactDecision {
     /// paused it, or it ended). Cancelling silently is the right move because
     /// either the user resumed work or another worker handled the session.
     NotStopped,
-    /// User has typed something into the pane after the Stop hook fired
-    /// (pty atime > Stop time). Killing them mid-prompt would be hostile.
+    /// The pane's terminal cursor moved between Stop hook arm time and
+    /// idle-timeout wake time. Either the user typed a follow-up prompt or
+    /// the foreground program is still writing output; in both cases firing
+    /// `/compact` would interrupt in-flight work.
     UserTyping,
     /// The session's branch already has a merged PR. Compacting work the user
     /// has shipped is wasteful, and the next session on this branch is likely
@@ -57,11 +62,14 @@ pub struct CompactInputs<'a> {
     pub session: &'a Session,
     pub now: DateTime<Utc>,
     pub idle_timeout: Duration,
-    /// PTY atime for the session's tmux pane, if available. `None` means we
-    /// could not query it (no tmux info, pane gone, stat failed). Treated as
-    /// "no recent input" rather than "definitely typing" — falsely cancelling
-    /// would defeat the whole feature.
-    pub last_input: Option<DateTime<Utc>>,
+    /// Terminal cursor position captured when the Stop hook armed this
+    /// worker, paired with the position observed at idle-timeout wake.
+    /// `None` on either side means we couldn't read it (no tmux info, pane
+    /// gone, parse failed); the decision treats unknown as "no movement
+    /// detected" so a transient tmux failure doesn't permanently disable
+    /// auto-compact.
+    pub arm_cursor: Option<CursorPosition>,
+    pub wake_cursor: Option<CursorPosition>,
     /// Whether the branch backing this session has a merged PR. `None` when
     /// we couldn't determine it (no git repo, GitHub call failed); treated as
     /// "not merged" so we err on the side of compacting.
@@ -87,8 +95,13 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::BranchMerged;
     }
 
-    if let Some(input_at) = inputs.last_input
-        && input_at > inputs.session.updated_at
+    // Cursor moved between arm and wake → something happened in the pane
+    // (user typed a follow-up, or the foreground program is still writing).
+    // Either way, leave the session alone. Missing readings on either side
+    // are treated as "no movement" so a one-off tmux failure doesn't block
+    // every future compaction.
+    if let (Some(arm), Some(wake)) = (inputs.arm_cursor, inputs.wake_cursor)
+        && arm != wake
     {
         return CompactDecision::UserTyping;
     }
@@ -148,7 +161,8 @@ mod tests {
             session,
             now,
             idle_timeout,
-            last_input: None,
+            arm_cursor: None,
+            wake_cursor: None,
             branch_merged: None,
             // Default the threshold check out of the way for the existing
             // suite: each older test wants the corresponding cheap check to
@@ -188,30 +202,60 @@ mod tests {
     }
 
     #[rstest]
-    fn user_typing_aborts_even_when_elapsed() {
-        // Stop fired an hour ago, but the user hit a key 5s ago — they're
-        // composing a follow-up prompt. Killing them mid-keystroke is exactly
-        // the rude behavior we're trying to avoid.
+    #[case::moved_x(Some((10, 5)), Some((11, 5)))]
+    #[case::moved_y(Some((10, 5)), Some((10, 6)))]
+    #[case::moved_both(Some((10, 5)), Some((0, 0)))]
+    fn cursor_movement_aborts(
+        #[case] arm: Option<CursorPosition>,
+        #[case] wake: Option<CursorPosition>,
+    ) {
+        // Stop fired an hour ago and idle_timeout has long since elapsed,
+        // but the cursor has moved — the user typed a follow-up, or the
+        // foreground program is still writing. Compacting now would
+        // interrupt whatever is happening.
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
-        let last_input = now - TimeDelta::seconds(5);
         let decision = decide_compact(CompactInputs {
-            last_input: Some(last_input),
+            arm_cursor: arm,
+            wake_cursor: wake,
             ..inputs(&session, now, Duration::from_secs(60))
         });
         assert_eq!(decision, CompactDecision::UserTyping);
     }
 
     #[rstest]
-    fn last_input_at_or_before_stop_does_not_block() {
-        // last_input that predates updated_at (or equals it, e.g. when claude
-        // wrote its own prompt to the pane during Stop) must not be treated
-        // as "user typing".
+    #[case::same_position(Some((10, 5)), Some((10, 5)))]
+    #[case::origin(Some((0, 0)), Some((0, 0)))]
+    fn stable_cursor_does_not_block(
+        #[case] arm: Option<CursorPosition>,
+        #[case] wake: Option<CursorPosition>,
+    ) {
         let now = Utc::now();
-        let stop_time = now - TimeDelta::hours(1);
-        let session = stopped_session(stop_time);
+        let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(stop_time),
+            arm_cursor: arm,
+            wake_cursor: wake,
+            ..inputs(&session, now, Duration::from_secs(60))
+        });
+        assert_eq!(decision, CompactDecision::Compact);
+    }
+
+    #[rstest]
+    #[case::arm_missing(None, Some((10, 5)))]
+    #[case::wake_missing(Some((10, 5)), None)]
+    #[case::both_missing(None, None)]
+    fn missing_cursor_does_not_block(
+        #[case] arm: Option<CursorPosition>,
+        #[case] wake: Option<CursorPosition>,
+    ) {
+        // A transient tmux failure (pane gone, parse error) on either side
+        // must not be treated as "definitely typing", or a single hiccup
+        // would permanently disable auto-compact for that pane.
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::hours(1));
+        let decision = decide_compact(CompactInputs {
+            arm_cursor: arm,
+            wake_cursor: wake,
             ..inputs(&session, now, Duration::from_secs(60))
         });
         assert_eq!(decision, CompactDecision::Compact);
@@ -291,7 +335,8 @@ mod tests {
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(now - TimeDelta::seconds(2)),
+            arm_cursor: Some((10, 5)),
+            wake_cursor: Some((11, 5)),
             context_tokens: Some(900_000),
             min_context_tokens: 180_000,
             ..inputs(&session, now, Duration::from_secs(60))
@@ -301,14 +346,15 @@ mod tests {
 
     #[rstest]
     fn merged_takes_precedence_over_typing() {
-        // The branch is merged, so we cancel regardless of pty activity.
+        // The branch is merged, so we cancel regardless of pane activity.
         // BranchMerged is a stronger signal than UserTyping: typing into a
         // session whose work has already shipped is most likely a stale pane
         // the user forgot about, not in-flight work.
         let now = Utc::now();
         let session = stopped_session(now - TimeDelta::hours(1));
         let decision = decide_compact(CompactInputs {
-            last_input: Some(now - TimeDelta::seconds(2)),
+            arm_cursor: Some((10, 5)),
+            wake_cursor: Some((11, 5)),
             branch_merged: Some(true),
             ..inputs(&session, now, Duration::from_secs(60))
         });

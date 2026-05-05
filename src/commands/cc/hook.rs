@@ -339,7 +339,8 @@ fn process_hook_event_impl(
         } else {
             let config = config::load_config().unwrap_or_default();
             if config.cc.auto_compact.enabled {
-                auto_compact::spawn_in_background(&session.session_id);
+                let pane_id = session.tmux_info.as_ref().map(|t| t.pane_id.as_str());
+                auto_compact::spawn_in_background(&session.session_id, pane_id);
             }
         }
     }

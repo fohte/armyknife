@@ -2,9 +2,10 @@
 //! hook.
 //!
 //! Lifecycle:
-//! 1. Stop hook fires `spawn_in_background(session_id)`, which forks a fresh
-//!    `a cc auto-compact schedule --session <id>` process and returns
-//!    immediately so the hook stays well under its budget.
+//! 1. Stop hook fires `spawn_in_background(session_id, pane_id)`, which
+//!    snapshots the pane's terminal cursor, forks a fresh
+//!    `a cc auto-compact schedule --session <id> --arm-cursor-x/-y` process,
+//!    and returns immediately so the hook stays well under its budget.
 //! 2. Schedule reads `@armyknife-auto-compact-timer-pid` from the session's
 //!    tmux pane. If a previous schedule worker is still sleeping for this
 //!    pane, it is SIGTERM'd — only the most recent Stop hook should fire a
@@ -12,10 +13,13 @@
 //! 3. Schedule writes its own pid into the same option so the next Stop hook
 //!    can find and cancel it.
 //! 4. Schedule sleeps for `idle_timeout` (cache-friendly default of 4m30s).
-//! 5. On wake-up it re-reads the session, the pty atime, and the branch
-//!    merge state, and asks `decision::decide_compact` what to do. Only
-//!    `Compact` triggers side effects; every other variant is logged and the
-//!    worker exits cleanly.
+//! 5. On wake-up it re-reads the session, the pane's terminal cursor
+//!    position, and the branch merge state, and asks
+//!    `decision::decide_compact` what to do. Cursor movement between the
+//!    arm-time snapshot (carried in our own argv) and the wake-time read
+//!    means the pane has been active during the sleep, so we abort. Only
+//!    `Compact` triggers side effects; every other variant is logged and
+//!    the worker exits cleanly.
 //! 6. SIGTERM the live `claude` process (so the next `claude -r` doesn't
 //!    collide with a running interactive session) and exec
 //!    `claude -r <id> -p "/compact"` to perform the compaction in print
@@ -26,10 +30,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
 use clap::Args;
 
-use super::decision::{CompactDecision, CompactInputs, decide_compact};
+use super::decision::{CompactDecision, CompactInputs, CursorPosition, decide_compact};
 use crate::commands::cc::auto_pause;
 use crate::commands::cc::claude_sessions;
 use crate::commands::cc::signal::{LibcSignalSender, SignalSender};
@@ -54,12 +58,27 @@ pub struct ScheduleArgs {
     /// Claude Code session_id to compact when the timer fires.
     #[arg(long)]
     pub session: String,
+    /// Pane cursor X captured at Stop hook time (when this worker was
+    /// armed). Compared against the wake-time reading to detect activity
+    /// during the sleep. Both `arm-cursor-x` and `arm-cursor-y` must be
+    /// present to participate in the comparison; either missing disables
+    /// the check (treated as "no movement").
+    #[arg(long)]
+    pub arm_cursor_x: Option<u32>,
+    #[arg(long)]
+    pub arm_cursor_y: Option<u32>,
 }
 
 /// Spawns a detached `a cc auto-compact schedule --session <id>` so the Stop
 /// hook can return immediately. Errors are swallowed (logged to stderr) —
 /// failing the hook for an opportunistic optimization is the wrong trade.
-pub fn spawn_in_background(session_id: &str) {
+///
+/// `pane_id`, if provided, is used to capture the pane's terminal cursor
+/// position right now (the moment the Stop hook fires) and pass it to the
+/// worker as its arm-time cursor reference. The worker compares it against
+/// a fresh reading after `idle_timeout` to detect any pane activity during
+/// the sleep.
+pub fn spawn_in_background(session_id: &str, pane_id: Option<&str>) {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
@@ -67,12 +86,22 @@ pub fn spawn_in_background(session_id: &str) {
             return;
         }
     };
-    let result = process::spawn_detached(
-        exe,
-        ["cc", "auto-compact", "schedule", "--session", session_id],
-        None,
-        &[],
-    );
+    let mut args: Vec<String> = vec![
+        "cc".into(),
+        "auto-compact".into(),
+        "schedule".into(),
+        "--session".into(),
+        session_id.into(),
+    ];
+    if let Some(pane_id) = pane_id
+        && let Some((x, y)) = tmux::get_pane_cursor_position(pane_id)
+    {
+        args.push("--arm-cursor-x".into());
+        args.push(x.to_string());
+        args.push("--arm-cursor-y".into());
+        args.push(y.to_string());
+    }
+    let result = process::spawn_detached(exe, args, None, &[]);
     if let Err(e) = result {
         eprintln!("[armyknife] cc auto-compact: failed to spawn schedule worker: {e}");
     }
@@ -134,7 +163,8 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         None => return Ok(()),
     };
 
-    let last_input = pty_last_input_for(&session);
+    let arm_cursor = arm_cursor_from(args);
+    let wake_cursor = wake_cursor_for(&session);
     let branch_merged = branch_merged_for(&session).await;
     let context_tokens =
         claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
@@ -143,7 +173,8 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         session: &session,
         now: Utc::now(),
         idle_timeout,
-        last_input,
+        arm_cursor,
+        wake_cursor,
         branch_merged,
         context_tokens,
         min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
@@ -240,12 +271,19 @@ fn is_current_timer(pane_id: &str) -> bool {
     recorded.trim().parse::<u32>().ok() == Some(std::process::id())
 }
 
-/// Returns the pane's pty atime as a UTC timestamp, if available. Mirrors the
-/// reading sweep does in `effective_updated_at`.
-fn pty_last_input_for(session: &Session) -> Option<DateTime<Utc>> {
+/// Recovers the arm-time cursor recorded in our argv when the Stop hook
+/// spawned us. Returns `None` if either coordinate is missing — an absent
+/// reading is treated by the decision as "no movement" rather than as
+/// activity, so a single unreadable Stop doesn't permanently block compact.
+fn arm_cursor_from(args: &ScheduleArgs) -> Option<CursorPosition> {
+    Some((args.arm_cursor_x?, args.arm_cursor_y?))
+}
+
+/// Reads the pane's terminal cursor right now. Returns `None` when the
+/// session has no tmux info or tmux can't tell us the value.
+fn wake_cursor_for(session: &Session) -> Option<CursorPosition> {
     let pane_id = &session.tmux_info.as_ref()?.pane_id;
-    let ts = tmux::get_pane_last_input(pane_id)?;
-    Utc.timestamp_opt(ts, 0).single()
+    tmux::get_pane_cursor_position(pane_id)
 }
 
 /// Returns Some(true) if the session's branch has a merged PR, Some(false)

@@ -560,6 +560,31 @@ pub fn get_pane_last_input(pane_id: &str) -> Option<i64> {
     Some(meta.atime())
 }
 
+/// Returns the current `(cursor_x, cursor_y)` for the pane.
+///
+/// Tracks the live terminal cursor: on a normal interactive prompt this
+/// moves whenever the user types or the foreground program writes. We use
+/// it as a "did anything happen in this pane" probe between two points in
+/// time (Stop hook arm vs. idle-timeout wake), since pty atime turned out
+/// to drift on macOS devfs in ways that didn't actually correlate with
+/// user input.
+///
+/// Returns `None` if tmux isn't running, the pane doesn't exist, or the
+/// output can't be parsed.
+pub fn get_pane_cursor_position(pane_id: &str) -> Option<(u32, u32)> {
+    let output = run_tmux_output(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane_id,
+        "#{cursor_x},#{cursor_y}",
+    ])
+    .ok()?;
+    let line = output.lines().next()?.trim();
+    let (x, y) = line.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 /// Parses a single line from tmux list-panes output for PID matching.
 /// Format: "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
 fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
