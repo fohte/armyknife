@@ -225,23 +225,28 @@ mod tests {
     #[test]
     fn trailing_whitespace_is_ignored() {
         // tmux capture-pane on some terminal/tmux combinations right-pads
-        // each line to pane width. Two captures of the same prompt taken
-        // at different pane widths must extract to the same string.
+        // each line to pane width. The same prompt captured under two
+        // different pane widths must still extract to the same string,
+        // otherwise a window resize between arm and wake would falsely
+        // trip UserTyping. We produce trailing whitespace via a `{pad}`
+        // substitution so editors don't strip it from the source.
         let narrow = format!(
             indoc! {"
                 {rule}
-                ❯ hi
+                ❯ hi{pad}
                 {rule}
             "},
             rule = RULE,
+            pad = "",
         );
         let padded = format!(
             indoc! {"
                 {rule}
-                ❯ hi
+                ❯ hi{pad}
                 {rule}
             "},
             rule = RULE,
+            pad = "              ",
         );
         assert_eq!(extract_input_text(&narrow), extract_input_text(&padded));
     }
