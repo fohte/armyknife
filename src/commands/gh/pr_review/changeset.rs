@@ -263,6 +263,7 @@ mod tests {
                 pulled_at: "2024-01-15T10:00:00Z".to_string(),
                 submit: false,
             },
+            reviews: vec![],
             threads,
         }
     }
