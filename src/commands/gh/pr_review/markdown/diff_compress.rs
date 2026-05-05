@@ -130,17 +130,19 @@ fn collect_target_indices(
     let mut hits = Vec::new();
 
     for (idx, line) in body.iter().enumerate() {
-        let prefix = line.chars().next().unwrap_or(' ');
+        // Diff prefixes are always single-byte ASCII (`+`, `-`, ` `, `\`),
+        // so reading the first byte avoids UTF-8 decoding on every line.
+        let prefix = line.as_bytes().first().copied().unwrap_or(b' ');
         let (current, advance_new, advance_old) = match prefix {
-            '+' => (new_line, true, false),
-            '-' => (old_line, false, true),
+            b'+' => (new_line, true, false),
+            b'-' => (old_line, false, true),
             // Treat anything else (space, '\', empty line) as context.
             _ => (if use_new_side { new_line } else { old_line }, true, true),
         };
 
         let on_target_side = match prefix {
-            '+' => use_new_side,
-            '-' => !use_new_side,
+            b'+' => use_new_side,
+            b'-' => !use_new_side,
             _ => true,
         };
 

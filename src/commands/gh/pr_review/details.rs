@@ -14,7 +14,7 @@
 
 use lazy_regex::{Lazy, Regex, lazy_regex, regex_captures};
 
-static DETAILS_RE: Lazy<Regex> = lazy_regex!(r"(?s)<details[^>]*>(.*?)</details>");
+static DETAILS_RE: Lazy<Regex> = lazy_regex!(r"(?si)<details[^>]*>(.*?)</details>");
 static HTML_COMMENT_RE: Lazy<Regex> = lazy_regex!(r"(?s)<!--.*?-->");
 static PICTURE_RE: Lazy<Regex> = lazy_regex!(r"(?si)<picture[^>]*>.*?</picture>");
 
@@ -43,9 +43,9 @@ fn collapse_details(text: &str) -> String {
         .replace_all(text, |caps: &regex::Captures| {
             let inner = &caps[1];
             if let Some((_, summary)) =
-                regex_captures!(r"(?s)^\s*<summary[^>]*>(.*?)</summary>", inner)
+                regex_captures!(r"(?si)^\s*<summary[^>]*>(.*?)</summary>", inner)
             {
-                format!("[▶ {summary}]")
+                format!("[▶ {}]", summary.trim())
             } else {
                 "[▶ ...]".to_string()
             }
@@ -82,6 +82,14 @@ mod tests {
     #[case::without_summary(
         "Before <details>Hidden content</details> After",
         "Before [▶ ...] After"
+    )]
+    #[case::uppercase_tag(
+        "Before <DETAILS><SUMMARY>Click</SUMMARY>Hidden</DETAILS> After",
+        "Before [▶ Click] After"
+    )]
+    #[case::summary_with_whitespace(
+        "<details><summary>  spaced  </summary>body</details>",
+        "[▶ spaced]"
     )]
     #[case::strips_html_comment(
         r#"Before <!-- devin-review-comment {"id": "BUG_x"} --> After"#,
