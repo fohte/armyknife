@@ -87,168 +87,125 @@ mod tests {
     // literal unwieldy.
     const RULE: &str = "────────────────────────────────────────────────────────────";
 
-    #[test]
-    fn empty_input_box_returns_empty_string() {
-        let raw = format!(
-            indoc! {"
-                Some earlier output line.
-                Another earlier line.
-
-                {rule}
-                ❯
-                {rule}
-                  Opus 4.7 (1M context) | 100k tok (12%)
-                  -- INSERT -- ⏵⏵ accept edits on
-            "},
-            rule = RULE,
-        );
-        assert_eq!(extract_input_text(&raw), Some(String::new()));
+    /// Builds a capture body by substituting `{rule}` with the test's
+    /// horizontal-rule fixture. Lets each parameterised case stay readable
+    /// without re-typing 60 box-drawing chars in every literal.
+    fn render(template: &str) -> String {
+        template.replace("{rule}", RULE)
     }
 
-    #[test]
-    fn single_line_input_returns_typed_text() {
-        let raw = format!(
-            indoc! {"
-                {rule}
-                ❯ hello world
-                {rule}
-                  -- INSERT --
-            "},
-            rule = RULE,
-        );
-        assert_eq!(extract_input_text(&raw), Some("hello world".to_string()));
-    }
+    #[rstest]
+    // The input box is a `─`-rule pair; an empty `❯` line between them
+    // must extract to the empty string (not to None, which is reserved
+    // for "no input box visible").
+    #[case::empty_input_box(
+        indoc! {"
+            Some earlier output line.
+            Another earlier line.
 
-    #[test]
-    fn multi_line_input_joins_continuation_rows() {
-        // Continuation rows are indented with two spaces in the capture;
-        // both Shift+Enter inserts and soft-wraps look the same to
-        // capture-pane, so the parser does not need to tell them apart.
-        let raw = format!(
-            indoc! {"
-                {rule}
-                ❯ first line
-                  second line
-                  third line
-                {rule}
-                  -- INSERT --
-            "},
-            rule = RULE,
-        );
-        assert_eq!(
-            extract_input_text(&raw),
-            Some(
-                indoc! {"
-                    first line
-                    second line
-                    third line
-                "}
-                .trim_end_matches('\n')
-                .to_string(),
-            ),
-        );
-    }
-
-    #[test]
-    fn typing_changes_the_extracted_string() {
-        // Documents the comparison the activity probe will make: arm and
-        // wake captures are extracted then compared as strings.
-        let arm = format!(
-            indoc! {"
-                {rule}
-                ❯
-                {rule}
-            "},
-            rule = RULE,
-        );
-        let wake = format!(
-            indoc! {"
-                {rule}
-                ❯ hi
-                {rule}
-            "},
-            rule = RULE,
-        );
-        assert_ne!(extract_input_text(&arm), extract_input_text(&wake));
-    }
-
-    #[test]
-    fn no_rules_returns_none() {
-        // Permission prompt mode and similar overlays don't draw the
-        // input box; callers must treat None as "no observation".
-        let raw = indoc! {"
+            {rule}
+            ❯
+            {rule}
+              Opus 4.7 (1M context) | 100k tok (12%)
+              -- INSERT -- ⏵⏵ accept edits on
+        "},
+        Some(""),
+    )]
+    #[case::single_line_input(
+        indoc! {"
+            {rule}
+            ❯ hello world
+            {rule}
+              -- INSERT --
+        "},
+        Some("hello world"),
+    )]
+    // Continuation rows are indented with two spaces in the capture;
+    // both Shift+Enter inserts and soft-wraps look the same to
+    // capture-pane, so the parser does not need to tell them apart.
+    #[case::multi_line_input(
+        indoc! {"
+            {rule}
+            ❯ first line
+              second line
+              third line
+            {rule}
+              -- INSERT --
+        "},
+        Some(indoc! {"
+            first line
+            second line
+            third line"}),
+    )]
+    // Permission prompt mode and similar overlays don't draw the input
+    // box; callers must treat None as "no observation".
+    #[case::no_rules_at_all(
+        indoc! {"
             Do you want to proceed?
             ❯ 1. Yes
               2. No
 
             Esc to cancel · Tab to amend
-        "};
-        assert_eq!(extract_input_text(raw), None);
+        "},
+        None,
+    )]
+    #[case::only_one_rule(
+        indoc! {"
+            {rule}
+            ❯ orphan
+        "},
+        None,
+    )]
+    // capture-pane outputs the visible pane only by default, but a deep
+    // capture (-S) can include prior turns whose rendered output
+    // happened to contain rule-like sequences. The probe anchors on the
+    // bottom-most pair so the live input box is what gets compared.
+    #[case::history_contains_earlier_rules(
+        indoc! {"
+            Earlier transcript chunk
+            {rule}
+            ❯ stale text from history
+            {rule}
+            Some assistant output between turns.
+            {rule}
+            ❯ live text
+            {rule}
+              -- INSERT --
+        "},
+        Some("live text"),
+    )]
+    fn extracts_input_text(#[case] template: &str, #[case] expected: Option<&str>) {
+        let raw = render(template);
+        assert_eq!(extract_input_text(&raw), expected.map(|s| s.to_string()),);
     }
 
-    #[test]
-    fn one_rule_only_returns_none() {
-        let raw = format!(
+    #[rstest]
+    // tmux capture-pane on some terminal/tmux combinations right-pads
+    // each line to pane width. Two captures of the same prompt taken at
+    // different pane widths must extract to the same string, otherwise
+    // a window resize between arm and wake would falsely trip
+    // UserTyping. The pad is applied by the test runner so editors
+    // don't strip the trailing whitespace from the source.
+    #[case::different_padding_widths("", "              ")]
+    #[case::same_padding_either_side("    ", "    ")]
+    fn capture_padding_does_not_affect_extracted_text(#[case] pad_a: &str, #[case] pad_b: &str) {
+        let raw_a = render(&format!(
             indoc! {"
-                {rule}
-                ❯ orphan
-            "},
-            rule = RULE,
-        );
-        assert_eq!(extract_input_text(&raw), None);
-    }
-
-    #[test]
-    fn picks_last_pair_when_capture_history_has_earlier_rules() {
-        // capture-pane outputs the visible pane only by default, but a
-        // deep capture (-S) can include prior turns whose rendered
-        // output happened to contain rule-like sequences. The probe
-        // anchors on the bottom-most pair so the live input box is what
-        // gets compared.
-        let raw = format!(
-            indoc! {"
-                Earlier transcript chunk
-                {rule}
-                ❯ stale text from history
-                {rule}
-                Some assistant output between turns.
-                {rule}
-                ❯ live text
-                {rule}
-                  -- INSERT --
-            "},
-            rule = RULE,
-        );
-        assert_eq!(extract_input_text(&raw), Some("live text".to_string()));
-    }
-
-    #[test]
-    fn trailing_whitespace_is_ignored() {
-        // tmux capture-pane on some terminal/tmux combinations right-pads
-        // each line to pane width. The same prompt captured under two
-        // different pane widths must still extract to the same string,
-        // otherwise a window resize between arm and wake would falsely
-        // trip UserTyping. We produce trailing whitespace via a `{pad}`
-        // substitution so editors don't strip it from the source.
-        let narrow = format!(
-            indoc! {"
-                {rule}
+                {{rule}}
                 ❯ hi{pad}
-                {rule}
+                {{rule}}
             "},
-            rule = RULE,
-            pad = "",
-        );
-        let padded = format!(
+            pad = pad_a,
+        ));
+        let raw_b = render(&format!(
             indoc! {"
-                {rule}
+                {{rule}}
                 ❯ hi{pad}
-                {rule}
+                {{rule}}
             "},
-            rule = RULE,
-            pad = "              ",
-        );
-        assert_eq!(extract_input_text(&narrow), extract_input_text(&padded));
+            pad = pad_b,
+        ));
+        assert_eq!(extract_input_text(&raw_a), extract_input_text(&raw_b));
     }
 
     #[rstest]
