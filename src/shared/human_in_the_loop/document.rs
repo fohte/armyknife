@@ -38,8 +38,14 @@ impl<S: DocumentSchema> Document<S> {
         }
 
         let content = fs::read_to_string(&path)?;
-        let (frontmatter, _body) = parse_frontmatter(&content)?;
+        Self::from_content(path, &content)
+    }
 
+    /// Construct a document from already-loaded content. Useful when the
+    /// caller has the file content in memory and wants to avoid a redundant
+    /// disk read.
+    pub fn from_content(path: PathBuf, content: &str) -> Result<Self> {
+        let (frontmatter, _body) = parse_frontmatter(content)?;
         Ok(Self { path, frontmatter })
     }
 

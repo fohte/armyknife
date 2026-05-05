@@ -120,7 +120,7 @@ These provide structured inputs/outputs suitable for AI workflows.
 
 #### `a ai draft <path>`
 
-Open a file in editor for review (no approval flow).
+Open a file in editor for review (no approval flow). After the editor exits, a unified diff between the pre-edit and post-edit contents is written to stdout (or `(no edits)` when unchanged), letting the caller see what the human edited without re-reading the file. The same stdout contract applies to every editor-backed review command (`a ai pr-draft review`, `a gh issue-agent review`, `a gh pr-review reply review`).
 
 | Option            | Description                                                |
 | ----------------- | ---------------------------------------------------------- |

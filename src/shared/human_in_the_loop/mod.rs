@@ -22,10 +22,14 @@ pub use lock::{CleanupGuard, LockGuard};
 pub use tmux::get_tmux_target;
 
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::shared::config::EditorConfig;
+use crate::shared::diff::write_unified_diff;
+
+const DIFF_CONTEXT_LINES: usize = 3;
 
 /// How long to wait for the terminal to signal it has started running the
 /// review-complete command before giving up. Covers cases like macOS being
@@ -97,6 +101,13 @@ where
         eprintln!("Skipped: Editor is already open for this file.");
         return Ok(None);
     }
+
+    // Snapshot the document before the editor opens so we can emit a diff
+    // afterwards. Background callers (e.g. Claude Code skills launching this
+    // command via run_in_background) read the diff from stdout instead of
+    // re-reading the whole file, which keeps token usage proportional to the
+    // edit size rather than the file size.
+    let pre_edit = std::fs::read_to_string(document_path)?;
 
     // Create a FIFO for the review-complete process to signal completion.
     // The FifoCleanupGuard ensures the FIFO is removed on early return.
@@ -178,9 +189,43 @@ where
     done_fifo_cleanup.disarm();
     let _ = std::fs::remove_file(&done_fifo_path);
 
-    // Review complete - read the final document state
-    let document = Document::<S>::from_path(document_path.to_path_buf())?;
+    // Emit a diff of what the user edited so background callers can pick it
+    // up from stdout without re-reading the file.
+    let post_edit = std::fs::read_to_string(document_path)?;
+    if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(e.into());
+    }
+
+    // Reuse the in-memory `post_edit` for the document parse to avoid a
+    // second read of the same file.
+    let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
     Ok(Some(document))
+}
+
+/// Write a unified diff of pre/post edit content to stdout, or `(no edits)`
+/// when unchanged. Color is enabled only when stdout is a TTY.
+fn print_edit_diff(pre: &str, post: &str) -> std::io::Result<()> {
+    use crossterm::tty::IsTty;
+    let use_color = std::io::stdout().is_tty();
+    let mut stdout = std::io::stdout().lock();
+    write_edit_diff(&mut stdout, pre, post, use_color)
+}
+
+/// Emit a hunk-based unified diff between `pre` and `post` to `writer`, or a
+/// "(no edits)" notice when they match. Factored out for unit testing.
+fn write_edit_diff<W: Write>(
+    writer: &mut W,
+    pre: &str,
+    post: &str,
+    use_color: bool,
+) -> std::io::Result<()> {
+    if pre == post {
+        writeln!(writer, "(no edits)")?;
+        return Ok(());
+    }
+    write_unified_diff(writer, pre, post, DIFF_CONTEXT_LINES, use_color)
 }
 
 /// Complete a review session after the user closes the editor.
@@ -523,5 +568,32 @@ mod tests {
         use std::os::unix::fs::FileTypeExt;
         let metadata = std::fs::metadata(&fifo).expect("stat fifo");
         assert!(metadata.file_type().is_fifo(), "expected FIFO file type");
+    }
+
+    // The exact diff format is covered by `shared::diff` tests; here we only
+    // verify the unique behavior layered on top: emit "(no edits)" for
+    // identical content, otherwise delegate to the underlying diff writer.
+
+    #[rstest]
+    #[case::identical_content("same\n", "same\n")]
+    #[case::both_empty("", "")]
+    fn write_edit_diff_emits_no_edits_marker_when_unchanged(#[case] pre: &str, #[case] post: &str) {
+        let mut buf = Vec::new();
+        write_edit_diff(&mut buf, pre, post, false).expect("write");
+        assert_eq!(String::from_utf8(buf).expect("utf8"), "(no edits)\n");
+    }
+
+    #[rstest]
+    fn write_edit_diff_emits_hunk_when_changed() {
+        let mut buf = Vec::new();
+        write_edit_diff(&mut buf, "old\n", "new\n", false).expect("write");
+        assert_eq!(
+            String::from_utf8(buf).expect("utf8"),
+            indoc::indoc! {"
+                @@ -1 +1 @@
+                -old
+                +new
+            "}
+        );
     }
 }
