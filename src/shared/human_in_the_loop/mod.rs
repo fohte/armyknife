@@ -188,10 +188,13 @@ where
     let _ = std::fs::remove_file(&done_fifo_path);
 
     // Emit a diff of what the user edited so background callers can pick it
-    // up from stdout without re-reading the file. Errors writing to stdout
-    // (e.g. BrokenPipe when piped to `head`) are intentionally ignored.
-    let post_edit = std::fs::read_to_string(document_path).unwrap_or_default();
-    let _ = print_edit_diff(&pre_edit, &post_edit);
+    // up from stdout without re-reading the file.
+    let post_edit = std::fs::read_to_string(document_path)?;
+    if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(e.into());
+    }
 
     // Review complete - read the final document state
     let document = Document::<S>::from_path(document_path.to_path_buf())?;
@@ -581,8 +584,12 @@ mod tests {
     fn write_edit_diff_delegates_to_write_diff_when_changed() {
         let mut buf = Vec::new();
         write_edit_diff(&mut buf, "old\n", "new\n", false).expect("write");
-        let out = String::from_utf8(buf).expect("utf8");
-        assert_ne!(out, "(no edits)\n");
-        assert_ne!(out, "");
+        assert_eq!(
+            String::from_utf8(buf).expect("utf8"),
+            indoc::indoc! {"
+                -old
+                +new
+            "}
+        );
     }
 }
