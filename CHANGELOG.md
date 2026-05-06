@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.167](https://github.com/fohte/armyknife/compare/v0.1.166...v0.1.167) (2026-05-06)
+
+
+### Features
+
+* **cc, shared/log:** add JSONL diagnostic logs for cc auto-compact and sweep ([#534](https://github.com/fohte/armyknife/issues/534)) ([94754d3](https://github.com/fohte/armyknife/commit/94754d3496a592da0f6db84ffaaf153644eea490))
+
 ## [0.1.166](https://github.com/fohte/armyknife/compare/v0.1.165...v0.1.166) (2026-05-05)
 
 
