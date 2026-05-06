@@ -125,6 +125,13 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     // frames as long as the user isn't typing.
     let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
 
+    // Anchor the elapsed-time gate to wall-clock time captured here, not to
+    // session.updated_at. Hook events unrelated to user activity (notably
+    // Notification(idle_prompt), which Claude Code fires internally when the
+    // user idles) bump updated_at during the sleep, and using that as the
+    // basis would prevent the timer from ever firing on idle sessions.
+    let armed_at = Utc::now();
+
     tokio::time::sleep(idle_timeout).await;
 
     // Re-check the pane option: a later Stop hook may have replaced our pid
@@ -152,6 +159,7 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     let decision = decide_compact(CompactInputs {
         session: &session,
         now: Utc::now(),
+        armed_at,
         idle_timeout,
         arm_input,
         wake_input,
