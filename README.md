@@ -473,6 +473,10 @@ Git worktree management with tmux integration.
 
 armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
 
+### Logging
+
+armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log.YYYY-MM-DD` (daily rotation, 7 files retained). Set `ARMYKNIFE_LOG=off|error|info|debug` to control verbosity. See [docs/logging.md](docs/logging.md) for the event reference and debugging recipes.
+
 ### `a completions <shell>`
 
 Generate shell completion scripts.

@@ -25,6 +25,7 @@ use super::store;
 use super::types::{Session, SessionStatus};
 use crate::infra::{process::ProcessSnapshot, tmux};
 use crate::shared::config;
+use crate::shared::log::short_run_id;
 
 /// Pane option where we record a `<input-hash>,<unix_seconds>` snapshot
 /// so the next sweep pass can tell whether the user has typed in the
@@ -78,6 +79,10 @@ pub fn run(args: &SweepArgs) -> Result<()> {
 }
 
 fn run_sweep(args: &SweepArgs) -> Result<()> {
+    let run_id = short_run_id();
+    let span = tracing::info_span!("cc.sweep", run_id = %run_id);
+    let _entered = span.enter();
+
     let config = config::load_config().unwrap_or_default();
 
     // Respect the enabled flag unless a manual --timeout override was given.
@@ -100,7 +105,22 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     let probe = TmuxSessionProbe {
         snapshot: snapshot.as_ref(),
     };
+    tracing::info!(
+        event = "cc.sweep.start",
+        timeout = %timeout_str,
+        dry_run = args.dry_run,
+    );
     let report = sweep_impl(&sessions_dir, timeout, &sender, &probe, args.dry_run)?;
+    tracing::info!(
+        event = "cc.sweep.summary",
+        scanned = report.scanned,
+        paused = report.paused,
+        waiting = report.waiting,
+        no_pid = report.no_pid,
+        active = report.active,
+        timeout = %timeout_str,
+        dry_run = args.dry_run,
+    );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
     // Otherwise only speak up when we actually paused something, since the
@@ -303,11 +323,20 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
                 // there is nothing to SIGTERM -- still count it for
                 // observability.
                 let Some(pid) = probe.resolve_pid(&session) else {
+                    tracing::info!(
+                        event = "cc.sweep.no_pid",
+                        session = %session.session_id,
+                    );
                     report.no_pid += 1;
                     continue;
                 };
 
                 if dry_run {
+                    tracing::info!(
+                        event = "cc.sweep.dry_run_pause",
+                        session = %session.session_id,
+                        pid = pid,
+                    );
                     eprintln!(
                         "[armyknife] cc sweep (dry-run): would pause {} (pid={pid})",
                         session.session_id,
@@ -315,6 +344,11 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
                     report.paused += 1;
                     continue;
                 }
+                tracing::info!(
+                    event = "cc.sweep.paused",
+                    session = %session.session_id,
+                    pid = pid,
+                );
                 pause_session(sessions_dir, session, pid, sender)?;
                 report.paused += 1;
             }
@@ -357,9 +391,11 @@ fn pause_session<S: SignalSender>(
     if let Err(e) = sender.send(pid, libc::SIGTERM)
         && e.raw_os_error() != Some(libc::ESRCH)
     {
-        eprintln!(
-            "[armyknife] cc sweep: failed to SIGTERM pid {pid} for session {}: {e}",
-            session.session_id
+        tracing::warn!(
+            event = "cc.sweep.sigterm_failed",
+            session = %session.session_id,
+            pid = pid,
+            error = %e,
         );
     }
 

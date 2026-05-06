@@ -7,6 +7,7 @@ pub mod dirs;
 pub mod env_var;
 pub mod hooks;
 pub mod human_in_the_loop;
+pub mod log;
 pub mod repos_root;
 pub mod table;
 #[cfg(test)]
