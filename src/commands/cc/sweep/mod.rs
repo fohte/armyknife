@@ -80,7 +80,7 @@ pub fn run(args: &SweepArgs) -> Result<()> {
 
 fn run_sweep(args: &SweepArgs) -> Result<()> {
     let run_id = short_run_id();
-    let span = tracing::info_span!("sweep", run_id = %run_id);
+    let span = tracing::info_span!("cc.sweep", run_id = %run_id);
     let _entered = span.enter();
 
     let config = config::load_config().unwrap_or_default();
@@ -106,13 +106,13 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         snapshot: snapshot.as_ref(),
     };
     tracing::info!(
-        event = "sweep.start",
+        event = "cc.sweep.start",
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
     let report = sweep_impl(&sessions_dir, timeout, &sender, &probe, args.dry_run)?;
     tracing::info!(
-        event = "sweep.summary",
+        event = "cc.sweep.summary",
         scanned = report.scanned,
         paused = report.paused,
         waiting = report.waiting,
@@ -324,7 +324,7 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
                 // observability.
                 let Some(pid) = probe.resolve_pid(&session) else {
                     tracing::info!(
-                        event = "sweep.no_pid",
+                        event = "cc.sweep.no_pid",
                         session = %session.session_id,
                     );
                     report.no_pid += 1;
@@ -333,7 +333,7 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
 
                 if dry_run {
                     tracing::info!(
-                        event = "sweep.dry_run_pause",
+                        event = "cc.sweep.dry_run_pause",
                         session = %session.session_id,
                         pid = pid,
                     );
@@ -345,7 +345,7 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
                     continue;
                 }
                 tracing::info!(
-                    event = "sweep.paused",
+                    event = "cc.sweep.paused",
                     session = %session.session_id,
                     pid = pid,
                 );
@@ -392,7 +392,7 @@ fn pause_session<S: SignalSender>(
         && e.raw_os_error() != Some(libc::ESRCH)
     {
         tracing::warn!(
-            event = "sweep.sigterm_failed",
+            event = "cc.sweep.sigterm_failed",
             session = %session.session_id,
             pid = pid,
             error = %e,

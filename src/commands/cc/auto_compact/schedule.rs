@@ -70,7 +70,7 @@ pub fn spawn_in_background(session_id: &str) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(
-                event = "auto_compact.spawn_failed",
+                event = "cc.auto_compact.spawn_failed",
                 session = session_id,
                 reason = "current_exe",
                 error = %e,
@@ -78,7 +78,7 @@ pub fn spawn_in_background(session_id: &str) {
             return;
         }
     };
-    tracing::info!(event = "auto_compact.spawn", session = session_id,);
+    tracing::info!(event = "cc.auto_compact.spawn", session = session_id,);
     let result = process::spawn_detached(
         exe,
         ["cc", "auto-compact", "schedule", "--session", session_id],
@@ -87,7 +87,7 @@ pub fn spawn_in_background(session_id: &str) {
     );
     if let Err(e) = result {
         tracing::warn!(
-            event = "auto_compact.spawn_failed",
+            event = "cc.auto_compact.spawn_failed",
             session = session_id,
             reason = "spawn_detached",
             error = %e,
@@ -97,13 +97,14 @@ pub fn spawn_in_background(session_id: &str) {
 
 pub async fn run(args: &ScheduleArgs) -> Result<()> {
     let run_id = short_run_id();
-    let span = tracing::info_span!("schedule", run_id = %run_id, session = %args.session);
+    let span =
+        tracing::info_span!("cc.auto_compact.schedule", run_id = %run_id, session = %args.session);
     run_inner(args).instrument(span).await
 }
 
 async fn run_inner(args: &ScheduleArgs) -> Result<()> {
     tracing::info!(
-        event = "schedule.start",
+        event = "cc.auto_compact.schedule.start",
         session = %args.session,
     );
     let cfg = config::load_config().unwrap_or_default();
@@ -111,7 +112,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         // Hook may still spawn us if config was edited mid-flight; bail out
         // so we don't waste a sleep.
         tracing::info!(
-            event = "schedule.exit",
+            event = "cc.auto_compact.schedule.exit",
             session = %args.session,
             reason = "disabled",
         );
@@ -130,7 +131,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         Some(s) => s,
         None => {
             tracing::info!(
-                event = "schedule.exit",
+                event = "cc.auto_compact.schedule.exit",
                 session = %args.session,
                 reason = "session_missing_at_arm",
             );
@@ -155,7 +156,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
     let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
 
     tracing::info!(
-        event = "schedule.armed",
+        event = "cc.auto_compact.schedule.armed",
         session = %session.session_id,
         pane_id = pane_id.as_deref().unwrap_or(""),
         idle_timeout_secs = idle_timeout.as_secs(),
@@ -173,7 +174,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         && !is_current_timer(pane_id)
     {
         tracing::info!(
-            event = "schedule.exit",
+            event = "cc.auto_compact.schedule.exit",
             session = %args.session,
             reason = "preempted",
         );
@@ -186,7 +187,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         Some(s) => s,
         None => {
             tracing::info!(
-                event = "schedule.exit",
+                event = "cc.auto_compact.schedule.exit",
                 session = %args.session,
                 reason = "session_missing_at_wake",
             );
@@ -200,7 +201,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
 
     tracing::info!(
-        event = "schedule.inputs",
+        event = "cc.auto_compact.schedule.inputs",
         session = %session.session_id,
         status = ?session.status,
         wake_input_present = wake_input.is_some(),
@@ -221,7 +222,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
     });
 
     tracing::info!(
-        event = "schedule.decision",
+        event = "cc.auto_compact.schedule.decision",
         session = %session.session_id,
         decision = ?decision,
     );
@@ -253,21 +254,24 @@ fn cancel_previous_timer<S: SignalSender>(pane_id: &str, sender: &S) {
     }
     match sender.send(target, libc::SIGTERM) {
         Ok(()) => {
-            tracing::info!(event = "schedule.cancelled_prev", target_pid = target);
+            tracing::info!(
+                event = "cc.auto_compact.schedule.cancelled_prev",
+                target_pid = target
+            );
         }
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
             // Prior worker was already gone — likely self-exited. Recording
             // this as a separate flag rather than a `cancel_prev_failed`
             // because nothing actually failed; we just had no one to signal.
             tracing::info!(
-                event = "schedule.cancelled_prev",
+                event = "cc.auto_compact.schedule.cancelled_prev",
                 target_pid = target,
                 already_gone = true,
             );
         }
         Err(e) => {
             tracing::warn!(
-                event = "schedule.cancel_prev_failed",
+                event = "cc.auto_compact.schedule.cancel_prev_failed",
                 target_pid = target,
                 error = %e,
             );
@@ -347,7 +351,7 @@ async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> R
             && e.raw_os_error() != Some(libc::ESRCH)
         {
             tracing::warn!(
-                event = "schedule.sigterm_failed",
+                event = "cc.auto_compact.schedule.sigterm_failed",
                 session = %session.session_id,
                 target_pid = pid,
                 error = %e,
@@ -362,7 +366,7 @@ async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> R
     spawn_compact_resume(session)?;
     mark_paused(session)?;
     tracing::info!(
-        event = "schedule.compact_executed",
+        event = "cc.auto_compact.schedule.compact_executed",
         session = %session.session_id,
     );
     Ok(())
@@ -387,7 +391,7 @@ fn spawn_compact_resume(session: &Session) -> Result<()> {
     );
     if let Err(e) = result {
         tracing::warn!(
-            event = "schedule.compact_spawn_failed",
+            event = "cc.auto_compact.schedule.compact_spawn_failed",
             session = %session.session_id,
             error = %e,
         );

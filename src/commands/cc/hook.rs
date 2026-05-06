@@ -45,7 +45,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     }
 
     let run_id = short_run_id();
-    let span = tracing::info_span!("hook", run_id = %run_id, event = %args.event);
+    let span = tracing::info_span!("cc.hook", run_id = %run_id, event = %args.event);
     let _entered = span.enter();
 
     // Read raw stdin first for debug logging
@@ -336,7 +336,7 @@ fn process_hook_event_impl(
     if side_effects.auto_compact && event == HookEvent::Stop {
         if session.last_bg_task_pending {
             tracing::info!(
-                event = "auto_compact.skipped",
+                event = "cc.auto_compact.skipped",
                 session = %session.session_id,
                 reason = "bg_task_pending",
             );
@@ -348,7 +348,7 @@ fn process_hook_event_impl(
                 auto_compact::spawn_in_background(&session.session_id);
             } else {
                 tracing::info!(
-                    event = "auto_compact.skipped",
+                    event = "cc.auto_compact.skipped",
                     session = %session.session_id,
                     reason = "disabled",
                 );
