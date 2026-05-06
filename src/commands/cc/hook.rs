@@ -21,6 +21,7 @@ use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{self, Config, Terminal};
 use crate::shared::env_var::EnvVars;
+use crate::shared::log::short_run_id;
 
 /// Delay between retries when waiting for transcript to be updated.
 const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -42,6 +43,10 @@ pub fn run(args: &HookArgs) -> Result<()> {
     if EnvVars::load().skip_hooks {
         return Ok(());
     }
+
+    let run_id = short_run_id();
+    let span = tracing::info_span!("hook", run_id = %run_id, event = %args.event);
+    let _entered = span.enter();
 
     // Read raw stdin first for debug logging
     let raw_stdin = read_raw_stdin()?;
@@ -330,9 +335,10 @@ fn process_hook_event_impl(
     // is consumed (cleared) here so the *next* genuine Stop is honored.
     if side_effects.auto_compact && event == HookEvent::Stop {
         if session.last_bg_task_pending {
-            eprintln!(
-                "[armyknife] cc auto-compact: skipping session {} (bg task pending)",
-                session.session_id,
+            tracing::info!(
+                event = "auto_compact.skipped",
+                session = %session.session_id,
+                reason = "bg_task_pending",
             );
             session.last_bg_task_pending = false;
             store::save_session_to(sessions_dir, &session)?;
@@ -340,6 +346,12 @@ fn process_hook_event_impl(
             let config = config::load_config().unwrap_or_default();
             if config.cc.auto_compact.enabled {
                 auto_compact::spawn_in_background(&session.session_id);
+            } else {
+                tracing::info!(
+                    event = "auto_compact.skipped",
+                    session = %session.session_id,
+                    reason = "disabled",
+                );
             }
         }
     }

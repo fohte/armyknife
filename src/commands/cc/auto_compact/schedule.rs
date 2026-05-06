@@ -31,6 +31,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Args;
+use tracing::Instrument;
 
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::cc::auto_pause;
@@ -43,6 +44,7 @@ use crate::infra::git::{MergeStatus, get_merge_status_for_repo, open_repo_at};
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
 use crate::shared::config;
+use crate::shared::log::short_run_id;
 
 /// Pane option name where the currently-sleeping schedule worker records its
 /// pid so that the next Stop hook can cancel it.
@@ -67,10 +69,16 @@ pub fn spawn_in_background(session_id: &str) {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[armyknife] cc auto-compact: cannot resolve current exe: {e}");
+            tracing::warn!(
+                event = "auto_compact.spawn_failed",
+                session = session_id,
+                reason = "current_exe",
+                error = %e,
+            );
             return;
         }
     };
+    tracing::info!(event = "auto_compact.spawn", session = session_id,);
     let result = process::spawn_detached(
         exe,
         ["cc", "auto-compact", "schedule", "--session", session_id],
@@ -78,15 +86,35 @@ pub fn spawn_in_background(session_id: &str) {
         &[],
     );
     if let Err(e) = result {
-        eprintln!("[armyknife] cc auto-compact: failed to spawn schedule worker: {e}");
+        tracing::warn!(
+            event = "auto_compact.spawn_failed",
+            session = session_id,
+            reason = "spawn_detached",
+            error = %e,
+        );
     }
 }
 
 pub async fn run(args: &ScheduleArgs) -> Result<()> {
+    let run_id = short_run_id();
+    let span = tracing::info_span!("schedule", run_id = %run_id, session = %args.session);
+    run_inner(args).instrument(span).await
+}
+
+async fn run_inner(args: &ScheduleArgs) -> Result<()> {
+    tracing::info!(
+        event = "schedule.start",
+        session = %args.session,
+    );
     let cfg = config::load_config().unwrap_or_default();
     if !cfg.cc.auto_compact.enabled {
         // Hook may still spawn us if config was edited mid-flight; bail out
         // so we don't waste a sleep.
+        tracing::info!(
+            event = "schedule.exit",
+            session = %args.session,
+            reason = "disabled",
+        );
         return Ok(());
     }
 
@@ -101,9 +129,10 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     let session = match store::load_session(&args.session)? {
         Some(s) => s,
         None => {
-            eprintln!(
-                "[armyknife] cc auto-compact: session {} not found, exiting",
-                args.session
+            tracing::info!(
+                event = "schedule.exit",
+                session = %args.session,
+                reason = "session_missing_at_arm",
             );
             return Ok(());
         }
@@ -125,6 +154,15 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     // frames as long as the user isn't typing.
     let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
 
+    tracing::info!(
+        event = "schedule.armed",
+        session = %session.session_id,
+        pane_id = pane_id.as_deref().unwrap_or(""),
+        idle_timeout_secs = idle_timeout.as_secs(),
+        status = ?session.status,
+        arm_input_present = arm_input.is_some(),
+    );
+
     tokio::time::sleep(idle_timeout).await;
 
     // Re-check the pane option: a later Stop hook may have replaced our pid
@@ -134,6 +172,11 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     if let Some(ref pane_id) = pane_id
         && !is_current_timer(pane_id)
     {
+        tracing::info!(
+            event = "schedule.exit",
+            session = %args.session,
+            reason = "preempted",
+        );
         return Ok(());
     }
 
@@ -141,13 +184,30 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
     // sweep paused it, …) while we slept.
     let session = match store::load_session(&args.session)? {
         Some(s) => s,
-        None => return Ok(()),
+        None => {
+            tracing::info!(
+                event = "schedule.exit",
+                session = %args.session,
+                reason = "session_missing_at_wake",
+            );
+            return Ok(());
+        }
     };
 
     let wake_input = wake_input_for(&session);
     let branch_merged = branch_merged_for(&session).await;
     let context_tokens =
         claude_sessions::get_last_context_tokens(&session.cwd, &session.session_id);
+
+    tracing::info!(
+        event = "schedule.inputs",
+        session = %session.session_id,
+        status = ?session.status,
+        wake_input_present = wake_input.is_some(),
+        branch_merged = ?branch_merged,
+        context_tokens = ?context_tokens,
+        min_context_tokens = cfg.cc.auto_compact.min_context_tokens,
+    );
 
     let decision = decide_compact(CompactInputs {
         session: &session,
@@ -160,28 +220,14 @@ pub async fn run(args: &ScheduleArgs) -> Result<()> {
         min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
     });
 
-    match decision {
-        CompactDecision::Compact => execute_compaction(&session, &LibcSignalSender).await?,
-        // BelowThreshold gets a verbose log because it is the only decision
-        // that is the result of a comparison: tuning `min_context_tokens` is
-        // impossible without seeing both sides of it. The other variants are
-        // observable from their name alone.
-        CompactDecision::BelowThreshold => {
-            eprintln!(
-                "[armyknife] cc auto-compact: skipping session {} (BelowThreshold: tokens={}, min={})",
-                session.session_id,
-                context_tokens
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                cfg.cc.auto_compact.min_context_tokens,
-            );
-        }
-        other => {
-            eprintln!(
-                "[armyknife] cc auto-compact: skipping session {} ({:?})",
-                session.session_id, other,
-            );
-        }
+    tracing::info!(
+        event = "schedule.decision",
+        session = %session.session_id,
+        decision = ?decision,
+    );
+
+    if decision == CompactDecision::Compact {
+        execute_compaction(&session, &LibcSignalSender).await?;
     }
     Ok(())
 }
@@ -205,10 +251,27 @@ fn cancel_previous_timer<S: SignalSender>(pane_id: &str, sender: &S) {
         // pid number is much worse than missing a cancellation.
         return;
     }
-    if let Err(e) = sender.send(target, libc::SIGTERM)
-        && e.raw_os_error() != Some(libc::ESRCH)
-    {
-        eprintln!("[armyknife] cc auto-compact: failed to cancel prior timer pid {target}: {e}");
+    match sender.send(target, libc::SIGTERM) {
+        Ok(()) => {
+            tracing::info!(event = "schedule.cancelled_prev", target_pid = target);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+            // Prior worker was already gone — likely self-exited. Recording
+            // this as a separate flag rather than a `cancel_prev_failed`
+            // because nothing actually failed; we just had no one to signal.
+            tracing::info!(
+                event = "schedule.cancelled_prev",
+                target_pid = target,
+                already_gone = true,
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                event = "schedule.cancel_prev_failed",
+                target_pid = target,
+                error = %e,
+            );
+        }
     }
 }
 
@@ -283,9 +346,11 @@ async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> R
         if let Err(e) = sender.send(pid, libc::SIGTERM)
             && e.raw_os_error() != Some(libc::ESRCH)
         {
-            eprintln!(
-                "[armyknife] cc auto-compact: failed to SIGTERM pid {pid} for session {}: {e}",
-                session.session_id,
+            tracing::warn!(
+                event = "schedule.sigterm_failed",
+                session = %session.session_id,
+                target_pid = pid,
+                error = %e,
             );
         }
         // SIGTERM is asynchronous; give claude a beat to finish flushing
@@ -296,6 +361,10 @@ async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> R
 
     spawn_compact_resume(session)?;
     mark_paused(session)?;
+    tracing::info!(
+        event = "schedule.compact_executed",
+        session = %session.session_id,
+    );
     Ok(())
 }
 
@@ -317,9 +386,10 @@ fn spawn_compact_resume(session: &Session) -> Result<()> {
         &[("ARMYKNIFE_SKIP_HOOKS", "1")],
     );
     if let Err(e) = result {
-        eprintln!(
-            "[armyknife] cc auto-compact: failed to spawn `claude -r -p /compact` for {}: {e}",
-            session.session_id,
+        tracing::warn!(
+            event = "schedule.compact_spawn_failed",
+            session = %session.session_id,
+            error = %e,
         );
         return Err(e).context("spawn claude -r");
     }
