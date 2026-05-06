@@ -11,6 +11,7 @@ use shared::update;
 
 #[tokio::main]
 async fn main() {
+    shared::log::init();
     if let Err(e) = run().await {
         eprintln!("Error: {e:?}");
         std::process::exit(1);
