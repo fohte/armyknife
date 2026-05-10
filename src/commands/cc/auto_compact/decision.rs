@@ -59,6 +59,13 @@ pub enum CompactDecision {
 pub struct CompactInputs<'a> {
     pub session: &'a Session,
     pub now: DateTime<Utc>,
+    /// Wall-clock time captured by the schedule worker right before it went
+    /// to sleep for `idle_timeout`. The elapsed-time gate is measured from
+    /// this point, *not* from `session.updated_at`, because hooks unrelated
+    /// to user activity (notably `Notification(idle_prompt)` fired by Claude
+    /// Code itself when the user idles) bump `updated_at` forward during the
+    /// sleep and would otherwise reset the timer indefinitely.
+    pub armed_at: DateTime<Utc>,
     pub idle_timeout: Duration,
     /// Text inside the Claude Code TUI input box, captured at arm time
     /// (Stop hook fired) and again at wake time (idle_timeout elapsed).
@@ -104,7 +111,7 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::UserTyping;
     }
 
-    let elapsed = inputs.now.signed_duration_since(inputs.session.updated_at);
+    let elapsed = inputs.now.signed_duration_since(inputs.armed_at);
     let Ok(elapsed_std) = elapsed.to_std() else {
         return CompactDecision::NotYetElapsed;
     };
@@ -158,6 +165,11 @@ mod tests {
         CompactInputs {
             session,
             now,
+            // Default armed_at to session.updated_at so the bulk of the suite
+            // (which encodes "Stop hook fired N seconds ago" by setting
+            // updated_at) keeps working unchanged. The dedicated armed_at
+            // tests override this field directly.
+            armed_at: session.updated_at,
             idle_timeout,
             arm_input: None,
             wake_input: None,
@@ -278,10 +290,39 @@ mod tests {
     #[rstest]
     fn clock_skew_is_not_yet_elapsed() {
         let now = Utc::now();
-        // updated_at in the future (NTP just stepped backwards on this box).
-        let session = stopped_session(now + TimeDelta::seconds(60));
-        let decision = decide_compact(inputs(&session, now, Duration::from_secs(10)));
+        // armed_at recorded as 60s in the future relative to wake-time `now`
+        // (NTP stepped backwards between sleep entry and wake). Negative
+        // elapsed must not be silently treated as "long enough".
+        let session = stopped_session(now);
+        let decision = decide_compact(CompactInputs {
+            armed_at: now + TimeDelta::seconds(60),
+            ..inputs(&session, now, Duration::from_secs(10))
+        });
         assert_eq!(decision, CompactDecision::NotYetElapsed);
+    }
+
+    #[rstest]
+    #[case::updated_at_advanced_after_armed(
+        // Stop hook armed 300s ago and the worker has just woken from a 270s
+        // sleep, but Claude Code fired a Notification(idle_prompt) hook
+        // partway through, which bumps session.updated_at without changing
+        // status. The elapsed gate must measure against armed_at, not
+        // updated_at, otherwise auto-compact never fires for a session that
+        // was idle long enough to deserve compaction.
+        300, 30, 270
+    )]
+    fn elapsed_uses_armed_at_not_updated_at(
+        #[case] armed_secs_ago: i64,
+        #[case] updated_secs_ago: i64,
+        #[case] timeout_secs: u64,
+    ) {
+        let now = Utc::now();
+        let session = stopped_session(now - TimeDelta::seconds(updated_secs_ago));
+        let decision = decide_compact(CompactInputs {
+            armed_at: now - TimeDelta::seconds(armed_secs_ago),
+            ..inputs(&session, now, Duration::from_secs(timeout_secs))
+        });
+        assert_eq!(decision, CompactDecision::Compact);
     }
 
     #[rstest]

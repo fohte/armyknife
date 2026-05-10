@@ -155,6 +155,13 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
     // frames as long as the user isn't typing.
     let arm_input = pane_id.as_deref().and_then(pane_input::get_pane_input_text);
 
+    // Anchor the elapsed-time gate to wall-clock time captured here, not to
+    // session.updated_at. Hook events unrelated to user activity (notably
+    // Notification(idle_prompt), which Claude Code fires internally when the
+    // user idles) bump updated_at during the sleep, and using that as the
+    // basis would prevent the timer from ever firing on idle sessions.
+    let armed_at = Utc::now();
+
     tracing::info!(
         event = "cc.auto_compact.schedule.armed",
         session = %session.session_id,
@@ -162,6 +169,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         idle_timeout_secs = idle_timeout.as_secs(),
         status = ?session.status,
         arm_input_present = arm_input.is_some(),
+        armed_at = %armed_at,
     );
 
     tokio::time::sleep(idle_timeout).await;
@@ -213,6 +221,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
     let decision = decide_compact(CompactInputs {
         session: &session,
         now: Utc::now(),
+        armed_at,
         idle_timeout,
         arm_input,
         wake_input,
