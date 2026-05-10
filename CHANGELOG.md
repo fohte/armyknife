@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.168](https://github.com/fohte/armyknife/compare/v0.1.167...v0.1.168) (2026-05-10)
+
+
+### Bug Fixes
+
+* **cc/auto-compact:** anchor the elapsed gate to armed_at ([#536](https://github.com/fohte/armyknife/issues/536)) ([f97eba7](https://github.com/fohte/armyknife/commit/f97eba73ad158aeae394ad3f28a6a8b27663235a))
+
 ## [0.1.167](https://github.com/fohte/armyknife/compare/v0.1.166...v0.1.167) (2026-05-06)
 
 
