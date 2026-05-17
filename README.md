@@ -311,6 +311,7 @@ Claude Code session monitoring with tmux integration.
 | `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
+| `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
 
 #### Setup
 
@@ -438,6 +439,16 @@ cc:
 The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Claude Code subscriptions; tune it up (e.g. `idle_timeout: 55m`) if your Anthropic API account uses the 1-hour cache.
 
 `min_context_tokens` is measured against the actual prompt size of the latest assistant turn (input + cache_read + cache_creation + output), so it tracks effective context use independent of which model context window (200k vs 1M) is in play.
+
+#### Window status
+
+`a cc window-status <window_id>` prints the colored status symbols (`●` running, `◐` waiting for input, `○` stopped, `⏸` paused) of every Claude Code session running in the panes of the given tmux window. Symbols are concatenated without a separator, so a window with several sessions shows each state individually.
+
+Embed it in tmux's `window-status-format` to surface per-window session state next to the window name:
+
+```tmux
+set -g window-status-format '#(a cc window-status #{window_id})#I:#W'
+```
 
 #### Environment Variables
 

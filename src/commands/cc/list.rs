@@ -6,7 +6,7 @@ use clap::Args;
 
 use super::claude_sessions;
 use super::store;
-use super::types::{Session, SessionStatus};
+use super::types::{Session, SessionStatus, StatusColor};
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -198,13 +198,13 @@ fn format_status(status: SessionStatus) -> String {
     let name = status.display_name();
 
     // Apply padding inside ANSI codes to avoid column misalignment
-    let (col, reset) = match status {
-        SessionStatus::Running => (color::GREEN, color::RESET),
-        SessionStatus::WaitingInput => (color::YELLOW, color::RESET),
-        SessionStatus::Paused => (color::DIM, color::RESET),
-        SessionStatus::Stopped | SessionStatus::Ended => (color::GRAY, color::RESET),
+    let col = match status.color() {
+        StatusColor::Green => color::GREEN,
+        StatusColor::Yellow => color::YELLOW,
+        StatusColor::Gray => color::GRAY,
+        StatusColor::Dim => color::DIM,
     };
-    format!("{col}{name:<8}{reset}")
+    format!("{col}{name:<8}{}", color::RESET)
 }
 
 /// Formats a datetime as a relative time string from a given reference time.
