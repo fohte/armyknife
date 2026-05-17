@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.169](https://github.com/fohte/armyknife/compare/v0.1.168...v0.1.169) (2026-05-17)
+
+
+### Features
+
+* **cc:** add window-status command for per-window session state ([#538](https://github.com/fohte/armyknife/issues/538)) ([cb411bf](https://github.com/fohte/armyknife/commit/cb411bf3ed2d7d318017110ca84cfc9bf9fb4b1b))
+
 ## [0.1.168](https://github.com/fohte/armyknife/compare/v0.1.167...v0.1.168) (2026-05-10)
 
 
