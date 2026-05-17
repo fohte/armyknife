@@ -386,13 +386,22 @@ pub fn list_all_pane_ids() -> Result<std::collections::HashSet<String>> {
     Ok(output.lines().map(|s| s.to_string()).collect())
 }
 
-/// Lists the pane IDs within a single window, in pane order.
+/// Lists the value of `option` for every pane in `window_id`, in pane order.
 ///
-/// Returns an empty vec if the window ID is invalid, tmux is unavailable,
-/// or the command fails, so callers can treat "no panes" uniformly.
-pub fn list_window_pane_ids(window_id: &str) -> Vec<String> {
-    match run_tmux_output(&["list-panes", "-t", window_id, "-F", "#{pane_id}"]) {
-        Ok(output) => output.lines().map(|s| s.to_string()).collect(),
+/// Panes where the option is unset (empty value) are omitted, so the result
+/// contains only panes that carry the option. The option name should include
+/// the '@' prefix (e.g. "@armyknife-last-claude-code-session-id").
+///
+/// Returns an empty vec if the window ID is invalid, tmux is unavailable, or
+/// the command fails, so callers can treat "no panes" uniformly.
+pub fn list_window_pane_options(window_id: &str, option: &str) -> Vec<String> {
+    let format = format!("#{{{option}}}");
+    match run_tmux_output(&["list-panes", "-t", window_id, "-F", &format]) {
+        Ok(output) => output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|s| s.to_string())
+            .collect(),
         Err(_) => Vec::new(),
     }
 }

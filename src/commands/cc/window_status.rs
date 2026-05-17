@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::Args;
 
 use super::store;
-use super::types::{Session, SessionStatus};
+use super::types::{Session, SessionStatus, StatusColor, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -18,44 +19,45 @@ pub struct WindowStatusArgs {
 /// Prints the colored status symbols of every Claude Code session running in
 /// the panes of the given tmux window, intended to be embedded in tmux's
 /// `window-status-format` via `#(a cc window-status #{window_id})`.
+///
+/// Only the sessions of the target window's panes are loaded — resolved via
+/// each pane's session-id option — so the cost stays O(panes in window)
+/// rather than O(all sessions on disk), since this runs on every redraw.
 pub fn run(args: &WindowStatusArgs) -> Result<()> {
-    let pane_ids = tmux::list_window_pane_ids(&args.window_id);
-    if pane_ids.is_empty() {
-        return Ok(());
+    let session_ids = tmux::list_window_pane_options(&args.window_id, TMUX_SESSION_OPTION);
+
+    // Two panes can carry the same session id (e.g. a split pane keeps the
+    // option), which would otherwise render the session's symbol twice.
+    let mut seen = HashSet::new();
+    let mut sessions = Vec::with_capacity(session_ids.len());
+    for session_id in &session_ids {
+        if !seen.insert(session_id.as_str()) {
+            continue;
+        }
+        if let Some(session) = store::load_session(session_id)? {
+            sessions.push(session);
+        }
     }
 
-    let sessions = store::list_sessions()?;
-
     let mut stdout = io::stdout().lock();
-    render_window_status(&mut stdout, &sessions, &pane_ids)?;
+    render_window_status(&mut stdout, &sessions)?;
 
     Ok(())
 }
 
-/// Renders the status symbols for a window's panes to the given writer.
+/// Renders the status symbols for a window's sessions to the given writer.
 ///
-/// For each pane (in pane order), every Claude Code session whose pane matches
-/// contributes one colored symbol. Symbols are concatenated without a
-/// separator and, when at least one symbol is emitted, a trailing space is
-/// added so the result reads cleanly when prepended to a window name.
+/// Each session contributes one colored symbol, in the given order, with no
+/// separator. When at least one symbol is emitted, a trailing space is added
+/// so the result reads cleanly when prepended to a window name.
 ///
 /// Separated from `run()` so the rendering logic can be tested without tmux.
-fn render_window_status<W: Write>(
-    writer: &mut W,
-    sessions: &[Session],
-    pane_ids: &[String],
-) -> Result<()> {
+fn render_window_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
     let mut symbols = String::new();
 
-    for pane_id in pane_ids {
-        for session in sessions {
-            let in_pane = session
-                .tmux_info
-                .as_ref()
-                .is_some_and(|info| info.pane_id == *pane_id);
-            if in_pane && let Some(symbol) = format_window_symbol(session.status) {
-                symbols.push_str(&symbol);
-            }
+    for session in sessions {
+        if let Some(symbol) = format_window_symbol(session.status) {
+            symbols.push_str(&symbol);
         }
     }
 
@@ -71,15 +73,17 @@ fn render_window_status<W: Write>(
 /// Returns `None` only for `Ended` sessions (Claude Code fully exited).
 /// `Stopped` and `Paused` are still shown: their panes are alive and the
 /// conversation is resumable, which is exactly what the window indicator is
-/// for. Colors follow the same scheme as `list::format_status`: running is
-/// green, waiting-input is yellow, stopped is gray, paused is dim.
+/// for. Colors come from `SessionStatus::color`, shared with the `cc list`
+/// table renderer.
 fn format_window_symbol(status: SessionStatus) -> Option<String> {
-    let style = match status {
-        SessionStatus::Running => "#[fg=green]",
-        SessionStatus::WaitingInput => "#[fg=yellow]",
-        SessionStatus::Stopped => "#[fg=brightblack]",
-        SessionStatus::Paused => "#[dim]",
-        SessionStatus::Ended => return None,
+    if status == SessionStatus::Ended {
+        return None;
+    }
+    let style = match status.color() {
+        StatusColor::Green => "#[fg=green]",
+        StatusColor::Yellow => "#[fg=yellow]",
+        StatusColor::Gray => "#[fg=brightblack]",
+        StatusColor::Dim => "#[dim]",
     };
     Some(format!("{style}{}#[default]", status.display_symbol()))
 }
@@ -87,23 +91,17 @@ fn format_window_symbol(status: SessionStatus) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::cc::types::TmuxInfo;
     use chrono::Utc;
     use rstest::rstest;
     use std::path::PathBuf;
 
-    fn session_in_pane(status: SessionStatus, pane_id: Option<&str>) -> Session {
+    fn session(status: SessionStatus) -> Session {
         Session {
             session_id: "test-123".to_string(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,
-            tmux_info: pane_id.map(|id| TmuxInfo {
-                session_name: "work".to_string(),
-                window_name: "editor".to_string(),
-                window_index: 0,
-                pane_id: id.to_string(),
-            }),
+            tmux_info: None,
             status,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -115,10 +113,10 @@ mod tests {
         }
     }
 
-    fn render(sessions: &[Session], pane_ids: &[&str]) -> String {
-        let pane_ids: Vec<String> = pane_ids.iter().map(|s| s.to_string()).collect();
+    fn render(statuses: &[SessionStatus]) -> String {
+        let sessions: Vec<Session> = statuses.iter().copied().map(session).collect();
         let mut output = Vec::new();
-        render_window_status(&mut output, sessions, &pane_ids).expect("render should succeed");
+        render_window_status(&mut output, &sessions).expect("render should succeed");
         String::from_utf8(output).expect("valid utf8")
     }
 
@@ -132,86 +130,20 @@ mod tests {
         assert_eq!(format_window_symbol(status).as_deref(), expected);
     }
 
-    #[test]
-    fn test_render_no_panes() {
-        let sessions = vec![session_in_pane(SessionStatus::Running, Some("%0"))];
-        assert_eq!(render(&sessions, &[]), "");
-    }
-
-    #[test]
-    fn test_render_no_matching_session() {
-        // Session lives in a pane outside this window.
-        let sessions = vec![session_in_pane(SessionStatus::Running, Some("%9"))];
-        assert_eq!(render(&sessions, &["%0", "%1"]), "");
-    }
-
-    #[test]
-    fn test_render_session_without_tmux_info() {
-        let sessions = vec![session_in_pane(SessionStatus::Running, None)];
-        assert_eq!(render(&sessions, &["%0"]), "");
-    }
-
-    #[test]
-    fn test_render_single_session_has_trailing_space() {
-        let sessions = vec![session_in_pane(SessionStatus::Running, Some("%0"))];
-        assert_eq!(render(&sessions, &["%0"]), "#[fg=green]\u{25cf}#[default] ");
-    }
-
-    #[test]
-    fn test_render_multiple_sessions_in_one_window_concatenated() {
-        // running / waiting / stopped sessions across the window's panes are
-        // emitted individually, in pane order, with no separator.
-        let sessions = vec![
-            session_in_pane(SessionStatus::Running, Some("%0")),
-            session_in_pane(SessionStatus::WaitingInput, Some("%1")),
-            session_in_pane(SessionStatus::Stopped, Some("%2")),
-        ];
-        assert_eq!(
-            render(&sessions, &["%0", "%1", "%2"]),
-            "#[fg=green]\u{25cf}#[default]#[fg=yellow]\u{25d0}#[default]#[fg=brightblack]\u{25cb}#[default] "
-        );
-    }
-
-    #[test]
-    fn test_render_multiple_sessions_in_same_pane() {
-        let sessions = vec![
-            session_in_pane(SessionStatus::Running, Some("%0")),
-            session_in_pane(SessionStatus::WaitingInput, Some("%0")),
-        ];
-        assert_eq!(
-            render(&sessions, &["%0"]),
-            "#[fg=green]\u{25cf}#[default]#[fg=yellow]\u{25d0}#[default] "
-        );
-    }
-
-    #[test]
-    fn test_render_follows_pane_order() {
-        let sessions = vec![
-            session_in_pane(SessionStatus::Stopped, Some("%2")),
-            session_in_pane(SessionStatus::Running, Some("%0")),
-        ];
-        // Output order tracks the pane_ids slice, not the sessions slice.
-        assert_eq!(
-            render(&sessions, &["%0", "%2"]),
-            "#[fg=green]\u{25cf}#[default]#[fg=brightblack]\u{25cb}#[default] "
-        );
-    }
-
-    #[test]
-    fn test_render_skips_ended_sessions() {
-        let sessions = vec![
-            session_in_pane(SessionStatus::Ended, Some("%0")),
-            session_in_pane(SessionStatus::Running, Some("%1")),
-        ];
-        assert_eq!(
-            render(&sessions, &["%0", "%1"]),
-            "#[fg=green]\u{25cf}#[default] "
-        );
-    }
-
-    #[test]
-    fn test_render_only_ended_session_emits_nothing() {
-        let sessions = vec![session_in_pane(SessionStatus::Ended, Some("%0"))];
-        assert_eq!(render(&sessions, &["%0"]), "");
+    #[rstest]
+    #[case::empty(&[], "")]
+    #[case::single_running(&[SessionStatus::Running], "#[fg=green]\u{25cf}#[default] ")]
+    #[case::paused(&[SessionStatus::Paused], "#[dim]\u{23f8}#[default] ")]
+    #[case::running_waiting_stopped(
+        &[SessionStatus::Running, SessionStatus::WaitingInput, SessionStatus::Stopped],
+        "#[fg=green]\u{25cf}#[default]#[fg=yellow]\u{25d0}#[default]#[fg=brightblack]\u{25cb}#[default] "
+    )]
+    #[case::skips_ended(
+        &[SessionStatus::Ended, SessionStatus::Running],
+        "#[fg=green]\u{25cf}#[default] "
+    )]
+    #[case::only_ended(&[SessionStatus::Ended], "")]
+    fn test_render_window_status(#[case] statuses: &[SessionStatus], #[case] expected: &str) {
+        assert_eq!(render(statuses), expected);
     }
 }

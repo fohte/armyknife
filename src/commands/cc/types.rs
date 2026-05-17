@@ -67,6 +67,19 @@ pub enum SessionStatus {
     Ended,
 }
 
+/// Semantic color of a session status, independent of the output medium.
+///
+/// Each renderer maps this to its own medium (ANSI escapes for the terminal
+/// table, tmux style markup for the status bar), so the status-to-color
+/// decision lives in one place and cannot drift between renderers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusColor {
+    Green,
+    Yellow,
+    Gray,
+    Dim,
+}
+
 impl SessionStatus {
     pub fn display_symbol(&self) -> &'static str {
         match self {
@@ -84,6 +97,15 @@ impl SessionStatus {
             Self::Stopped => "stopped",
             Self::Paused => "paused",
             Self::Ended => "ended",
+        }
+    }
+
+    pub fn color(&self) -> StatusColor {
+        match self {
+            Self::Running => StatusColor::Green,
+            Self::WaitingInput => StatusColor::Yellow,
+            Self::Paused => StatusColor::Dim,
+            Self::Stopped | Self::Ended => StatusColor::Gray,
         }
     }
 }
