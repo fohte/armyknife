@@ -386,6 +386,17 @@ pub fn list_all_pane_ids() -> Result<std::collections::HashSet<String>> {
     Ok(output.lines().map(|s| s.to_string()).collect())
 }
 
+/// Lists the pane IDs within a single window, in pane order.
+///
+/// Returns an empty vec if the window ID is invalid, tmux is unavailable,
+/// or the command fails, so callers can treat "no panes" uniformly.
+pub fn list_window_pane_ids(window_id: &str) -> Vec<String> {
+    match run_tmux_output(&["list-panes", "-t", window_id, "-F", "#{pane_id}"]) {
+        Ok(output) => output.lines().map(|s| s.to_string()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Information about a tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {

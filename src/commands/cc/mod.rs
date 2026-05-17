@@ -14,6 +14,7 @@ mod sweep;
 mod tui;
 pub(crate) mod types;
 mod watch;
+mod window_status;
 
 use clap::Subcommand;
 
@@ -25,6 +26,7 @@ pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
 pub use watch::WatchArgs;
+pub use window_status::WindowStatusArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CcCommands {
@@ -55,6 +57,10 @@ pub enum CcCommands {
     /// Schedule a `/compact` for an idle session while the prompt cache is warm.
     #[command(name = "auto-compact")]
     AutoCompact(AutoCompactArgs),
+
+    /// Print status symbols for the Claude Code sessions in a tmux window
+    #[command(name = "window-status")]
+    WindowStatus(WindowStatusArgs),
 }
 
 impl CcCommands {
@@ -68,6 +74,7 @@ impl CcCommands {
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
+            Self::WindowStatus(args) => window_status::run(args)?,
         }
         Ok(())
     }
