@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Args;
 
 use super::store;
-use super::types::{Session, SessionStatus, StatusColor, TMUX_SESSION_OPTION};
+use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -16,8 +16,8 @@ pub struct WindowStatusArgs {
 
 /// Runs the window-status command.
 ///
-/// Prints the colored status symbols of every Claude Code session running in
-/// the panes of the given tmux window, intended to be embedded in tmux's
+/// Prints the status symbols of every Claude Code session running in the
+/// panes of the given tmux window, intended to be embedded in tmux's
 /// `window-status-format` via `#(a cc window-status #{window_id})`.
 ///
 /// Only the sessions of the target window's panes are loaded — resolved via
@@ -57,7 +57,7 @@ fn render_window_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Resul
 
     for session in sessions {
         if let Some(symbol) = format_window_symbol(session.status) {
-            symbols.push_str(&symbol);
+            symbols.push_str(symbol);
         }
     }
 
@@ -68,24 +68,23 @@ fn render_window_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Resul
     Ok(())
 }
 
-/// Formats a single status symbol with tmux style markup.
+/// Formats a single status symbol for embedding in tmux's window-status.
 ///
 /// Returns `None` only for `Ended` sessions (Claude Code fully exited).
 /// `Stopped` and `Paused` are still shown: their panes are alive and the
 /// conversation is resumable, which is exactly what the window indicator is
-/// for. Colors come from `SessionStatus::color`, shared with the `cc list`
-/// table renderer.
-fn format_window_symbol(status: SessionStatus) -> Option<String> {
+/// for.
+///
+/// No tmux style markup is emitted. A foreground color here would visually
+/// become a *background* color whenever the surrounding context has the
+/// `reverse` attribute (a common idiom for `window-status-activity-style`),
+/// painting the icon's cell with a color block that breaks out of the rest
+/// of the tab. Shape alone (●/◐/○/⏸) carries the status well enough.
+fn format_window_symbol(status: SessionStatus) -> Option<&'static str> {
     if status == SessionStatus::Ended {
         return None;
     }
-    let style = match status.color() {
-        StatusColor::Green => "#[fg=green]",
-        StatusColor::Yellow => "#[fg=yellow]",
-        StatusColor::Gray => "#[fg=brightblack]",
-        StatusColor::Dim => "#[dim]",
-    };
-    Some(format!("{style}{}#[default]", status.display_symbol()))
+    Some(status.display_symbol())
 }
 
 #[cfg(test)]
@@ -121,26 +120,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, Some("#[fg=green]\u{25cf}#[default]"))]
-    #[case::waiting(SessionStatus::WaitingInput, Some("#[fg=yellow]\u{25d0}#[default]"))]
-    #[case::stopped(SessionStatus::Stopped, Some("#[fg=brightblack]\u{25cb}#[default]"))]
-    #[case::paused(SessionStatus::Paused, Some("#[dim]\u{23f8}#[default]"))]
+    #[case::running(SessionStatus::Running, Some("\u{25cf}"))]
+    #[case::waiting(SessionStatus::WaitingInput, Some("\u{25d0}"))]
+    #[case::stopped(SessionStatus::Stopped, Some("\u{25cb}"))]
+    #[case::paused(SessionStatus::Paused, Some("\u{23f8}"))]
     #[case::ended(SessionStatus::Ended, None)]
     fn test_format_window_symbol(#[case] status: SessionStatus, #[case] expected: Option<&str>) {
-        assert_eq!(format_window_symbol(status).as_deref(), expected);
+        assert_eq!(format_window_symbol(status), expected);
     }
 
     #[rstest]
     #[case::empty(&[], "")]
-    #[case::single_running(&[SessionStatus::Running], "#[fg=green]\u{25cf}#[default] ")]
-    #[case::paused(&[SessionStatus::Paused], "#[dim]\u{23f8}#[default] ")]
+    #[case::single_running(&[SessionStatus::Running], "\u{25cf} ")]
+    #[case::paused(&[SessionStatus::Paused], "\u{23f8} ")]
     #[case::running_waiting_stopped(
         &[SessionStatus::Running, SessionStatus::WaitingInput, SessionStatus::Stopped],
-        "#[fg=green]\u{25cf}#[default]#[fg=yellow]\u{25d0}#[default]#[fg=brightblack]\u{25cb}#[default] "
+        "\u{25cf}\u{25d0}\u{25cb} "
     )]
     #[case::skips_ended(
         &[SessionStatus::Ended, SessionStatus::Running],
-        "#[fg=green]\u{25cf}#[default] "
+        "\u{25cf} "
     )]
     #[case::only_ended(&[SessionStatus::Ended], "")]
     fn test_render_window_status(#[case] statuses: &[SessionStatus], #[case] expected: &str) {
