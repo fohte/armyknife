@@ -16,8 +16,8 @@ pub struct WindowStatusArgs {
 
 /// Runs the window-status command.
 ///
-/// Prints the colored status symbols of every Claude Code session running in
-/// the panes of the given tmux window, intended to be embedded in tmux's
+/// Prints the status symbols of every Claude Code session running in the
+/// panes of the given tmux window, intended to be embedded in tmux's
 /// `window-status-format` via `#(a cc window-status #{window_id})`.
 ///
 /// Only the sessions of the target window's panes are loaded — resolved via

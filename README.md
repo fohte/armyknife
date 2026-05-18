@@ -442,7 +442,7 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 #### Window status
 
-`a cc window-status <window_id>` prints the colored status symbols (`●` running, `◐` waiting for input, `○` stopped, `⏸` paused) of every Claude Code session running in the panes of the given tmux window. Symbols are concatenated without a separator, so a window with several sessions shows each state individually.
+`a cc window-status <window_id>` prints the status symbols (`●` running, `◐` waiting for input, `○` stopped, `⏸` paused) of every Claude Code session running in the panes of the given tmux window. Symbols are concatenated without a separator, so a window with several sessions shows each state individually. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
 
 Embed it in tmux's `window-status-format` to surface per-window session state next to the window name:
 
