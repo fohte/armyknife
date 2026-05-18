@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.170](https://github.com/fohte/armyknife/compare/v0.1.169...v0.1.170) (2026-05-18)
+
+
+### Bug Fixes
+
+* **cc/window-status:** drop style markup so the icon cell inherits surrounding background ([#540](https://github.com/fohte/armyknife/issues/540)) ([42c7327](https://github.com/fohte/armyknife/commit/42c732732cda64398c6b9d95d3d938b0b9613d6e))
+
 ## [0.1.169](https://github.com/fohte/armyknife/compare/v0.1.168...v0.1.169) (2026-05-17)
 
 
