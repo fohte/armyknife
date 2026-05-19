@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::path::Path;
 
 use anyhow::Result;
 use clap::Args;
 
 use super::store;
-use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION};
+use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_WINDOW_STATUS_OPTION};
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -17,42 +18,72 @@ pub struct WindowStatusArgs {
 /// Runs the window-status command.
 ///
 /// Prints the status symbols of every Claude Code session running in the
-/// panes of the given tmux window, intended to be embedded in tmux's
-/// `window-status-format` via `#(a cc window-status #{window_id})`.
-///
-/// Only the sessions of the target window's panes are loaded — resolved via
-/// each pane's session-id option — so the cost stays O(panes in window)
-/// rather than O(all sessions on disk), since this runs on every redraw.
+/// panes of the given tmux window. The event-driven path writes the same
+/// string to the window's `@cc-window-status` option (see
+/// `sync_window_option`); this command exists for manual inspection and for
+/// a polling-based `window-status-format` that calls `#(a cc window-status)`.
 pub fn run(args: &WindowStatusArgs) -> Result<()> {
-    let session_ids = tmux::list_window_pane_options(&args.window_id, TMUX_SESSION_OPTION);
+    let sessions = load_window_sessions(&args.window_id, &store::sessions_dir()?)?;
 
-    // Two panes can carry the same session id (e.g. a split pane keeps the
-    // option), which would otherwise render the session's symbol twice.
+    let mut stdout = io::stdout().lock();
+    write!(stdout, "{}", render_window_status(&sessions))?;
+
+    Ok(())
+}
+
+/// Recomputes `window_id`'s aggregated Claude Code status symbols and writes
+/// them to the window's `@cc-window-status` user option.
+///
+/// The option write and the status-bar refresh are skipped when the rendered
+/// value matches what tmux already holds, so an event that does not change
+/// the visible status (e.g. running → running) costs no redraw. This is what
+/// turns the per-redraw polling of `#(a cc window-status)` into an
+/// event-driven update fired only by `a cc hook`.
+pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
+    let sessions = load_window_sessions(window_id, sessions_dir)?;
+    let rendered = render_window_status(&sessions);
+
+    let current = tmux::get_window_option(window_id, TMUX_WINDOW_STATUS_OPTION);
+    if !window_status_changed(current.as_deref(), &rendered) {
+        return Ok(());
+    }
+
+    tmux::set_window_option(window_id, TMUX_WINDOW_STATUS_OPTION, &rendered)?;
+    tmux::refresh_status()?;
+
+    Ok(())
+}
+
+/// Loads every distinct Claude Code session running in the panes of `window_id`.
+///
+/// Sessions are resolved via each pane's session-id option, so the cost stays
+/// O(panes in window) rather than O(all sessions on disk). Two panes can carry
+/// the same session id (e.g. a split pane keeps the option), so duplicates are
+/// dropped to avoid rendering a session's symbol twice.
+fn load_window_sessions(window_id: &str, sessions_dir: &Path) -> Result<Vec<Session>> {
+    let session_ids = tmux::list_window_pane_options(window_id, TMUX_SESSION_OPTION);
+
     let mut seen = HashSet::new();
     let mut sessions = Vec::with_capacity(session_ids.len());
     for session_id in &session_ids {
         if !seen.insert(session_id.as_str()) {
             continue;
         }
-        if let Some(session) = store::load_session(session_id)? {
+        if let Some(session) = store::load_session_from(sessions_dir, session_id)? {
             sessions.push(session);
         }
     }
 
-    let mut stdout = io::stdout().lock();
-    render_window_status(&mut stdout, &sessions)?;
-
-    Ok(())
+    Ok(sessions)
 }
 
-/// Renders the status symbols for a window's sessions to the given writer.
+/// Renders the aggregated status symbols for a window's sessions.
 ///
-/// Each session contributes one colored symbol, in the given order, with no
+/// Each session contributes one symbol, in the given order, with no
 /// separator. When at least one symbol is emitted, a trailing space is added
-/// so the result reads cleanly when prepended to a window name.
-///
-/// Separated from `run()` so the rendering logic can be tested without tmux.
-fn render_window_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
+/// so the result reads cleanly when prepended to a window name. Returns an
+/// empty string when no session contributes a symbol.
+fn render_window_status(sessions: &[Session]) -> String {
     let mut symbols = String::new();
 
     for session in sessions {
@@ -61,11 +92,20 @@ fn render_window_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Resul
         }
     }
 
-    if !symbols.is_empty() {
-        write!(writer, "{symbols} ")?;
+    if symbols.is_empty() {
+        String::new()
+    } else {
+        format!("{symbols} ")
     }
+}
 
-    Ok(())
+/// Whether the window option must be rewritten: true when the freshly
+/// rendered value differs from what tmux currently holds.
+///
+/// An unset option (`None`) is treated as an empty string, so a window that
+/// never hosted a Claude Code session does not get a redundant write.
+fn window_status_changed(current: Option<&str>, rendered: &str) -> bool {
+    current.unwrap_or("") != rendered
 }
 
 /// Formats a single status symbol for embedding in tmux's window-status.
@@ -114,9 +154,7 @@ mod tests {
 
     fn render(statuses: &[SessionStatus]) -> String {
         let sessions: Vec<Session> = statuses.iter().copied().map(session).collect();
-        let mut output = Vec::new();
-        render_window_status(&mut output, &sessions).expect("render should succeed");
-        String::from_utf8(output).expect("valid utf8")
+        render_window_status(&sessions)
     }
 
     #[rstest]
@@ -144,5 +182,19 @@ mod tests {
     #[case::only_ended(&[SessionStatus::Ended], "")]
     fn test_render_window_status(#[case] statuses: &[SessionStatus], #[case] expected: &str) {
         assert_eq!(render(statuses), expected);
+    }
+
+    #[rstest]
+    #[case::unset_and_empty(None, "", false)]
+    #[case::unset_and_nonempty(None, "\u{25cf} ", true)]
+    #[case::unchanged(Some("\u{25cf} "), "\u{25cf} ", false)]
+    #[case::status_changed(Some("\u{25cf} "), "\u{25d0} ", true)]
+    #[case::cleared(Some("\u{25cf} "), "", true)]
+    fn test_window_status_changed(
+        #[case] current: Option<&str>,
+        #[case] rendered: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(window_status_changed(current, rendered), expected);
     }
 }

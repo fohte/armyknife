@@ -201,6 +201,23 @@ pub fn current_window_id() -> Option<String> {
     query_tmux_value("#{window_id}")
 }
 
+/// Returns the window ID (e.g. `@3`) of the window containing `pane_id`.
+///
+/// Unlike `current_window_id`, this targets a specific pane, so it resolves
+/// the window of a known pane rather than the caller's own — needed by
+/// detached processes (e.g. an `a cc hook` invocation) that must update the
+/// window of the session that fired the hook.
+///
+/// Returns None if the pane no longer exists or tmux is unavailable.
+pub fn get_window_id_for_pane(pane_id: &str) -> Option<String> {
+    let output = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{window_id}"]).ok()?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
 /// Get the current window ID if the pane is inside the given path.
 pub fn get_window_id_if_in_path(path: &str) -> Option<String> {
     let pane_path = current_pane_path()?;
@@ -348,6 +365,24 @@ pub fn get_current_pane_option(option: &str) -> Option<String> {
 /// options without inheriting a TMUX env var.
 pub fn get_pane_option(pane_id: &str, option: &str) -> Option<String> {
     let output = run_tmux_output(&["show-options", "-p", "-t", pane_id, "-v", option]).ok()?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
+/// Set a user option on a specific tmux window.
+/// User options are prefixed with '@' (e.g. "@cc-window-status").
+/// Targets the window by ID, so it does not require being inside tmux.
+pub fn set_window_option(window_id: &str, option: &str, value: &str) -> Result<()> {
+    run_tmux(&["set-option", "-w", "-t", window_id, option, value])
+}
+
+/// Get a user option value from a specific tmux window.
+/// Returns None if the option is unset, empty, or the command fails.
+pub fn get_window_option(window_id: &str, option: &str) -> Option<String> {
+    let output = run_tmux_output(&["show-options", "-w", "-t", window_id, "-v", option]).ok()?;
     if output.is_empty() {
         None
     } else {
