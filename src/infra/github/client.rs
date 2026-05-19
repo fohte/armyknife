@@ -1,7 +1,5 @@
 //! GitHub API client implementation using reqwest.
 
-#[cfg(not(test))]
-use std::process::Command;
 use std::sync::OnceLock;
 
 use anyhow::Context;
@@ -9,6 +7,8 @@ use indoc::indoc;
 use serde::Deserialize;
 
 use super::error::{GitHubError, Result, api_error_from_response};
+#[cfg(not(test))]
+use crate::shared::command;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -1129,7 +1129,7 @@ fn get_gh_token() -> Result<String> {
 
     #[cfg(not(test))]
     {
-        let output = Command::new("gh")
+        let output = command::new("gh")
             .args(["auth", "token"])
             .output()
             .context("Failed to run gh auth token")?;

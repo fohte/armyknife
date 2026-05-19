@@ -1,17 +1,17 @@
 use std::io::Write;
-use std::process::Command;
 
 use anyhow::Context;
 
 use super::{Backend, check_command_status, extract_first_line};
 use crate::commands::name_branch::error::Result;
+use crate::shared::command;
 
 /// Claude Code backend using `claude --model haiku --print`
 pub struct ClaudeCode;
 
 impl Backend for ClaudeCode {
     fn generate(&self, prompt: &str) -> Result<String> {
-        let mut child = Command::new("claude")
+        let mut child = command::new("claude")
             .args(["--model", "haiku", "--print"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

@@ -1,10 +1,11 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 
 use indoc::formatdoc;
 
+use crate::shared::command;
 use crate::shared::config::Terminal;
 
 /// Options for launching a terminal window.
@@ -45,7 +46,7 @@ pub fn run_editor(
     file_path: &Path,
     window_title: Option<&str>,
 ) -> std::io::Result<ExitStatus> {
-    let mut cmd = Command::new(editor_command);
+    let mut cmd = command::new(editor_command);
 
     // Apply nvim-specific titlestring option
     if (editor_command == "nvim" || editor_command.ends_with("/nvim"))
@@ -94,7 +95,7 @@ fn launch_wezterm(
     let cols_config = format!("initial_cols={}", options.window_cols);
     let rows_config = format!("initial_rows={}", options.window_rows);
 
-    let mut cmd = Command::new(&base_command[0]);
+    let mut cmd = command::new(&base_command[0]);
     cmd.args(&base_command[1..]);
     cmd.args([
         "--config",
@@ -163,7 +164,7 @@ fn launch_ghostty_linux(
     let height_flag = format!("--window-height={}", options.window_rows);
     let title_flag = format!("--title={}", options.window_title);
 
-    let mut cmd = Command::new("ghostty");
+    let mut cmd = command::new("ghostty");
     cmd.args([&width_flag, &height_flag, &title_flag, "-e"]);
     cmd.arg(command);
     cmd.args(args);
@@ -231,7 +232,7 @@ fn launch_ghostty_macos(
             return prevWin & "," & newWinId
         end tell"#};
 
-    let output = Command::new("osascript").args(["-e", &script]).output()?;
+    let output = command::new("osascript").args(["-e", &script]).output()?;
 
     if !output.status.success() {
         return Err(std::io::Error::other(
@@ -268,7 +269,7 @@ fn launch_ghostty_macos(
             end try
         end tell'"};
 
-    Command::new("bash")
+    command::new("bash")
         .args(["-c", &watcher_sh])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
