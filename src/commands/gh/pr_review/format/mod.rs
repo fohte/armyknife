@@ -11,8 +11,9 @@ pub use summary::format_summary;
 
 use super::details::{clean_review_body, strip_noise_keep_details};
 use super::models::{Review, ReviewState};
+use crate::shared::command;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[derive(Default)]
 pub struct FormatOptions {
@@ -115,7 +116,7 @@ pub(super) fn format_diff_with_delta(path: &str, diff_hunk: &str, skip_delta: bo
 
     // Try to pipe through delta, fall back to plain output on any failure
     let run_delta = || -> std::io::Result<String> {
-        let mut child = Command::new("delta")
+        let mut child = command::new("delta")
             .args(["--paging=never", "--line-numbers"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

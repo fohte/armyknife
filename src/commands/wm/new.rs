@@ -2,7 +2,6 @@ use anyhow::{Context, bail};
 use clap::Args;
 use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::error::{Result, WmError};
 use super::git::branch_to_worktree_name;
@@ -12,6 +11,7 @@ use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
 use crate::infra::tmux;
 use crate::shared::cache;
+use crate::shared::command;
 use crate::shared::config::{Config, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -68,7 +68,7 @@ fn open_editor_for_prompt() -> Result<Option<String>> {
     let temp_path = temp_file.path().to_path_buf();
 
     // Launch editor
-    let status = Command::new(&editor)
+    let status = command::new(&editor)
         .arg(&temp_path)
         .status()
         .with_context(|| format!("Failed to launch editor '{editor}'"))?;

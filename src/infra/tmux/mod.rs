@@ -4,12 +4,12 @@ pub mod layout;
 
 use std::fmt;
 use std::path::Path;
-use std::process::Command;
 
 use indoc::writedoc;
 use thiserror::Error;
 
 use crate::infra::process;
+use crate::shared::command;
 
 #[derive(Error, Debug)]
 pub enum TmuxError {
@@ -71,7 +71,7 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 
 /// Run a tmux command and return stdout on success.
 fn run_tmux_output(args: &[&str]) -> Result<String> {
-    let output = Command::new("tmux")
+    let output = command::new("tmux")
         .args(args)
         .output()
         .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;

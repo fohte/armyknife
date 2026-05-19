@@ -9,7 +9,9 @@ use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::shared::command;
 
 /// Replaces the current process image with `program args...` via `execve(2)`.
 /// Returns only on failure; the returned `io::Error` describes why `exec` could not start the program.
@@ -19,7 +21,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    Command::new(program).args(args).exec()
+    command::new(program).args(args).exec()
 }
 
 /// Spawns `program args...` with stdio redirected to `/dev/null` and the
@@ -44,7 +46,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut cmd = Command::new(program);
+    let mut cmd = command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -61,7 +63,7 @@ where
 /// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
 /// Returns `None` if the process is gone or `ps` fails.
 pub fn get_parent_pid(pid: u32) -> Option<u32> {
-    let output = Command::new("ps")
+    let output = command::new("ps")
         .args(["-o", "ppid=", "-p", &pid.to_string()])
         .output()
         .ok()?;
@@ -87,7 +89,7 @@ impl ProcessSnapshot {
     /// Captures the current process table via `ps -A`.
     /// Returns `None` if `ps` fails.
     pub fn capture() -> Option<Self> {
-        let output = Command::new("ps")
+        let output = command::new("ps")
             .args(["-A", "-o", "pid=,ppid=,comm="])
             .output()
             .ok()?;
