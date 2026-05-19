@@ -51,7 +51,8 @@ pub fn is_command_available(cmd: &str) -> bool {
 /// The result is cached for the process lifetime, so repeated lookups of the
 /// same command skip re-scanning every PATH entry.
 pub fn find_command_path(cmd: &str) -> Option<PathBuf> {
-    if let Some(cached) = resolution_cache()
+    let cache = resolution_cache();
+    if let Some(cached) = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(cmd)
@@ -61,7 +62,7 @@ pub fn find_command_path(cmd: &str) -> Option<PathBuf> {
 
     // Run the filesystem scan without holding the cache lock.
     let resolved = scan_path_for_command(cmd);
-    resolution_cache()
+    cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(cmd.to_string(), resolved.clone());
