@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.171](https://github.com/fohte/armyknife/compare/v0.1.170...v0.1.171) (2026-05-19)
+
+
+### Performance Improvements
+
+* **command:** cache PATH resolution for external commands ([#543](https://github.com/fohte/armyknife/issues/543)) ([9e3d4bf](https://github.com/fohte/armyknife/commit/9e3d4bfde83c69ab72652aea60b062f6307293da))
+
 ## [0.1.170](https://github.com/fohte/armyknife/compare/v0.1.169...v0.1.170) (2026-05-18)
 
 
