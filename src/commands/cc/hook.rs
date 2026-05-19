@@ -16,6 +16,7 @@ use super::claude_sessions;
 use super::error::CcError;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
+use super::window_status;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -144,15 +145,19 @@ fn process_hook_event_impl(
     // Claude Code process, its shutdown fires SessionEnd, which would
     // otherwise clobber the Paused marker and break `a cc resume`.
     if event == HookEvent::SessionEnd {
-        if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)?
-            && session.status != SessionStatus::Paused
-        {
-            session.status = SessionStatus::Ended;
-            session.updated_at = Utc::now();
-            store::save_session_to(sessions_dir, &session)?;
+        let mut ended_pane_id = None;
+        if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
+            ended_pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+            if session.status != SessionStatus::Paused {
+                session.status = SessionStatus::Ended;
+                session.updated_at = Utc::now();
+                store::save_session_to(sessions_dir, &session)?;
+            }
         }
+        // Recompute the window's aggregated status so the just-ended session
+        // stops contributing a symbol.
         if side_effects.tmux {
-            let _ = tmux::refresh_status();
+            sync_window_status(ended_pane_id.as_deref(), sessions_dir);
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -300,10 +305,15 @@ fn process_hook_event_impl(
     // Save updated session
     store::save_session_to(sessions_dir, &session)?;
 
-    // Refresh tmux status bar so `#()` commands pick up the state change immediately.
-    // Silently ignore errors (e.g., not in tmux, tmux not installed).
+    // Push the window's aggregated Claude Code status into its
+    // `@armyknife-cc-window-status` tmux option. The write and the status-bar refresh
+    // are skipped when the rendered value is unchanged, so an event that does
+    // not alter the visible status (e.g. running → running) costs no redraw.
     if side_effects.tmux {
-        let _ = tmux::refresh_status();
+        sync_window_status(
+            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+            sessions_dir,
+        );
     }
 
     // Remove stale notifications on every event that reaches here, except
@@ -357,6 +367,27 @@ fn process_hook_event_impl(
     }
 
     Ok(ProcessResult::SessionSaved)
+}
+
+/// Pushes the aggregated window status for the window containing `pane_id`
+/// into its tmux user option.
+///
+/// No-op when there is no pane (session ran outside tmux) or the window
+/// cannot be resolved (pane gone, tmux unavailable). Errors are ignored: the
+/// window option is best-effort.
+///
+/// Only the window the pane *currently* belongs to is recomputed. Moving a
+/// pane across windows (`move-pane` / `break-pane`) leaves the source
+/// window's option stale until one of its own sessions next fires a hook —
+/// rare enough not to warrant tracking each pane's previous window.
+fn sync_window_status(pane_id: Option<&str>, sessions_dir: &Path) {
+    let Some(pane_id) = pane_id else {
+        return;
+    };
+    let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
+        return;
+    };
+    let _ = window_status::sync_window_option(&window_id, sessions_dir);
 }
 
 /// Reads raw content from stdin.
