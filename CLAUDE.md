@@ -1,5 +1,3 @@
-<<<<<<< before updating
-
 # armyknife
 
 Rust CLI toolkit for AI-assisted development workflows.
@@ -60,14 +58,6 @@ Generic framework for interactive document editing:
 ### No external command or system service dependencies
 
 Tests must not depend on external commands (tmux, ps, terminal-notifier, git CLI, etc.) or system services (XPC, D-Bus, network). When testing production code that calls external commands, isolate the external call boundary so tests exercise logic without invoking real commands. Reason: tests run in srt sandbox / CI where external commands may be blocked or absent, causing hangs or failures.
-
-=======
-
-# CLAUDE.md
-
-## Test code rules
-
-> > > > > > > after updating
 
 ### Parameterize similar test cases with rstest
 
