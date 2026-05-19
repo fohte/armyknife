@@ -12,9 +12,9 @@ pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
 
 /// Tmux window-scoped user option holding the aggregated Claude Code status
 /// symbols for the window. `a cc hook` writes it whenever a session's state
-/// changes, so tmux's `window-status-format` can read `#{@cc-window-status}`
+/// changes, so tmux's `window-status-format` can read `#{@armyknife-cc-window-status}`
 /// directly instead of re-running `a cc window-status` on every redraw.
-pub const TMUX_WINDOW_STATUS_OPTION: &str = "@cc-window-status";
+pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {

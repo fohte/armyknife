@@ -19,7 +19,7 @@ pub struct WindowStatusArgs {
 ///
 /// Prints the status symbols of every Claude Code session running in the
 /// panes of the given tmux window. The event-driven path writes the same
-/// string to the window's `@cc-window-status` option (see
+/// string to the window's `@armyknife-cc-window-status` option (see
 /// `sync_window_option`); this command exists for manual inspection and for
 /// a polling-based `window-status-format` that calls `#(a cc window-status)`.
 pub fn run(args: &WindowStatusArgs) -> Result<()> {
@@ -32,7 +32,7 @@ pub fn run(args: &WindowStatusArgs) -> Result<()> {
 }
 
 /// Recomputes `window_id`'s aggregated Claude Code status symbols and writes
-/// them to the window's `@cc-window-status` user option.
+/// them to the window's `@armyknife-cc-window-status` user option.
 ///
 /// The option write and the status-bar refresh are skipped when the rendered
 /// value matches what tmux already holds, so an event that does not change

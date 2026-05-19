@@ -373,7 +373,7 @@ pub fn get_pane_option(pane_id: &str, option: &str) -> Option<String> {
 }
 
 /// Set a user option on a specific tmux window.
-/// User options are prefixed with '@' (e.g. "@cc-window-status").
+/// User options are prefixed with '@' (e.g. "@armyknife-cc-window-status").
 /// Targets the window by ID, so it does not require being inside tmux.
 pub fn set_window_option(window_id: &str, option: &str, value: &str) -> Result<()> {
     run_tmux(&["set-option", "-w", "-t", window_id, option, value])

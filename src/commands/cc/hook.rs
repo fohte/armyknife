@@ -306,7 +306,7 @@ fn process_hook_event_impl(
     store::save_session_to(sessions_dir, &session)?;
 
     // Push the window's aggregated Claude Code status into its
-    // `@cc-window-status` tmux option. The write and the status-bar refresh
+    // `@armyknife-cc-window-status` tmux option. The write and the status-bar refresh
     // are skipped when the rendered value is unchanged, so an event that does
     // not alter the visible status (e.g. running → running) costs no redraw.
     if side_effects.tmux {
