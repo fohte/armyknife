@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.172](https://github.com/fohte/armyknife/compare/v0.1.171...v0.1.172) (2026-05-19)
+
+
+### Bug Fixes
+
+* **cc:** stop running window-status on every status-bar redraw ([#544](https://github.com/fohte/armyknife/issues/544)) ([8634635](https://github.com/fohte/armyknife/commit/863463515bb46571df51d45665565a34662aab46))
+
 ## [0.1.171](https://github.com/fohte/armyknife/compare/v0.1.170...v0.1.171) (2026-05-19)
 
 
