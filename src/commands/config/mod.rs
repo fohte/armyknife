@@ -54,11 +54,11 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
     };
 
     match cfg.get_value(key, repo_id.as_deref()) {
-        Some(value) => {
-            println!("{value}");
-        }
+        Some(value) => print!("{}", format_value(&value)?),
         None if key == "repo.language" => {
-            // Default: private repos -> "ja", public repos -> "en"
+            // Default: private repos -> "ja", public repos -> "en".
+            // Stay silent when there is no repo context — there's nothing to
+            // default to without an owner/repo.
             if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
                 let client = GitHubClient::get()?;
                 let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
@@ -66,13 +66,28 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
                 println!("{default_lang}");
             }
         }
-        None => {}
+        None => anyhow::bail!("key not found: {key}"),
     }
     Ok(())
 }
 
+/// Format a resolved config value for stdout. Scalars render bare (preserving
+/// pre-existing `a config get` output); maps and arrays render as YAML so the
+/// shape of the config file round-trips into stdout. The returned string is
+/// terminated with a newline.
+fn format_value(value: &serde_json::Value) -> anyhow::Result<String> {
+    Ok(match value {
+        serde_json::Value::String(s) => format!("{s}\n"),
+        serde_json::Value::Bool(b) => format!("{b}\n"),
+        serde_json::Value::Number(n) => format!("{n}\n"),
+        // serde_yaml emits a trailing newline already.
+        _ => serde_yaml::to_string(value)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::format_value;
     use crate::infra::github::{GitHubMockServer, RepoClient};
     use crate::shared::config::Config;
     use indoc::indoc;
@@ -80,6 +95,18 @@ mod tests {
 
     fn config_from_yaml(yaml: &str) -> Config {
         serde_yaml::from_str(yaml).unwrap()
+    }
+
+    /// Stringify a scalar Value the same way `format_value` would, minus the
+    /// trailing newline. Returns None for non-scalar values so that existing
+    /// scalar-focused tests stay readable.
+    fn scalar(v: Option<serde_json::Value>) -> Option<String> {
+        match v {
+            Some(serde_json::Value::String(s)) => Some(s),
+            Some(serde_json::Value::Bool(b)) => Some(b.to_string()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }
     }
 
     #[rstest]
@@ -91,8 +118,7 @@ mod tests {
     #[case::notification_sound("notification.sound", "Glass")]
     fn get_value_returns_default_values(#[case] key: &str, #[case] expected: &str) {
         let cfg = Config::default();
-        let result = cfg.get_value(key, None);
-        assert_eq!(result.as_deref(), Some(expected));
+        assert_eq!(scalar(cfg.get_value(key, None)).as_deref(), Some(expected));
     }
 
     #[rstest]
@@ -109,16 +135,75 @@ mod tests {
               enabled: false
               sound: Ping
         "});
-        assert_eq!(cfg.get_value(key, None).as_deref(), expected);
+        assert_eq!(scalar(cfg.get_value(key, None)).as_deref(), expected);
     }
 
     #[rstest]
     #[case::top_level("nonexistent")]
     #[case::nested("wm.nonexistent")]
-    #[case::object_key("wm")]
-    fn get_value_returns_none_for_unknown_or_non_scalar_key(#[case] key: &str) {
+    fn get_value_returns_none_for_unknown_key(#[case] key: &str) {
         let cfg = Config::default();
         assert_eq!(cfg.get_value(key, None), None);
+    }
+
+    #[test]
+    fn get_value_returns_object_for_map_key() {
+        let cfg = Config::default();
+        let v = cfg.get_value("wm", None).expect("wm is present");
+        assert!(v.is_object(), "wm should resolve to a YAML map: {v:?}");
+    }
+
+    #[test]
+    fn format_value_renders_map_as_yaml() {
+        let cfg = config_from_yaml(indoc! {"
+            orgs:
+              fohte:
+                ai:
+                  review:
+                    reviewers: [gemini]
+        "});
+        let v = cfg
+            .get_value("orgs.fohte", Some("fohte/any"))
+            .expect("orgs.fohte exists");
+        let yaml = format_value(&v).unwrap();
+        assert_eq!(
+            yaml,
+            indoc! {"
+                ai:
+                  review:
+                    reviewers:
+                    - gemini
+            "}
+        );
+    }
+
+    #[test]
+    fn format_value_renders_list_as_yaml() {
+        let cfg = config_from_yaml(indoc! {"
+            orgs:
+              fohte:
+                ai:
+                  review:
+                    reviewers: [gemini, devin]
+        "});
+        let v = cfg
+            .get_value("orgs.fohte.ai.review.reviewers", None)
+            .expect("reviewers list exists");
+        let yaml = format_value(&v).unwrap();
+        assert_eq!(
+            yaml,
+            indoc! {"
+                - gemini
+                - devin
+            "}
+        );
+    }
+
+    #[test]
+    fn format_value_scalars_match_legacy_output() {
+        assert_eq!(format_value(&serde_json::json!("foo")).unwrap(), "foo\n");
+        assert_eq!(format_value(&serde_json::json!(true)).unwrap(), "true\n");
+        assert_eq!(format_value(&serde_json::json!(42)).unwrap(), "42\n");
     }
 
     #[rstest]
@@ -131,7 +216,7 @@ mod tests {
                 language: ja
         "});
         assert_eq!(
-            cfg.get_value("repo.language", Some(repo_id)).as_deref(),
+            scalar(cfg.get_value("repo.language", Some(repo_id))).as_deref(),
             expected
         );
     }
@@ -161,8 +246,7 @@ mod tests {
               fohte/no-direct-commit-key: {}
         "});
         assert_eq!(
-            cfg.get_value("repo.direct_commit", Some(repo_id))
-                .as_deref(),
+            scalar(cfg.get_value("repo.direct_commit", Some(repo_id))).as_deref(),
             Some(expected)
         );
     }

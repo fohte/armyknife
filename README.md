@@ -515,9 +515,9 @@ Print JSON Schema for the configuration file.
 
 #### `a config get <key>`
 
-Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). If the key has a value, it is printed to stdout. If not found, nothing is printed (exit 0).
+Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
 
-For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. Only scalar leaves (string, bool, number) are printed; sequence/object values such as `ai.review.reviewers` print nothing.
+For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
 ```sh
 $ a config get wm.branch_prefix
