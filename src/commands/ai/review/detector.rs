@@ -15,15 +15,25 @@ pub enum StartDetection {
     BodyReaction { emoji: &'static str },
     /// A GitHub check run with the given name has appeared.
     CheckRun { name: &'static str },
+    /// A legacy Commit Status (GitHub Status API) with the given context has appeared
+    /// on the PR's head commit (e.g., CodeRabbit posts a `CodeRabbit` status).
+    CommitStatus { context: &'static str },
 }
 
 /// How to detect that a reviewer has completed its review.
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the `Review` prefix names the signal source and is meaningful in context"
+)]
 pub enum CompletionDetection {
     /// A PR review (via GitHub review API) has been submitted by the bot.
     ReviewSubmitted,
     /// A PR review has been submitted, OR a check run with the given name has completed.
     /// Whichever signal arrives first counts as completion.
     ReviewOrCheckRun { check_name: &'static str },
+    /// A PR review has been submitted, OR a Commit Status with the given context
+    /// has reached the `success` state. Whichever signal arrives first counts.
+    ReviewOrCommitStatus { context: &'static str },
 }
 
 /// Context passed to detection methods, carrying the GitHub API client
@@ -103,6 +113,26 @@ pub trait DetectionClient: Send + Sync {
         pr_number: u64,
         check_name: &str,
     ) -> impl Future<Output = Result<Option<DateTime<Utc>>>> + Send;
+
+    /// Check whether a legacy Commit Status with the given context exists on the PR's head commit
+    /// (in any state).
+    fn has_commit_status(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        context: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Get the timestamp of the latest `success`-state Commit Status with the given context,
+    /// or `None` if no success status is present yet.
+    fn commit_status_completed_at(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        context: &str,
+    ) -> impl Future<Output = Result<Option<DateTime<Utc>>>> + Send;
 }
 
 /// Strategy trait for detecting bot review start and completion.
@@ -144,6 +174,11 @@ pub trait ReviewDetector: Send + Sync {
                     .has_check_run(ctx.owner, ctx.repo, ctx.pr, name)
                     .await
             }
+            StartDetection::CommitStatus { context } => {
+                ctx.github
+                    .has_commit_status(ctx.owner, ctx.repo, ctx.pr, context)
+                    .await
+            }
         }
     }
 
@@ -171,6 +206,18 @@ pub trait ReviewDetector: Send + Sync {
                 }
                 ctx.github
                     .check_run_completed_at(ctx.owner, ctx.repo, ctx.pr, check_name)
+                    .await
+            }
+            CompletionDetection::ReviewOrCommitStatus { context } => {
+                if let Some(t) = ctx
+                    .github
+                    .find_latest_review(ctx.owner, ctx.repo, ctx.pr, self.bot_login())
+                    .await?
+                {
+                    return Ok(Some(t));
+                }
+                ctx.github
+                    .commit_status_completed_at(ctx.owner, ctx.repo, ctx.pr, context)
                     .await
             }
         }

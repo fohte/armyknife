@@ -302,6 +302,11 @@
           "description": "Devin AI",
           "type": "string",
           "const": "devin"
+        },
+        {
+          "description": "CodeRabbit",
+          "type": "string",
+          "const": "coderabbit"
         }
       ]
     },

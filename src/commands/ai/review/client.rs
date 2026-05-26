@@ -53,6 +53,35 @@ const PR_REACTIONS_QUERY: &str = indoc! {"
     }
 "};
 
+// GraphQL query to check legacy Commit Statuses on the PR's head commit.
+// Uses statusCheckRollup.contexts and selects StatusContext nodes.
+const COMMIT_STATUSES_QUERY: &str = indoc! {"
+    query($owner: String!, $repo: String!, $pr: Int!) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pr) {
+                commits(last: 1) {
+                    nodes {
+                        commit {
+                            statusCheckRollup {
+                                contexts(first: 100) {
+                                    nodes {
+                                        __typename
+                                        ... on StatusContext {
+                                            context
+                                            state
+                                            createdAt
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+"};
+
 // GraphQL query to check check runs on the PR's head commit
 const CHECK_RUNS_QUERY: &str = indoc! {"
     query($owner: String!, $repo: String!, $pr: Int!) {
@@ -215,6 +244,65 @@ struct CheckRun {
     completed_at: Option<String>,
 }
 
+// Commit status query types
+#[derive(Debug, Deserialize)]
+struct CommitStatusesData {
+    repository: Option<CommitStatusesRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitStatusesRepository {
+    pull_request: Option<CommitStatusesPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommitStatusesPullRequest {
+    commits: CommitStatusesCommits,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommitStatusesCommits {
+    nodes: Vec<CommitStatusesCommitNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommitStatusesCommitNode {
+    commit: CommitStatusesCommit,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitStatusesCommit {
+    status_check_rollup: Option<StatusCheckRollup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusCheckRollup {
+    contexts: StatusCheckRollupContexts,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusCheckRollupContexts {
+    nodes: Vec<StatusCheckRollupContext>,
+}
+
+// `StatusCheckRollupContext` is a GraphQL union of `StatusContext` and `CheckRun`.
+// Only `StatusContext` carries the fields we need; `CheckRun` entries deserialize with
+// `context = None` and are filtered out.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusCheckRollupContext {
+    #[serde(rename = "__typename")]
+    typename: String,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
 impl OctocrabDetectionClient {
     async fn fetch_pr_info(
         &self,
@@ -235,6 +323,22 @@ impl OctocrabDetectionClient {
             .repository
             .and_then(|r| r.pull_request)
             .ok_or_else(|| ReviewError::RepoInfoError("Pull request not found".to_string()).into())
+    }
+
+    fn find_commit_statuses<'a>(
+        &self,
+        data: &'a CommitStatusesData,
+        context: &str,
+    ) -> Vec<&'a StatusCheckRollupContext> {
+        data.repository
+            .iter()
+            .flat_map(|r| r.pull_request.iter())
+            .flat_map(|pr| &pr.commits.nodes)
+            .filter_map(|cn| cn.commit.status_check_rollup.as_ref())
+            .flat_map(|rollup| &rollup.contexts.nodes)
+            .filter(|n| n.typename == "StatusContext")
+            .filter(|n| n.context.as_deref() == Some(context))
+            .collect()
     }
 
     fn find_check_runs<'a>(
@@ -428,6 +532,58 @@ impl DetectionClient for OctocrabDetectionClient {
 
         Ok(latest)
     }
+
+    async fn has_commit_status(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        context: &str,
+    ) -> Result<bool> {
+        let client = GitHubClient::get()?;
+        let variables = json!({
+            "owner": owner,
+            "repo": repo,
+            "pr": pr_number,
+        });
+
+        let response: CommitStatusesData = client.graphql(COMMIT_STATUSES_QUERY, variables).await?;
+
+        Ok(!self.find_commit_statuses(&response, context).is_empty())
+    }
+
+    async fn commit_status_completed_at(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        context: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let client = GitHubClient::get()?;
+        let variables = json!({
+            "owner": owner,
+            "repo": repo,
+            "pr": pr_number,
+        });
+
+        let response: CommitStatusesData = client.graphql(COMMIT_STATUSES_QUERY, variables).await?;
+
+        let statuses = self.find_commit_statuses(&response, context);
+
+        let mut latest: Option<DateTime<Utc>> = None;
+        for s in statuses {
+            if s.state.as_deref() == Some("SUCCESS")
+                && let Some(ref created_at) = s.created_at
+            {
+                let t = created_at
+                    .parse::<DateTime<Utc>>()
+                    .map_err(|_| ReviewError::TimestampParseError(created_at.clone()))?;
+                latest = Some(latest.map_or(t, |prev| prev.max(t)));
+            }
+        }
+
+        Ok(latest)
+    }
 }
 
 /// Get the default production client.
@@ -474,6 +630,15 @@ pub mod mock {
         pub completed_at: Option<DateTime<Utc>>,
     }
 
+    /// Mock data for a legacy Commit Status.
+    #[derive(Clone, Debug)]
+    pub struct MockCommitStatus {
+        pub context: String,
+        /// Matches the GraphQL `StatusState` enum (e.g., "PENDING", "SUCCESS", "ERROR").
+        pub state: String,
+        pub created_at: DateTime<Utc>,
+    }
+
     /// Mock data for a reaction on the PR body.
     #[derive(Clone, Debug)]
     pub struct MockReaction {
@@ -495,6 +660,8 @@ pub mod mock {
         pub check_runs: Arc<Mutex<Vec<MockCheckRun>>>,
         /// Reactions on the PR body.
         pub reactions: Arc<Mutex<Vec<MockReaction>>>,
+        /// Legacy Commit Statuses on the PR's head commit.
+        pub commit_statuses: Arc<Mutex<Vec<MockCommitStatus>>>,
         /// Number of find_latest_review calls before returning reviews.
         /// If set, the first N calls will return None.
         pub skip_first_n_reviews: Arc<Mutex<usize>>,
@@ -546,6 +713,20 @@ pub mod mock {
             self.check_runs.lock().unwrap().push(MockCheckRun {
                 name: name.into(),
                 completed_at,
+            });
+            self
+        }
+
+        pub fn with_commit_status(
+            self,
+            context: impl Into<String>,
+            state: impl Into<String>,
+            created_at: DateTime<Utc>,
+        ) -> Self {
+            self.commit_statuses.lock().unwrap().push(MockCommitStatus {
+                context: context.into(),
+                state: state.into(),
+                created_at,
             });
             self
         }
@@ -703,6 +884,32 @@ pub mod mock {
                 .find(|cr| cr.name == check_name && cr.completed_at.is_some())
                 .and_then(|cr| cr.completed_at))
         }
+
+        async fn has_commit_status(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            context: &str,
+        ) -> Result<bool> {
+            let statuses = self.commit_statuses.lock().unwrap();
+            Ok(statuses.iter().any(|s| s.context == context))
+        }
+
+        async fn commit_status_completed_at(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            context: &str,
+        ) -> Result<Option<DateTime<Utc>>> {
+            let statuses = self.commit_statuses.lock().unwrap();
+            Ok(statuses
+                .iter()
+                .filter(|s| s.context == context && s.state == "SUCCESS")
+                .map(|s| s.created_at)
+                .max())
+        }
     }
 
     #[cfg(test)]
@@ -858,6 +1065,59 @@ pub mod mock {
                 .unwrap();
 
             assert_eq!(result, Some(t));
+        }
+
+        #[rstest]
+        #[case::exists("CodeRabbit", true)]
+        #[case::missing("Other", false)]
+        #[tokio::test]
+        async fn has_commit_status_checks_context(#[case] query: &str, #[case] expected: bool) {
+            let t = DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .to_utc();
+            let client = MockDetectionClient::new().with_commit_status("CodeRabbit", "PENDING", t);
+
+            let result = client
+                .has_commit_status("owner", "repo", 1, query)
+                .await
+                .unwrap();
+
+            assert_eq!(result, expected);
+        }
+
+        #[tokio::test]
+        async fn commit_status_completed_at_returns_latest_success() {
+            let t1 = DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .to_utc();
+            let t2 = DateTime::parse_from_rfc3339("2024-01-01T13:00:00Z")
+                .unwrap()
+                .to_utc();
+            let client = MockDetectionClient::new()
+                .with_commit_status("CodeRabbit", "PENDING", t1)
+                .with_commit_status("CodeRabbit", "SUCCESS", t2);
+
+            let result = client
+                .commit_status_completed_at("owner", "repo", 1, "CodeRabbit")
+                .await
+                .unwrap();
+
+            assert_eq!(result, Some(t2));
+        }
+
+        #[tokio::test]
+        async fn commit_status_completed_at_returns_none_when_pending() {
+            let t = DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .to_utc();
+            let client = MockDetectionClient::new().with_commit_status("CodeRabbit", "PENDING", t);
+
+            let result = client
+                .commit_status_completed_at("owner", "repo", 1, "CodeRabbit")
+                .await
+                .unwrap();
+
+            assert!(result.is_none());
         }
 
         #[tokio::test]

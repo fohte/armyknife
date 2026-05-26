@@ -152,12 +152,12 @@ Request or wait for bot reviews on a PR.
 | `request` | Request a review from a bot reviewer and wait for completion          |
 | `wait`    | Wait for an existing review to complete (does not trigger new review) |
 
-| Option                  | Description                                                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                    |
-| `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated. When omitted, falls back to repo > org config > `gemini, devin` |
-| `--interval <seconds>`  | Polling interval (default: 15)                                                                                    |
-| `--timeout <seconds>`   | Timeout (default: 300)                                                                                            |
+| Option                  | Description                                                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                                                      |
+| `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated (`gemini`, `devin`, `coderabbit`). When omitted, falls back to repo > org config > `gemini, devin` |
+| `--interval <seconds>`  | Polling interval (default: 15)                                                                                                                      |
+| `--timeout <seconds>`   | Timeout (default: 300)                                                                                                                              |
 
 When `--reviewer` is omitted, the reviewer set is resolved in this order:
 
