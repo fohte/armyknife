@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.173](https://github.com/fohte/armyknife/compare/v0.1.172...v0.1.173) (2026-05-26)
+
+
+### Features
+
+* **ai/review:** support CodeRabbit as a reviewer ([#547](https://github.com/fohte/armyknife/issues/547)) ([b2b3c0d](https://github.com/fohte/armyknife/commit/b2b3c0df9d25ac1e86926a89b39dfb1280c77f02))
+
 ## [0.1.172](https://github.com/fohte/armyknife/compare/v0.1.171...v0.1.172) (2026-05-19)
 
 
