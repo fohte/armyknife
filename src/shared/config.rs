@@ -39,8 +39,9 @@ impl Config {
     /// Look up a config value by dot-separated key path.
     /// For `repo.*` keys, `repo_id` (e.g. "owner/repo") selects which repo entry to use.
     /// For `org.*` keys, `repo_id` 's owner segment selects the org entry.
-    /// Returns the value as a string, or None if not found.
-    pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<String> {
+    /// Returns the raw JSON value at the path, or None if the path is missing
+    /// or resolves to null. Callers format scalars and collections as needed.
+    pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<serde_json::Value> {
         if let Some(repo_key) = key.strip_prefix("repo.") {
             // Fall back to RepoConfig::default() when no entry exists for this
             // repo, so per-field serde defaults (e.g. direct_commit = false)
@@ -84,18 +85,18 @@ impl Config {
     }
 }
 
-/// Resolve a dot-separated path against a JSON value, returning a string representation.
-fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<String> {
+/// Resolve a dot-separated path against a JSON value. Null is treated as
+/// missing so callers (and the `repo.language` fallback in `run_get`) can
+/// distinguish "set to a value" from "absent / explicitly null".
+fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
     let mut current = value;
     for segment in path.split('.') {
         current = current.get(segment)?;
     }
-    match current {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Bool(b) => Some(b.to_string()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        // Non-scalar values (objects, arrays, null) are not leaf config values
-        _ => None,
+    if current.is_null() {
+        None
+    } else {
+        Some(current.clone())
     }
 }
 
