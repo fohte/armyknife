@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.174](https://github.com/fohte/armyknife/compare/v0.1.173...v0.1.174) (2026-05-26)
+
+
+### Bug Fixes
+
+* **config:** print collections as YAML and error on missing keys ([#549](https://github.com/fohte/armyknife/issues/549)) ([bda7e17](https://github.com/fohte/armyknife/commit/bda7e176571001e46356464adc56477a53e396f4))
+
 ## [0.1.173](https://github.com/fohte/armyknife/compare/v0.1.172...v0.1.173) (2026-05-26)
 
 
