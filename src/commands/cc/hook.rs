@@ -127,6 +127,48 @@ fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
     process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
 }
 
+/// Ends any Paused sessions that were attached to `pane_id` but belong to a
+/// different `session_id` than the one now taking the pane. Without this, a
+/// session auto-paused by `a cc sweep` lingers in `a cc watch` after another
+/// `claude` (or `claude -c <other-id>`) starts on the same pane. Resuming the
+/// same paused session with `claude -c <same-id>` is unaffected because
+/// `session_id` matches and the entry is skipped.
+fn evict_paused_sessions_on_pane_takeover(
+    sessions_dir: &Path,
+    pane_id: &str,
+    current_session_id: &str,
+) {
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return;
+    };
+    let now = Utc::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
+            continue;
+        };
+        let matches_pane = session
+            .tmux_info
+            .as_ref()
+            .is_some_and(|info| info.pane_id == pane_id);
+        if session.status != SessionStatus::Paused
+            || session.session_id == current_session_id
+            || !matches_pane
+        {
+            continue;
+        }
+        session.status = SessionStatus::Ended;
+        session.updated_at = now;
+        let _ = store::save_session_to(sessions_dir, &session);
+    }
+}
+
 /// Internal implementation that returns ProcessResult for testing.
 /// Accepts sessions_dir as a parameter to allow testing with temporary directories.
 fn process_hook_event_impl(
@@ -186,6 +228,11 @@ fn process_hook_event_impl(
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+            evict_paused_sessions_on_pane_takeover(
+                sessions_dir,
+                &pane_info.pane_id,
+                &input.session_id,
+            );
         }
     }
 
@@ -193,11 +240,19 @@ fn process_hook_event_impl(
     // When `claude` is started without `-c`, only SessionStart(startup) fires,
     // which skips setting the pane option to avoid wrong session_id on resume.
     // UserPromptSubmit is the earliest subsequent event where we can set it.
+    // Skip once the session file exists: pane option and eviction only need to
+    // run at the moment of pane handover (the first prompt of a new session),
+    // and re-running them on every prompt costs an O(N) disk scan plus a
+    // `tmux` process spawn for no behavioral effect.
     if side_effects.tmux
         && event == HookEvent::UserPromptSubmit
+        && !sessions_dir
+            .join(format!("{}.json", input.session_id))
+            .exists()
         && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
+        evict_paused_sessions_on_pane_takeover(sessions_dir, &pane_info.pane_id, &input.session_id);
     }
 
     // Get tmux info by finding the pane that contains this process
@@ -1614,6 +1669,110 @@ mod tests {
                 .expect("session should exist after user-prompt-submit");
             assert_eq!(session.session_id, "test-123");
             assert_eq!(session.status, SessionStatus::Running);
+        }
+    }
+
+    mod evict_paused_on_pane_takeover_tests {
+        use super::*;
+        use chrono::Utc;
+        use rstest::{fixture, rstest};
+        use tempfile::TempDir;
+
+        #[fixture]
+        fn temp_dir() -> TempDir {
+            TempDir::new().expect("temp dir creation should succeed")
+        }
+
+        fn make_paused_session(session_id: &str, pane_id: &str) -> Session {
+            let now = Utc::now();
+            Session {
+                session_id: session_id.to_string(),
+                cwd: std::path::PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: Some(TmuxInfo {
+                    session_name: "main".into(),
+                    window_name: "win".into(),
+                    window_index: 0,
+                    pane_id: pane_id.to_string(),
+                }),
+                status: SessionStatus::Paused,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+                last_bg_task_pending: false,
+            }
+        }
+
+        #[rstest]
+        #[case::ends_on_pane_takeover(
+            SessionStatus::Paused,
+            "old",
+            "%42",
+            "%42",
+            "new",
+            SessionStatus::Ended
+        )]
+        #[case::keeps_when_session_id_matches(
+            // `claude -c <same-id>` resume: session_id matches, must be left
+            // as Paused so the running hook later transitions it back.
+            SessionStatus::Paused,
+            "same",
+            "%42",
+            "%42",
+            "same",
+            SessionStatus::Paused,
+        )]
+        #[case::keeps_when_pane_differs(
+            SessionStatus::Paused,
+            "other",
+            "%99",
+            "%42",
+            "new",
+            SessionStatus::Paused
+        )]
+        #[case::keeps_when_not_paused(
+            // A Running session sharing the pane (shouldn't happen in practice
+            // but guards against accidental termination of active sessions).
+            SessionStatus::Running,
+            "active",
+            "%42",
+            "%42",
+            "new",
+            SessionStatus::Running,
+        )]
+        fn evict_paused_sessions_on_pane_takeover_cases(
+            temp_dir: TempDir,
+            #[case] initial_status: SessionStatus,
+            #[case] session_id: &str,
+            #[case] session_pane: &str,
+            #[case] takeover_pane: &str,
+            #[case] takeover_session_id: &str,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let mut session = make_paused_session(session_id, session_pane);
+            session.status = initial_status;
+            store::save_session_to(temp_dir.path(), &session).expect("save");
+
+            evict_paused_sessions_on_pane_takeover(
+                temp_dir.path(),
+                takeover_pane,
+                takeover_session_id,
+            );
+
+            let reloaded = store::load_session_from(temp_dir.path(), session_id)
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(reloaded.status, expected_status);
+        }
+
+        #[rstest]
+        fn missing_sessions_dir_is_noop(temp_dir: TempDir) {
+            let missing = temp_dir.path().join("does-not-exist");
+            evict_paused_sessions_on_pane_takeover(&missing, "%42", "new");
         }
     }
 
