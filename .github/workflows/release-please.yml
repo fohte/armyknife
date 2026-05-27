@@ -22,13 +22,8 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-<<<<<<< before updating
-      - uses: actions/create-github-app-token@7bd03711494f032dfa3be3558f7dc8787b0be333 # v3.1.0
-        id: app-token
-=======
       - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
         id: octo-sts
->>>>>>> after updating
         with:
           scope: fohte
           identity: ${{ github.event.repository.name }}-release-please
