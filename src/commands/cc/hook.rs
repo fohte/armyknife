@@ -240,8 +240,15 @@ fn process_hook_event_impl(
     // When `claude` is started without `-c`, only SessionStart(startup) fires,
     // which skips setting the pane option to avoid wrong session_id on resume.
     // UserPromptSubmit is the earliest subsequent event where we can set it.
+    // Skip once the session file exists: pane option and eviction only need to
+    // run at the moment of pane handover (the first prompt of a new session),
+    // and re-running them on every prompt costs an O(N) disk scan plus a
+    // `tmux` process spawn for no behavioral effect.
     if side_effects.tmux
         && event == HookEvent::UserPromptSubmit
+        && !sessions_dir
+            .join(format!("{}.json", input.session_id))
+            .exists()
         && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
