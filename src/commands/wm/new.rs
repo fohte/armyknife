@@ -261,6 +261,11 @@ pub struct NewArgs {
     /// When specified, operates on the given repository instead of the current directory.
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
+
+    /// Skip the post-worktree-create hook.
+    /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
+    #[arg(long)]
+    pub skip_hooks: bool,
 }
 
 /// Context information injected into the prompt when --agent is used
@@ -541,19 +546,23 @@ fn run_worktree_creation(
     };
 
     // Run post-worktree-create hook (failures abort `wm new`).
-    let worktree_abs =
-        std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
-    hooks::run_hook(
-        "post-worktree-create",
-        &[
-            (
-                EnvVars::worktree_path_name(),
-                &worktree_abs.to_string_lossy(),
-            ),
-            (EnvVars::branch_name_name(), &actual_branch),
-            (EnvVars::repo_root_name(), repo_root),
-        ],
-    )?;
+    if args.skip_hooks {
+        eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
+    } else {
+        let worktree_abs =
+            std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
+        hooks::run_hook(
+            "post-worktree-create",
+            &[
+                (
+                    EnvVars::worktree_path_name(),
+                    &worktree_abs.to_string_lossy(),
+                ),
+                (EnvVars::branch_name_name(), &actual_branch),
+                (EnvVars::repo_root_name(), repo_root),
+            ],
+        )?;
+    }
 
     // Build environment variables for child session
     let mut env_vars: Vec<(String, String)> = Vec::new();
@@ -846,6 +855,7 @@ mod tests {
             label: None,
             parent_session_id: None,
             repo: None,
+            skip_hooks: false,
         };
         let result = resolve_args_with_deps(
             &args,
@@ -877,6 +887,7 @@ mod tests {
             label: None,
             parent_session_id: None,
             repo: None,
+            skip_hooks: false,
         };
         let result = resolve_args_with_deps(
             &args,
