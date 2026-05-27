@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.175](https://github.com/fohte/armyknife/compare/v0.1.174...v0.1.175) (2026-05-27)
+
+
+### Features
+
+* **wm/new:** add `--skip-hooks` flag ([#553](https://github.com/fohte/armyknife/issues/553)) ([2b8c404](https://github.com/fohte/armyknife/commit/2b8c40494544b620d74313cabfae26f6c67d350e))
+
 ## [0.1.174](https://github.com/fohte/armyknife/compare/v0.1.173...v0.1.174) (2026-05-26)
 
 
