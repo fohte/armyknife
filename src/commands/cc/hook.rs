@@ -1708,60 +1708,65 @@ mod tests {
         }
 
         #[rstest]
-        fn ends_paused_session_on_pane_takeover(temp_dir: TempDir) {
-            let paused = make_paused_session("old", "%42");
-            store::save_session_to(temp_dir.path(), &paused).expect("save");
-
-            evict_paused_sessions_on_pane_takeover(temp_dir.path(), "%42", "new");
-
-            let reloaded = store::load_session_from(temp_dir.path(), "old")
-                .expect("load")
-                .expect("session exists");
-            assert_eq!(reloaded.status, SessionStatus::Ended);
-        }
-
-        #[rstest]
-        fn preserves_paused_session_on_same_session_id(temp_dir: TempDir) {
+        #[case::ends_on_pane_takeover(
+            SessionStatus::Paused,
+            "old",
+            "%42",
+            "%42",
+            "new",
+            SessionStatus::Ended
+        )]
+        #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
             // as Paused so the running hook later transitions it back.
-            let paused = make_paused_session("same", "%42");
-            store::save_session_to(temp_dir.path(), &paused).expect("save");
-
-            evict_paused_sessions_on_pane_takeover(temp_dir.path(), "%42", "same");
-
-            let reloaded = store::load_session_from(temp_dir.path(), "same")
-                .expect("load")
-                .expect("session exists");
-            assert_eq!(reloaded.status, SessionStatus::Paused);
-        }
-
-        #[rstest]
-        fn preserves_paused_session_on_different_pane(temp_dir: TempDir) {
-            let paused = make_paused_session("other", "%99");
-            store::save_session_to(temp_dir.path(), &paused).expect("save");
-
-            evict_paused_sessions_on_pane_takeover(temp_dir.path(), "%42", "new");
-
-            let reloaded = store::load_session_from(temp_dir.path(), "other")
-                .expect("load")
-                .expect("session exists");
-            assert_eq!(reloaded.status, SessionStatus::Paused);
-        }
-
-        #[rstest]
-        fn preserves_non_paused_session_on_same_pane(temp_dir: TempDir) {
+            SessionStatus::Paused,
+            "same",
+            "%42",
+            "%42",
+            "same",
+            SessionStatus::Paused,
+        )]
+        #[case::keeps_when_pane_differs(
+            SessionStatus::Paused,
+            "other",
+            "%99",
+            "%42",
+            "new",
+            SessionStatus::Paused
+        )]
+        #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
             // but guards against accidental termination of active sessions).
-            let mut running = make_paused_session("active", "%42");
-            running.status = SessionStatus::Running;
-            store::save_session_to(temp_dir.path(), &running).expect("save");
+            SessionStatus::Running,
+            "active",
+            "%42",
+            "%42",
+            "new",
+            SessionStatus::Running,
+        )]
+        fn evict_paused_sessions_on_pane_takeover_cases(
+            temp_dir: TempDir,
+            #[case] initial_status: SessionStatus,
+            #[case] session_id: &str,
+            #[case] session_pane: &str,
+            #[case] takeover_pane: &str,
+            #[case] takeover_session_id: &str,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let mut session = make_paused_session(session_id, session_pane);
+            session.status = initial_status;
+            store::save_session_to(temp_dir.path(), &session).expect("save");
 
-            evict_paused_sessions_on_pane_takeover(temp_dir.path(), "%42", "new");
+            evict_paused_sessions_on_pane_takeover(
+                temp_dir.path(),
+                takeover_pane,
+                takeover_session_id,
+            );
 
-            let reloaded = store::load_session_from(temp_dir.path(), "active")
+            let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.status, SessionStatus::Running);
+            assert_eq!(reloaded.status, expected_status);
         }
 
         #[rstest]
