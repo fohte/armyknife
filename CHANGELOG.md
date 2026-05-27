@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.176](https://github.com/fohte/armyknife/compare/v0.1.175...v0.1.176) (2026-05-27)
+
+
+### Bug Fixes
+
+* **cc/hook:** drop paused sessions whose tmux pane was taken over by another session ([#552](https://github.com/fohte/armyknife/issues/552)) ([ef3c7bd](https://github.com/fohte/armyknife/commit/ef3c7bd277df89390bb54d0df50f4a4deecc8d65))
+
 ## [0.1.175](https://github.com/fohte/armyknife/compare/v0.1.174...v0.1.175) (2026-05-27)
 
 
