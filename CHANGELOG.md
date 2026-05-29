@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.178](https://github.com/fohte/armyknife/compare/v0.1.177...v0.1.178) (2026-05-29)
+
+
+### Dependencies
+
+* update rust crate libc to v0.2.186 ([#558](https://github.com/fohte/armyknife/issues/558)) ([3c185ba](https://github.com/fohte/armyknife/commit/3c185ba6784a7d1a132aed950ba799639cfc7afd))
+* update rust crate open to v5.3.5 ([#559](https://github.com/fohte/armyknife/issues/559)) ([3f220fa](https://github.com/fohte/armyknife/commit/3f220fa5420b4e8d503b96269850ab6254a3cac9))
+
 ## [0.1.177](https://github.com/fohte/armyknife/compare/v0.1.176...v0.1.177) (2026-05-29)
 
 
