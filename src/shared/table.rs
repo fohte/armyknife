@@ -20,7 +20,7 @@ pub mod color {
 /// Uses Unicode width for proper handling of wide characters (e.g., CJK).
 ///
 /// # Examples
-/// ```ignore
+/// ```
 /// use armyknife::shared::table::truncate_to_width;
 /// assert_eq!(truncate_to_width("hello world", 5), "hello");
 /// assert_eq!(truncate_to_width("日本語", 4), "日本");  // Each CJK char is width 2
@@ -49,7 +49,7 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
 /// - If width < 3, truncates without ellipsis.
 ///
 /// # Examples
-/// ```ignore
+/// ```
 /// use armyknife::shared::table::pad_or_truncate;
 /// assert_eq!(pad_or_truncate("hello", 10), "hello     ");
 /// assert_eq!(pad_or_truncate("hello world", 8), "hello...");

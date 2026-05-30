@@ -615,17 +615,8 @@ fn merge_yaml(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml
 /// Generate JSON Schema for the Config struct.
 ///
 /// Only compiled with the `schema-gen` feature, which is enabled by the
-/// `config-schema-gen` workspace member. The `a` binary never calls it, so
-/// suppress dead-code analysis on its module tree's compile.
+/// `config-schema-gen` workspace member.
 #[cfg(feature = "schema-gen")]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        clippy::allow_attributes,
-        reason = "reached only via the lib's pub re-export, invisible from the `a` binary crate root"
-    )
-)]
 pub fn generate_schema() -> schemars::Schema {
     schemars::schema_for!(Config)
 }

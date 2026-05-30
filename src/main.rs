@@ -1,13 +1,9 @@
-mod cli;
-mod commands;
-mod infra;
-mod shared;
-
 use anyhow::Result;
+use armyknife::cli::{Cli, Commands};
+use armyknife::shared;
+use armyknife::shared::update;
 use clap::{CommandFactory, Parser};
 use clap_complete::aot::generate;
-use cli::{Cli, Commands};
-use shared::update;
 
 #[tokio::main]
 async fn main() {

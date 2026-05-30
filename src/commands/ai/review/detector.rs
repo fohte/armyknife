@@ -21,7 +21,7 @@ pub enum StartDetection {
 }
 
 /// How to detect that a reviewer has completed its review.
-#[expect(
+#[allow(
     clippy::enum_variant_names,
     reason = "the `Review` prefix names the signal source and is meaningful in context"
 )]

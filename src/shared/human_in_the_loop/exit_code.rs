@@ -4,7 +4,7 @@ use super::HumanInTheLoopError;
 
 /// The user approved the review (success).
 /// Not used directly (successful return implies exit code 0), but defined for completeness.
-#[expect(
+#[allow(
     dead_code,
     reason = "defined for documentation; success exits via Ok(())"
 )]

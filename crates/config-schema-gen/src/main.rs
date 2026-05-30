@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use armyknife::config;
+use armyknife::shared::config;
 
 fn main() -> Result<()> {
     let output: Option<PathBuf> = std::env::args().nth(1).map(PathBuf::from);
