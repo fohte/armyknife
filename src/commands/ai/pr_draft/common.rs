@@ -64,7 +64,7 @@ impl RepoInfo {
     /// Get repo info with is_private check via GitHub API (async)
     pub async fn from_current_dir_async(gh_client: &impl RepoClient) -> Result<Self> {
         let repo = git::open_repo()?;
-        Self::from_git2_repo_async(&repo, Some(gh_client)).await
+        Self::from_repo_async(&repo, Some(gh_client)).await
     }
 
     /// Get repo info from git only (no network call, is_private defaults to false)
@@ -80,7 +80,7 @@ impl RepoInfo {
         })
     }
 
-    /// Get repo info from a git2 Repository at a specific path.
+    /// Get repo info from a repository at a specific path.
     /// Used for testing with temporary repositories.
     #[cfg(test)]
     pub fn from_path(path: &Path) -> Result<Self> {
@@ -95,8 +95,8 @@ impl RepoInfo {
         })
     }
 
-    async fn from_git2_repo_async(
-        repo: &git2::Repository,
+    async fn from_repo_async(
+        repo: &git::GitRepo,
         gh_client: Option<&impl RepoClient>,
     ) -> Result<Self> {
         let branch = git::current_branch(repo)?;

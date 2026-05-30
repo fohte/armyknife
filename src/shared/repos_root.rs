@@ -44,9 +44,12 @@ fn ghq_root_from_env() -> Option<PathBuf> {
 
 /// Read ghq.root from git global config.
 fn ghq_root_from_gitconfig() -> Option<PathBuf> {
-    let config = git2::Config::open_default().ok()?;
-    let value = config.get_path("ghq.root").ok()?;
-    Some(value)
+    let value =
+        crate::infra::git::cmd::run_git_global(["config", "--get", "--path", "ghq.root"]).ok()?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
 }
 
 /// Expand `~` prefix to the home directory.

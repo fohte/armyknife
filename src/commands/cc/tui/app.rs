@@ -886,11 +886,11 @@ fn resolve_repo_name_for_path(cwd: &std::path::Path) -> String {
 /// workdir, so matching sibling sessions via `starts_with` is safe even when
 /// `cwd` is a subdirectory.
 fn resolve_worktree_root(cwd: &Path) -> Option<PathBuf> {
-    let repo = git2::Repository::open(cwd).ok()?;
+    let repo = crate::infra::git::open_repo_at(cwd).ok()?;
     if !repo.is_worktree() {
         return None;
     }
-    repo.workdir().map(|p| p.to_path_buf())
+    Some(repo.workdir().to_path_buf())
 }
 
 /// Loads sessions from disk with cleanup.
@@ -1353,7 +1353,15 @@ mod tests {
         let parent = tempfile::TempDir::new().unwrap();
         let repo_dir = parent.path().join("my-repo");
         std::fs::create_dir_all(&repo_dir).unwrap();
-        git2::Repository::init(&repo_dir).unwrap();
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_dir)
+            .args(["init", "-q"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success());
 
         let subdir = repo_dir.join("some").join("subdir");
         std::fs::create_dir_all(&subdir).unwrap();

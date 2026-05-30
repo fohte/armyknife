@@ -1,10 +1,9 @@
 //! GitHub-related git operations.
 
-use git2::Repository;
 use lazy_regex::regex_captures;
 
 use super::error::{GitError, Result};
-use super::repo::{open_repo, origin_url};
+use super::repo::{GitRepo, open_repo, origin_url};
 
 /// Parse owner and repo from a GitHub URL.
 /// Supports both SSH (git@github.com:owner/repo.git) and HTTPS formats.
@@ -15,7 +14,7 @@ pub fn parse_github_url(url: &str) -> Result<(String, String)> {
 }
 
 /// Get owner and repo from the origin remote.
-pub fn github_owner_and_repo(repo: &Repository) -> Result<(String, String)> {
+pub fn github_owner_and_repo(repo: &GitRepo) -> Result<(String, String)> {
     let url = origin_url(repo)?;
     parse_github_url(&url)
 }
@@ -23,9 +22,8 @@ pub fn github_owner_and_repo(repo: &Repository) -> Result<(String, String)> {
 /// Get owner and repo from git remote URL (using current repository).
 pub fn get_owner_repo() -> Option<(String, String)> {
     let repo = open_repo().ok()?;
-    let remote = repo.find_remote("origin").ok()?;
-    let url = remote.url()?;
-    parse_github_url(url).ok()
+    let url = repo.origin_url().ok()?;
+    parse_github_url(&url).ok()
 }
 
 #[cfg(test)]
