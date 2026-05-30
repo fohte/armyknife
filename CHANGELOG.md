@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.182](https://github.com/fohte/armyknife/compare/v0.1.181...v0.1.182) (2026-05-30)
+
+
+### Bug Fixes
+
+* **cc/hook:** clear lingering Hammerspoon notification on user-ended session ([#573](https://github.com/fohte/armyknife/issues/573)) ([950c3ed](https://github.com/fohte/armyknife/commit/950c3ed1f0963fc9b264e9fa256db1158755a757))
+
 ## [0.1.181](https://github.com/fohte/armyknife/compare/v0.1.180...v0.1.181) (2026-05-30)
 
 
