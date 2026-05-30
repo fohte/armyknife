@@ -1,4 +1,3 @@
-mod fallback;
 mod hammerspoon;
 pub mod icon;
 mod types;
@@ -9,20 +8,17 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 
-/// notify-rust will be removed in a future release; warn now so the user can
-/// install Hammerspoon before notifications start being silently dropped.
-const HAMMERSPOON_MISSING_MESSAGE: &str = "Hammerspoon is not installed; falling back to notify-rust (which will be removed in a future release). Install with: brew install --cask hammerspoon";
+const HAMMERSPOON_MISSING_MESSAGE: &str = "Hammerspoon is not installed; notifications will be skipped. Install with: brew install --cask hammerspoon";
 
 static HAMMERSPOON_WARNED: OnceLock<()> = OnceLock::new();
 
-/// Sends a notification using the best available method.
-/// Priority: Hammerspoon → notify-rust fallback.
+/// Sends a notification via Hammerspoon. No-op (with a one-shot warning) if Hammerspoon is missing.
 pub fn send(notification: &Notification) -> Result<()> {
     if is_hammerspoon_available() {
         hammerspoon::send(notification)
     } else {
         warn_hammerspoon_missing();
-        fallback::send(notification)
+        Ok(())
     }
 }
 
