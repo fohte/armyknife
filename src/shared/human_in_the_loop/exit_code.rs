@@ -2,14 +2,6 @@
 
 use super::HumanInTheLoopError;
 
-/// The user approved the review (success).
-/// Not used directly (successful return implies exit code 0), but defined for completeness.
-#[allow(
-    dead_code,
-    reason = "defined for documentation; success exits via Ok(())"
-)]
-pub const APPROVED: i32 = 0;
-
 /// The user did not approve the review (closed the editor without approving).
 pub const NOT_APPROVED: i32 = 1;
 
