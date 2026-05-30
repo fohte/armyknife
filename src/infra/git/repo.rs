@@ -41,15 +41,22 @@ impl GitRepo {
 
         let common_dir_raw = run_git(&workdir, ["rev-parse", "--git-common-dir"])
             .map_err(|_| GitError::NotInRepo)?;
-        let common_dir = resolve_relative(&workdir, &common_dir_raw);
-        let common_dir = std::fs::canonicalize(&common_dir).unwrap_or(common_dir);
-
         let git_dir_raw =
             run_git(&workdir, ["rev-parse", "--git-dir"]).map_err(|_| GitError::NotInRepo)?;
-        let git_dir = resolve_relative(&workdir, &git_dir_raw);
-        let git_dir = std::fs::canonicalize(&git_dir).unwrap_or(git_dir);
 
-        let is_worktree = git_dir != common_dir;
+        // In a linked worktree `--git-dir` resolves to
+        // `<common-dir>/worktrees/<name>` while `--git-common-dir` resolves to
+        // `<common-dir>` itself; in the main worktree the two are identical.
+        // Compare raw strings first (covers the common case without touching
+        // the filesystem), then fall back to absolute-path comparison.
+        let is_worktree = if git_dir_raw == common_dir_raw {
+            false
+        } else {
+            let abs_common = resolve_relative(&workdir, &common_dir_raw);
+            let abs_git = resolve_relative(&workdir, &git_dir_raw);
+            abs_git != abs_common
+        };
+        let common_dir = resolve_relative(&workdir, &common_dir_raw);
 
         Ok(Self {
             workdir,

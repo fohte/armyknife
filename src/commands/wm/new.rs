@@ -135,10 +135,12 @@ fn git_worktree_add(repo: &GitRepo, worktree_dir: &Path, mode: WorktreeAddMode) 
             .context("Failed to add worktree")?;
         }
         WorktreeAddMode::ForceNewBranch { branch, base } => {
-            // `git worktree add -B` resets the branch even if it already exists.
+            // `--force -B` overrides both "branch already used by worktree"
+            // and "destination path exists" checks so the reset succeeds even
+            // when the branch is checked out elsewhere.
             run_git(
                 repo.workdir(),
-                ["worktree", "add", "-B", branch, path, base],
+                ["worktree", "add", "--force", "-B", branch, path, base],
             )
             .context("Failed to add worktree")?;
         }
