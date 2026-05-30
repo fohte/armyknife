@@ -41,8 +41,6 @@ fn is_hammerspoon_available() -> bool {
     hammerspoon::find_hs_path().is_some()
 }
 
-/// Emits a one-shot warning that Hammerspoon is missing.
-/// Writes to both stderr (interactive visibility) and tracing (log file).
 fn warn_hammerspoon_missing() {
     if HAMMERSPOON_WARNED.set(()).is_ok() {
         tracing::warn!("{}", HAMMERSPOON_MISSING_MESSAGE);
