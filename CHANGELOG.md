@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.179](https://github.com/fohte/armyknife/compare/v0.1.178...v0.1.179) (2026-05-30)
+
+
+### Features
+
+* **notification:** require Hammerspoon and drop notify-rust fallback ([#568](https://github.com/fohte/armyknife/issues/568)) ([66d184d](https://github.com/fohte/armyknife/commit/66d184df07611efac069a6911b3027aee416d91e))
+
 ## [0.1.178](https://github.com/fohte/armyknife/compare/v0.1.177...v0.1.178) (2026-05-29)
 
 
