@@ -1,8 +1,6 @@
 //! Branch operations.
 
-use git2::{BranchType, Repository};
-
-use super::repo::{get_main_branch, open_repo};
+use super::repo::{GitRepo, get_main_branch, open_repo};
 use crate::infra::github::{PrInfo, PrState};
 
 /// Check if a local branch exists
@@ -10,7 +8,7 @@ pub fn local_branch_exists(branch: &str) -> bool {
     let Ok(repo) = open_repo() else {
         return false;
     };
-    repo.find_branch(branch, BranchType::Local).is_ok()
+    repo.local_branch_exists(branch)
 }
 
 /// Find the base branch for PR creation.
@@ -114,7 +112,7 @@ pub fn merge_status_from_pr(pr_info: &PrInfo) -> MergeStatus {
 ///
 /// Always returns `NotMerged` to protect branches that may have
 /// work-in-progress changes.
-pub fn merge_status_from_git(_repo: &Repository, _branch_name: &str) -> MergeStatus {
+pub fn merge_status_from_git(_repo: &GitRepo, _branch_name: &str) -> MergeStatus {
     // When no PR is found, always treat the branch as not merged.
     // The git merge-base check (is-ancestor) gives false positives for branches
     // that have no commits yet, since their HEAD is an ancestor of the main branch.
@@ -138,11 +136,11 @@ pub async fn get_merge_status(branch_name: &str) -> MergeStatus {
 /// Unlike [`get_merge_status`], this does not open a repository from the
 /// current working directory. Use this in cross-repository operations
 /// (e.g., `--all` mode) where the target repo differs from the CWD.
-pub async fn get_merge_status_for_repo(repo: &Repository, branch_name: &str) -> MergeStatus {
+pub async fn get_merge_status_for_repo(repo: &GitRepo, branch_name: &str) -> MergeStatus {
     get_merge_status_impl(Some(repo), branch_name).await
 }
 
-async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> MergeStatus {
+async fn get_merge_status_impl(repo: Option<&GitRepo>, branch_name: &str) -> MergeStatus {
     use super::github::github_owner_and_repo;
     use crate::infra::github::{GitHubClient, PrClient};
 
@@ -157,7 +155,7 @@ async fn get_merge_status_impl(repo: Option<&Repository>, branch_name: &str) -> 
         return merge_status_from_pr(&pr_info);
     }
 
-    // Fallback: check using git2 merge-base
+    // Fallback: protect branches without an associated PR.
     if let Some(repo) = repo {
         return merge_status_from_git(repo, branch_name);
     }

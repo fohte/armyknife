@@ -1,10 +1,26 @@
 //! Test utilities for creating temporary git repositories.
 
-use git2::Repository;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
 
-use super::repo::open_repo_at;
+use super::repo::{GitRepo, open_repo_at};
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(status.success(), "git {args:?} failed");
+}
 
 /// A temporary git repository for testing.
 pub struct TempRepo {
@@ -14,55 +30,32 @@ pub struct TempRepo {
 impl TempRepo {
     /// Create a new temporary git repository with a GitHub-style origin remote.
     pub fn new(owner: &str, repo_name: &str, branch: &str) -> Self {
-        // Ensure the system temp directory exists before asking tempfile for a
-        // new subdirectory. Under the srt sandbox, `TMPDIR` can point at a path
-        // (e.g. `/tmp/claude`) that is created lazily, and a narrow race
-        // window can make `TempDir::new()` fail with `NotFound` when several
-        // tests run in parallel and `TempDir` probes the parent before it
-        // exists.
+        // Some sandboxes (srt) lazily create TMPDIR; ensure it exists before
+        // TempDir probes the parent.
         let tmp_root = std::env::temp_dir();
         std::fs::create_dir_all(&tmp_root)
             .unwrap_or_else(|e| panic!("create temp root {}: {e}", tmp_root.display()));
         let dir = TempDir::new()
             .unwrap_or_else(|e| panic!("create temp dir under {}: {e}", tmp_root.display()));
-        let repo = Repository::init(dir.path()).expect("init repo");
 
-        // Create initial commit so HEAD exists
-        {
-            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-            let tree_id = repo.index().unwrap().write_tree().unwrap();
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-                .expect("create initial commit");
-        }
+        let path = dir.path();
+        git(path, &["init", "-q", "-b", branch]);
+        git(
+            path,
+            &["commit", "--allow-empty", "-q", "-m", "Initial commit"],
+        );
 
-        // Rename default branch if needed
-        {
-            let head = repo.head().expect("get head");
-            let current_branch = head.shorthand().unwrap_or("master").to_string();
-            drop(head); // Release borrow before renaming
-            if current_branch != branch {
-                let mut branch_ref = repo
-                    .find_branch(&current_branch, git2::BranchType::Local)
-                    .expect("find branch");
-                branch_ref.rename(branch, true).expect("rename branch");
-            }
-        }
-
-        // Set up origin remote with GitHub URL
         let url = format!("https://github.com/{owner}/{repo_name}.git");
-        repo.remote("origin", &url).expect("set origin");
+        git(path, &["remote", "add", "origin", &url]);
 
         Self { dir }
     }
 
-    /// Get the path to the repository.
     pub fn path(&self) -> PathBuf {
         self.dir.path().to_path_buf()
     }
 
-    /// Open the repository.
-    pub fn open(&self) -> Repository {
+    pub fn open(&self) -> GitRepo {
         open_repo_at(self.dir.path()).expect("open temp repo")
     }
 }

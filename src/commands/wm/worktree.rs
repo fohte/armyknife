@@ -3,183 +3,212 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use git2::{BranchType, Repository, WorktreePruneOptions};
 
 use super::error::{Result, WmError};
+use crate::infra::git::GitRepo;
+use crate::infra::git::cmd::run_git;
 
 /// Get the main repository, resolving from a worktree if necessary.
-pub fn get_main_repo(repo: &Repository) -> Result<Repository> {
-    if repo.is_worktree() {
-        let commondir = repo.commondir();
-        Repository::open(commondir.parent().ok_or(WmError::NotInGitRepo)?)
-            .map_err(|_| WmError::NotInGitRepo.into())
-    } else {
-        // Clone isn't available, so re-open from workdir
-        let workdir = repo.workdir().ok_or(WmError::NotInGitRepo)?;
-        Repository::open(workdir).map_err(|_| WmError::NotInGitRepo.into())
-    }
+pub fn get_main_repo(repo: &GitRepo) -> Result<GitRepo> {
+    repo.main_repo().map_err(|_| WmError::NotInGitRepo.into())
 }
 
 /// Get the branch name associated with a worktree.
-pub fn get_worktree_branch(repo: &Repository, worktree_name: &str) -> Option<String> {
-    let worktree = repo.find_worktree(worktree_name).ok()?;
-    let wt_repo = Repository::open_from_worktree(&worktree).ok()?;
-    let head = wt_repo.head().ok()?;
-    head.shorthand().map(|s| s.to_string())
+pub fn get_worktree_branch(repo: &GitRepo, worktree_name: &str) -> Option<String> {
+    let wt = list_worktrees_raw(repo).ok()?;
+    let entry = wt.into_iter().find(|w| w.name == worktree_name)?;
+    Some(entry.branch).filter(|b| !b.is_empty() && b != "(detached)")
 }
 
 /// Delete a worktree by name. Returns true if successful.
-pub fn delete_worktree(repo: &Repository, worktree_name: &str) -> Result<bool> {
-    let worktree = match repo.find_worktree(worktree_name) {
-        Ok(w) => w,
+pub fn delete_worktree(repo: &GitRepo, worktree_name: &str) -> Result<bool> {
+    let entry = match list_worktrees_raw(repo) {
+        Ok(list) => match list.into_iter().find(|w| w.name == worktree_name) {
+            Some(e) => e,
+            None => {
+                eprintln!("Failed to find worktree {worktree_name}");
+                return Ok(false);
+            }
+        },
         Err(e) => {
-            eprintln!("Failed to find worktree {worktree_name}: {e}");
+            eprintln!("Failed to list worktrees: {e}");
             return Ok(false);
         }
     };
 
-    let mut prune_opts = WorktreePruneOptions::new();
-    prune_opts.valid(true).working_tree(true);
-
-    match worktree.prune(Some(&mut prune_opts)) {
-        Ok(()) => Ok(true),
-        Err(e) => {
-            eprintln!("Failed to delete worktree {worktree_name}: {e}");
-            Ok(false)
+    let remove = run_git(
+        repo.workdir(),
+        [
+            "worktree",
+            "remove",
+            "--force",
+            entry.path.to_string_lossy().as_ref(),
+        ],
+    );
+    if remove.is_err() {
+        // Path may have been deleted out-of-band; prune lingering admin data.
+        let _ = run_git(repo.workdir(), ["worktree", "prune"]);
+        let still_present = list_worktrees_raw(repo)
+            .map(|l| l.iter().any(|w| w.name == worktree_name))
+            .unwrap_or(false);
+        if still_present {
+            eprintln!("Failed to delete worktree {worktree_name}");
+            return Ok(false);
         }
     }
+    Ok(true)
 }
 
 /// Delete a local branch if it exists. Returns true if deleted.
-pub fn delete_branch_if_exists(repo: &Repository, branch: &str) -> bool {
+pub fn delete_branch_if_exists(repo: &GitRepo, branch: &str) -> bool {
     if branch.is_empty() {
         return false;
     }
-
-    // Use the provided repo directly instead of opening from current directory,
-    // because the worktree directory may already be deleted at this point.
-    if let Ok(mut branch_ref) = repo.find_branch(branch, BranchType::Local) {
-        branch_ref.delete().is_ok()
-    } else {
-        false
+    if !repo.local_branch_exists(branch) {
+        return false;
     }
+    repo.delete_branch(branch).is_ok()
 }
 
 /// Find the worktree name from its path.
-pub fn find_worktree_name(repo: &Repository, worktree_path: &str) -> Result<String> {
-    let worktrees = repo.worktrees().context("Failed to list worktrees")?;
-
-    for name in worktrees.iter().flatten() {
-        if let Ok(wt) = repo.find_worktree(name) {
-            let wt_path = wt.path().to_string_lossy();
-            let wt_path_normalized = wt_path.trim_end_matches('/');
-            let worktree_path_normalized = worktree_path.trim_end_matches('/');
-            if wt_path_normalized == worktree_path_normalized {
-                return Ok(name.to_string());
-            }
+pub fn find_worktree_name(repo: &GitRepo, worktree_path: &str) -> Result<String> {
+    let normalized = worktree_path.trim_end_matches('/');
+    let entries = list_worktrees_raw(repo).context("Failed to list worktrees")?;
+    for entry in entries {
+        let p = entry.path.to_string_lossy();
+        if p.trim_end_matches('/') == normalized {
+            return Ok(entry.name);
         }
     }
-
     Err(WmError::WorktreeNotFound(worktree_path.to_string()).into())
 }
 
 /// Basic information about a linked worktree.
 #[derive(Debug, Clone)]
 pub struct LinkedWorktree {
-    /// The worktree name (used by git internally).
     pub name: String,
-    /// The worktree path on disk.
     pub path: PathBuf,
-    /// The branch name checked out in this worktree.
     pub branch: String,
-    /// The short commit hash (7 chars).
     pub commit: String,
 }
 
 /// List all linked worktrees (excludes main worktree).
-pub fn list_linked_worktrees(repo: &Repository) -> Result<Vec<LinkedWorktree>> {
-    let worktrees = repo.worktrees().context("Failed to list worktrees")?;
-
+pub fn list_linked_worktrees(repo: &GitRepo) -> Result<Vec<LinkedWorktree>> {
+    let all = list_worktrees_raw(repo).context("Failed to list worktrees")?;
     let mut result = Vec::new();
-
-    for name in worktrees.iter().flatten() {
-        let wt = match repo.find_worktree(name) {
-            Ok(w) => w,
-            Err(_) => continue,
-        };
-
-        let wt_path = wt.path().to_path_buf();
-
-        // Open the worktree repository to get its HEAD
-        let wt_repo = match Repository::open(&wt_path) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        let wt_head = wt_repo.head().ok();
-        let branch = wt_head
-            .as_ref()
-            .and_then(|h| h.shorthand())
-            .unwrap_or("(unknown)")
-            .to_string();
-        let commit = wt_head
-            .as_ref()
-            .and_then(|h| h.peel_to_commit().ok())
-            .map(|c| c.id().to_string())
-            .map(|s| s[..7].to_string())
-            .unwrap_or_else(|| "(none)".to_string());
-
+    // First entry from --porcelain is always the main worktree.
+    for entry in all.into_iter().skip(1) {
         result.push(LinkedWorktree {
-            name: name.to_string(),
-            path: wt_path,
-            branch,
-            commit,
+            name: entry.name,
+            path: entry.path,
+            branch: if entry.branch.is_empty() {
+                "(unknown)".to_string()
+            } else {
+                entry.branch
+            },
+            commit: entry.short_hash,
         });
     }
-
     Ok(result)
 }
 
 /// Get the main worktree path.
-pub fn get_main_worktree_path(repo: &Repository) -> Result<PathBuf> {
+pub fn get_main_worktree_path(repo: &GitRepo) -> Result<PathBuf> {
     if repo.is_worktree() {
-        repo.commondir()
-            .parent()
-            .map(|p| p.to_path_buf())
-            .ok_or_else(|| WmError::NotInGitRepo.into())
+        repo.main_workdir()
     } else {
-        repo.workdir()
-            .map(|p| p.to_path_buf())
-            .ok_or_else(|| WmError::NotInGitRepo.into())
+        Ok(repo.workdir().to_path_buf())
     }
 }
 
 /// Get the branch and commit for the main worktree.
-/// If called from a linked worktree, opens the main repo to get correct info.
-pub fn get_main_worktree_info(repo: &Repository) -> (String, String) {
-    // If we're in a worktree, we need to open the main repo to get its HEAD
+pub fn get_main_worktree_info(repo: &GitRepo) -> (String, String) {
     let main_repo = if repo.is_worktree() {
-        repo.commondir()
-            .parent()
-            .and_then(|p| Repository::open(p).ok())
+        repo.main_repo().ok()
     } else {
         None
     };
-
-    let target_repo = main_repo.as_ref().unwrap_or(repo);
-    let head = target_repo.head().ok();
-    let branch = head
-        .as_ref()
-        .and_then(|h| h.shorthand())
-        .unwrap_or("(unknown)")
-        .to_string();
-    let commit = head
-        .as_ref()
-        .and_then(|h| h.peel_to_commit().ok())
-        .map(|c| c.id().to_string())
-        .map(|s| s[..7].to_string())
-        .unwrap_or_else(|| "(none)".to_string());
+    let target = main_repo.as_ref().unwrap_or(repo);
+    let branch = target
+        .current_branch()
+        .unwrap_or_else(|_| "(unknown)".to_string());
+    let commit = target
+        .short_hash("HEAD")
+        .unwrap_or_else(|_| "(none)".to_string());
     (branch, commit)
+}
+
+/// Raw worktree-list entry from `git worktree list --porcelain`.
+#[derive(Debug, Clone)]
+struct WorktreeEntry {
+    /// Worktree name (last path component, matching git's internal name).
+    name: String,
+    path: PathBuf,
+    /// Branch shorthand, `"(detached)"` for detached HEAD, or empty.
+    branch: String,
+    /// 7-char short hash.
+    short_hash: String,
+}
+
+/// Run `git worktree list --porcelain` and parse the result. First entry is
+/// the main worktree.
+fn list_worktrees_raw(repo: &GitRepo) -> anyhow::Result<Vec<WorktreeEntry>> {
+    let stdout = run_git(repo.workdir(), ["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_porcelain(&stdout))
+}
+
+fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
+    let mut out = Vec::new();
+    let mut current: Option<(PathBuf, String, String, bool)> = None;
+
+    fn flush(cur: Option<(PathBuf, String, String, bool)>, out: &mut Vec<WorktreeEntry>) {
+        if let Some((path, head, branch, detached)) = cur {
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let short_hash = head.chars().take(7).collect::<String>();
+            let branch_display = if detached {
+                "(detached)".to_string()
+            } else {
+                branch
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&branch)
+                    .to_string()
+            };
+            out.push(WorktreeEntry {
+                name,
+                path,
+                branch: branch_display,
+                short_hash,
+            });
+        }
+    }
+
+    for line in text.lines() {
+        if line.is_empty() {
+            flush(current.take(), &mut out);
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            flush(current.take(), &mut out);
+            current = Some((PathBuf::from(rest), String::new(), String::new(), false));
+        } else if let Some(rest) = line.strip_prefix("HEAD ") {
+            if let Some(c) = current.as_mut() {
+                c.1 = rest.to_string();
+            }
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            if let Some(c) = current.as_mut() {
+                c.2 = rest.to_string();
+            }
+        } else if line == "detached"
+            && let Some(c) = current.as_mut()
+        {
+            c.3 = true;
+        }
+    }
+    flush(current.take(), &mut out);
+    out
 }
 
 #[cfg(test)]
@@ -194,7 +223,7 @@ mod tests {
 
         let main_repo = get_main_repo(&repo).unwrap();
         assert_eq!(
-            main_repo.workdir().unwrap().canonicalize().unwrap(),
+            main_repo.workdir().canonicalize().unwrap(),
             test_repo.path()
         );
     }
@@ -204,11 +233,11 @@ mod tests {
         let test_repo = TestRepo::new();
         test_repo.create_worktree("feature");
 
-        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+        let wt_repo = crate::infra::git::open_repo_at(&test_repo.worktree_path("feature")).unwrap();
         let main_repo = get_main_repo(&wt_repo).unwrap();
 
         assert_eq!(
-            main_repo.workdir().unwrap().canonicalize().unwrap(),
+            main_repo.workdir().canonicalize().unwrap(),
             test_repo.path()
         );
     }
@@ -240,15 +269,22 @@ mod tests {
 
         let repo = test_repo.open();
 
-        // Verify worktree exists
-        assert!(repo.find_worktree("to-delete").is_ok());
+        assert!(
+            list_worktrees_raw(&repo)
+                .unwrap()
+                .iter()
+                .any(|w| w.name == "to-delete")
+        );
 
-        // Delete it
         let result = delete_worktree(&repo, "to-delete").unwrap();
         assert!(result);
 
-        // Verify it's gone
-        assert!(repo.find_worktree("to-delete").is_err());
+        assert!(
+            !list_worktrees_raw(&repo)
+                .unwrap()
+                .iter()
+                .any(|w| w.name == "to-delete")
+        );
     }
 
     #[test]
@@ -336,7 +372,7 @@ mod tests {
         let test_repo = TestRepo::new();
         test_repo.create_worktree("feature");
 
-        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+        let wt_repo = crate::infra::git::open_repo_at(&test_repo.worktree_path("feature")).unwrap();
         let path = get_main_worktree_path(&wt_repo).unwrap();
 
         assert_eq!(path.canonicalize().unwrap(), test_repo.path());
@@ -358,42 +394,28 @@ mod tests {
         let test_repo = TestRepo::new();
         test_repo.create_worktree("feature");
 
-        // Open from worktree, not main repo
-        let wt_repo = Repository::open(test_repo.worktree_path("feature")).unwrap();
+        let wt_repo = crate::infra::git::open_repo_at(&test_repo.worktree_path("feature")).unwrap();
 
-        // Should return main repo's branch (master), not the worktree's branch (feature)
         let (branch, _commit) = get_main_worktree_info(&wt_repo);
         assert_eq!(branch, "master");
     }
 
     #[test]
     fn delete_branch_if_exists_works_after_worktree_deleted() {
-        // This test reproduces the bug where branch deletion fails when:
-        // 1. Current directory is the worktree being deleted
-        // 2. Worktree is deleted first
-        // 3. Then delete_branch_if_exists is called
-        //
-        // The bug occurs because local_branch_exists() uses open_repo() which
-        // opens from current directory - but the worktree directory is already gone.
-
         let test_repo = TestRepo::new();
         test_repo.create_worktree("feature-to-delete");
 
         let repo = test_repo.open();
         let wt_path = test_repo.worktree_path("feature-to-delete");
 
-        // Verify the branch exists before deletion
         assert!(
-            repo.find_branch("feature-to-delete", BranchType::Local)
-                .is_ok(),
+            repo.local_branch_exists("feature-to-delete"),
             "Branch should exist before deletion"
         );
 
-        // RAII guard to restore current directory even on panic
         struct DirGuard(std::path::PathBuf);
         impl Drop for DirGuard {
             fn drop(&mut self) {
-                // Ignore result since we can't panic in drop
                 let _ = std::env::set_current_dir(&self.0);
             }
         }
@@ -402,12 +424,9 @@ mod tests {
             let _guard = DirGuard(std::env::current_dir().unwrap());
             std::env::set_current_dir(&wt_path).unwrap();
 
-            // Delete the worktree first (this is what happens in delete.rs)
             let deleted = delete_worktree(&repo, "feature-to-delete").unwrap();
             assert!(deleted, "Worktree should be deleted");
 
-            // Now try to delete the branch - this should succeed but fails due to the bug
-            // because local_branch_exists() tries to open repo from current dir (deleted worktree)
             delete_branch_if_exists(&repo, "feature-to-delete")
         };
 
@@ -416,11 +435,34 @@ mod tests {
             "Branch should be deleted even after worktree is removed"
         );
 
-        // Verify the branch is actually gone
         assert!(
-            repo.find_branch("feature-to-delete", BranchType::Local)
-                .is_err(),
+            !repo.local_branch_exists("feature-to-delete"),
             "Branch should not exist after deletion"
         );
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_handles_basic() {
+        let input = indoc::indoc! {"
+            worktree /repo
+            HEAD abcdef0123456789
+            branch refs/heads/main
+
+            worktree /repo/.worktrees/feature
+            HEAD fedcba9876543210
+            branch refs/heads/feature
+
+            worktree /repo/.worktrees/detached
+            HEAD 1111111222222222
+            detached
+        "};
+        let entries = parse_worktree_porcelain(input);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "repo");
+        assert_eq!(entries[0].branch, "main");
+        assert_eq!(entries[0].short_hash, "abcdef0");
+        assert_eq!(entries[1].name, "feature");
+        assert_eq!(entries[1].branch, "feature");
+        assert_eq!(entries[2].branch, "(detached)");
     }
 }

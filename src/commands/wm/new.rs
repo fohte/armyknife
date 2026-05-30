@@ -1,12 +1,13 @@
 use anyhow::{Context, bail};
 use clap::Args;
-use git2::{BranchType, Repository, WorktreeAddOptions};
 use std::path::{Path, PathBuf};
 
 use super::error::{Result, WmError};
 use super::git::branch_to_worktree_name;
 use crate::commands::cc::store as cc_store;
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
+use crate::infra::git::GitRepo;
+use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
 use crate::infra::tmux;
@@ -101,97 +102,45 @@ enum WorktreeAddMode<'a> {
     ForceNewBranch { branch: &'a str, base: &'a str },
 }
 
-/// Run `git worktree add` with the specified mode using git2
-fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMode) -> Result<()> {
-    let worktree_name = worktree_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .context("Invalid worktree path")?;
+/// Run `git worktree add` with the specified mode.
+fn git_worktree_add(repo: &GitRepo, worktree_dir: &Path, mode: WorktreeAddMode) -> Result<()> {
+    let path = worktree_dir.to_str().context("Invalid worktree path")?;
 
     match mode {
         WorktreeAddMode::LocalBranch { branch } => {
-            // Checkout existing local branch
-            let local_branch = repo
-                .find_branch(branch, BranchType::Local)
-                .context("Failed to find branch")?;
-            let reference = local_branch.into_reference();
-
-            let mut opts = WorktreeAddOptions::new();
-            opts.reference(Some(&reference));
-
-            repo.worktree(worktree_name, worktree_dir, Some(&opts))
+            run_git(repo.workdir(), ["worktree", "add", path, branch])
                 .context("Failed to add worktree")?;
         }
         WorktreeAddMode::TrackRemote { branch } => {
-            // Create a tracking branch from remote
             let remote_name = format!("origin/{branch}");
-            let remote_branch = repo
-                .find_branch(&remote_name, BranchType::Remote)
-                .context("Failed to find remote branch")?;
-
-            let commit = remote_branch
-                .get()
-                .peel_to_commit()
-                .context("Failed to get commit from remote branch")?;
-
-            // Create local branch tracking remote
-            let mut local_branch = repo
-                .branch(branch, &commit, false)
-                .context("Failed to create branch")?;
-
-            local_branch
-                .set_upstream(Some(&remote_name))
-                .context("Failed to set upstream")?;
-
-            let reference = local_branch.into_reference();
-            let mut opts = WorktreeAddOptions::new();
-            opts.reference(Some(&reference));
-
-            repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .context("Failed to add worktree")?;
+            run_git(
+                repo.workdir(),
+                [
+                    "worktree",
+                    "add",
+                    "--track",
+                    "-b",
+                    branch,
+                    path,
+                    &remote_name,
+                ],
+            )
+            .context("Failed to add worktree")?;
         }
         WorktreeAddMode::NewBranch { branch, base } => {
-            // Create new branch from base
-            let base_commit = repo
-                .revparse_single(base)
-                .context("Failed to resolve base")?
-                .peel_to_commit()
-                .context("Failed to get commit")?;
-
-            let new_branch = repo
-                .branch(branch, &base_commit, false)
-                .context("Failed to create branch")?;
-
-            let reference = new_branch.into_reference();
-            let mut opts = WorktreeAddOptions::new();
-            opts.reference(Some(&reference));
-
-            repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .context("Failed to add worktree")?;
+            run_git(
+                repo.workdir(),
+                ["worktree", "add", "-b", branch, path, base],
+            )
+            .context("Failed to add worktree")?;
         }
         WorktreeAddMode::ForceNewBranch { branch, base } => {
-            // Force create/reset branch from base
-            let base_commit = repo
-                .revparse_single(base)
-                .context("Failed to resolve base")?
-                .peel_to_commit()
-                .context("Failed to get commit")?;
-
-            // Delete existing branch if it exists
-            if let Ok(mut existing) = repo.find_branch(branch, BranchType::Local) {
-                existing.delete().ok();
-            }
-
-            let new_branch = repo
-                .branch(branch, &base_commit, true)
-                .context("Failed to create branch")?;
-
-            let reference = new_branch.into_reference();
-            let mut opts = WorktreeAddOptions::new();
-            opts.reference(Some(&reference));
-
-            repo.worktree(worktree_name, worktree_dir, Some(&opts))
-                .context("Failed to add worktree")?;
+            // `git worktree add -B` resets the branch even if it already exists.
+            run_git(
+                repo.workdir(),
+                ["worktree", "add", "-B", branch, path, base],
+            )
+            .context("Failed to add worktree")?;
         }
     }
 
@@ -199,21 +148,15 @@ fn git_worktree_add(repo: &Repository, worktree_dir: &Path, mode: WorktreeAddMod
 }
 
 /// Check if a branch exists (local or remote) in the given repository.
-fn repo_branch_exists(repo: &Repository, branch: &str) -> bool {
-    repo.find_branch(branch, BranchType::Local).is_ok()
-        || repo
-            .find_branch(&format!("origin/{branch}"), BranchType::Remote)
-            .is_ok()
+fn repo_branch_exists(repo: &GitRepo, branch: &str) -> bool {
+    repo.local_branch_exists(branch) || repo.remote_branch_exists(&format!("origin/{branch}"))
 }
 
 /// Add a worktree for an existing branch (local or remote)
-fn add_worktree_for_branch(repo: &Repository, worktree_dir: &Path, branch: &str) -> Result<()> {
-    if repo.find_branch(branch, BranchType::Local).is_ok() {
+fn add_worktree_for_branch(repo: &GitRepo, worktree_dir: &Path, branch: &str) -> Result<()> {
+    if repo.local_branch_exists(branch) {
         git_worktree_add(repo, worktree_dir, WorktreeAddMode::LocalBranch { branch })
-    } else if repo
-        .find_branch(&format!("origin/{branch}"), BranchType::Remote)
-        .is_ok()
-    {
+    } else if repo.remote_branch_exists(&format!("origin/{branch}")) {
         git_worktree_add(repo, worktree_dir, WorktreeAddMode::TrackRemote { branch })
     } else {
         // Fallback: use as-is (should not normally happen)
@@ -638,9 +581,25 @@ fn setup_tmux_window(
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
-    use git2::Signature;
     use indoc::indoc;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(status.success(), "git {args:?} failed");
+    }
 
     #[test]
     fn git_worktree_add_creates_worktree_with_new_branch() {
@@ -661,10 +620,8 @@ mod tests {
         )
         .unwrap();
 
-        // Worktree should exist
         assert!(worktree_dir.exists());
-        // Branch should be created
-        assert!(repo.find_branch("test-branch", BranchType::Local).is_ok());
+        assert!(repo.local_branch_exists("test-branch"));
     }
 
     #[test]
@@ -672,9 +629,7 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        // Create a branch first
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("existing-branch", &head, false).unwrap();
+        git_in(&test_repo.path(), &["branch", "existing-branch"]);
 
         let worktrees_dir = test_repo.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
@@ -697,21 +652,15 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        // Create initial branch
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("force-test", &head, false).unwrap();
-
-        // Create a new commit
-        let sig = Signature::now("Test", "test@test.com").unwrap();
-        let tree_id = repo.index().unwrap().write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "Second commit", &tree, &[&head])
-            .unwrap();
+        git_in(&test_repo.path(), &["branch", "force-test"]);
+        git_in(
+            &test_repo.path(),
+            &["commit", "--allow-empty", "-q", "-m", "Second commit"],
+        );
 
         let worktrees_dir = test_repo.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
 
-        // Force create should delete old branch and create from new HEAD
         let worktree_dir = worktrees_dir.join("force-test");
         git_worktree_add(
             &repo,
@@ -734,16 +683,11 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        // Create a local branch
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("existing-local", &head, false).unwrap();
-
-        // Create a remote tracking branch
-        repo.reference(
-            "refs/remotes/origin/existing-remote",
-            head.id(),
-            true,
-            "create fake remote branch",
+        git_in(&test_repo.path(), &["branch", "existing-local"]);
+        let head = run_git(&test_repo.path(), ["rev-parse", "HEAD"]).unwrap();
+        run_git(
+            &test_repo.path(),
+            ["update-ref", "refs/remotes/origin/existing-remote", &head],
         )
         .unwrap();
 
@@ -754,8 +698,7 @@ mod tests {
     fn add_worktree_for_branch_uses_local_branch() {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("local-branch", &head, false).unwrap();
+        git_in(&test_repo.path(), &["branch", "local-branch"]);
 
         let worktrees_dir = test_repo.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
@@ -767,34 +710,66 @@ mod tests {
 
     #[rstest]
     fn add_worktree_for_branch_tracks_remote_branch() {
-        // Create a "remote" bare repo and a local clone so that
-        // set_upstream can resolve the remote for origin/*.
+        // Create a "remote" bare repo and a local clone so that --track can
+        // resolve the upstream for origin/*.
         let remote_dir = tempfile::tempdir().unwrap();
-        let remote_repo = Repository::init_bare(remote_dir.path()).unwrap();
-        let sig = Signature::now("Test", "test@test.com").unwrap();
-        let tree_id = remote_repo.index().unwrap().write_tree().unwrap();
-        let tree = remote_repo.find_tree(tree_id).unwrap();
-        let commit = remote_repo
-            .commit(Some("refs/heads/master"), &sig, &sig, "init", &tree, &[])
+        let remote_path = remote_dir.path();
+        let status = Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg("-q")
+            .arg("-b")
+            .arg("master")
+            .arg(remote_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
             .unwrap();
-        let master_commit = remote_repo.find_commit(commit).unwrap();
-        remote_repo
-            .branch("remote-branch", &master_commit, false)
-            .unwrap();
+        assert!(status.success());
 
-        // Clone the remote
+        // Seed the bare remote with a master commit and remote-branch.
+        let seed_dir = tempfile::tempdir().unwrap();
+        let seed_path = seed_dir.path();
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg("-b")
+            .arg("master")
+            .arg(seed_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        git_in(seed_path, &["commit", "--allow-empty", "-q", "-m", "init"]);
+        git_in(seed_path, &["branch", "remote-branch"]);
+        git_in(
+            seed_path,
+            &["remote", "add", "origin", remote_path.to_str().unwrap()],
+        );
+        git_in(
+            seed_path,
+            &["push", "-q", "origin", "master", "remote-branch"],
+        );
+
+        // Clone the populated remote.
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir
             .path()
             .canonicalize()
             .unwrap_or_else(|_| local_dir.path().to_path_buf());
-        let repo = Repository::clone(remote_dir.path().to_str().unwrap(), &local_path).unwrap();
-
-        // Fetch to get remote tracking branches
-        repo.find_remote("origin")
-            .unwrap()
-            .fetch(&[] as &[&str], None, None)
+        let status = Command::new("git")
+            .arg("clone")
+            .arg("-q")
+            .arg(remote_path)
+            .arg(&local_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
             .unwrap();
+        assert!(status.success());
+
+        let repo = crate::infra::git::open_repo_at(&local_path).unwrap();
 
         let worktrees_dir = local_path.join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
@@ -802,8 +777,7 @@ mod tests {
 
         add_worktree_for_branch(&repo, &worktree_dir, "remote-branch").unwrap();
         assert!(worktree_dir.exists());
-        // Should have created a local tracking branch
-        assert!(repo.find_branch("remote-branch", BranchType::Local).is_ok());
+        assert!(repo.local_branch_exists("remote-branch"));
     }
 
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};

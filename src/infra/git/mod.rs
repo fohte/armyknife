@@ -1,9 +1,11 @@
-//! Git operations using git2 (libgit2).
+//! Git operations via the `git` CLI.
 //!
-//! This module provides a unified interface for git operations without
-//! spawning external git processes.
+//! Wraps `git` subcommands with typed helpers ([`GitRepo`] etc.) so the rest
+//! of the codebase operates on a single boundary instead of shelling out ad
+//! hoc and so we can drop the libgit2 C dependency.
 
 mod branch;
+pub(crate) mod cmd;
 mod error;
 mod github;
 mod repo;
@@ -17,6 +19,6 @@ pub use branch::{
 pub use error::GitError;
 pub use github::{get_owner_repo, github_owner_and_repo};
 pub use repo::{
-    current_branch, fetch_with_prune, get_main_branch_for_repo, get_repo_owner_and_name,
+    GitRepo, current_branch, fetch_with_prune, get_main_branch_for_repo, get_repo_owner_and_name,
     get_repo_root, get_repo_root_in, open_repo, open_repo_at, parse_repo,
 };

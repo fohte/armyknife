@@ -1,16 +1,16 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use git2::Repository;
 
 use super::error::{Result, WmError};
 use super::worktree::{get_main_worktree_info, get_main_worktree_path, list_linked_worktrees};
+use crate::infra::git::GitRepo;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}
 
 pub fn run(_args: &ListArgs) -> Result<()> {
-    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let entries = list_worktrees(&repo)?;
     print!("{}", format_worktree_list(&entries));
     if !entries.is_empty() {
@@ -56,7 +56,7 @@ pub fn format_worktree_list(entries: &[WorktreeInfo]) -> String {
 }
 
 /// List all worktrees (main + linked) for a repository.
-pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
+pub fn list_worktrees(repo: &GitRepo) -> Result<Vec<WorktreeInfo>> {
     let mut entries = Vec::new();
 
     // Add main worktree
@@ -117,7 +117,8 @@ mod tests {
         repo.create_worktree("feature-branch");
 
         // Open from the worktree instead of main repo
-        let wt_repo = Repository::open(repo.worktree_path("feature-branch")).unwrap();
+        let wt_repo =
+            crate::infra::git::open_repo_at(&repo.worktree_path("feature-branch")).unwrap();
         let entries = list_worktrees(&wt_repo).unwrap();
 
         // Should still list both worktrees

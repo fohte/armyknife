@@ -1,5 +1,23 @@
-use git2::{Repository, Signature};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::infra::git::GitRepo;
+
+fn git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Test User")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test User")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(status.success(), "git {args:?} failed");
+}
 
 /// A temporary git repository for testing.
 pub struct TestRepo {
@@ -10,17 +28,12 @@ impl TestRepo {
     /// Create a new test repository with an initial commit.
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
-
-        // Initialize git repo using git2
-        let repo = Repository::init(dir.path()).expect("Failed to init repo");
-
-        // Create initial commit
-        let sig = Signature::now("Test User", "test@example.com").expect("Failed to create sig");
-        let tree_id = repo.index().unwrap().write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-            .expect("Failed to create initial commit");
-
+        let path = dir.path();
+        git(path, &["init", "-q"]);
+        git(
+            path,
+            &["commit", "--allow-empty", "-q", "-m", "Initial commit"],
+        );
         Self { dir }
     }
 
@@ -34,23 +47,27 @@ impl TestRepo {
     }
 
     /// Open the repository.
-    pub fn open(&self) -> Repository {
-        Repository::open(self.path()).expect("Failed to open repo")
+    pub fn open(&self) -> GitRepo {
+        crate::infra::git::open_repo_at(&self.path()).expect("Failed to open repo")
     }
 
     /// Create a worktree with the given branch name.
     pub fn create_worktree(&self, branch_name: &str) {
         let worktree_path = self.worktree_path(branch_name);
 
-        // Create .worktrees directory if it doesn't exist
         let worktrees_dir = self.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).expect("Failed to create .worktrees dir");
 
-        let repo = self.open();
-
-        // Create worktree using git2
-        repo.worktree(branch_name, &worktree_path, None)
-            .expect("Failed to create worktree");
+        git(
+            &self.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch_name,
+                worktree_path.to_str().expect("utf8 path"),
+            ],
+        );
     }
 
     /// Get the path to a worktree.

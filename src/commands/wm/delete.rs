@@ -1,11 +1,11 @@
 use anyhow::{Context, bail};
 use clap::Args;
-use git2::Repository;
 use std::io::{self, Write};
 
 use super::error::{Result, WmError};
 use super::git::{branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists};
 use super::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
+use crate::infra::git::GitRepo;
 use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::config::load_config;
@@ -28,7 +28,7 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
         &config.wm.branch_prefix,
     )?;
 
-    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
     let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
@@ -67,7 +67,7 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
 }
 
 /// Checks if the worktree's branch is merged and prompts for confirmation if not.
-async fn check_merge_status(repo: &Repository, worktree_name: &str, force: bool) -> Result<()> {
+async fn check_merge_status(repo: &GitRepo, worktree_name: &str, force: bool) -> Result<()> {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
