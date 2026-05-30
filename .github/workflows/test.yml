@@ -67,7 +67,7 @@ jobs:
         run: lefthook run pre-commit --all-files
 
       - name: Regenerate config schema
-        run: cargo run -- config schema --output docs/config-schema.json
+        run: cargo run -p config-schema-gen -- docs/config-schema.json
 
       # Formatters configured with `stage_fixed: true` run `git add` after formatting,
       # which stages the changes.

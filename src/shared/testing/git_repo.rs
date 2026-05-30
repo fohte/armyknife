@@ -24,6 +24,12 @@ pub struct TestRepo {
     dir: tempfile::TempDir,
 }
 
+impl Default for TestRepo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestRepo {
     /// Create a new test repository with an initial commit.
     pub fn new() -> Self {

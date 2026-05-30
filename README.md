@@ -505,14 +505,6 @@ a completions zsh > ~/.zfunc/_a
 
 Configuration management.
 
-#### `a config schema`
-
-Print JSON Schema for the configuration file.
-
-| Option                | Description                            |
-| --------------------- | -------------------------------------- |
-| `-o, --output <path>` | Write schema to file instead of stdout |
-
 #### `a config get <key>`
 
 Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.

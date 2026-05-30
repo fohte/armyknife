@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::ai::review::reviewer::Reviewer;
 
 /// Top-level configuration for armyknife.
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Worktree management settings.
@@ -101,17 +101,18 @@ fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json
 }
 
 /// Worktree management configuration.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WmConfig {
     /// Worktree directory name (default: ".worktrees").
     #[serde(default = "default_worktrees_dir")]
-    #[schemars(default = "default_worktrees_dir")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_worktrees_dir"))]
     pub worktrees_dir: String,
 
     /// Branch prefix (default: "fohte/").
     #[serde(default = "default_branch_prefix")]
-    #[schemars(default = "default_branch_prefix")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_branch_prefix"))]
     pub branch_prefix: String,
 
     /// tmux pane layout definition.
@@ -137,7 +138,8 @@ impl Default for WmConfig {
 }
 
 /// Layout tree node: either a single pane (leaf) or a split (internal node).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum LayoutNode {
     /// Split node with two children.
@@ -163,7 +165,8 @@ impl Default for LayoutNode {
 }
 
 /// Split configuration with direction and two child nodes.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SplitConfig {
     /// Split direction ("horizontal" or "vertical").
@@ -175,7 +178,8 @@ pub struct SplitConfig {
 }
 
 /// Split direction.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     /// Horizontal split (tmux split-window -h).
@@ -185,7 +189,8 @@ pub enum SplitDirection {
 }
 
 /// Configuration for a single tmux pane.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PaneConfig {
     /// Command to run in the pane.
@@ -196,7 +201,8 @@ pub struct PaneConfig {
 }
 
 /// Terminal emulator to use for human-in-the-loop reviews.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Terminal {
     /// WezTerm terminal emulator.
@@ -217,7 +223,8 @@ impl Terminal {
 }
 
 /// Terminal/editor configuration for human-in-the-loop reviews.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EditorConfig {
     /// Terminal emulator (default: "wezterm").
@@ -226,7 +233,7 @@ pub struct EditorConfig {
 
     /// Editor command (default: "nvim").
     #[serde(default = "default_editor_command")]
-    #[schemars(default = "default_editor_command")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_editor_command"))]
     pub editor_command: String,
 
     /// App name to focus on notification click (macOS only).
@@ -256,17 +263,21 @@ impl Default for EditorConfig {
 }
 
 /// Notification configuration.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationConfig {
     /// Whether notifications are enabled (default: true).
     #[serde(default = "default_true")]
-    #[schemars(default = "default_true")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_true"))]
     pub enabled: bool,
 
     /// Notification sound name (default: "Glass"). Empty string for silent.
     #[serde(default = "default_notification_sound")]
-    #[schemars(default = "default_notification_sound")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_notification_sound")
+    )]
     pub sound: String,
 }
 
@@ -280,7 +291,8 @@ impl Default for NotificationConfig {
 }
 
 /// Per-repository configuration.
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RepoConfig {
     /// Language for commit messages and PR content (e.g., "ja", "en").
@@ -290,7 +302,7 @@ pub struct RepoConfig {
     /// Whether direct commits to the default branch (e.g., master/main) are allowed.
     /// Consumed by external git hooks; armyknife only stores and exposes the value.
     #[serde(default)]
-    #[schemars(default)]
+    #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
     /// AI-related per-repo overrides (e.g., reviewer set for `a ai review wait`).
@@ -299,7 +311,8 @@ pub struct RepoConfig {
 }
 
 /// Per-organization (GitHub owner) configuration.
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OrgConfig {
     /// AI-related per-org defaults (e.g., reviewer set for `a ai review wait`).
@@ -308,7 +321,8 @@ pub struct OrgConfig {
 }
 
 /// Settings under the `ai` key (used in both org and repo scopes).
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AiConfig {
     /// Settings for `a ai review` commands.
@@ -317,7 +331,8 @@ pub struct AiConfig {
 }
 
 /// Settings for `a ai review` commands.
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AiReviewConfig {
     /// Default reviewers for `a ai review wait` and `a ai review request`.
@@ -327,7 +342,8 @@ pub struct AiReviewConfig {
 }
 
 /// Claude Code session monitoring configuration.
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CcConfig {
     /// Automatic pause settings for long-stopped sessions.
@@ -347,12 +363,13 @@ pub struct CcConfig {
 /// sends SIGTERM to any Claude Code process whose session has been Stopped for
 /// longer than `timeout`, and flips the session status to Paused so that
 /// `a cc resume` can restore it later.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AutoPauseConfig {
     /// Whether automatic pausing is enabled (default: true).
     #[serde(default = "default_true")]
-    #[schemars(default = "default_true")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_true"))]
     pub enabled: bool,
 
     /// How long a session must stay in Stopped before being paused.
@@ -360,7 +377,10 @@ pub struct AutoPauseConfig {
     /// built into armyknife, e.g., "30s", "10m", "1h30m".
     /// Default: "30m".
     #[serde(default = "default_auto_pause_timeout")]
-    #[schemars(default = "default_auto_pause_timeout")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_auto_pause_timeout")
+    )]
     pub timeout: String,
 }
 
@@ -385,12 +405,13 @@ fn default_auto_pause_timeout() -> String {
 /// hook fire time), it SIGTERMs the live `claude` process and then re-runs
 /// `claude -r <id> -p "/compact"` so that the compaction itself benefits from
 /// the still-warm prompt cache.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AutoCompactConfig {
     /// Whether automatic compaction is enabled (default: true).
     #[serde(default = "default_true")]
-    #[schemars(default = "default_true")]
+    #[cfg_attr(feature = "schema-gen", schemars(default = "default_true"))]
     pub enabled: bool,
 
     /// How long a session must stay idle (since the last Stop hook) before
@@ -398,7 +419,10 @@ pub struct AutoCompactConfig {
     /// so the resulting `/compact` invocation hits a warm cache (Claude Code
     /// subscriptions: 5m TTL → default 4m30s).
     #[serde(default = "default_auto_compact_idle_timeout")]
-    #[schemars(default = "default_auto_compact_idle_timeout")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_auto_compact_idle_timeout")
+    )]
     pub idle_timeout: String,
 
     /// Minimum context size (in tokens) required before auto-compact fires.
@@ -411,7 +435,10 @@ pub struct AutoCompactConfig {
     /// use (200k vs 1M).
     /// Default: 180000.
     #[serde(default = "default_auto_compact_min_context_tokens")]
-    #[schemars(default = "default_auto_compact_min_context_tokens")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_auto_compact_min_context_tokens")
+    )]
     pub min_context_tokens: u64,
 }
 
@@ -586,6 +613,10 @@ fn merge_yaml(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml
 }
 
 /// Generate JSON Schema for the Config struct.
+///
+/// Only compiled with the `schema-gen` feature, which is enabled by the
+/// `config-schema-gen` workspace member.
+#[cfg(feature = "schema-gen")]
 pub fn generate_schema() -> schemars::Schema {
     schemars::schema_for!(Config)
 }
@@ -594,7 +625,9 @@ pub fn generate_schema() -> schemars::Schema {
 mod tests {
     use super::*;
     use indoc::indoc;
-    use rstest::{fixture, rstest};
+    #[cfg(feature = "schema-gen")]
+    use rstest::fixture;
+    use rstest::rstest;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1220,18 +1253,21 @@ mod tests {
         assert_eq!(config.resolve_reviewers(owner, repo), expected);
     }
 
+    #[cfg(feature = "schema-gen")]
     #[fixture]
     fn schema_value() -> serde_json::Value {
         let schema = generate_schema();
         serde_json::to_value(&schema).unwrap()
     }
 
+    #[cfg(feature = "schema-gen")]
     #[rstest]
     fn generate_schema_returns_valid_json_with_title(schema_value: serde_json::Value) {
         // schemars generates a title from the struct name
         assert_eq!(schema_value["title"], "Config");
     }
 
+    #[cfg(feature = "schema-gen")]
     #[rstest]
     fn generate_schema_contains_wm_description(schema_value: serde_json::Value) {
         // Doc comments should appear as descriptions in the schema
@@ -1241,6 +1277,7 @@ mod tests {
         assert_eq!(wm_desc, "Worktree management settings.");
     }
 
+    #[cfg(feature = "schema-gen")]
     #[rstest]
     fn generate_schema_contains_default_values(schema_value: serde_json::Value) {
         // Default values from schemars(default = ...) should appear in the schema.

@@ -1,14 +1,12 @@
 //! Reviewer definitions.
 
 use clap::ValueEnum;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::detectors::{AnyDetector, CodeRabbitDetector, DevinDetector, GeminiDetector};
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, JsonSchema, Hash,
-)]
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Reviewer {
     /// Gemini Code Assist
