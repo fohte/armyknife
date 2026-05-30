@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.183](https://github.com/fohte/armyknife/compare/v0.1.182...v0.1.183) (2026-05-30)
+
+
+### Bug Fixes
+
+* **cc/sweep:** skip auto-pause while background tasks are running ([#574](https://github.com/fohte/armyknife/issues/574)) ([e10d109](https://github.com/fohte/armyknife/commit/e10d109b3f8751d55837d1e92fceaa6efe727075))
+
 ## [0.1.182](https://github.com/fohte/armyknife/compare/v0.1.181...v0.1.182) (2026-05-30)
 
 
