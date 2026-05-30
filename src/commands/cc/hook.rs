@@ -132,10 +132,10 @@ impl SideEffects {
             let _ = crate::infra::notification::remove_group(group);
         }
         #[cfg(test)]
-        if let Some(rec) = &self.removed_notification_groups
-            && let Ok(mut v) = rec.lock()
-        {
-            v.push(group.to_string());
+        if let Some(rec) = &self.removed_notification_groups {
+            rec.lock()
+                .expect("removed_notification_groups mutex poisoned")
+                .push(group.to_string());
         }
     }
 }
