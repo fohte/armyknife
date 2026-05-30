@@ -24,6 +24,11 @@ pub enum PauseDecision {
     NotStopped,
     /// Session is Stopped but the timeout has not elapsed yet.
     NotYetElapsed,
+    /// Session is Stopped but has at least one background task (Bash
+    /// `run_in_background: true`) that has not yet reported completion.
+    /// The Stop hook fires synthetically right after a bg launch, so a
+    /// Stopped status here does not mean the user is idle.
+    BgTaskPending,
 }
 
 /// Determines whether a stopped session should be paused right now.
@@ -49,6 +54,10 @@ pub fn decide_pause_with_effective(
 ) -> PauseDecision {
     if session.status != SessionStatus::Stopped {
         return PauseDecision::NotStopped;
+    }
+
+    if !session.pending_bg_task_ids.is_empty() {
+        return PauseDecision::BgTaskPending;
     }
 
     let elapsed = now.signed_duration_since(effective_updated_at);
@@ -150,6 +159,7 @@ pub fn parse_duration(input: &str) -> Result<Duration, DurationParseError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     use chrono::TimeDelta;
@@ -171,7 +181,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            last_bg_task_pending: false,
+            pending_bg_task_ids: BTreeSet::new(),
         }
     }
 
@@ -202,6 +212,17 @@ mod tests {
         assert_eq!(
             decide_pause(&session, now, Duration::from_secs(60)),
             PauseDecision::NotStopped
+        );
+    }
+
+    #[rstest]
+    fn decide_pause_skips_when_bg_task_pending() {
+        let now = Utc::now();
+        let mut session = stopped_session(now - TimeDelta::hours(1));
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        assert_eq!(
+            decide_pause(&session, now, Duration::from_secs(60)),
+            PauseDecision::BgTaskPending
         );
     }
 

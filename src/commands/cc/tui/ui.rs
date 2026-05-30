@@ -935,7 +935,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            last_bg_task_pending: false,
+            pending_bg_task_ids: std::collections::BTreeSet::new(),
         }
     }
 
