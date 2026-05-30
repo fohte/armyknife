@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -106,13 +107,28 @@ pub fn run(_args: &DoctorArgs) -> Result<()> {
         .collect();
 
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
+    let color = use_color();
 
     for row in &rows {
-        print_row(row, name_width);
+        print_row(row, name_width, color);
     }
 
     Ok(())
 }
+
+/// Honors `NO_COLOR` (https://no-color.org) and disables colors when stdout is
+/// not a terminal so piped/redirected output stays plain.
+fn use_color() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::io::stdout().is_terminal()
+}
+
+const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
+const DIM: &str = "\x1b[2m";
+const RESET: &str = "\x1b[0m";
 
 struct Row {
     name: String,
@@ -252,24 +268,31 @@ fn extract_version(output: &str) -> Option<String> {
     Some(line.to_string())
 }
 
-fn print_row(row: &Row, name_width: usize) {
-    let (icon, detail) = match &row.status {
-        Status::Found(v) => ("✅", v.clone()),
-        Status::FoundNoVersion => ("✅", "found".to_string()),
-        Status::Missing => ("❌", "not found".to_string()),
-        Status::Skipped(reason) => ("➖", format!("skipped ({reason})")),
+fn print_row(row: &Row, name_width: usize, color: bool) {
+    let (icon, detail, color_code) = match &row.status {
+        Status::Found(v) => ("✓", v.clone(), GREEN),
+        Status::FoundNoVersion => ("✓", "found".to_string(), GREEN),
+        Status::Missing => ("x", "not found".to_string(), RED),
+        Status::Skipped(reason) => ("-", format!("skipped ({reason})"), DIM),
     };
 
+    let (on, off) = if color { (color_code, RESET) } else { ("", "") };
+
     println!(
-        "{icon} {name:<width$}  {detail}  -- {purpose}",
+        "{on}{icon}{off} {name:<width$}  {on}{detail}{off}  {dim}-- {purpose}{off}",
         name = row.name,
         width = name_width,
         detail = detail,
         purpose = row.purpose,
+        dim = if color { DIM } else { "" },
     );
 
     if let Some(hint) = &row.install_hint {
-        println!("   {:width$}  install: {hint}", "", width = name_width);
+        println!(
+            "  {empty:<width$}  install: {hint}",
+            empty = "",
+            width = name_width,
+        );
     }
 }
 
