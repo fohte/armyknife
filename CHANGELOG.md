@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.181](https://github.com/fohte/armyknife/compare/v0.1.180...v0.1.181) (2026-05-30)
+
+
+### Features
+
+* split schemars into a workspace member to shorten release builds ([#569](https://github.com/fohte/armyknife/issues/569)) ([9d714f0](https://github.com/fohte/armyknife/commit/9d714f07c514c84e5750c9ceb0017fc8682404db))
+
 ## [0.1.180](https://github.com/fohte/armyknife/compare/v0.1.179...v0.1.180) (2026-05-30)
 
 
