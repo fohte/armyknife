@@ -3,7 +3,7 @@ members = [".", "crates/config-schema-gen"]
 
 [package]
 name = "armyknife"
-version = "0.1.180"
+version = "0.1.181"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
