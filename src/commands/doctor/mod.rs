@@ -200,22 +200,29 @@ fn install_hint(tool: &Tool) -> String {
 }
 
 fn run_version(program: &str, args: &[&str]) -> Option<String> {
-    let output = command::new(program).args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    extract_version(&String::from_utf8_lossy(&output.stdout))
+    parse_version_output(command::new(program).args(args).output().ok()?)
 }
 
 fn run_version_at(program: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .ok()?;
+    parse_version_output(
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()?,
+    )
+}
+
+fn parse_version_output(output: std::process::Output) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    extract_version(&String::from_utf8_lossy(&output.stdout))
+    // Some CLIs (older clap-based tools) print `--version` to stderr.
+    let bytes = if output.stdout.iter().any(|b| !b.is_ascii_whitespace()) {
+        &output.stdout
+    } else {
+        &output.stderr
+    };
+    extract_version(&String::from_utf8_lossy(bytes))
 }
 
 /// Pulls a human-readable version string out of typical `--version` output.
