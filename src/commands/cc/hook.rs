@@ -100,6 +100,11 @@ struct SideEffects {
     /// Spawn the detached `a cc auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     auto_compact: bool,
+    /// Test-only sink that records the group ids passed to
+    /// `remove_notification_group`. Lets tests assert the call happened
+    /// without invoking hammerspoon.
+    #[cfg(test)]
+    removed_notification_groups: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 impl SideEffects {
@@ -108,6 +113,8 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            #[cfg(test)]
+            removed_notification_groups: None,
         }
     }
 
@@ -117,6 +124,19 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            removed_notification_groups: None,
+        }
+    }
+
+    fn remove_notification_group(&self, group: &str) {
+        if self.notifications {
+            let _ = crate::infra::notification::remove_group(group);
+        }
+        #[cfg(test)]
+        if let Some(rec) = &self.removed_notification_groups {
+            rec.lock()
+                .expect("removed_notification_groups mutex poisoned")
+                .push(group.to_string());
         }
     }
 }
@@ -195,6 +215,13 @@ fn process_hook_event_impl(
                 session.status = SessionStatus::Ended;
                 session.updated_at = Utc::now();
                 store::save_session_to(sessions_dir, &session)?;
+                // The user terminated this session (sweep flips status to
+                // Paused before SIGTERM, so reaching this branch means a
+                // Ctrl-C / `/exit` / crash, not a sweep). No further events
+                // will arrive to auto-clear lingering notifications, so do it
+                // here. Paused sessions keep their notification so the user
+                // still sees it after `a cc resume`.
+                side_effects.remove_notification_group(&input.session_id);
             }
         }
         // Recompute the window's aggregated status so the just-ended session
@@ -387,8 +414,8 @@ fn process_hook_event_impl(
     // PermissionRequest for the same permission ask; clearing the group there
     // would erase the just-sent notification before the user sees it.
     // SessionEnd never reaches here (early return above).
-    if side_effects.notifications && !matches!(event, HookEvent::Notification) {
-        let _ = crate::infra::notification::remove_group(&input.session_id);
+    if !matches!(event, HookEvent::Notification) {
+        side_effects.remove_notification_group(&input.session_id);
     }
 
     // Send notification if applicable (errors are logged but don't fail the hook).
@@ -1330,6 +1357,52 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::user_ended_clears_notification(SessionStatus::Running, vec!["end-sess".to_string()])]
+    #[case::sweep_paused_keeps_notification(SessionStatus::Paused, Vec::<String>::new())]
+    fn session_end_clears_notification_only_when_not_paused(
+        #[case] initial_status: SessionStatus,
+        #[case] expected_removed: Vec<String>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let session = Session {
+            session_id: "end-sess".to_string(),
+            cwd: "/tmp/test".into(),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: initial_status,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+        };
+        store::save_session_to(sessions_dir, &session).expect("save");
+
+        let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let side_effects = SideEffects {
+            tmux: false,
+            notifications: false,
+            auto_compact: false,
+            removed_notification_groups: Some(removed.clone()),
+        };
+
+        let input: HookInput =
+            serde_json::from_str(r#"{"session_id":"end-sess","cwd":"/tmp/test"}"#)
+                .expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::SessionEnd, input, sessions_dir, &side_effects)
+            .expect("hook should succeed");
+
+        let recorded = removed.lock().expect("lock").clone();
+        assert_eq!(recorded, expected_removed);
+    }
+
     /// Runs a PostToolUse hook with the given initial pending-id set and the
     /// given raw JSON payload, then returns the resulting pending set.
     fn run_post_tool_use(initial: &[&str], payload: &str) -> BTreeSet<String> {
@@ -1460,6 +1533,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: true,
+            removed_notification_groups: None,
         };
 
         let input: HookInput =

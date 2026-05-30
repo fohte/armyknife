@@ -1,0 +1,15 @@
+[package]
+name = "config-schema-gen"
+version = "0.1.182"
+edition = "2024"
+publish = false
+description = "Dev-only generator for armyknife's Config JSON Schema"
+
+[[bin]]
+name = "config-schema-gen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "=1.0.102"
+armyknife = { path = "../..", features = ["schema-gen"] }
+serde_json = "=1.0.150"

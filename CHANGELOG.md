@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.182](https://github.com/fohte/armyknife/compare/v0.1.181...v0.1.182) (2026-05-30)
+
+
+### Bug Fixes
+
+* **cc/hook:** clear lingering Hammerspoon notification on user-ended session ([#573](https://github.com/fohte/armyknife/issues/573)) ([950c3ed](https://github.com/fohte/armyknife/commit/950c3ed1f0963fc9b264e9fa256db1158755a757))
+
+## [0.1.181](https://github.com/fohte/armyknife/compare/v0.1.180...v0.1.181) (2026-05-30)
+
+
+### Features
+
+* split schemars into a workspace member to shorten release builds ([#569](https://github.com/fohte/armyknife/issues/569)) ([9d714f0](https://github.com/fohte/armyknife/commit/9d714f07c514c84e5750c9ceb0017fc8682404db))
+
+## [0.1.180](https://github.com/fohte/armyknife/compare/v0.1.179...v0.1.180) (2026-05-30)
+
+
+### Features
+
+* replace git2 with git CLI shell-out ([#567](https://github.com/fohte/armyknife/issues/567)) ([a7aaa1d](https://github.com/fohte/armyknife/commit/a7aaa1da58537c87e3a76300a49e755b7427f1d6))
+
 ## [0.1.179](https://github.com/fohte/armyknife/compare/v0.1.178...v0.1.179) (2026-05-30)
 
 

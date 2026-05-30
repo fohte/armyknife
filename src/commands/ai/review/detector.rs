@@ -21,10 +21,6 @@ pub enum StartDetection {
 }
 
 /// How to detect that a reviewer has completed its review.
-#[expect(
-    clippy::enum_variant_names,
-    reason = "the `Review` prefix names the signal source and is meaningful in context"
-)]
 pub enum CompletionDetection {
     /// A PR review (via GitHub review API) has been submitted by the bot.
     ReviewSubmitted,

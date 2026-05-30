@@ -340,8 +340,7 @@ fn wake_input_for(session: &Session) -> Option<String> {
 /// could not determine it (cwd is not a git repo, GitHub call failed).
 async fn branch_merged_for(session: &Session) -> Option<bool> {
     let repo = open_repo_at(&session.cwd).ok()?;
-    let head = repo.head().ok()?;
-    let branch = head.shorthand()?.to_string();
+    let branch = repo.current_branch().ok()?;
     // Detached HEAD: `current_branch` reports "HEAD" — there is no branch to
     // associate with a PR, so treat as "not merged" and let auto-compact run.
     if branch == "HEAD" {

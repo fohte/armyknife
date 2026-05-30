@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
-use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
+use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
@@ -42,7 +42,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
         return run_all(args).await;
     }
 
-    let repo = Repository::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
     fetch_with_prune(&main_repo).context("Failed to fetch from remote")?;
@@ -117,7 +117,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
             .to_string_lossy()
             .to_string();
 
-        let repo = match Repository::open(repo_path) {
+        let repo = match GitRepo::open_at(repo_path) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Warning: Failed to open {repo_name}: {e}");
@@ -186,7 +186,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     let mut all_to_keep = Vec::new();
 
     for rd in &repo_data {
-        let repo = match Repository::open(&rd.repo_path) {
+        let repo = match GitRepo::open_at(&rd.repo_path) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -368,7 +368,7 @@ fn confirm_deletion() -> bool {
 }
 
 /// Delete all worktrees and their branches for a single repository.
-fn delete_worktrees_single_repo(repo: &Repository, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
+fn delete_worktrees_single_repo(repo: &GitRepo, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
     let mut deleted_count = 0;
 
     for info in worktrees {
@@ -412,7 +412,7 @@ fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]
 
     for (repo_name, infos) in &by_repo {
         let repo_path = repos_root.join(repo_name);
-        let repo = match Repository::open(&repo_path) {
+        let repo = match GitRepo::open_at(&repo_path) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Warning: Failed to open {repo_name}: {e}");
@@ -452,7 +452,7 @@ fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]
 
 /// Collect all worktrees and categorize them by merge status
 async fn collect_worktrees(
-    repo: &Repository,
+    repo: &GitRepo,
     repo_name: Option<&str>,
 ) -> Result<(Vec<CleanWorktreeInfo>, Vec<CleanWorktreeInfo>)> {
     let mut to_delete = Vec::new();

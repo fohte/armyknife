@@ -6,14 +6,13 @@
 
 use std::path::Path;
 
-use git2::Repository;
-
 use crate::commands::cc::store;
 use crate::commands::cc::types::SessionStatus;
 use crate::commands::wm::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
 };
+use crate::infra::git::GitRepo;
 use crate::infra::tmux;
 
 /// Result of worktree resource cleanup.
@@ -41,7 +40,7 @@ pub struct WorktreeCleanupResult {
 ///
 /// If `cwd` is not inside a git worktree, returns a default (no-op) result.
 pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupResult> {
-    let repo = match Repository::open(cwd) {
+    let repo = match GitRepo::open_at(cwd) {
         Ok(r) => r,
         Err(_) => return Ok(WorktreeCleanupResult::default()),
     };
@@ -52,12 +51,7 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
 
     let main_repo = get_main_repo(&repo)?;
 
-    // Resolve the worktree root directory, not the raw cwd which may be
-    // a subdirectory. This ensures find_worktree_name matches correctly.
-    let worktree_root = match repo.workdir() {
-        Some(p) => p.to_path_buf(),
-        None => return Ok(WorktreeCleanupResult::default()),
-    };
+    let worktree_root = repo.workdir().to_path_buf();
     let worktree_root_str = worktree_root.to_string_lossy();
 
     let worktree_name = match find_worktree_name(&main_repo, &worktree_root_str) {
@@ -78,7 +72,7 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
 /// `worktree_path` is the filesystem path of the worktree root, used for
 /// tmux window and session file lookup.
 pub fn cleanup_worktree_by_name(
-    repo: &Repository,
+    repo: &GitRepo,
     worktree_name: &str,
     worktree_path: &Path,
 ) -> anyhow::Result<WorktreeCleanupResult> {
@@ -108,8 +102,7 @@ pub fn cleanup_worktree_by_name(
 }
 
 /// Deletes a git worktree and its associated branch.
-/// Pure git2 operation with no external command dependencies.
-fn delete_worktree_and_branch(repo: &Repository, worktree_name: &str) -> WorktreeCleanupResult {
+fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCleanupResult {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
     let worktree_deleted = delete_worktree(repo, worktree_name).unwrap_or(false);
@@ -187,8 +180,8 @@ mod tests {
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
 
-    // Tests exercise delete_worktree_and_branch (pure git2 operations) to
-    // avoid depending on external commands like tmux or session store I/O.
+    // Tests exercise delete_worktree_and_branch directly to avoid depending
+    // on tmux or session store I/O.
 
     #[rstest]
     #[case::running(SessionStatus::Running, true)]
@@ -216,7 +209,11 @@ mod tests {
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
 
-        assert!(repo.find_worktree("cleanup-test").is_err());
+        // After deletion, the worktree should no longer be listed.
+        let list =
+            crate::infra::git::cmd::run_git(repo.workdir(), ["worktree", "list", "--porcelain"])
+                .unwrap();
+        assert!(!list.contains("/.worktrees/cleanup-test"));
     }
 
     #[test]
@@ -232,8 +229,8 @@ mod tests {
 
     #[test]
     fn cleanup_worktree_resources_on_non_worktree_returns_default() {
-        // Repository::open on a non-worktree returns is_worktree() == false,
-        // so no external commands are invoked.
+        // Opening a non-worktree path returns is_worktree() == false, so no
+        // tmux commands run.
         let test_repo = TestRepo::new();
         let result =
             cleanup_worktree_resources(&test_repo.path()).expect("should succeed on main repo");
@@ -246,7 +243,7 @@ mod tests {
 
     #[test]
     fn cleanup_worktree_resources_on_nonexistent_path_returns_default() {
-        // Repository::open fails, so no external commands are invoked.
+        // open_at fails, so no tmux commands run.
         let result = cleanup_worktree_resources(Path::new("/nonexistent/path/to/repo"))
             .expect("should succeed on missing path");
 
