@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/config-schema-gen"]
+
 [package]
 name = "armyknife"
 version = "0.1.178"
@@ -7,9 +10,18 @@ description = "Personal CLI toolkit written in Rust"
 repository = "https://github.com/fohte/armyknife"
 license = "MIT"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "a"
 path = "src/main.rs"
+
+[features]
+# Enable JSON Schema generation for the Config type. Only used by the
+# config-schema-gen workspace member; off by default so the production
+# `a` binary doesn't pull in `schemars` and its derive expansions.
+schema-gen = ["dep:schemars"]
 
 [dependencies]
 anyhow = "=1.0.102"
@@ -26,7 +38,7 @@ lazy-regex = "=3.6.0"
 libc = "=0.2.186"
 regex = "=1.12.3"
 self_update = { version = "=0.42.0", features = ["rustls", "compression-flate2"], default-features = false }
-schemars = "=1.2.1"
+schemars = { version = "=1.2.1", optional = true }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 serde_yaml = "=0.9.34"

@@ -477,6 +477,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "config-schema-gen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "armyknife",
+ "serde_json",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
