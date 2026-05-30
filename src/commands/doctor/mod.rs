@@ -26,7 +26,6 @@ struct Tool {
     version_args: &'static [&'static str],
     /// One-line description of what armyknife uses this tool for.
     purpose: &'static str,
-    /// Whether the tool is required for core functionality.
     /// macOS-only tools are skipped on other platforms.
     macos_only: bool,
     /// Override the `brew install` package name (defaults to `name`).
