@@ -95,7 +95,20 @@ impl GitRepo {
     pub fn current_branch(&self) -> Result<String> {
         match run_git(&self.workdir, ["symbolic-ref", "--short", "HEAD"]) {
             Ok(s) if !s.is_empty() => Ok(s),
-            _ => Ok("HEAD".to_string()),
+            Ok(_) => Ok("HEAD".to_string()),
+            Err(err) => {
+                // Only treat a non-zero git exit (detached HEAD) as the
+                // fallback; propagate spawn / I/O failures so the caller
+                // doesn't see a phantom detached HEAD when git is missing.
+                if matches!(
+                    err.downcast_ref::<GitError>(),
+                    Some(GitError::CommandFailed(_))
+                ) {
+                    Ok("HEAD".to_string())
+                } else {
+                    Err(err)
+                }
+            }
         }
     }
 

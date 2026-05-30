@@ -46,8 +46,10 @@ where
 
 fn check_output(output: Output) -> Result<String> {
     if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        Ok(stdout.trim_end_matches('\n').to_string())
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Strip both \n and \r so Windows CRLF-style git output doesn't leave
+        // a stray \r inside parsed branch names or paths.
+        Ok(stdout.trim_end_matches(['\n', '\r']).to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(GitError::CommandFailed(stderr).into())

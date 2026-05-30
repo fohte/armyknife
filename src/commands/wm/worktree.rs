@@ -39,10 +39,10 @@ pub fn delete_worktree(repo: &GitRepo, worktree_name: &str) -> Result<bool> {
     let remove = run_git(
         repo.workdir(),
         [
-            "worktree",
-            "remove",
-            "--force",
-            entry.path.to_string_lossy().as_ref(),
+            std::ffi::OsStr::new("worktree"),
+            std::ffi::OsStr::new("remove"),
+            std::ffi::OsStr::new("--force"),
+            entry.path.as_os_str(),
         ],
     );
     if remove.is_err() {
