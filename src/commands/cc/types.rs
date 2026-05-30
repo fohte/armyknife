@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::error::CcError;
@@ -40,13 +41,16 @@ pub struct Session {
     /// child sessions can still find their nearest living ancestor.
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
-    /// True when the most recent tool call launched a background task whose
-    /// completion is observable only to the model (no hook fires). Set by
-    /// PostToolUse, consumed and cleared by the Stop hook so we skip
-    /// auto-compact for the Stop that is really just "I kicked off a
-    /// background command".
+    /// IDs of background tasks (`Bash` with `run_in_background: true`) that
+    /// were launched in this session and whose completion has not yet been
+    /// observed. The Stop hook fires synthetically as soon as a bg task is
+    /// spawned, so a non-empty set means "the user is still mid-task even
+    /// though Claude's main loop went idle". Consumed by `auto_compact`
+    /// (skip compaction while non-empty) and by `sweep` (do not auto-pause
+    /// while non-empty). Cleared per-id when a `BashOutput` PostToolUse
+    /// reports completion or a `KillShell` PostToolUse fires.
     #[serde(default)]
-    pub last_bg_task_pending: bool,
+    pub pending_bg_task_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +170,22 @@ impl HookInput {
             .get("backgroundTaskId")?
             .as_str()
     }
+
+    /// Shell id referenced by `BashOutput` / `KillShell` tool calls. Claude
+    /// Code's tool_input schema for these tools is not documented
+    /// (anthropics/claude-code#3671); empirically the field is `shell_id`
+    /// but `bash_id` has appeared in older builds. Try both.
+    pub fn shell_id(&self) -> Option<&str> {
+        let ti = self.tool_input.as_ref()?;
+        ti.shell_id.as_deref().or(ti.bash_id.as_deref())
+    }
+
+    /// Status string from a `BashOutput` PostToolUse `tool_response`. Returns
+    /// `None` for any shape that does not carry a string `status` field
+    /// (still running, schema mismatch, MCP array payload, etc.).
+    pub fn bash_output_status(&self) -> Option<&str> {
+        self.tool_response.as_ref()?.get("status")?.as_str()
+    }
 }
 
 /// Tool input data from pre-tool-use events.
@@ -177,6 +197,12 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
+    /// Shell id for `BashOutput` / `KillShell` tools (current Claude Code).
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    /// Shell id for `BashOutput` / `KillShell` tools (legacy field name).
+    #[serde(default)]
+    pub bash_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

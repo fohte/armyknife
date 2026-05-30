@@ -25,6 +25,12 @@ pub enum CompactDecision {
     /// paused it, or it ended). Cancelling silently is the right move because
     /// either the user resumed work or another worker handled the session.
     NotStopped,
+    /// Session is Stopped but has at least one background task in flight.
+    /// Compacting would SIGTERM the live `claude` and kill the bg task with
+    /// it. Workers scheduled by an earlier turn (before the bg launch) reach
+    /// this branch because the post-bg-launch synthetic Stop suppresses the
+    /// spawn of a *new* worker but cannot retroactively cancel the prior one.
+    BgTaskPending,
     /// The text inside the Claude Code TUI input box changed between
     /// arm time (Stop hook fired) and wake time (idle_timeout elapsed),
     /// meaning the user has typed something into the prompt. Compacting
@@ -96,6 +102,10 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::NotStopped;
     }
 
+    if !inputs.session.pending_bg_task_ids.is_empty() {
+        return CompactDecision::BgTaskPending;
+    }
+
     if inputs.branch_merged == Some(true) {
         return CompactDecision::BranchMerged;
     }
@@ -153,7 +163,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            last_bg_task_pending: false,
+            pending_bg_task_ids: std::collections::BTreeSet::new(),
         }
     }
 
@@ -261,6 +271,20 @@ mod tests {
             ..inputs(&session, now, Duration::from_secs(60))
         });
         assert_eq!(decision, CompactDecision::Compact);
+    }
+
+    #[rstest]
+    fn pending_bg_task_aborts() {
+        // A worker scheduled by an earlier Stop wakes up after the user has
+        // launched a bg task in a later turn. The post-bg-launch synthetic
+        // Stop suppresses spawning a *new* worker but cannot retroactively
+        // cancel the prior one; this worker must abort on its own, otherwise
+        // it SIGTERMs the live claude and kills the bg task with it.
+        let now = Utc::now();
+        let mut session = stopped_session(now - TimeDelta::hours(1));
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        let decision = decide_compact(inputs(&session, now, Duration::from_secs(60)));
+        assert_eq!(decision, CompactDecision::BgTaskPending);
     }
 
     #[rstest]

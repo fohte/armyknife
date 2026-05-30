@@ -358,6 +358,14 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
             PauseDecision::NotStopped => {
                 report.active += 1;
             }
+            PauseDecision::BgTaskPending => {
+                tracing::info!(
+                    event = "cc.sweep.bg_task_pending",
+                    session = %session.session_id,
+                    pending = session.pending_bg_task_ids.len(),
+                );
+                report.active += 1;
+            }
         }
     }
 
@@ -487,7 +495,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            last_bg_task_pending: false,
+            pending_bg_task_ids: std::collections::BTreeSet::new(),
         }
     }
 
@@ -759,6 +767,41 @@ mod tests {
 
         assert_eq!(report.paused, 1);
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+    }
+
+    #[rstest]
+    fn pending_bg_task_blocks_pause(test_dir: TestDir) {
+        // Stopped well past the timeout, but a background task launched
+        // earlier in the turn has not reported completion. Pausing here
+        // would kill the bg task — sweep must leave it alone and count it
+        // as active.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("bg-busy", SessionStatus::Stopped, old);
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("bg-busy", 4242)]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(60),
+            &sender,
+            &probe,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 0);
+        assert_eq!(report.active, 1);
+        assert!(
+            sender.calls.borrow().is_empty(),
+            "session with pending bg tasks must not be SIGTERM'd"
+        );
+
+        let reloaded = store::load_session_from(&test_dir.path, "bg-busy")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
     }
 
     #[rstest]

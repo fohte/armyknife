@@ -371,7 +371,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                last_bg_task_pending: false,
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
             })
             .collect();
 
@@ -575,7 +575,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                last_bg_task_pending: false,
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
             },
             Session {
                 session_id: "session-waiting".to_string(),
@@ -590,7 +590,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                last_bg_task_pending: false,
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
             },
             Session {
                 session_id: "session-stopped".to_string(),
@@ -605,7 +605,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                last_bg_task_pending: false,
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
             },
             Session {
                 session_id: "session-paused".to_string(),
@@ -620,7 +620,7 @@ mod tests {
                 current_tool: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
-                last_bg_task_pending: false,
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
             },
         ];
         App::with_sessions(sessions)
@@ -855,7 +855,7 @@ mod tests {
             current_tool: None,
             label: None,
             ancestor_session_ids: Vec::new(),
-            last_bg_task_pending: false,
+            pending_bg_task_ids: std::collections::BTreeSet::new(),
         }
     }
 
