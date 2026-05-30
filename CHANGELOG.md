@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.180](https://github.com/fohte/armyknife/compare/v0.1.179...v0.1.180) (2026-05-30)
+
+
+### Features
+
+* replace git2 with git CLI shell-out ([#567](https://github.com/fohte/armyknife/issues/567)) ([a7aaa1d](https://github.com/fohte/armyknife/commit/a7aaa1da58537c87e3a76300a49e755b7427f1d6))
+
 ## [0.1.179](https://github.com/fohte/armyknife/compare/v0.1.178...v0.1.179) (2026-05-30)
 
 
