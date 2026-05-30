@@ -5,7 +5,15 @@ mod types;
 
 pub use types::{Notification, NotificationAction};
 
+use std::sync::OnceLock;
+
 use anyhow::Result;
+
+/// notify-rust will be removed in a future release; warn now so the user can
+/// install Hammerspoon before notifications start being silently dropped.
+const HAMMERSPOON_MISSING_MESSAGE: &str = "Hammerspoon is not installed; falling back to notify-rust (which will be removed in a future release). Install with: brew install --cask hammerspoon";
+
+static HAMMERSPOON_WARNED: OnceLock<()> = OnceLock::new();
 
 /// Sends a notification using the best available method.
 /// Priority: Hammerspoon → notify-rust fallback.
@@ -13,6 +21,7 @@ pub fn send(notification: &Notification) -> Result<()> {
     if is_hammerspoon_available() {
         hammerspoon::send(notification)
     } else {
+        warn_hammerspoon_missing();
         fallback::send(notification)
     }
 }
@@ -30,6 +39,15 @@ pub fn remove_group(group: &str) -> Result<()> {
 /// Checks if the Hammerspoon CLI (`hs`) is available on the system.
 fn is_hammerspoon_available() -> bool {
     hammerspoon::find_hs_path().is_some()
+}
+
+/// Emits a one-shot warning that Hammerspoon is missing.
+/// Writes to both stderr (interactive visibility) and tracing (log file).
+fn warn_hammerspoon_missing() {
+    if HAMMERSPOON_WARNED.set(()).is_ok() {
+        tracing::warn!("{}", HAMMERSPOON_MISSING_MESSAGE);
+        eprintln!("[armyknife] warning: {HAMMERSPOON_MISSING_MESSAGE}");
+    }
 }
 
 #[cfg(test)]
