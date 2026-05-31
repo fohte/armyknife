@@ -1,6 +1,11 @@
 [workspace]
 members = [".", "crates/config-schema-gen"]
 
+# Optimize release profile for build speed rather than runtime performance.
+[profile.release]
+opt-level = 1
+strip = "symbols"
+
 [package]
 name = "armyknife"
 version = "0.1.183"
