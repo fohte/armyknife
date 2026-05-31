@@ -34,7 +34,7 @@ pub fn remove_group(group: &str) -> Result<()> {
 
 /// Checks if the Hammerspoon CLI (`hs`) is available on the system.
 fn is_hammerspoon_available() -> bool {
-    hammerspoon::find_hs_path().is_some()
+    crate::infra::external_tool::ExternalTool::Hammerspoon.is_available()
 }
 
 fn warn_hammerspoon_missing() {

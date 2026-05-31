@@ -11,7 +11,7 @@ pub use summary::format_summary;
 
 use super::details::{clean_review_body, strip_noise_keep_details};
 use super::models::{Review, ReviewState};
-use crate::shared::command;
+use crate::infra::external_tool::ExternalTool;
 use std::io::Write;
 use std::process::Stdio;
 
@@ -116,7 +116,8 @@ pub(super) fn format_diff_with_delta(path: &str, diff_hunk: &str, skip_delta: bo
 
     // Try to pipe through delta, fall back to plain output on any failure
     let run_delta = || -> std::io::Result<String> {
-        let mut child = command::new("delta")
+        let mut child = ExternalTool::Delta
+            .command()
             .args(["--paging=never", "--line-numbers"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

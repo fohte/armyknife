@@ -1,139 +1,28 @@
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use anyhow::Result;
 use clap::Args;
 
-use crate::shared::command;
-
-const HS_BUNDLED_PATH: &str = "/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs";
-
-fn find_hs_path() -> Option<PathBuf> {
-    if let Some(p) = command::find_command_path("hs") {
-        return Some(p);
-    }
-    let bundled = PathBuf::from(HS_BUNDLED_PATH);
-    bundled.is_file().then_some(bundled)
-}
+use crate::infra::external_tool::ExternalTool;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DoctorArgs {}
 
-/// External tool armyknife may invoke.
-struct Tool {
-    /// Display name (also used as the install hint package name unless `brew` is set).
-    name: &'static str,
-    /// Arguments passed to fetch the version (e.g., `["--version"]`, `["-V"]`).
-    version_args: &'static [&'static str],
-    /// One-line description of what armyknife uses this tool for.
-    purpose: &'static str,
-    /// macOS-only tools are skipped on other platforms.
-    macos_only: bool,
-    /// Override the `brew install` package name (defaults to `name`).
-    brew: Option<&'static str>,
-}
-
-const TOOLS: &[Tool] = &[
-    Tool {
-        name: "git",
-        version_args: &["--version"],
-        purpose: "git operations",
-        macos_only: false,
-        brew: None,
-    },
-    Tool {
-        name: "gh",
-        version_args: &["--version"],
-        purpose: "GitHub integration",
-        macos_only: false,
-        brew: None,
-    },
-    Tool {
-        name: "tmux",
-        version_args: &["-V"],
-        purpose: "session monitor, worktree windows",
-        macos_only: false,
-        brew: None,
-    },
-    Tool {
-        name: "nvim",
-        version_args: &["--version"],
-        purpose: "default editor for human-in-the-loop reviews",
-        macos_only: false,
-        brew: Some("neovim"),
-    },
-    Tool {
-        name: "wezterm",
-        version_args: &["--version"],
-        purpose: "terminal emulator for review windows",
-        macos_only: false,
-        brew: Some("--cask wezterm"),
-    },
-    Tool {
-        name: "ghostty",
-        version_args: &["--version"],
-        purpose: "alternative terminal emulator for review windows",
-        macos_only: false,
-        brew: Some("--cask ghostty"),
-    },
-    Tool {
-        name: "delta",
-        version_args: &["--version"],
-        purpose: "diff pager for `a gh pr-review`",
-        macos_only: false,
-        brew: Some("git-delta"),
-    },
-    Tool {
-        name: "claude",
-        version_args: &["--version"],
-        purpose: "Claude Code backend for `a name-branch`",
-        macos_only: false,
-        brew: None,
-    },
-    Tool {
-        name: "opencode",
-        version_args: &["--version"],
-        purpose: "opencode backend for `a name-branch`",
-        macos_only: false,
-        brew: None,
-    },
-];
-
 pub fn run(_args: &DoctorArgs) -> Result<()> {
-    let rows: Vec<Row> = TOOLS
-        .iter()
-        .map(check_tool)
-        .chain(check_hammerspoon())
-        .collect();
-
+    let rows: Vec<Row> = ExternalTool::ALL.iter().map(|t| check(*t)).collect();
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
     let color = use_color();
-
     for row in &rows {
         print_row(row, name_width, color);
     }
-
     Ok(())
 }
 
-/// Honors `NO_COLOR` (https://no-color.org) and disables colors when stdout is
-/// not a terminal so piped/redirected output stays plain.
-fn use_color() -> bool {
-    if std::env::var_os("NO_COLOR").is_some() {
-        return false;
-    }
-    std::io::stdout().is_terminal()
-}
-
-const GREEN: &str = "\x1b[32m";
-const RED: &str = "\x1b[31m";
-const DIM: &str = "\x1b[2m";
-const RESET: &str = "\x1b[0m";
-
 struct Row {
-    name: String,
+    name: &'static str,
     status: Status,
-    purpose: String,
+    purpose: &'static str,
     install_hint: Option<String>,
 }
 
@@ -144,91 +33,50 @@ enum Status {
     Skipped(&'static str),
 }
 
-fn check_tool(tool: &Tool) -> Row {
-    if tool.macos_only && !cfg!(target_os = "macos") {
+fn check(tool: ExternalTool) -> Row {
+    let meta = tool.metadata();
+
+    if meta.macos_only && !cfg!(target_os = "macos") {
         return Row {
-            name: tool.name.to_string(),
+            name: meta.name,
             status: Status::Skipped("macOS only"),
-            purpose: tool.purpose.to_string(),
+            purpose: meta.purpose,
             install_hint: None,
         };
     }
 
-    if !command::is_command_available(tool.name) {
+    if !tool.is_available() {
         return Row {
-            name: tool.name.to_string(),
+            name: meta.name,
             status: Status::Missing,
-            purpose: tool.purpose.to_string(),
-            install_hint: Some(install_hint(tool)),
+            purpose: meta.purpose,
+            install_hint: Some(tool.install_hint()),
         };
     }
 
-    let version = run_version(tool.name, tool.version_args);
-    let status = match version {
+    let status = match run_version(tool) {
         Some(v) => Status::Found(v),
         None => Status::FoundNoVersion,
     };
 
     Row {
-        name: tool.name.to_string(),
+        name: meta.name,
         status,
-        purpose: tool.purpose.to_string(),
+        purpose: meta.purpose,
         install_hint: None,
     }
 }
 
-fn check_hammerspoon() -> Option<Row> {
-    if !cfg!(target_os = "macos") {
-        return Some(Row {
-            name: "hammerspoon".to_string(),
-            status: Status::Skipped("macOS only"),
-            purpose: "desktop notifications".to_string(),
-            install_hint: None,
-        });
-    }
-
-    match find_hs_path() {
-        Some(path) => {
-            let version = run_version_at(&path, &["-c", "print(hs.processInfo.version)"]);
-            let status = match version {
-                Some(v) => Status::Found(v),
-                None => Status::FoundNoVersion,
-            };
-            Some(Row {
-                name: "hammerspoon".to_string(),
-                status,
-                purpose: "desktop notifications".to_string(),
-                install_hint: None,
-            })
-        }
-        None => Some(Row {
-            name: "hammerspoon".to_string(),
-            status: Status::Missing,
-            purpose: "desktop notifications".to_string(),
-            install_hint: Some("brew install --cask hammerspoon".to_string()),
-        }),
-    }
+fn run_version(tool: ExternalTool) -> Option<String> {
+    let output = tool
+        .command()
+        .args(tool.metadata().version_args)
+        .output()
+        .ok()?;
+    parse_version_output(output)
 }
 
-fn install_hint(tool: &Tool) -> String {
-    let pkg = tool.brew.unwrap_or(tool.name);
-    format!("brew install {pkg}")
-}
-
-fn run_version(program: &str, args: &[&str]) -> Option<String> {
-    parse_version_output(command::new(program).args(args).output().ok()?)
-}
-
-fn run_version_at(program: &Path, args: &[&str]) -> Option<String> {
-    parse_version_output(
-        std::process::Command::new(program)
-            .args(args)
-            .output()
-            .ok()?,
-    )
-}
-
-fn parse_version_output(output: std::process::Output) -> Option<String> {
+fn parse_version_output(output: Output) -> Option<String> {
     if !output.status.success() {
         return None;
     }
@@ -245,7 +93,8 @@ fn parse_version_output(output: std::process::Output) -> Option<String> {
 ///
 /// Strategies in order: first line stripped of common prefixes ("git version ",
 /// "tmux ", "gh version "); otherwise the first whitespace-separated token that
-/// starts with a digit; otherwise the raw first line.
+/// looks like a version (digit-led, optionally with `v` prefix); otherwise the
+/// raw first line.
 fn extract_version(output: &str) -> Option<String> {
     let line = output.lines().next()?.trim();
     if line.is_empty() {
@@ -268,6 +117,20 @@ fn extract_version(output: &str) -> Option<String> {
     Some(line.to_string())
 }
 
+/// Honors `NO_COLOR` (https://no-color.org) and disables colors when stdout is
+/// not a terminal so piped/redirected output stays plain.
+fn use_color() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::io::stdout().is_terminal()
+}
+
+const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
+const DIM: &str = "\x1b[2m";
+const RESET: &str = "\x1b[0m";
+
 fn print_row(row: &Row, name_width: usize, color: bool) {
     let (icon, detail, color_code) = match &row.status {
         Status::Found(v) => ("✓", v.clone(), GREEN),
@@ -277,6 +140,7 @@ fn print_row(row: &Row, name_width: usize, color: bool) {
     };
 
     let (on, off) = if color { (color_code, RESET) } else { ("", "") };
+    let dim = if color { DIM } else { "" };
 
     println!(
         "{on}{icon}{off} {name:<width$}  {on}{detail}{off}  {dim}-- {purpose}{off}",
@@ -284,7 +148,6 @@ fn print_row(row: &Row, name_width: usize, color: bool) {
         width = name_width,
         detail = detail,
         purpose = row.purpose,
-        dim = if color { DIM } else { "" },
     );
 
     if let Some(hint) = &row.install_hint {
@@ -312,29 +175,5 @@ mod tests {
     #[case::empty("", None)]
     fn extract_version_cases(#[case] input: &str, #[case] expected: Option<&str>) {
         assert_eq!(extract_version(input).as_deref(), expected);
-    }
-
-    #[test]
-    fn install_hint_uses_brew_override() {
-        let tool = Tool {
-            name: "nvim",
-            version_args: &["--version"],
-            purpose: "",
-            macos_only: false,
-            brew: Some("neovim"),
-        };
-        assert_eq!(install_hint(&tool), "brew install neovim");
-    }
-
-    #[test]
-    fn install_hint_defaults_to_name() {
-        let tool = Tool {
-            name: "git",
-            version_args: &["--version"],
-            purpose: "",
-            macos_only: false,
-            brew: None,
-        };
-        assert_eq!(install_hint(&tool), "brew install git");
     }
 }

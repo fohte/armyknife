@@ -90,13 +90,19 @@ fn launch_wezterm(
     command: impl AsRef<OsStr>,
     args: &[OsString],
 ) -> std::io::Result<ExitStatus> {
-    let base_command = wezterm_base_command();
-
     let cols_config = format!("initial_cols={}", options.window_cols);
     let rows_config = format!("initial_rows={}", options.window_rows);
 
-    let mut cmd = command::new(&base_command[0]);
-    cmd.args(&base_command[1..]);
+    // On macOS, WezTerm.app is launched via the system `open` command; on
+    // Linux, the `wezterm` CLI is invoked directly.
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = command::new("open");
+        c.args(["-n", "-a", "WezTerm", "--args"]);
+        c
+    } else {
+        crate::infra::external_tool::ExternalTool::Wezterm.command()
+    };
+
     cmd.args([
         "--config",
         "window_decorations=\"TITLE | RESIZE\"",
@@ -112,21 +118,6 @@ fn launch_wezterm(
     cmd.arg(command);
     cmd.args(args);
     cmd.status()
-}
-
-/// Returns the platform-specific base command for launching WezTerm.
-fn wezterm_base_command() -> Vec<String> {
-    if cfg!(target_os = "macos") {
-        vec![
-            "open".to_string(),
-            "-n".to_string(),
-            "-a".to_string(),
-            "WezTerm".to_string(),
-            "--args".to_string(),
-        ]
-    } else {
-        vec!["wezterm".to_string()]
-    }
 }
 
 /// Launch Ghostty with Ghostty-specific options.
@@ -164,7 +155,7 @@ fn launch_ghostty_linux(
     let height_flag = format!("--window-height={}", options.window_rows);
     let title_flag = format!("--title={}", options.window_title);
 
-    let mut cmd = command::new("ghostty");
+    let mut cmd = crate::infra::external_tool::ExternalTool::Ghostty.command();
     cmd.args([&width_flag, &height_flag, &title_flag, "-e"]);
     cmd.arg(command);
     cmd.args(args);

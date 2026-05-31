@@ -8,7 +8,7 @@ use super::error::{GitError, Result};
 
 /// Build a `git` command with `-C <dir>` so it operates against the given path.
 pub fn git_at(dir: &Path) -> Command {
-    let mut cmd = crate::shared::command::new("git");
+    let mut cmd = crate::infra::external_tool::ExternalTool::Git.command();
     cmd.arg("-C").arg(dir);
     cmd
 }
@@ -36,7 +36,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut cmd = crate::shared::command::new("git");
+    let mut cmd = crate::infra::external_tool::ExternalTool::Git.command();
     for arg in args {
         cmd.arg(arg);
     }
