@@ -93,8 +93,9 @@ fn launch_wezterm(
     let cols_config = format!("initial_cols={}", options.window_cols);
     let rows_config = format!("initial_rows={}", options.window_rows);
 
-    // On macOS, WezTerm.app is launched via the system `open` command; on
-    // Linux, the `wezterm` CLI is invoked directly.
+    // On macOS, `open -n -a WezTerm` spawns a new app instance even if WezTerm
+    // is already running; invoking the `wezterm` CLI on macOS does not, so the
+    // review window would attach to an existing session.
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = command::new("open");
         c.args(["-n", "-a", "WezTerm", "--args"]);

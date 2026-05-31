@@ -10,8 +10,6 @@ use std::process::Command;
 
 use crate::shared::command;
 
-const HS_BUNDLED_PATH: &str = "/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalTool {
     Git,
@@ -40,6 +38,10 @@ pub struct Metadata {
     pub macos_only: bool,
     /// Tail of the install hint shown after `brew install` when missing.
     pub brew_pkg: Option<&'static str>,
+    /// Absolute path to a `.app` bundle whose existence proves the tool is
+    /// installed on macOS even when no CLI is on `PATH` (e.g. WezTerm launched
+    /// via `open -a`, or Hammerspoon's bundled `hs` binary).
+    pub macos_app_path: Option<&'static str>,
 }
 
 impl ExternalTool {
@@ -65,6 +67,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,
+                macos_app_path: None,
             },
             Self::Gh => Metadata {
                 name: "gh",
@@ -73,6 +76,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,
+                macos_app_path: None,
             },
             Self::Tmux => Metadata {
                 name: "tmux",
@@ -81,6 +85,7 @@ impl ExternalTool {
                 version_args: &["-V"],
                 macos_only: false,
                 brew_pkg: None,
+                macos_app_path: None,
             },
             Self::Nvim => Metadata {
                 name: "nvim",
@@ -89,6 +94,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: Some("neovim"),
+                macos_app_path: None,
             },
             Self::Wezterm => Metadata {
                 name: "wezterm",
@@ -97,6 +103,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: Some("--cask wezterm"),
+                macos_app_path: Some("/Applications/WezTerm.app"),
             },
             Self::Ghostty => Metadata {
                 name: "ghostty",
@@ -105,6 +112,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: Some("--cask ghostty"),
+                macos_app_path: Some("/Applications/Ghostty.app"),
             },
             Self::Delta => Metadata {
                 name: "delta",
@@ -113,6 +121,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: Some("git-delta"),
+                macos_app_path: None,
             },
             Self::Claude => Metadata {
                 name: "claude",
@@ -121,6 +130,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,
+                macos_app_path: None,
             },
             Self::Opencode => Metadata {
                 name: "opencode",
@@ -129,6 +139,7 @@ impl ExternalTool {
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,
+                macos_app_path: None,
             },
             Self::Hammerspoon => Metadata {
                 name: "hammerspoon",
@@ -137,6 +148,7 @@ impl ExternalTool {
                 version_args: &["-c", "print(hs.processInfo.version)"],
                 macos_only: true,
                 brew_pkg: Some("--cask hammerspoon"),
+                macos_app_path: Some("/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"),
             },
         }
     }
@@ -155,23 +167,37 @@ impl ExternalTool {
         format!("brew install {pkg}")
     }
 
-    /// Resolves the tool to an absolute path. For Hammerspoon, falls back to
-    /// the bundled CLI location at [`HS_BUNDLED_PATH`].
+    /// Resolves the tool's CLI to an absolute path via PATH, falling back to
+    /// `macos_app_path` on macOS when the CLI is not on PATH but the .app
+    /// bundle (or bundled binary) exists.
     pub fn resolve_path(self) -> Option<PathBuf> {
         if let Some(p) = command::find_command_path(self.binary()) {
             return Some(p);
         }
-        if matches!(self, Self::Hammerspoon) {
-            let bundled = PathBuf::from(HS_BUNDLED_PATH);
-            if bundled.is_file() {
-                return Some(bundled);
+        if cfg!(target_os = "macos")
+            && let Some(app_path) = self.metadata().macos_app_path
+        {
+            let p = PathBuf::from(app_path);
+            if p.is_file() {
+                return Some(p);
             }
         }
         None
     }
 
+    /// Returns true if the tool is usable, including the macOS case where only
+    /// the `.app` bundle is installed and the spawn path is something like
+    /// `open -a` (i.e. no CLI on PATH).
     pub fn is_available(self) -> bool {
-        self.resolve_path().is_some()
+        if self.resolve_path().is_some() {
+            return true;
+        }
+        if cfg!(target_os = "macos")
+            && let Some(app_path) = self.metadata().macos_app_path
+        {
+            return std::path::Path::new(app_path).exists();
+        }
+        false
     }
 
     /// Builds a [`Command`] for this tool, using the resolved absolute path
