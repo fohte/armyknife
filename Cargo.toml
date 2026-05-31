@@ -1,9 +1,7 @@
 [workspace]
 members = [".", "crates/config-schema-gen"]
 
-# Optimize for CI release build time. armyknife is I/O-bound, so opt-level=1
-# has no perceptible runtime impact but cuts leaf-crate codegen significantly.
-# strip = "symbols" offsets the binary size increase from the lower opt-level.
+# Optimize release profile for build speed rather than runtime performance.
 [profile.release]
 opt-level = 1
 strip = "symbols"
