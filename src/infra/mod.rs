@@ -1,3 +1,4 @@
+pub mod external_tool;
 pub mod git;
 pub mod github;
 pub mod launchd;

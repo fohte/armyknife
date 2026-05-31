@@ -1,70 +1,45 @@
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
-use crate::shared::command::find_command_path;
+use crate::infra::external_tool::ExternalTool;
 
 use super::types::Notification;
-
-/// Well-known location of the `hs` CLI bundled inside Hammerspoon.app.
-const HS_BUNDLED_PATH: &str = "/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs";
-
-/// Returns the path to the `hs` CLI, checking PATH first then the bundled location.
-pub fn find_hs_path() -> Option<PathBuf> {
-    if let Some(p) = find_command_path("hs") {
-        return Some(p);
-    }
-    let bundled = PathBuf::from(HS_BUNDLED_PATH);
-    if bundled.is_file() {
-        return Some(bundled);
-    }
-    None
-}
 
 /// Sends a notification using Hammerspoon's `hs` CLI.
 /// Click actions are handled via a pre-registered callback ("armyknife_notification")
 /// in the Hammerspoon config. The command to execute on click is stored in a global
 /// Lua table keyed by the notification's string representation.
 pub fn send(notification: &Notification) -> Result<()> {
-    let hs = find_hs_path().context("hs command not found")?;
     let lua = build_send_lua(notification);
-
-    let output = Command::new(&hs)
-        .arg("-c")
-        .arg(&lua)
-        .output()
-        .context("failed to execute hs command")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("hs notification failed: {}", stderr);
-    }
-
-    Ok(())
+    run_hs(&lua, "hs notification failed")
 }
 
 /// Removes notifications belonging to the given group.
 /// Delegates to a Lua helper defined in the Hammerspoon config.
 pub fn remove_group(group: &str) -> Result<()> {
-    let hs = find_hs_path().context("hs command not found")?;
     let g = lua_quote(group);
     let lua = format!(
         "if _G._armyknife and _G._armyknife.groups and _G._armyknife.groups[{g}] then for _, n in ipairs(_G._armyknife.groups[{g}]) do n:withdraw() end; _G._armyknife.groups[{g}] = nil end"
     );
+    run_hs(&lua, "hs remove_group failed")
+}
 
-    let output = Command::new(&hs)
+fn run_hs(lua: &str, fail_label: &str) -> Result<()> {
+    if !ExternalTool::Hammerspoon.is_available() {
+        bail!("hs command not found");
+    }
+    let output = ExternalTool::Hammerspoon
+        .command()
         .arg("-c")
-        .arg(&lua)
+        .arg(lua)
         .output()
-        .context("failed to execute hs -c for remove_group")?;
+        .context("failed to execute hs command")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("hs remove_group failed: {}", stderr);
+        bail!("{fail_label}: {stderr}");
     }
-
     Ok(())
 }
 

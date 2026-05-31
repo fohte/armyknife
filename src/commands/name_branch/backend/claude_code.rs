@@ -4,14 +4,15 @@ use anyhow::Context;
 
 use super::{Backend, check_command_status, extract_first_line};
 use crate::commands::name_branch::error::Result;
-use crate::shared::command;
+use crate::infra::external_tool::ExternalTool;
 
 /// Claude Code backend using `claude --model haiku --print`
 pub struct ClaudeCode;
 
 impl Backend for ClaudeCode {
     fn generate(&self, prompt: &str) -> Result<String> {
-        let mut child = command::new("claude")
+        let mut child = ExternalTool::Claude
+            .command()
             .args(["--model", "haiku", "--print"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

@@ -490,6 +490,14 @@ armyknife supports git-style hooks for command lifecycle events (worktree creati
 
 armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log.YYYY-MM-DD` (daily rotation, 7 files retained). Set `ARMYKNIFE_LOG=off|error|info|debug` to control verbosity. See [docs/logging.md](docs/logging.md) for the event reference and debugging recipes.
 
+### `a doctor`
+
+Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
+
+```sh
+a doctor
+```
+
 ### `a completions <shell>`
 
 Generate shell completion scripts.

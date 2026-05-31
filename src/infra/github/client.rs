@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
-use crate::shared::command;
+use crate::infra::external_tool::ExternalTool;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -1129,7 +1129,8 @@ fn get_gh_token() -> Result<String> {
 
     #[cfg(not(test))]
     {
-        let output = command::new("gh")
+        let output = ExternalTool::Gh
+            .command()
             .args(["auth", "token"])
             .output()
             .context("Failed to run gh auth token")?;

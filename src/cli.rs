@@ -4,6 +4,7 @@ use clap_complete::Shell;
 use crate::commands::ai::AiCommands;
 use crate::commands::cc::CcCommands;
 use crate::commands::config::ConfigCommands;
+use crate::commands::doctor::DoctorArgs;
 use crate::commands::gh::GhCommands;
 use crate::commands::name_branch::NameBranchArgs;
 use crate::commands::wm::WmCommands;
@@ -46,6 +47,9 @@ pub enum Commands {
     /// Git worktree manager
     #[command(subcommand)]
     Wm(WmCommands),
+
+    /// Check availability and versions of external tools armyknife depends on
+    Doctor(DoctorArgs),
 
     /// Update to the latest version
     Update,
