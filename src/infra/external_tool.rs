@@ -135,7 +135,7 @@ impl ExternalTool {
             Self::Opencode => Metadata {
                 name: "opencode",
                 binary: "opencode",
-                purpose: "opencode backend for `a name-branch`",
+                purpose: "fallback backend for `a name-branch` when claude is unavailable",
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,
