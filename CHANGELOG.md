@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.184](https://github.com/fohte/armyknife/compare/v0.1.183...v0.1.184) (2026-05-31)
+
+
+### Features
+
+* add doctor command to check external tool availability ([#578](https://github.com/fohte/armyknife/issues/578)) ([0b20933](https://github.com/fohte/armyknife/commit/0b20933ed671276e4b37c6820490cd4b495e178b))
+
 ## [0.1.183](https://github.com/fohte/armyknife/compare/v0.1.182...v0.1.183) (2026-05-30)
 
 
