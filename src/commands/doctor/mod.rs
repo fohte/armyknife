@@ -5,18 +5,41 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::infra::external_tool::ExternalTool;
+use crate::shared::config::{Config, Terminal};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DoctorArgs {}
 
 pub fn run(_args: &DoctorArgs) -> Result<()> {
-    let rows: Vec<Row> = ExternalTool::ALL.iter().map(|t| check(*t)).collect();
+    let config = crate::shared::config::load_config().unwrap_or_default();
+    let tools = selected_tools(&config);
+    let rows: Vec<Row> = tools.iter().map(|t| check(*t)).collect();
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
     let color = use_color();
     for row in &rows {
         print_row(row, name_width, color);
     }
     Ok(())
+}
+
+/// Filters [`ExternalTool::ALL`] down to the tools the current config actually
+/// uses. Non-selected terminal alternatives, a non-nvim editor, and disabled
+/// notifications are dropped so users aren't flagged for tools they will never
+/// invoke.
+fn selected_tools(config: &Config) -> Vec<ExternalTool> {
+    ExternalTool::ALL
+        .iter()
+        .copied()
+        .filter(|tool| match tool {
+            ExternalTool::Wezterm => config.editor.terminal == Terminal::Wezterm,
+            ExternalTool::Ghostty => config.editor.terminal == Terminal::Ghostty,
+            // `editor_command` accepts any executable; doctor only knows how to
+            // probe `nvim`, so silently skip when the user picked something else.
+            ExternalTool::Nvim => config.editor.editor_command == "nvim",
+            ExternalTool::Hammerspoon => config.notification.enabled,
+            _ => true,
+        })
+        .collect()
 }
 
 struct Row {
@@ -175,5 +198,54 @@ mod tests {
     #[case::empty("", None)]
     fn extract_version_cases(#[case] input: &str, #[case] expected: Option<&str>) {
         assert_eq!(extract_version(input).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::default_wezterm(
+        Config::default(),
+        &[
+            ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
+            ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+        ],
+    )]
+    #[case::ghostty_terminal(
+        {
+            let mut c = Config::default();
+            c.editor.terminal = Terminal::Ghostty;
+            c
+        },
+        &[
+            ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
+            ExternalTool::Nvim, ExternalTool::Ghostty, ExternalTool::Delta,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+        ],
+    )]
+    #[case::custom_editor(
+        {
+            let mut c = Config::default();
+            c.editor.editor_command = "helix".to_string();
+            c
+        },
+        &[
+            ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
+            ExternalTool::Wezterm, ExternalTool::Delta,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+        ],
+    )]
+    #[case::notifications_disabled(
+        {
+            let mut c = Config::default();
+            c.notification.enabled = false;
+            c
+        },
+        &[
+            ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
+            ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
+            ExternalTool::Claude, ExternalTool::Opencode,
+        ],
+    )]
+    fn selected_tools_cases(#[case] config: Config, #[case] expected: &[ExternalTool]) {
+        assert_eq!(selected_tools(&config), expected);
     }
 }
