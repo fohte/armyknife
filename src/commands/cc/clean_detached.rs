@@ -34,6 +34,16 @@ pub struct CleanDetachedArgs {
 }
 
 pub fn run(args: &CleanDetachedArgs) -> Result<()> {
+    // All failures stay off the parent TTY: `cc watch` spawns this process
+    // detached and the silent contract is documented at the top of this
+    // module. Failures that happen after the log file is open are recorded
+    // there on a best-effort basis; failures before that point are
+    // necessarily lost.
+    let _ = run_inner(args);
+    Ok(())
+}
+
+fn run_inner(args: &CleanDetachedArgs) -> Result<()> {
     let log_dir = log_dir().context("cache dir is unavailable")?;
     fs::create_dir_all(&log_dir)
         .with_context(|| format!("failed to create log dir: {}", log_dir.display()))?;
@@ -44,7 +54,7 @@ pub fn run(args: &CleanDetachedArgs) -> Result<()> {
     let log_path = log_dir.join(format!("{pid}.jsonl"));
     let mut log = LogWriter::create(&log_path)?;
 
-    let paths = collect_paths(args)?;
+    let paths = collect_paths(args, &mut log);
 
     let cleaner = RealCleaner;
     run_with(&mut log, &paths, &cleaner);
@@ -55,20 +65,30 @@ fn log_dir() -> Option<PathBuf> {
     cache::base_dir().map(|d| d.join("clean"))
 }
 
-fn collect_paths(args: &CleanDetachedArgs) -> Result<Vec<PathBuf>> {
+fn collect_paths(args: &CleanDetachedArgs, log: &mut LogWriter) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = args.paths.clone();
     if let Some(file) = &args.paths_file {
-        let f = File::open(file)
-            .with_context(|| format!("failed to open paths file: {}", file.display()))?;
-        for line in BufReader::new(f).lines() {
-            let line = line?;
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                paths.push(PathBuf::from(trimmed));
+        match File::open(file) {
+            Ok(f) => {
+                // Skip undecodable lines instead of aborting: one bad line
+                // must not drop the remaining paths from a batch cleanup.
+                for line in BufReader::new(f).lines().map_while(std::result::Result::ok) {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        paths.push(PathBuf::from(trimmed));
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = log.write(&Event::Err {
+                    ts: now_ts(),
+                    path: &file.to_string_lossy(),
+                    msg: format!("failed to open paths file: {e}"),
+                });
             }
         }
     }
-    Ok(paths)
+    paths
 }
 
 /// Removes `*.jsonl` files in `dir` older than `ttl` relative to `now`.
@@ -211,7 +231,6 @@ mod tests {
     use tempfile::TempDir;
 
     struct FakeCleaner {
-        // Map from path-string to whether the cleanup should succeed.
         plan: Vec<(String, std::result::Result<(), String>)>,
         calls: RefCell<Vec<PathBuf>>,
     }
@@ -377,12 +396,14 @@ mod tests {
             "},
         )
         .unwrap();
+        let log_path = tmp.path().join("test.jsonl");
+        let mut log = LogWriter::create(&log_path).unwrap();
 
         let args = CleanDetachedArgs {
             paths: vec![PathBuf::from("/from/argv")],
             paths_file: Some(file),
         };
-        let paths = collect_paths(&args).unwrap();
+        let paths = collect_paths(&args, &mut log);
         assert_eq!(
             paths,
             vec![
@@ -391,5 +412,27 @@ mod tests {
                 PathBuf::from("/from/file/2"),
             ]
         );
+        // No err event should be logged for a successful read.
+        assert!(read_events(&log_path).is_empty());
+    }
+
+    #[rstest]
+    fn collect_paths_logs_err_when_paths_file_missing() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("test.jsonl");
+        let mut log = LogWriter::create(&log_path).unwrap();
+
+        let args = CleanDetachedArgs {
+            paths: vec![PathBuf::from("/from/argv")],
+            paths_file: Some(PathBuf::from("/nonexistent/paths/file")),
+        };
+        let paths = collect_paths(&args, &mut log);
+
+        assert_eq!(paths, vec![PathBuf::from("/from/argv")]);
+        let events = read_events(&log_path);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], "err");
+        assert_eq!(events[0]["path"], "/nonexistent/paths/file");
+        assert!(events[0]["msg"].as_str().unwrap().contains("paths file"));
     }
 }
