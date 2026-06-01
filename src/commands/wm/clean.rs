@@ -286,8 +286,14 @@ fn apply_active_session_protection(
         return;
     }
 
-    let Ok(sessions) = list_sessions() else {
-        return;
+    let sessions = match list_sessions() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to list Claude Code sessions, active session protection disabled: {e}"
+            );
+            return;
+        }
     };
     if sessions.is_empty() {
         return;

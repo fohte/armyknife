@@ -142,9 +142,20 @@ pub fn contains_active_session<P: ActivityProbe>(
     now: DateTime<Utc>,
     timeout: Duration,
 ) -> bool {
+    // Canonicalize both sides: on macOS `/tmp` and `/var` are symlinks to
+    // `/private/tmp` and `/private/var`, so a session whose cwd was captured
+    // pre-resolution would not match a worktree path read from git which
+    // resolves them. Fall back to the raw path on failure so a missing
+    // directory just behaves like the previous prefix check.
+    let canonical_worktree = worktree_path
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_path.to_path_buf());
     sessions
         .iter()
-        .filter(|s| s.cwd.starts_with(worktree_path))
+        .filter(|s| {
+            let canonical_cwd = s.cwd.canonicalize().unwrap_or_else(|_| s.cwd.clone());
+            canonical_cwd.starts_with(&canonical_worktree)
+        })
         .any(|s| is_session_active(s, probe, now, timeout))
 }
 
@@ -323,6 +334,7 @@ mod tests {
     #[rstest]
     #[case::empty("")]
     #[case::missing_ts("12345")]
+    #[case::trailing_garbage("12345,1700000000,extra")]
     #[case::non_numeric_hash("abc,1700000000")]
     #[case::non_numeric_ts("12345,now")]
     fn parse_pane_activity_rejects_malformed(#[case] raw: &str) {
