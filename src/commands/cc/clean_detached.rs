@@ -224,8 +224,10 @@ fn run_with<C: Cleaner>(log: &mut LogWriter, paths: &[PathBuf], cleaner: &C) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
     use indoc::indoc;
     use rstest::rstest;
+    use serde_json::json;
     use std::cell::RefCell;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -251,11 +253,20 @@ mod tests {
         }
     }
 
+    /// Reads JSONL events, validates each `ts` field parses as RFC3339, and
+    /// strips it so the rest can be compared whole against `json!(...)`
+    /// literals.
     fn read_events(path: &Path) -> Vec<serde_json::Value> {
         let s = fs::read_to_string(path).unwrap();
         s.lines()
             .filter(|l| !l.is_empty())
-            .map(|l| serde_json::from_str(l).unwrap())
+            .map(|l| {
+                let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+                let ts = v["ts"].as_str().unwrap();
+                DateTime::parse_from_rfc3339(ts).unwrap();
+                v.as_object_mut().unwrap().remove("ts");
+                v
+            })
             .collect()
     }
 
@@ -280,25 +291,16 @@ mod tests {
         ];
         run_with(&mut log, &paths, &cleaner);
 
-        let events = read_events(&log_path);
-        assert_eq!(events.len(), 5, "start + 3 outcomes + done");
-        assert_eq!(events[0]["event"], "start");
-        assert_eq!(events[0]["total"], 3);
-        assert_eq!(events[1]["event"], "ok");
-        assert_eq!(events[1]["path"], "/a");
-        assert_eq!(events[2]["event"], "err");
-        assert_eq!(events[2]["path"], "/b");
-        assert_eq!(events[2]["msg"], "boom");
-        assert_eq!(events[3]["event"], "ok");
-        assert_eq!(events[3]["path"], "/c");
-        assert_eq!(events[4]["event"], "done");
-        assert_eq!(events[4]["ok"], 2);
-        assert_eq!(events[4]["failed"], 1);
-
-        // Every event carries an ISO8601 timestamp.
-        for ev in &events {
-            assert!(ev["ts"].as_str().unwrap().contains('T'));
-        }
+        assert_eq!(
+            read_events(&log_path),
+            vec![
+                json!({"event": "start", "total": 3}),
+                json!({"event": "ok", "path": "/a"}),
+                json!({"event": "err", "path": "/b", "msg": "boom"}),
+                json!({"event": "ok", "path": "/c"}),
+                json!({"event": "done", "ok": 2, "failed": 1}),
+            ]
+        );
     }
 
     #[rstest]
@@ -332,13 +334,13 @@ mod tests {
         };
         run_with(&mut log, &[], &cleaner);
 
-        let events = read_events(&log_path);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0]["event"], "start");
-        assert_eq!(events[0]["total"], 0);
-        assert_eq!(events[1]["event"], "done");
-        assert_eq!(events[1]["ok"], 0);
-        assert_eq!(events[1]["failed"], 0);
+        assert_eq!(
+            read_events(&log_path),
+            vec![
+                json!({"event": "start", "total": 0}),
+                json!({"event": "done", "ok": 0, "failed": 0}),
+            ]
+        );
     }
 
     #[rstest]
@@ -419,20 +421,30 @@ mod tests {
     #[rstest]
     fn collect_paths_logs_err_when_paths_file_missing() {
         let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("nonexistent").join("paths-file");
         let log_path = tmp.path().join("test.jsonl");
         let mut log = LogWriter::create(&log_path).unwrap();
 
+        // Reproduce the exact OS error string the production code will format.
+        let expected_msg = format!(
+            "failed to open paths file: {}",
+            File::open(&missing).unwrap_err()
+        );
+
         let args = CleanDetachedArgs {
             paths: vec![PathBuf::from("/from/argv")],
-            paths_file: Some(PathBuf::from("/nonexistent/paths/file")),
+            paths_file: Some(missing.clone()),
         };
         let paths = collect_paths(&args, &mut log);
-
         assert_eq!(paths, vec![PathBuf::from("/from/argv")]);
-        let events = read_events(&log_path);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["event"], "err");
-        assert_eq!(events[0]["path"], "/nonexistent/paths/file");
-        assert!(events[0]["msg"].as_str().unwrap().contains("paths file"));
+
+        assert_eq!(
+            read_events(&log_path),
+            vec![json!({
+                "event": "err",
+                "path": missing.to_string_lossy(),
+                "msg": expected_msg,
+            })]
+        );
     }
 }
