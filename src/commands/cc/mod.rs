@@ -65,7 +65,7 @@ pub enum CcCommands {
     WindowStatus(WindowStatusArgs),
 
     /// Internal: non-interactive batch worktree cleanup for `cc watch`.
-    #[command(name = "clean-detached")]
+    #[command(name = "clean-detached", hide = true)]
     CleanDetached(CleanDetachedArgs),
 }
 

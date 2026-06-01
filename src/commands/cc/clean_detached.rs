@@ -23,7 +23,6 @@ use crate::shared::cleanup;
 const LOG_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 #[derive(Args, Clone, PartialEq, Eq)]
-#[command(hide = true)]
 pub struct CleanDetachedArgs {
     /// Worktree paths to clean up. Each must be the worktree root.
     pub paths: Vec<PathBuf>,
@@ -146,7 +145,8 @@ impl LogWriter {
     fn create(path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(path)
             .with_context(|| format!("failed to open log file: {}", path.display()))?;
         Ok(Self { file })
