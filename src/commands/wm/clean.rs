@@ -3,17 +3,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
+use chrono::Utc;
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
+use crate::commands::cc::auto_pause::parse_duration;
+use crate::commands::cc::store::list_sessions;
+use crate::commands::cc::types::Session;
 use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
+use crate::shared::active_session::{
+    ActivityProbe, NoActivityProbe, TmuxActivityProbe, contains_active_session,
+};
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
@@ -27,6 +34,11 @@ pub struct CleanArgs {
     /// Clean worktrees across all repositories under repos_root
     #[arg(long)]
     pub all: bool,
+
+    /// Delete even worktrees that currently host an active Claude Code session.
+    /// Without this flag, such worktrees are kept regardless of merge status.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Worktree with merge status for clean command.
@@ -35,6 +47,10 @@ struct CleanWorktreeInfo {
     status: MergeStatus,
     /// Repository name (relative path from repos_root). Only set in --all mode.
     repo_name: Option<String>,
+    /// True when this worktree contains an active Claude Code session and was
+    /// kept for that reason (overrides merge-status-based deletion unless
+    /// `--force` is set).
+    has_active_session: bool,
 }
 
 pub async fn run(args: &CleanArgs) -> Result<()> {
@@ -47,7 +63,9 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 
     fetch_with_prune(&main_repo).context("Failed to fetch from remote")?;
 
-    let (to_delete, to_keep) = collect_worktrees(&main_repo, None).await?;
+    let (mut to_delete, mut to_keep) = collect_worktrees(&main_repo, None).await?;
+
+    apply_active_session_protection(&mut to_delete, &mut to_keep, args.force);
 
     if to_delete.is_empty() && to_keep.is_empty() {
         println!("No worktrees found.");
@@ -206,6 +224,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
                 wt: wt.clone(),
                 status,
                 repo_name: Some(rd.repo_name.clone()),
+                has_active_session: false,
             };
 
             if should_delete {
@@ -217,6 +236,8 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     }
 
     spinner.finish_and_clear();
+
+    apply_active_session_protection(&mut all_to_delete, &mut all_to_keep, args.force);
 
     if all_to_delete.is_empty() && all_to_keep.is_empty() {
         println!("No worktrees found across all repositories.");
@@ -246,6 +267,83 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     delete_worktrees_all_repos(&repos_root, &all_to_delete)?;
 
     Ok(())
+}
+
+/// Move worktrees that currently host an active Claude Code session out of
+/// `to_delete` and into `to_keep`, tagging each moved entry as
+/// `has_active_session = true` so the table renderer can show the reason.
+///
+/// `--force` skips this protection entirely. Best-effort: if sessions cannot
+/// be loaded (e.g., the sessions dir does not exist), no protection is
+/// applied -- a user without any session state cannot have anything to
+/// protect.
+fn apply_active_session_protection(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    force: bool,
+) {
+    if force {
+        return;
+    }
+
+    let Ok(sessions) = list_sessions() else {
+        return;
+    };
+    if sessions.is_empty() {
+        return;
+    }
+
+    let timeout = load_config()
+        .ok()
+        .and_then(|c| parse_duration(&c.cc.auto_pause.timeout).ok())
+        .unwrap_or(Duration::from_secs(30 * 60));
+
+    // wm clean may be invoked from a non-tmux context (cron, plain shell);
+    // fall back to the no-op probe so we never block on tmux calls.
+    if std::env::var_os("TMUX").is_some() {
+        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxActivityProbe);
+    } else {
+        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &NoActivityProbe);
+    }
+}
+
+/// Pure core of [`apply_active_session_protection`]. Exposed for tests so the
+/// session list, timeout, and activity probe can be injected without
+/// touching disk or tmux.
+fn protect_active_worktrees<P: ActivityProbe>(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    sessions: &[Session],
+    timeout: Duration,
+    probe: &P,
+) {
+    let now = Utc::now();
+
+    let mut kept = Vec::new();
+    to_delete.retain_mut(|info| {
+        if contains_active_session(&info.wt.path, sessions, probe, now, timeout) {
+            kept.push(CleanWorktreeInfo {
+                wt: info.wt.clone(),
+                status: info.status.clone(),
+                repo_name: info.repo_name.clone(),
+                has_active_session: true,
+            });
+            false
+        } else {
+            true
+        }
+    });
+    to_keep.extend(kept);
+
+    // Tag worktrees already in to_keep so the reason column shows
+    // "active session" alongside their merge reason.
+    for info in to_keep.iter_mut() {
+        if !info.has_active_session
+            && contains_active_session(&info.wt.path, sessions, probe, now, timeout)
+        {
+            info.has_active_session = true;
+        }
+    }
 }
 
 /// Create a stderr spinner with braille animation for long-running operations.
@@ -340,7 +438,17 @@ fn render_worktrees_table<W: Write>(
         } else {
             format!("{icon} ")
         };
-        let colored_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
+        let base_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
+        let colored_status = if info.has_active_session {
+            format!(
+                "{}{} ⏵ active session{}",
+                base_status,
+                color::YELLOW,
+                color::RESET
+            )
+        } else {
+            base_status
+        };
 
         if show_repo {
             let repo_cell = pad_or_truncate(info.repo_name.as_deref().unwrap_or(""), REPO_WIDTH);
@@ -469,6 +577,7 @@ async fn collect_worktrees(
             wt,
             status,
             repo_name: repo_name.map(|s| s.to_string()),
+            has_active_session: false,
         };
 
         if should_delete {
@@ -484,10 +593,33 @@ async fn collect_worktrees(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::cc::types::SessionStatus;
+    use crate::shared::active_session::NoActivityProbe;
     use crate::shared::testing::TestRepo;
+    use chrono::Utc;
     use indoc::indoc;
     use rstest::rstest;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
+        let now = Utc::now();
+        Session {
+            session_id: id.to_string(),
+            cwd,
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: now,
+            updated_at: now,
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+        }
+    }
 
     fn make_clean_info(
         name: &str,
@@ -504,6 +636,7 @@ mod tests {
             },
             status,
             repo_name: None,
+            has_active_session: false,
         }
     }
 
@@ -523,6 +656,7 @@ mod tests {
             },
             status,
             repo_name: Some(repo_name.to_string()),
+            has_active_session: false,
         }
     }
 
@@ -783,6 +917,131 @@ mod tests {
                 REPO                               NAME                         BRANCH                       STATUS
                 github.com/fohte/armyknife         merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
                 github.com/fohte/other-repo        open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+            "}
+        );
+    }
+
+    // =========================================================================
+    // Tests for active-session protection
+    // =========================================================================
+
+    #[rstest]
+    fn protection_moves_active_worktree_from_delete_to_keep() {
+        let wt_path = PathBuf::from("/tmp/wt-active");
+        let mut to_delete = vec![make_clean_info(
+            "wt-active",
+            wt_path.clone(),
+            "fohte/wt-active",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        )];
+        let mut to_keep = Vec::new();
+
+        let sessions = vec![make_session_at(
+            "s1",
+            SessionStatus::Running,
+            wt_path.clone(),
+        )];
+
+        protect_active_worktrees(
+            &mut to_delete,
+            &mut to_keep,
+            &sessions,
+            Duration::from_secs(60),
+            &NoActivityProbe,
+        );
+
+        assert!(to_delete.is_empty(), "active worktree must not be deleted");
+        assert_eq!(to_keep.len(), 1);
+        assert!(to_keep[0].has_active_session);
+        assert_eq!(to_keep[0].wt.path, wt_path);
+    }
+
+    #[rstest]
+    fn protection_keeps_inactive_worktrees_in_delete() {
+        let wt_path = PathBuf::from("/tmp/wt-merged");
+        let mut to_delete = vec![make_clean_info(
+            "wt-merged",
+            wt_path,
+            "fohte/wt-merged",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        )];
+        let mut to_keep = Vec::new();
+
+        // Session for a completely different worktree.
+        let sessions = vec![make_session_at(
+            "s1",
+            SessionStatus::Running,
+            PathBuf::from("/tmp/some-other-wt"),
+        )];
+
+        protect_active_worktrees(
+            &mut to_delete,
+            &mut to_keep,
+            &sessions,
+            Duration::from_secs(60),
+            &NoActivityProbe,
+        );
+
+        assert_eq!(to_delete.len(), 1);
+        assert!(to_keep.is_empty());
+    }
+
+    #[rstest]
+    fn protection_tags_already_kept_worktrees_with_active_session() {
+        let wt_path = PathBuf::from("/tmp/wt-wip");
+        let mut to_delete = Vec::new();
+        let mut to_keep = vec![make_clean_info(
+            "wt-wip",
+            wt_path.clone(),
+            "fohte/wt-wip",
+            MergeStatus::NotMerged {
+                reason: "open".to_string(),
+            },
+        )];
+
+        let sessions = vec![make_session_at("s1", SessionStatus::WaitingInput, wt_path)];
+
+        protect_active_worktrees(
+            &mut to_delete,
+            &mut to_keep,
+            &sessions,
+            Duration::from_secs(60),
+            &NoActivityProbe,
+        );
+
+        assert_eq!(to_keep.len(), 1);
+        assert!(
+            to_keep[0].has_active_session,
+            "already-kept worktree with active session must be tagged"
+        );
+    }
+
+    #[rstest]
+    fn render_shows_active_session_marker() {
+        let test_repo = TestRepo::new();
+        let mut info = make_clean_info(
+            "wip",
+            test_repo.path().join(".worktrees/wip"),
+            "fohte/wip",
+            MergeStatus::NotMerged {
+                reason: "open".to_string(),
+            },
+        );
+        info.has_active_session = true;
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &[info], false).expect("render should succeed");
+
+        let result = String::from_utf8(output).expect("valid utf8");
+        assert_eq!(
+            result,
+            indoc! {"
+                NAME                         BRANCH                       STATUS
+                wip                          fohte/wip                    \x1b[32mopen\x1b[0m\x1b[33m ⏵ active session\x1b[0m
             "}
         );
     }
