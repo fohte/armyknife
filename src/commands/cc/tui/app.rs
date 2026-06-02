@@ -500,10 +500,10 @@ impl App {
     /// currently selected worktree (used for `Enter` → focus pane).
     pub fn worktree_view_focus_session(&self) -> Option<&Session> {
         let row = self.worktree_view.selected_worktree()?;
-        let canonical = canonicalize_or_self(&row.path);
+        // `row.path` is already canonicalized at discovery time.
         self.sessions
             .iter()
-            .filter(|s| canonicalize_or_self(&s.cwd).starts_with(&canonical))
+            .filter(|s| canonicalize_or_self(&s.cwd).starts_with(&row.path))
             .max_by_key(|s| s.updated_at)
     }
 

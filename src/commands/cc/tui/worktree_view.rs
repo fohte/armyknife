@@ -134,10 +134,10 @@ impl WorktreeView {
             .collect();
 
         for row in rows.iter_mut() {
-            let canonical = canonicalize_or_self(&row.path);
+            // `row.path` is already canonicalized at discovery time.
             let in_wt: Vec<&Session> = canonical_sessions
                 .iter()
-                .filter(|(c, _)| c.starts_with(&canonical))
+                .filter(|(c, _)| c.starts_with(&row.path))
                 .map(|(_, s)| *s)
                 .collect();
             row.session_count = in_wt.len();
@@ -274,7 +274,10 @@ pub fn discover_worktree_rows(repos_root: &Path, worktrees_dir: &str) -> Vec<Wor
                 repo: repo_name.clone(),
                 branch: wt.branch,
                 name,
-                path: wt.path,
+                // Canonicalize once on the discovery thread; downstream
+                // overlay refreshes happen on the UI thread and would
+                // otherwise hit the filesystem per row, per refresh.
+                path: canonicalize_or_self(&wt.path),
                 session_count: 0,
                 has_active: false,
             });
@@ -423,7 +426,9 @@ mod tests {
             repo: "r".to_string(),
             branch: "b".to_string(),
             name: "wt".to_string(),
-            path: wt.clone(),
+            // Mirror what `discover_worktree_rows` does so the overlay
+            // comparison hits the same realpath on both sides.
+            path: canonicalize_or_self(&wt),
             session_count: 0,
             has_active: false,
         }]);

@@ -423,12 +423,20 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
 }
 
 fn focus_selected_worktree_session(app: &mut App) {
-    let pane_id = app
-        .worktree_view_focus_session()
-        .and_then(|s| s.tmux_info.as_ref().map(|t| t.pane_id.clone()));
-    if let Some(pane_id) = pane_id
-        && let Err(e) = tmux::focus_pane(&pane_id)
-    {
+    let pane_id = match app.worktree_view_focus_session() {
+        Some(s) => match s.tmux_info.as_ref() {
+            Some(t) => t.pane_id.clone(),
+            None => {
+                app.set_error("No tmux pane for this session".to_string());
+                return;
+            }
+        },
+        None => {
+            app.set_error("No sessions in this worktree to focus".to_string());
+            return;
+        }
+    };
+    if let Err(e) = tmux::focus_pane(&pane_id) {
         app.set_error(format!("Failed to focus tmux pane: {e}"));
     }
 }
