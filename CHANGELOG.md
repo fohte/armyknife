@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.186](https://github.com/fohte/armyknife/compare/v0.1.185...v0.1.186) (2026-06-02)
+
+
+### Features
+
+* **wm/clean:** protect worktrees with active sessions from deletion ([#582](https://github.com/fohte/armyknife/issues/582)) ([cb709ee](https://github.com/fohte/armyknife/commit/cb709ee779cca844aaf580f6918156808c61789e))
+
 ## [0.1.185](https://github.com/fohte/armyknife/compare/v0.1.184...v0.1.185) (2026-06-02)
 
 
