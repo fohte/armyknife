@@ -101,7 +101,7 @@ fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
             render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
         }
         (false, false) => {
-            render_session_list(frame, areas[1], app, now);
+            render_main_list(frame, areas[1], app, now);
             render_help(frame, areas[2], app);
         }
     }
