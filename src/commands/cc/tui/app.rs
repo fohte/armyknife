@@ -10,6 +10,26 @@ use std::path::{Path, PathBuf};
 
 use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
+use super::worktree_view::{
+    WorktreeMode, WorktreeRow, WorktreeView, canonicalize_or_self, session_lives_under,
+};
+
+/// Top-level view selection. Tab cycles between these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Session,
+    Worktree,
+}
+
+impl View {
+    pub fn next(self) -> Self {
+        match self {
+            View::Session => View::Worktree,
+            View::Worktree => View::Session,
+        }
+    }
+}
 
 /// Application mode.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -62,10 +82,17 @@ pub struct App {
     /// Cache of repository names (keyed by cwd path).
     /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
     repo_name_cache: HashMap<PathBuf, String>,
+    /// Cache of (repo_name, worktree_name) keyed by cwd path. Worktree name
+    /// is the branch when resolvable, otherwise the worktree dir basename.
+    worktree_label_cache: HashMap<PathBuf, (String, String)>,
     /// Tree-ordered indices into `sessions`.
     /// Updated each render by the UI layer after building the session tree.
     /// Maps display position (list_state index) to sessions index.
     tree_ordered_indices: Vec<usize>,
+    /// Currently active top-level view.
+    pub view: View,
+    /// Worktree-view state (background-loaded list, sub-mode, selection).
+    pub worktree_view: WorktreeView,
 }
 
 impl App {
@@ -124,6 +151,9 @@ impl App {
             tree_ordered_indices: Vec::new(),
             title_cache,
             repo_name_cache: HashMap::new(),
+            worktree_label_cache: HashMap::new(),
+            view: View::Session,
+            worktree_view: WorktreeView::new(),
         };
         app.rebuild_tree_order();
         app
@@ -417,8 +447,134 @@ impl App {
     }
 
     /// Returns the cached repository name for a given cwd path.
+    #[cfg(test)]
     pub fn get_cached_repo_name(&self, cwd: &std::path::Path) -> Option<&str> {
         self.repo_name_cache.get(cwd).map(String::as_str)
+    }
+
+    /// Ensures worktree labels (repo + worktree-name) are cached for the
+    /// given cwd paths. Worktree-name is the branch when the cwd is inside
+    /// a linked worktree; otherwise the path basename of the resolved
+    /// workdir is used.
+    pub fn ensure_worktree_labels_resolved(&mut self, cwds: &[PathBuf]) {
+        for cwd in cwds {
+            if !self.worktree_label_cache.contains_key(cwd) {
+                let labels = resolve_worktree_labels_for_path(cwd);
+                self.worktree_label_cache.insert(cwd.clone(), labels);
+            }
+        }
+    }
+
+    /// Returns the cached (repo, worktree_name) for a cwd path.
+    pub fn get_cached_worktree_labels(&self, cwd: &std::path::Path) -> Option<(&str, &str)> {
+        self.worktree_label_cache
+            .get(cwd)
+            .map(|(r, n)| (r.as_str(), n.as_str()))
+    }
+
+    /// Cycles the active view.
+    pub fn cycle_view(&mut self) {
+        self.view = self.view.next();
+        if self.view == View::Worktree {
+            // Make sure overlay reflects the latest session list whenever the
+            // user lands on the worktree view.
+            self.worktree_view.refresh_session_overlay(&self.sessions);
+        }
+    }
+
+    /// Installs the freshly loaded worktree rows.
+    pub fn set_worktrees(&mut self, rows: Vec<WorktreeRow>) {
+        self.worktree_view.set_rows(rows);
+        self.worktree_view.refresh_session_overlay(&self.sessions);
+    }
+
+    /// Marks worktree discovery as failed (background thread error) and
+    /// also surfaces the error in the global error banner so the user
+    /// notices it without switching to the worktree view first.
+    pub fn set_worktrees_failed(&mut self, error: String) {
+        self.set_error(format!("Failed to load worktrees: {error}"));
+        self.worktree_view.set_failed(error);
+    }
+
+    /// In worktree view, returns the most recently updated session inside the
+    /// currently selected worktree (used for `Enter` → focus pane).
+    pub fn worktree_view_focus_session(&self) -> Option<&Session> {
+        let row = self.worktree_view.selected_worktree()?;
+        // `row.path` is already canonicalized at discovery time.
+        self.sessions
+            .iter()
+            .filter(|s| canonicalize_or_self(&s.cwd).starts_with(&row.path))
+            .max_by_key(|s| s.updated_at)
+    }
+
+    /// Enters Confirm sub-mode on the selected worktree (for `d`).
+    pub fn worktree_view_request_delete(&mut self) {
+        if let Some(row) = self.worktree_view.selected_worktree() {
+            self.worktree_view.mode = WorktreeMode::Confirm {
+                worktree_path: row.path,
+                session_count: row.session_count,
+                has_active: row.has_active,
+            };
+        }
+    }
+
+    /// Cancels the pending worktree-view confirmation.
+    pub fn worktree_view_cancel_confirm(&mut self) {
+        self.worktree_view.mode = WorktreeMode::Normal;
+    }
+
+    /// Deletes the worktree via `cleanup_worktree_resources` (git worktree,
+    /// branch, tmux windows, session files). Does not consult merge status.
+    pub fn worktree_view_confirm_delete(&mut self) -> anyhow::Result<()> {
+        let path = match &self.worktree_view.mode {
+            WorktreeMode::Confirm { worktree_path, .. } => worktree_path.clone(),
+            _ => return Ok(()),
+        };
+
+        self.worktree_view.mode = WorktreeMode::Normal;
+
+        use crate::shared::cleanup;
+        let result = cleanup::cleanup_worktree_resources(&path)?;
+
+        if result.worktree_deleted {
+            // Drop sessions whose cwd is gone.
+            if let Some(ref wt_root) = result.worktree_root {
+                let to_remove: Vec<String> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| session_lives_under(&s.cwd, wt_root))
+                    .map(|s| s.session_id.clone())
+                    .collect();
+                for id in &to_remove {
+                    self.remove_session(id);
+                }
+            }
+            let prev_selection = self.worktree_view.list_state.selected();
+            if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
+                &mut self.worktree_view.state
+            {
+                rows.retain(|r| r.path != path);
+            }
+            self.worktree_view.refresh_session_overlay(&self.sessions);
+            // Keep the cursor near the deleted row: pick the first
+            // selectable index >= the old position, otherwise the last.
+            let sel = self.worktree_view.selectable_indices();
+            let next = prev_selection
+                .and_then(|p| {
+                    sel.iter()
+                        .find(|&&i| i >= p)
+                        .copied()
+                        .or_else(|| sel.last().copied())
+                })
+                .or_else(|| sel.first().copied());
+            self.worktree_view.list_state.select(next);
+        } else {
+            self.set_error(format!(
+                "Worktree not deleted: {} (use `a wm clean` to investigate)",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Exits search mode, confirming the search.
@@ -756,7 +912,7 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 }
 
 /// Gets the title display name for a session.
-/// Priority: label (armyknife) > firstPrompt (Claude Code) > tmux session:window > cwd.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > cwd basename.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
     // Prefer armyknife's own label (set via env var or auto-generated)
@@ -766,13 +922,6 @@ fn get_title_display_name(session: &Session) -> String {
 
     if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
         return title;
-    }
-
-    if let Some(ref tmux_info) = session.tmux_info {
-        return claude_sessions::normalize_title(&format!(
-            "{}:{}",
-            tmux_info.session_name, tmux_info.window_name
-        ));
     }
 
     // Extract last component of cwd path
@@ -856,6 +1005,37 @@ fn build_searchable_text(session: &Session) -> String {
     }
 
     parts.join(" ")
+}
+
+/// Resolves (repo_name, worktree_name) for `cwd`.
+/// `worktree_name` is the current branch when resolvable; otherwise
+/// it falls back to the workdir basename, then to the cwd basename.
+fn resolve_worktree_labels_for_path(cwd: &std::path::Path) -> (String, String) {
+    use crate::infra::git::open_repo_at;
+
+    let repo_name = resolve_repo_name_for_path(cwd);
+
+    let worktree_name = open_repo_at(cwd)
+        .ok()
+        .map(|repo| {
+            let workdir = repo.workdir().to_path_buf();
+            let branch = repo.current_branch().ok();
+            branch.filter(|b| b != "HEAD").unwrap_or_else(|| {
+                workdir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| workdir.display().to_string())
+            })
+        })
+        .unwrap_or_else(|| {
+            cwd.file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| cwd.display().to_string())
+        });
+
+    (repo_name, worktree_name)
 }
 
 /// Resolves the repository name for a given cwd path.
