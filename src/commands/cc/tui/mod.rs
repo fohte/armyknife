@@ -414,8 +414,9 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
             app.worktree_view_request_delete();
         }
         (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
-            let num = c.to_digit(10).unwrap_or(0) as usize;
-            app.worktree_view.select_by_number(num);
+            if let Some(num) = c.to_digit(10) {
+                app.worktree_view.select_by_number(num as usize);
+            }
         }
         _ => {}
     }

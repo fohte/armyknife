@@ -488,8 +488,11 @@ impl App {
         self.worktree_view.refresh_session_overlay(&self.sessions);
     }
 
-    /// Marks worktree discovery as failed (background thread error).
+    /// Marks worktree discovery as failed (background thread error) and
+    /// also surfaces the error in the global error banner so the user
+    /// notices it without switching to the worktree view first.
     pub fn set_worktrees_failed(&mut self, error: String) {
+        self.set_error(format!("Failed to load worktrees: {error}"));
         self.worktree_view.set_failed(error);
     }
 
@@ -520,10 +523,8 @@ impl App {
         self.worktree_view.mode = WorktreeMode::Normal;
     }
 
-    /// Executes the pending worktree-view deletion. Runs the shared
-    /// `cleanup_worktree_resources`, which handles git worktree, branch,
-    /// tmux windows, and session files. Does NOT consult merge status —
-    /// callers wanting merge gating must use `a wm clean`.
+    /// Deletes the worktree via `cleanup_worktree_resources` (git worktree,
+    /// branch, tmux windows, session files). Does not consult merge status.
     pub fn worktree_view_confirm_delete(&mut self) -> anyhow::Result<()> {
         let path = match &self.worktree_view.mode {
             WorktreeMode::Confirm { worktree_path, .. } => worktree_path.clone(),
@@ -548,20 +549,28 @@ impl App {
                     self.remove_session(id);
                 }
             }
-            // Drop the deleted row from the cached worktree list.
+            let prev_selection = self.worktree_view.list_state.selected();
             if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
                 &mut self.worktree_view.state
             {
                 rows.retain(|r| r.path != path);
             }
             self.worktree_view.refresh_session_overlay(&self.sessions);
-            self.worktree_view.select_first_worktree();
+            // Keep the cursor near the deleted row: pick the first
+            // selectable index >= the old position, otherwise the last.
+            let sel = self.worktree_view.selectable_indices();
+            let next = prev_selection
+                .and_then(|p| {
+                    sel.iter()
+                        .find(|&&i| i >= p)
+                        .copied()
+                        .or_else(|| sel.last().copied())
+                })
+                .or_else(|| sel.first().copied());
+            self.worktree_view.list_state.select(next);
         } else {
-            // No-op deletion: most often uncommitted changes or an
-            // unresolvable worktree name. Surface it so the user knows
-            // their `y` did not take effect.
             self.set_error(format!(
-                "Worktree not deleted (uncommitted changes or unresolvable name): {}",
+                "Worktree not deleted: {} (use `a wm clean` to investigate)",
                 path.display()
             ));
         }

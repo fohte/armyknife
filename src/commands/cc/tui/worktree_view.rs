@@ -181,30 +181,34 @@ impl WorktreeView {
         }
     }
 
-    pub fn select_next(&mut self) {
+    /// Steps the selection by `delta` (positive = down, negative = up),
+    /// wrapping around at both ends. Headers are always skipped.
+    fn step(&mut self, delta: isize) {
         let sel = self.selectable_indices();
         if sel.is_empty() {
             return;
         }
-        let current = self.list_state.selected().unwrap_or(sel[0]);
-        let pos = sel.iter().position(|&i| i >= current).unwrap_or(0);
-        let next_pos = if sel[pos] == current {
-            (pos + 1) % sel.len()
-        } else {
-            pos
+        // Look up the *exact* selected index in `sel`. If the previous
+        // selection no longer lives in the selectable set (rows changed,
+        // user landed mid-header etc.), restart at the first selectable.
+        let cur_pos = self
+            .list_state
+            .selected()
+            .and_then(|c| sel.iter().position(|&i| i == c));
+        let len = sel.len() as isize;
+        let next = match cur_pos {
+            Some(p) => (((p as isize) + delta).rem_euclid(len)) as usize,
+            None => 0,
         };
-        self.list_state.select(Some(sel[next_pos]));
+        self.list_state.select(Some(sel[next]));
+    }
+
+    pub fn select_next(&mut self) {
+        self.step(1);
     }
 
     pub fn select_previous(&mut self) {
-        let sel = self.selectable_indices();
-        if sel.is_empty() {
-            return;
-        }
-        let current = self.list_state.selected().unwrap_or(sel[0]);
-        let pos = sel.iter().position(|&i| i >= current).unwrap_or(0);
-        let prev_pos = if pos == 0 { sel.len() - 1 } else { pos - 1 };
-        self.list_state.select(Some(sel[prev_pos]));
+        self.step(-1);
     }
 
     pub fn select_by_number(&mut self, num: usize) {
@@ -232,8 +236,8 @@ pub fn canonicalize_or_self(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// True when `session_cwd` lives inside `worktree_path`. Canonicalizes both
-/// sides so symlink layouts (`/tmp` → `/private/tmp`) compare correctly.
+/// Canonicalizes both sides: macOS `/tmp` → `/private/tmp` etc. would
+/// otherwise make a plain `starts_with` falsely return false.
 pub fn session_lives_under(session_cwd: &Path, worktree_path: &Path) -> bool {
     canonicalize_or_self(session_cwd).starts_with(canonicalize_or_self(worktree_path))
 }
