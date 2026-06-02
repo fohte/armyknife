@@ -45,3 +45,11 @@ src/
 ```
 
 Shared modules are extracted when reusable (e.g., `human_in_the_loop/`).
+
+## Internal Subcommands
+
+Subcommands marked with `#[command(hide = true)]` are not user-facing entry points; they exist as spawn targets for other commands and are listed here for discoverability.
+
+| Command               | Spawned by   | Purpose                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `a cc clean-detached` | `a cc watch` | Non-interactive batch worktree cleanup. Reads paths from argv or `--paths-file`, runs `cleanup_worktree_resources` per path, and journals progress as JSONL under `~/.cache/armyknife/clean/<pid>.jsonl`. Never reads stdin; never writes stdout/stderr. The caller is responsible for detaching the process (`nohup`/`setsid`). Logs older than 7 days are GC'd on each invocation. |

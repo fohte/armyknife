@@ -1,6 +1,7 @@
 mod auto_compact;
 mod auto_pause;
 mod claude_sessions;
+mod clean_detached;
 mod error;
 mod focus;
 mod hook;
@@ -19,6 +20,7 @@ mod window_status;
 use clap::Subcommand;
 
 pub use auto_compact::AutoCompactArgs;
+pub use clean_detached::CleanDetachedArgs;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
@@ -61,6 +63,10 @@ pub enum CcCommands {
     /// Print status symbols for the Claude Code sessions in a tmux window
     #[command(name = "window-status")]
     WindowStatus(WindowStatusArgs),
+
+    /// Internal: non-interactive batch worktree cleanup for `cc watch`.
+    #[command(name = "clean-detached", hide = true)]
+    CleanDetached(CleanDetachedArgs),
 }
 
 impl CcCommands {
@@ -75,6 +81,7 @@ impl CcCommands {
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
+            Self::CleanDetached(args) => clean_detached::run(args)?,
         }
         Ok(())
     }
