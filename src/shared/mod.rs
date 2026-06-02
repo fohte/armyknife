@@ -1,3 +1,4 @@
+pub mod active_session;
 pub mod cache;
 pub mod cleanup;
 pub mod command;

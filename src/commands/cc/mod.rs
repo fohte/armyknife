@@ -1,5 +1,5 @@
 mod auto_compact;
-mod auto_pause;
+pub(crate) mod auto_pause;
 mod claude_sessions;
 mod clean_detached;
 mod error;

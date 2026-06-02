@@ -477,10 +477,13 @@ Git worktree management with tmux integration.
 
 `clean` options:
 
-| Option          | Description                                                |
-| --------------- | ---------------------------------------------------------- |
-| `-n, --dry-run` | Show what would be deleted without actually deleting       |
-| `--all`         | Clean worktrees across all repositories under `repos_root` |
+| Option          | Description                                                                             |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `-n, --dry-run` | Show what would be deleted without actually deleting                                    |
+| `--all`         | Clean worktrees across all repositories under `repos_root`                              |
+| `--force`       | Delete even worktrees that currently host an active Claude Code session (default: keep) |
+
+Worktrees that contain an active Claude Code session (any session not paused/ended, with pending background tasks, or with recent tmux pane input) are kept by default regardless of merge status. The `STATUS` column shows `active session` for those entries. Pass `--force` to override.
 
 ### Hooks
 
