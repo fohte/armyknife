@@ -41,6 +41,8 @@ pub enum AppEvent {
     SessionsChanged(Option<Vec<SessionChange>>),
     /// Tick for periodic updates.
     Tick,
+    /// Background worktree discovery finished.
+    WorktreesLoaded(std::result::Result<Vec<super::worktree_view::WorktreeRow>, String>),
 }
 
 /// Event handler that combines keyboard input and file system events.
@@ -66,6 +68,12 @@ impl EventHandler {
         let tick_tx = tx.clone();
         thread::spawn(move || {
             handle_tick_events(tick_tx);
+        });
+
+        // Spawn worktree discovery thread (one-shot).
+        let wt_tx = tx.clone();
+        thread::spawn(move || {
+            handle_worktree_discovery(wt_tx);
         });
 
         // Set up file system watcher
@@ -108,6 +116,25 @@ fn handle_keyboard_events(tx: Sender<AppEvent>) {
             }
         }
     }
+}
+
+/// Performs a one-shot scan for worktrees under the configured repos root.
+/// Sends a single `WorktreesLoaded` event when finished.
+fn handle_worktree_discovery(tx: Sender<AppEvent>) {
+    use crate::shared::config::load_config;
+    use crate::shared::repos_root::resolve_repos_root;
+
+    let result = (|| -> std::result::Result<Vec<super::worktree_view::WorktreeRow>, String> {
+        let config = load_config().map_err(|e| e.to_string())?;
+        let repos_root =
+            resolve_repos_root(config.wm.repos_root.as_deref()).map_err(|e| e.to_string())?;
+        Ok(super::worktree_view::discover_worktree_rows(
+            &repos_root,
+            &config.wm.worktrees_dir,
+        ))
+    })();
+
+    let _ = tx.send(AppEvent::WorktreesLoaded(result));
 }
 
 /// Handles tick events for periodic UI updates.

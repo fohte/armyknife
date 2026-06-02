@@ -9,11 +9,12 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::app::{App, AppMode};
+use super::app::{App, AppMode, View};
 use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
 };
+use super::worktree_view::{WorktreeListEntry, WorktreeLoadState, WorktreeMode, WorktreeStatus};
 
 /// Minimum width for session info on line 1
 const MIN_SESSION_INFO_WIDTH: usize = 20;
@@ -45,12 +46,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     let area = frame.area();
 
-    // Determine layout based on mode and error state
+    // The search bar is session-view only.
     let has_error = app.error_message.is_some();
-    let is_search_mode = app.mode == AppMode::Search;
-    // Show search bar only when text search is involved (search mode or confirmed query).
-    // Status-only filter uses header highlighting, so no search bar needed.
-    let has_text_filter = !app.confirmed_query.is_empty();
+    let is_search_mode = app.view == View::Session && app.mode == AppMode::Search;
+    let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
     let show_search_bar = is_search_mode || has_text_filter;
 
     let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
@@ -87,17 +86,17 @@ fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     match (show_search_bar, has_error) {
         (true, true) => {
             render_search_input(frame, areas[1], app);
-            render_session_list(frame, areas[2], app, now);
+            render_main_list(frame, areas[2], app, now);
             render_help(frame, areas[3], app);
             render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
         }
         (true, false) => {
             render_search_input(frame, areas[1], app);
-            render_session_list(frame, areas[2], app, now);
+            render_main_list(frame, areas[2], app, now);
             render_help(frame, areas[3], app);
         }
         (false, true) => {
-            render_session_list(frame, areas[1], app, now);
+            render_main_list(frame, areas[1], app, now);
             render_help(frame, areas[2], app);
             render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
         }
@@ -133,11 +132,12 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let stopped_style = get_status_style(Color::DarkGray, SessionStatus::Stopped, status_filter);
     let paused_style = get_status_style(Color::Indexed(245), SessionStatus::Paused, status_filter);
 
+    let title = match app.view {
+        View::Session => "  Claude Code Sessions",
+        View::Worktree => "  Worktrees           ",
+    };
     let status_line = Line::from(vec![
-        Span::styled(
-            "  Claude Code Sessions",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("                       "),
         Span::styled(
             format!("{} {}", SessionStatus::Running.display_symbol(), running),
@@ -171,6 +171,123 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     frame.render_widget(header, area);
+}
+
+/// Dispatch list rendering on the active view.
+fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
+    match app.view {
+        View::Session => render_session_list(frame, area, app, now),
+        View::Worktree => render_worktree_list(frame, area, app),
+    }
+}
+
+/// Renders the worktree list, grouped by repo.
+fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let term_width = area.width as usize;
+    let state = app.worktree_view.state.clone();
+    match state {
+        WorktreeLoadState::Loading => {
+            let p = Paragraph::new("  Loading worktrees...")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(p, area);
+            return;
+        }
+        WorktreeLoadState::Failed(err) => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Failed to load worktrees: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(err, Style::default().fg(Color::Red)),
+            ]);
+            frame.render_widget(Paragraph::new(line), area);
+            return;
+        }
+        WorktreeLoadState::Loaded(_) => {}
+    }
+
+    let entries = app.worktree_view.list_entries();
+    if entries.is_empty() {
+        let p = Paragraph::new("  No linked worktrees discovered.")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(p, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|e| create_worktree_list_item(e, term_width))
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
+
+    frame.render_stateful_widget(list, area, &mut app.worktree_view.list_state);
+}
+
+/// Returns the symbol + color used for one worktree row.
+fn worktree_status_glyph(status: WorktreeStatus) -> (&'static str, Color) {
+    match status {
+        WorktreeStatus::Orphan => ("◌", Color::DarkGray),
+        WorktreeStatus::Active => ("◐", Color::Yellow),
+        WorktreeStatus::Idle => ("●", Color::Green),
+    }
+}
+
+fn create_worktree_list_item(entry: &WorktreeListEntry, term_width: usize) -> ListItem<'static> {
+    let dim_style = Style::default().fg(Color::DarkGray);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+
+    match entry {
+        WorktreeListEntry::RepoHeader(name) => {
+            let line = Line::from(vec![Span::styled(
+                format!("▼ {}", name),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]);
+            ListItem::new(vec![line])
+        }
+        WorktreeListEntry::Worktree(row) => {
+            let (symbol, color) = worktree_status_glyph(row.status());
+            let repo_color = repo_label_color(&row.repo);
+            let bar = Span::styled("▎", Style::default().fg(repo_color));
+
+            // Line 1: "  {status} ▎ {repo} {branch}"
+            let primary = if row.repo == row.name || row.branch.is_empty() {
+                row.repo.clone()
+            } else {
+                format!("{} {}", row.repo, row.branch)
+            };
+            let primary = truncate(&primary, term_width.saturating_sub(8));
+            let line1 = Line::from(vec![
+                Span::raw("  "),
+                Span::styled(symbol.to_string(), Style::default().fg(color)),
+                Span::raw(" "),
+                bar.clone(),
+                Span::raw(" "),
+                Span::styled(primary, bold),
+            ]);
+
+            // Line 2: "     ▎ {n} sessions · {path}"
+            let detail = format!(
+                "{} session{} · {}",
+                row.session_count,
+                if row.session_count == 1 { "" } else { "s" },
+                row.path.display()
+            );
+            let detail = truncate(&detail, term_width.saturating_sub(8));
+            let line2 = Line::from(vec![
+                Span::raw("     "),
+                bar,
+                Span::raw(" "),
+                Span::styled(detail, dim_style),
+            ]);
+
+            ListItem::new(vec![line1, line2])
+        }
+    }
 }
 
 /// Renders the session list with tree view.
@@ -207,15 +324,14 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         app.confirmed_query.clone()
     };
 
-    // Pre-compute repo names for filtered sessions. Populate cache
-    // to avoid calling get_repo_root_in (filesystem I/O) on every
-    // render frame. Must drop filtered_sessions first to release
-    // the immutable borrow on app before mutating the cache.
+    // Pre-compute repo names and worktree labels for filtered sessions.
+    // Populate caches to avoid hitting git I/O on every render frame.
     {
         let cwds: Vec<std::path::PathBuf> =
             filtered_sessions.iter().map(|s| s.cwd.clone()).collect();
         drop(filtered_sessions);
         app.ensure_repo_names_resolved(&cwds);
+        app.ensure_worktree_labels_resolved(&cwds);
     }
     let filtered_sessions: Vec<&Session> = app.filtered_sessions();
 
@@ -232,7 +348,9 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
             tree_session_ids.push(entry.session.session_id.clone());
             let next_entry = tree_entries.get(i + 1);
             let cached_title = app.get_cached_title(&entry.session.session_id);
-            let repo_name = app.get_cached_repo_name(&entry.session.cwd).unwrap_or("");
+            let (repo_name, worktree_name) = app
+                .get_cached_worktree_labels(&entry.session.cwd)
+                .unwrap_or(("", ""));
             create_tree_session_item(
                 entry,
                 next_entry,
@@ -241,6 +359,7 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
                 term_width,
                 &query,
                 repo_name,
+                worktree_name,
             )
         })
         .collect();
@@ -261,6 +380,69 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 /// Renders the help bar at the bottom.
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
+
+    // Worktree view has its own help line set.
+    if app.view == View::Worktree {
+        let help_lines: Vec<Line> = match &app.worktree_view.mode {
+            WorktreeMode::Confirm {
+                session_count,
+                has_active,
+                ..
+            } => {
+                let warn_color = if *has_active {
+                    Color::Red
+                } else {
+                    Color::Yellow
+                };
+                let warn_style = Style::default().fg(warn_color).add_modifier(Modifier::BOLD);
+                let prompt = if *has_active {
+                    format!(
+                        "  WARNING: ACTIVE session — delete worktree and {session_count} session{}?",
+                        if *session_count == 1 { "" } else { "s" }
+                    )
+                } else if *session_count > 0 {
+                    format!(
+                        "  Delete worktree and {session_count} session{}?",
+                        if *session_count == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "  Delete worktree?".to_string()
+                };
+                vec![
+                    Line::from(vec![
+                        Span::styled(prompt, warn_style),
+                        Span::raw(" "),
+                        Span::styled("y", bold),
+                        Span::raw(": yes  "),
+                        Span::styled("n/Esc", bold),
+                        Span::raw(": cancel"),
+                    ]),
+                    Line::from(""),
+                ]
+            }
+            WorktreeMode::Normal => vec![
+                Line::from(vec![
+                    Span::styled("  j/k", bold),
+                    Span::raw(": move  "),
+                    Span::styled("Enter/f", bold),
+                    Span::raw(": focus  "),
+                    Span::styled("d", bold),
+                    Span::raw(": delete  "),
+                    Span::styled("1-9", bold),
+                    Span::raw(": quick  "),
+                    Span::styled("Tab", bold),
+                    Span::raw(": switch view  "),
+                    Span::styled("q", bold),
+                    Span::raw(": quit"),
+                ]),
+                Line::from(""),
+            ],
+        };
+        let help =
+            Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(help, area);
+        return;
+    }
 
     let help_lines: Vec<Line> = match &app.mode {
         AppMode::Confirm { is_alive, .. } => {
@@ -353,7 +535,9 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             ]),
             Line::from(vec![
                 Span::styled("  C-r/w/s/p", bold),
-                Span::raw(": filter"),
+                Span::raw(": filter  "),
+                Span::styled("Tab", bold),
+                Span::raw(": worktree view"),
             ]),
         ],
     };
@@ -437,6 +621,10 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 /// - Line 2: [tree_prefix_continuation]  ▎ current_tool or last_message
 ///
 /// Plus separator lines between tree entries (empty lines with connectors).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tree-rendering needs entry + neighbour + caches + repo/worktree labels in one call"
+)]
 fn create_tree_session_item(
     entry: &TreeEntry,
     next_entry: Option<&TreeEntry>,
@@ -445,11 +633,12 @@ fn create_tree_session_item(
     term_width: usize,
     query: &str,
     repo_name: &str,
+    worktree_name: &str,
 ) -> ListItem<'static> {
     let session = entry.session;
     let status_symbol = session.status.display_symbol();
     let s_color = status_color(session.status);
-    let session_info = get_session_info(session);
+    let session_info = get_session_info(session, repo_name, worktree_name);
     let label = cached_title
         .map(String::from)
         .unwrap_or_else(|| get_title_display_name_fallback(session));
@@ -681,14 +870,6 @@ fn get_title_display_name_fallback(session: &Session) -> String {
         return claude_sessions::normalize_title(label);
     }
 
-    if let Some(ref tmux_info) = session.tmux_info {
-        return claude_sessions::normalize_title(&format!(
-            "{}:{}",
-            tmux_info.session_name, tmux_info.window_name
-        ));
-    }
-
-    // Extract last component of cwd path
     let raw_title = session
         .cwd
         .file_name()
@@ -698,15 +879,31 @@ fn get_title_display_name_fallback(session: &Session) -> String {
     claude_sessions::normalize_title(&raw_title)
 }
 
-/// Gets the session info (tmux session:window or cwd path).
+/// Gets the session info field rendered next to the repo bar.
+/// Format: `<repo> <worktree-name>`. When neither label is available yet
+/// (first frame before the cache is populated), falls back to the cwd
+/// basename so the row stays within reasonable width.
 /// All outputs are sanitized to strip ANSI escape sequences.
-fn get_session_info(session: &Session) -> String {
+fn get_session_info(session: &Session, repo: &str, worktree_name: &str) -> String {
     use crate::commands::cc::claude_sessions;
 
-    let raw = if let Some(ref tmux_info) = session.tmux_info {
-        format!("{}:{}", tmux_info.session_name, tmux_info.window_name)
+    let raw = if !repo.is_empty() && !worktree_name.is_empty() {
+        if repo == worktree_name {
+            repo.to_string()
+        } else {
+            format!("{repo} {worktree_name}")
+        }
+    } else if !repo.is_empty() {
+        repo.to_string()
+    } else if !worktree_name.is_empty() {
+        worktree_name.to_string()
     } else {
-        session.cwd.display().to_string()
+        session
+            .cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| session.cwd.display().to_string())
     };
     claude_sessions::normalize_title(&raw)
 }
@@ -999,8 +1196,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_title_display_name_fallback_to_tmux() {
-        // When cache is not available, falls back to tmux info
+    fn test_get_title_display_name_fallback_ignores_tmux() {
+        // Tmux session:window is no longer used as a label fallback; the
+        // row already shows `<repo> <worktree-name>` instead. Without an
+        // explicit label, the fallback is the cwd basename.
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
@@ -1008,7 +1207,7 @@ mod tests {
             window_index: 0,
             pane_id: "%0".to_string(),
         });
-        assert_eq!(get_title_display_name_fallback(&session), "dev:editor");
+        assert_eq!(get_title_display_name_fallback(&session), "project");
     }
 
     #[test]
@@ -1018,22 +1217,19 @@ mod tests {
         assert_eq!(get_title_display_name_fallback(&session), "project");
     }
 
-    #[test]
-    fn test_get_session_info_with_tmux() {
-        let mut session = create_test_session("test");
-        session.tmux_info = Some(TmuxInfo {
-            session_name: "dev".to_string(),
-            window_name: "editor".to_string(),
-            window_index: 0,
-            pane_id: "%0".to_string(),
-        });
-        assert_eq!(get_session_info(&session), "dev:editor");
-    }
-
-    #[test]
-    fn test_get_session_info_without_tmux() {
+    #[rstest]
+    #[case::repo_only("armyknife", "", "armyknife")]
+    #[case::worktree_only("", "feat-x", "feat-x")]
+    #[case::repo_and_worktree("armyknife", "feat-x", "armyknife feat-x")]
+    #[case::dedup_when_equal("docs", "docs", "docs")]
+    #[case::empty_falls_back_to_cwd_basename("", "", "project")]
+    fn test_get_session_info_formats_repo_and_worktree(
+        #[case] repo: &str,
+        #[case] worktree: &str,
+        #[case] expected: &str,
+    ) {
         let session = create_test_session("test");
-        assert_eq!(get_session_info(&session), "/home/user/project");
+        assert_eq!(get_session_info(&session, repo, worktree), expected);
     }
 
     #[rstest]
@@ -1125,16 +1321,16 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 1  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >● ▎ webapp:dev  just now
+            >● ▎ project  just now
                ▎
 
-             ◐ ▎ api:test  5m ago
+             ◐ ▎ project  5m ago
                ▎
 
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1154,7 +1350,7 @@ mod tests {
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1181,12 +1377,12 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >● ▎ webapp:dev  just now
+            >● ▎ project  just now
                ▎ I've updated the code as requested.
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1212,12 +1408,12 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >● ▎ webapp:dev  just now
+            >● ▎ project  just now
                ▎
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1240,12 +1436,12 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 1               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >○ ▎ /home/user/docs  docs  just now
+            >○ ▎ docs  just now
                ▎
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1288,16 +1484,16 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 2  ◐ 0  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >● ▎ app:main  just now
+            >● ▎ project  just now
                ▎ Bash(cargo build)
              │
-             └── ● ▎ app:test  2m ago
+             └── ● ▎ project  2m ago
                    ▎ Bash(cargo test)
 
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }
@@ -1343,19 +1539,19 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 2  ◐ 1  ⏸ 0  ○ 0               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >● ▎ app:main  just now
+            >● ▎ project  just now
                ▎
              │
-             ├── ● ▎ app:test  1m ago
+             ├── ● ▎ project  1m ago
              │     ▎
              │
-             └── ◐ ▎ app:review  3m ago
+             └── ◐ ▎ project  3m ago
                    ▎
 
 
 
               j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter"};
+              C-r/w/s/p: filter  Tab: worktree view"};
 
         assert_eq!(output, expected);
     }

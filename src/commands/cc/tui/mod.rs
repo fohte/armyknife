@@ -2,6 +2,7 @@ mod app;
 mod event;
 mod session_tree;
 mod ui;
+mod worktree_view;
 
 use std::collections::HashMap;
 
@@ -9,8 +10,9 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use self::app::{App, AppMode};
+use self::app::{App, AppMode, View};
 use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChangeType};
+use self::worktree_view::WorktreeMode;
 use crate::commands::cc::types::SessionStatus;
 use crate::infra::tmux;
 
@@ -58,16 +60,31 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
                 AppEvent::SessionsChanged(None) => needs_full_reload = true,
                 AppEvent::Tick => {}
+                AppEvent::WorktreesLoaded(Ok(rows)) => {
+                    app.set_worktrees(rows);
+                }
+                AppEvent::WorktreesLoaded(Err(err)) => {
+                    app.set_worktrees_failed(err);
+                }
             }
         }
 
         // Apply merged session changes in a single reload
+        let mut sessions_changed = false;
         if let Some(merged) = merge_session_changes(change_map, needs_full_reload) {
             if !merged.is_empty() {
                 app.reload_sessions(Some(&merged))?;
+                sessions_changed = true;
             }
         } else {
             app.reload_sessions(None)?;
+            sessions_changed = true;
+        }
+        if sessions_changed {
+            // Keep the worktree overlay (session count + active marker) in
+            // sync without re-running git discovery.
+            let snapshot = app.sessions.clone();
+            app.worktree_view.refresh_session_overlay(&snapshot);
         }
 
         if app.should_quit {
@@ -335,8 +352,23 @@ fn handle_confirm_worktree_cleanup_key_event(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles key events based on current mode.
+/// Handles key events based on the current view and sub-mode.
 fn handle_key_event(app: &mut App, key: KeyEvent) {
+    match app.view {
+        View::Session => handle_session_view_key_event(app, key),
+        View::Worktree => handle_worktree_view_key_event(app, key),
+    }
+}
+
+fn handle_session_view_key_event(app: &mut App, key: KeyEvent) {
+    // Tab cycles views from any non-text-input session sub-mode.
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Tab, _) = (key.code, key.modifiers)
+    {
+        app.cycle_view();
+        return;
+    }
+
     match app.mode {
         AppMode::Normal => handle_normal_key_event(app, key),
         AppMode::Search => handle_search_key_event(app, key),
@@ -344,6 +376,59 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         AppMode::ConfirmWorktreeCleanup { .. } => {
             handle_confirm_worktree_cleanup_key_event(app, key);
         }
+    }
+}
+
+fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
+    // Sub-mode dispatcher: confirmations have their own keys.
+    if let WorktreeMode::Confirm { .. } = app.worktree_view.mode {
+        match key.code {
+            KeyCode::Char('y') => {
+                if let Err(e) = app.worktree_view_confirm_delete() {
+                    app.set_error(format!("Failed to delete worktree: {e}"));
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.worktree_view_cancel_confirm();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    app.clear_error();
+    match (key.code, key.modifiers) {
+        (KeyCode::Tab, _) => app.cycle_view(),
+        (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
+        (KeyCode::Esc, _) => app.quit(),
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+            app.worktree_view.select_next();
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+            app.worktree_view.select_previous();
+        }
+        (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
+            focus_selected_worktree_session(app);
+        }
+        (KeyCode::Char('d'), KeyModifiers::NONE) => {
+            app.worktree_view_request_delete();
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
+            let num = c.to_digit(10).unwrap_or(0) as usize;
+            app.worktree_view.select_by_number(num);
+        }
+        _ => {}
+    }
+}
+
+fn focus_selected_worktree_session(app: &mut App) {
+    let pane_id = app
+        .worktree_view_focus_session()
+        .and_then(|s| s.tmux_info.as_ref().map(|t| t.pane_id.clone()));
+    if let Some(pane_id) = pane_id
+        && let Err(e) = tmux::focus_pane(&pane_id)
+    {
+        app.set_error(format!("Failed to focus tmux pane: {e}"));
     }
 }
 
