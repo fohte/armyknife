@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.187](https://github.com/fohte/armyknife/compare/v0.1.186...v0.1.187) (2026-06-02)
+
+
+### Features
+
+* **cc/tui:** add worktree view alongside session view in cc watch ([#585](https://github.com/fohte/armyknife/issues/585)) ([5cbd5f4](https://github.com/fohte/armyknife/commit/5cbd5f41f09fec8e69ddb9ffbebb3314b371fd22))
+
 ## [0.1.186](https://github.com/fohte/armyknife/compare/v0.1.185...v0.1.186) (2026-06-02)
 
 
