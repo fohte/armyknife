@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.185](https://github.com/fohte/armyknife/compare/v0.1.184...v0.1.185) (2026-06-02)
+
+
+### Features
+
+* **cc:** add hidden clean-detached subcommand ([#581](https://github.com/fohte/armyknife/issues/581)) ([bbb62b1](https://github.com/fohte/armyknife/commit/bbb62b13e6283ecc8eaa638dbc3ce803d8bf052d))
+
 ## [0.1.184](https://github.com/fohte/armyknife/compare/v0.1.183...v0.1.184) (2026-05-31)
 
 
