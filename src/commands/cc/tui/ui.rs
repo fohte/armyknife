@@ -270,7 +270,9 @@ fn create_worktree_list_item(entry: &WorktreeListEntry, term_width: usize) -> Li
                 Span::styled(primary, bold),
             ]);
 
-            // Line 2: "     ▎ {n} sessions · {path}"
+            // Line 2: "    ▎ {n} sessions · {path}"
+            // Leading width = indent (2) + status glyph width (1) + space (1) = 4
+            // so the bar lines up under the bar on line 1.
             let detail = format!(
                 "{} session{} · {}",
                 row.session_count,
@@ -279,7 +281,7 @@ fn create_worktree_list_item(entry: &WorktreeListEntry, term_width: usize) -> Li
             );
             let detail = truncate(&detail, term_width.saturating_sub(8));
             let line2 = Line::from(vec![
-                Span::raw("     "),
+                Span::raw("    "),
                 bar,
                 Span::raw(" "),
                 Span::styled(detail, dim_style),
@@ -1070,6 +1072,24 @@ fn render_to_string(
     width: u16,
     height: u16,
 ) -> String {
+    render_to_string_with(sessions, selected_index, now, width, height, |_| {})
+}
+
+/// Same as `render_to_string`, but lets the caller mutate the `App`
+/// between construction and render — useful to flip into the worktree
+/// view, inject worktree rows, etc.
+#[cfg(test)]
+fn render_to_string_with<F>(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+    setup: F,
+) -> String
+where
+    F: FnOnce(&mut App),
+{
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1078,6 +1098,7 @@ fn render_to_string(
 
     let mut app = App::with_sessions(sessions.to_vec());
     app.list_state.select(selected_index);
+    setup(&mut app);
 
     terminal
         .draw(|frame| {
@@ -1618,5 +1639,81 @@ mod tests {
                 "{name} got {color:?}, expected Rgb"
             );
         }
+    }
+
+    // =========================================================================
+    // Worktree view rendering
+    // =========================================================================
+
+    use crate::commands::cc::tui::worktree_view::WorktreeRow;
+
+    fn wt_row(repo: &str, branch: &str, name: &str, path: &str) -> WorktreeRow {
+        WorktreeRow {
+            repo: repo.to_string(),
+            branch: branch.to_string(),
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            session_count: 0,
+            has_active: false,
+        }
+    }
+
+    #[test]
+    fn test_render_worktree_view_grouped_rows_snapshot() {
+        // Locks in row layout: header title, repo group, status glyph,
+        // and crucially the column alignment between line 1 (header +
+        // bar) and line 2 (bar + detail). If the bar drifts between
+        // lines, the snapshot diff makes it obvious.
+        let now = Utc::now();
+        let output = render_to_string_with(&[], None, now, 80, 12, |app| {
+            app.view = View::Worktree;
+            app.set_worktrees(vec![
+                wt_row(
+                    "armyknife",
+                    "feat/a",
+                    "feat-a",
+                    "/tmp/armyknife/.worktrees/feat-a",
+                ),
+                wt_row("specs", "main", "main", "/tmp/specs/.worktrees/main"),
+            ]);
+        });
+
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Worktrees                                  ● 0  ◐ 0  ⏸ 0  ○ 0               │
+            └──────────────────────────────────────────────────────────────────────────────┘
+             ▼ armyknife
+            >  ◌ ▎ armyknife feat/a
+                 ▎ 0 sessions · /tmp/armyknife/.worktrees/feat-a
+             ▼ specs
+               ◌ ▎ specs main
+                 ▎ 0 sessions · /tmp/specs/.worktrees/main
+
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  Tab: switch view  q: quit
+            "};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_worktree_view_loading_snapshot() {
+        let now = Utc::now();
+        let output = render_to_string_with(&[], None, now, 80, 9, |app| {
+            app.view = View::Worktree;
+            // No set_worktrees call → state stays Loading.
+        });
+
+        let expected = indoc! {"
+            ┌──────────────────────────────────────────────────────────────────────────────┐
+            │  Worktrees                                  ● 0  ◐ 0  ⏸ 0  ○ 0               │
+            └──────────────────────────────────────────────────────────────────────────────┘
+              Loading worktrees...
+
+
+
+              j/k: move  Enter/f: focus  d: delete  1-9: quick  Tab: switch view  q: quit
+            "};
+
+        assert_eq!(output, expected);
     }
 }
