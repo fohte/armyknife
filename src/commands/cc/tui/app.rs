@@ -5,7 +5,7 @@ use crate::infra::tmux;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::clean_progress::{CleanLogEvent, CleanProgress};
@@ -84,12 +84,12 @@ pub struct App {
     /// Cache of session titles for display (keyed by session_id).
     /// Built on load/reload for fast UI rendering.
     title_cache: HashMap<String, String>,
-    /// Cache of repository names (keyed by cwd path).
-    /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
-    repo_name_cache: HashMap<PathBuf, String>,
-    /// Cache of (repo_name, worktree_name) keyed by cwd path. Worktree name
-    /// is the branch when resolvable, otherwise the worktree dir basename.
+    /// Cache of (repo_name, worktree_name) keyed by cwd path.
+    /// Populated asynchronously; render must not block on libgit2 I/O.
     worktree_label_cache: HashMap<PathBuf, (String, String)>,
+    /// Cwds whose async resolution is in flight. Guards `claim_unresolved_label_cwds`
+    /// against re-dispatch before the corresponding result event arrives.
+    pending_label_cwds: HashSet<PathBuf>,
     /// Tree-ordered indices into `sessions`.
     /// Updated each render by the UI layer after building the session tree.
     /// Maps display position (list_state index) to sessions index.
@@ -163,8 +163,8 @@ impl App {
             searchable_text_cache: None,
             tree_ordered_indices: Vec::new(),
             title_cache,
-            repo_name_cache: HashMap::new(),
             worktree_label_cache: HashMap::new(),
+            pending_label_cwds: HashSet::new(),
             view: View::Session,
             clean_return_view: View::Session,
             worktree_view: WorktreeView::new(),
@@ -451,41 +451,45 @@ impl App {
         self.title_cache.get(session_id).map(String::as_str)
     }
 
-    /// Ensures repo names are cached for the given cwd paths.
-    /// Only resolves (via git I/O) for paths not already in the cache.
-    pub fn ensure_repo_names_resolved(&mut self, cwds: &[PathBuf]) {
-        for cwd in cwds {
-            if !self.repo_name_cache.contains_key(cwd) {
-                let name = resolve_repo_name_for_path(cwd);
-                self.repo_name_cache.insert(cwd.clone(), name);
-            }
-        }
-    }
-
-    /// Returns the cached repository name for a given cwd path.
-    #[cfg(test)]
-    pub fn get_cached_repo_name(&self, cwd: &std::path::Path) -> Option<&str> {
-        self.repo_name_cache.get(cwd).map(String::as_str)
-    }
-
-    /// Ensures worktree labels (repo + worktree-name) are cached for the
-    /// given cwd paths. Worktree-name is the branch when the cwd is inside
-    /// a linked worktree; otherwise the path basename of the resolved
-    /// workdir is used.
-    pub fn ensure_worktree_labels_resolved(&mut self, cwds: &[PathBuf]) {
-        for cwd in cwds {
-            if !self.worktree_label_cache.contains_key(cwd) {
-                let labels = resolve_worktree_labels_for_path(cwd);
-                self.worktree_label_cache.insert(cwd.clone(), labels);
-            }
-        }
-    }
-
-    /// Returns the cached (repo, worktree_name) for a cwd path.
+    /// Cache lookup only. Misses are expected for sessions whose async
+    /// resolution has not yet completed.
     pub fn get_cached_worktree_labels(&self, cwd: &std::path::Path) -> Option<(&str, &str)> {
         self.worktree_label_cache
             .get(cwd)
             .map(|(r, n)| (r.as_str(), n.as_str()))
+    }
+
+    /// Returns cwds present in `sessions` whose worktree labels are neither
+    /// cached nor currently being resolved, and marks them as pending.
+    /// Callers dispatch the returned list to a background resolver.
+    pub fn claim_unresolved_label_cwds(&mut self) -> Vec<PathBuf> {
+        let mut seen: HashSet<&Path> = HashSet::new();
+        let mut out = Vec::new();
+        for session in &self.sessions {
+            let cwd = session.cwd.as_path();
+            if !seen.insert(cwd) {
+                continue;
+            }
+            if self.worktree_label_cache.contains_key(cwd) {
+                continue;
+            }
+            if self.pending_label_cwds.contains(cwd) {
+                continue;
+            }
+            out.push(cwd.to_path_buf());
+        }
+        for cwd in &out {
+            self.pending_label_cwds.insert(cwd.clone());
+        }
+        out
+    }
+
+    /// Inserts the results of an async label resolution into the cache.
+    pub fn apply_resolved_labels(&mut self, results: Vec<(PathBuf, String, String)>) {
+        for (cwd, repo, worktree) in results {
+            self.pending_label_cwds.remove(&cwd);
+            self.worktree_label_cache.insert(cwd, (repo, worktree));
+        }
     }
 
     /// Cycles the active view. No-op when in `Clean`.
@@ -1110,57 +1114,53 @@ fn build_searchable_text(session: &Session) -> String {
     parts.join(" ")
 }
 
-/// Resolves (repo_name, worktree_name) for `cwd`.
-/// `worktree_name` is the current branch when resolvable; otherwise
-/// it falls back to the workdir basename, then to the cwd basename.
-fn resolve_worktree_labels_for_path(cwd: &std::path::Path) -> (String, String) {
-    use crate::infra::git::open_repo_at;
-
-    let repo_name = resolve_repo_name_for_path(cwd);
-
-    let worktree_name = open_repo_at(cwd)
-        .ok()
-        .map(|repo| {
-            let workdir = repo.workdir().to_path_buf();
-            let branch = repo.current_branch().ok();
-            branch.filter(|b| b != "HEAD").unwrap_or_else(|| {
-                workdir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| workdir.display().to_string())
-            })
+/// Resolves session labels for the given cwds on the calling thread.
+/// Intended for use by a background worker; not called from render.
+pub(super) fn resolve_labels_for_cwds(cwds: &[PathBuf]) -> Vec<(PathBuf, String, String)> {
+    cwds.iter()
+        .map(|cwd| {
+            let (repo, worktree) = resolve_session_labels_for_path(cwd);
+            (cwd.clone(), repo, worktree)
         })
-        .unwrap_or_else(|| {
-            cwd.file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| cwd.display().to_string())
-        });
-
-    (repo_name, worktree_name)
+        .collect()
 }
 
-/// Resolves the repository name for a given cwd path.
-/// Uses `get_repo_root_in` to find the git worktree root, then takes its
-/// last path component. Falls back to cwd's last component on error.
-fn resolve_repo_name_for_path(cwd: &std::path::Path) -> String {
-    use crate::infra::git::get_repo_root_in;
-    use std::path::Path;
+/// Resolves (repo_name, worktree_name) for `cwd` using a single libgit2
+/// open. `repo_name` is the main worktree's basename; `worktree_name` is the
+/// current branch when resolvable, otherwise the cwd's workdir basename.
+/// Falls back to the cwd basename when the path is outside a git repo.
+fn resolve_session_labels_for_path(cwd: &Path) -> (String, String) {
+    use crate::infra::git::open_repo_at;
 
-    let root = get_repo_root_in(cwd).ok().and_then(|r| {
-        Path::new(&r)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-    });
-
-    root.unwrap_or_else(|| {
+    let basename_fallback = || {
         cwd.file_name()
             .and_then(|n| n.to_str())
             .map(String::from)
             .unwrap_or_else(|| cwd.display().to_string())
-    })
+    };
+
+    let Ok(repo) = open_repo_at(cwd) else {
+        let fallback = basename_fallback();
+        return (fallback.clone(), fallback);
+    };
+
+    let repo_name = repo
+        .main_workdir()
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+        .unwrap_or_else(basename_fallback);
+
+    let branch = repo.current_branch().ok();
+    let worktree_name = branch.filter(|b| b != "HEAD").unwrap_or_else(|| {
+        let workdir = repo.workdir();
+        workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| workdir.display().to_string())
+    });
+
+    (repo_name, worktree_name)
 }
 
 /// Resolves the git worktree root for `cwd`. Returns `None` if `cwd` is not
@@ -1620,50 +1620,69 @@ mod tests {
     }
 
     // =========================================================================
-    // resolve_repo_name tests
+    // session label resolution tests
     // =========================================================================
 
     #[rstest]
-    #[case::normal_path("/home/user/project", "project")]
-    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife")]
-    #[case::root_path("/", "/")]
-    fn test_resolve_repo_name_fallback(#[case] cwd: &str, #[case] expected: &str) {
-        assert_eq!(resolve_repo_name_for_path(&PathBuf::from(cwd)), expected);
+    #[case::normal_path("/home/user/project", "project", "project")]
+    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife", "armyknife")]
+    fn test_resolve_session_labels_fallback(
+        #[case] cwd: &str,
+        #[case] expected_repo: &str,
+        #[case] expected_wt: &str,
+    ) {
+        let (repo, wt) = resolve_session_labels_for_path(&PathBuf::from(cwd));
+        assert_eq!(repo, expected_repo);
+        assert_eq!(wt, expected_wt);
     }
 
     #[test]
-    fn test_resolve_repo_name_from_git_repo() {
-        // Create a temp directory with a known repo name subdirectory,
-        // so get_repo_root_in returns a path whose file_name is "my-repo".
-        let parent = tempfile::TempDir::new().unwrap();
-        let repo_dir = parent.path().join("my-repo");
-        std::fs::create_dir_all(&repo_dir).unwrap();
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_dir)
-            .args(["init", "-q"])
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let subdir = repo_dir.join("some").join("subdir");
-        std::fs::create_dir_all(&subdir).unwrap();
-
-        assert_eq!(resolve_repo_name_for_path(&subdir), "my-repo");
+    fn test_get_cached_worktree_labels_miss_returns_none() {
+        let app = create_test_app(vec![]);
+        let cwd = PathBuf::from("/home/user/project");
+        assert!(app.get_cached_worktree_labels(&cwd).is_none());
     }
 
     #[test]
-    fn test_ensure_repo_names_resolved() {
+    fn test_apply_resolved_labels_populates_cache() {
         let mut app = create_test_app(vec![]);
         let cwd = PathBuf::from("/home/user/project");
 
-        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
-        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
+        app.apply_resolved_labels(vec![(
+            cwd.clone(),
+            "project".to_string(),
+            "main".to_string(),
+        )]);
 
-        // Second call should not change the cache
-        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
-        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
+        assert_eq!(
+            app.get_cached_worktree_labels(&cwd),
+            Some(("project", "main"))
+        );
+    }
+
+    #[test]
+    fn test_claim_unresolved_label_cwds_dedups_and_marks_pending() {
+        let mut app = create_test_app(vec![create_test_session("a"), create_test_session("b")]);
+        // Both default sessions share cwd `/tmp/test`, so only one cwd is returned.
+        let first = app.claim_unresolved_label_cwds();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0], PathBuf::from("/tmp/test"));
+
+        // Second call returns nothing (already pending).
+        let second = app.claim_unresolved_label_cwds();
+        assert!(second.is_empty());
+
+        // After the result is applied the cwd is cached and stays cached.
+        app.apply_resolved_labels(vec![(
+            PathBuf::from("/tmp/test"),
+            "test".to_string(),
+            "main".to_string(),
+        )]);
+        let third = app.claim_unresolved_label_cwds();
+        assert!(third.is_empty());
+        assert_eq!(
+            app.get_cached_worktree_labels(&PathBuf::from("/tmp/test")),
+            Some(("test", "main"))
+        );
     }
 }

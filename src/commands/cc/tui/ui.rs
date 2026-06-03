@@ -460,17 +460,6 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         app.confirmed_query.clone()
     };
 
-    // Pre-compute repo names and worktree labels for filtered sessions.
-    // Populate caches to avoid hitting git I/O on every render frame.
-    {
-        let cwds: Vec<std::path::PathBuf> =
-            filtered_sessions.iter().map(|s| s.cwd.clone()).collect();
-        drop(filtered_sessions);
-        app.ensure_repo_names_resolved(&cwds);
-        app.ensure_worktree_labels_resolved(&cwds);
-    }
-    let filtered_sessions: Vec<&Session> = app.filtered_sessions();
-
     // Build tree structure from sessions
     let tree_entries = build_session_tree(&filtered_sessions);
 

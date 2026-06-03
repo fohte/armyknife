@@ -48,6 +48,9 @@ pub enum AppEvent {
     Tick,
     /// Background worktree discovery finished.
     WorktreesLoaded(std::result::Result<Vec<super::worktree_view::WorktreeRow>, String>),
+    /// Background session-label (repo name + worktree name) resolution
+    /// finished for one batch of cwds.
+    SessionLabelsResolved(Vec<(PathBuf, String, String)>),
     /// PR status fetch for the clean view completed.
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
@@ -119,6 +122,20 @@ impl EventHandler {
     /// Non-blocking receive: returns `Some(event)` if available, `None` otherwise.
     pub fn try_next(&self) -> Option<AppEvent> {
         self.receiver.try_recv().ok()
+    }
+
+    /// Resolve session labels (repo + worktree names) for `cwds` in the
+    /// background. The result arrives as [`AppEvent::SessionLabelsResolved`].
+    /// Callers must deduplicate cwds (see `App::claim_unresolved_label_cwds`).
+    pub fn start_session_labels_resolve(&self, cwds: Vec<PathBuf>) {
+        if cwds.is_empty() {
+            return;
+        }
+        let tx = self.sender.clone();
+        thread::spawn(move || {
+            let results = super::app::resolve_labels_for_cwds(&cwds);
+            let _ = tx.send(AppEvent::SessionLabelsResolved(results));
+        });
     }
 
     /// Kick off a one-shot PR-status fetch for the clean view. Returns
