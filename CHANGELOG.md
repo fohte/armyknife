@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.188](https://github.com/fohte/armyknife/compare/v0.1.187...v0.1.188) (2026-06-03)
+
+
+### Features
+
+* **cc/tui:** add clean view to cc watch with detached cleanup ([#587](https://github.com/fohte/armyknife/issues/587)) ([e421e65](https://github.com/fohte/armyknife/commit/e421e654c99c060fc8b4cf5bac5513ca0ee03dd8))
+
 ## [0.1.187](https://github.com/fohte/armyknife/compare/v0.1.186...v0.1.187) (2026-06-02)
 
 
