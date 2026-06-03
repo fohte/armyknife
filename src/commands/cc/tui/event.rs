@@ -5,10 +5,15 @@ use notify::{
     EventKind, RecommendedWatcher, RecursiveMode, Watcher,
     event::{CreateKind, ModifyKind, RemoveKind},
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+
+use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
+use super::clean_view::CleanRow;
+use super::worktree_view::WorktreeRow;
+use crate::commands::cc::types::Session;
 
 /// Key event with code and modifiers.
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +48,21 @@ pub enum AppEvent {
     Tick,
     /// Background worktree discovery finished.
     WorktreesLoaded(std::result::Result<Vec<super::worktree_view::WorktreeRow>, String>),
+    /// PR status fetch for the clean view completed.
+    CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
+    /// One or more JSONL events from the detached clean child.
+    CleanLogEvents(Vec<CleanLogEvent>),
 }
 
 /// Event handler that combines keyboard input and file system events.
 pub struct EventHandler {
     receiver: Receiver<AppEvent>,
+    /// Cloned for ad-hoc background work (clean PR fetch, tail thread).
+    sender: Sender<AppEvent>,
+    /// Tokio runtime handle captured at construction so async PR fetches
+    /// can be spawned without nesting a fresh runtime — `cc watch` is
+    /// invoked from inside the top-level tokio runtime.
+    rt_handle: Option<tokio::runtime::Handle>,
     /// Watcher must be kept alive to receive events.
     _watcher: Option<RecommendedWatcher>,
 }
@@ -77,10 +92,13 @@ impl EventHandler {
         });
 
         // Set up file system watcher
+        let sender = tx.clone();
         let watcher = setup_file_watcher(tx)?;
 
         Ok(Self {
             receiver: rx,
+            sender,
+            rt_handle: tokio::runtime::Handle::try_current().ok(),
             _watcher: watcher,
         })
     }
@@ -95,6 +113,67 @@ impl EventHandler {
     /// Non-blocking receive: returns `Some(event)` if available, `None` otherwise.
     pub fn try_next(&self) -> Option<AppEvent> {
         self.receiver.try_recv().ok()
+    }
+
+    /// Kick off a one-shot PR-status fetch for the clean view. Returns
+    /// immediately; the result arrives as [`AppEvent::CleanPrFetched`].
+    /// If the runtime handle is unavailable, the failure is reported
+    /// through the same event so the user always gets a banner.
+    pub fn start_clean_pr_fetch(&self, rows: Vec<WorktreeRow>, sessions: Vec<Session>) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::CleanPrFetched(Err(
+                "tokio runtime is not available".to_string(),
+            )));
+            return;
+        };
+        rt.spawn(async move {
+            let result = super::pr_fetch::fetch_clean_inputs(rows, sessions).await;
+            let _ = tx.send(AppEvent::CleanPrFetched(result));
+        });
+    }
+
+    /// Begin tailing `log_path` for JSONL events from the detached
+    /// clean child. Stops on the first `Done` event or when the
+    /// receiver is dropped. Polling cadence matches
+    /// [`clean_progress::TAIL_INTERVAL`].
+    pub fn start_clean_tail(&self, log_path: PathBuf) {
+        let tx = self.sender.clone();
+        thread::spawn(move || {
+            let mut cursor = 0u64;
+            // Bounded retry on missing file so we do not poll forever
+            // if the child never managed to create its log.
+            let mut empty_polls = 0usize;
+            loop {
+                thread::sleep(TAIL_INTERVAL);
+                let (events, new_cursor) = match clean_progress::read_new_events(&log_path, cursor)
+                {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                cursor = new_cursor;
+                let done = events
+                    .iter()
+                    .any(|e| matches!(e, CleanLogEvent::Done { .. }));
+                if !events.is_empty() {
+                    empty_polls = 0;
+                    if tx.send(AppEvent::CleanLogEvents(events)).is_err() {
+                        break;
+                    }
+                    if done {
+                        break;
+                    }
+                } else {
+                    empty_polls += 1;
+                    // ~60s with no activity → assume the child died before
+                    // writing anything; the UI surfaces this via the
+                    // missing `Done` summary.
+                    if empty_polls > 120 {
+                        break;
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -271,9 +350,11 @@ mod tests {
 
     #[test]
     fn test_try_next_returns_none_on_empty_channel() {
-        let (_tx, rx) = mpsc::channel::<AppEvent>();
+        let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx,
+            rt_handle: None,
             _watcher: None,
         };
         assert!(handler.try_next().is_none());
@@ -284,6 +365,8 @@ mod tests {
         let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx.clone(),
+            rt_handle: None,
             _watcher: None,
         };
 
@@ -311,6 +394,8 @@ mod tests {
         let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx.clone(),
+            rt_handle: None,
             _watcher: None,
         };
 

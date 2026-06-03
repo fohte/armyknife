@@ -1,5 +1,8 @@
 mod app;
+mod clean_progress;
+mod clean_view;
 mod event;
+mod pr_fetch;
 mod session_tree;
 mod ui;
 mod worktree_view;
@@ -24,6 +27,29 @@ pub fn run() -> Result<()> {
     result
 }
 
+/// Side effects requested by key handlers that need access to the event
+/// handler (to spawn background work). Returning these from the pure
+/// handlers keeps them testable without dragging in real async / IO.
+#[derive(Debug, Default)]
+struct KeyEffects {
+    /// User pressed `c`: kick off the PR fetch for the clean view.
+    request_clean_pr_fetch: bool,
+    /// User confirmed `y` in the clean view: spawn the detached child
+    /// for these paths and start tailing its log.
+    spawn_detached_clean: Option<Vec<std::path::PathBuf>>,
+}
+
+impl KeyEffects {
+    fn merge(&mut self, other: KeyEffects) {
+        if other.request_clean_pr_fetch {
+            self.request_clean_pr_fetch = true;
+        }
+        if other.spawn_detached_clean.is_some() {
+            self.spawn_detached_clean = other.spawn_detached_clean;
+        }
+    }
+}
+
 /// Maximum events to drain per iteration to prevent starvation under sustained load.
 const MAX_DRAIN_PER_ITERATION: usize = 100;
 
@@ -39,12 +65,23 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
+    // Startup hygiene for the detached-clean log dir: GC stale logs and
+    // surface a one-shot summary if a prior watch missed the Done event.
+    if let Some(dir) = clean_progress::log_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        clean_progress::gc_old_logs(&dir, clean_progress::LOG_TTL, std::time::SystemTime::now());
+        if let Some(summary) = clean_progress::pop_last_summary(&dir) {
+            app.set_last_clean_summary(summary);
+        }
+    }
+
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         let first_event = event_handler.next()?;
         let mut needs_full_reload = false;
         let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
+        let mut effects = KeyEffects::default();
 
         // Process first event + drain queued events (bounded to prevent starvation)
         for event in std::iter::once(first_event)
@@ -52,7 +89,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             .take(MAX_DRAIN_PER_ITERATION)
         {
             match event {
-                AppEvent::Key(k) => handle_key_event(&mut app, k),
+                AppEvent::Key(k) => effects.merge(handle_key_event(&mut app, k)),
                 AppEvent::SessionsChanged(Some(changes)) => {
                     for c in changes {
                         change_map.insert(c.session_id, c.change_type);
@@ -65,6 +102,34 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
                 AppEvent::WorktreesLoaded(Err(err)) => {
                     app.set_worktrees_failed(err);
+                }
+                AppEvent::CleanPrFetched(Ok(rows)) => {
+                    app.set_clean_rows(rows);
+                }
+                AppEvent::CleanPrFetched(Err(err)) => {
+                    app.set_clean_failed(err);
+                }
+                AppEvent::CleanLogEvents(events) => {
+                    app.apply_clean_log_events(&events);
+                }
+            }
+        }
+
+        if effects.request_clean_pr_fetch {
+            let rows = app.worktree_rows_snapshot();
+            let sessions = app.sessions.clone();
+            event_handler.start_clean_pr_fetch(rows, sessions);
+        }
+        if let Some(paths) = effects.spawn_detached_clean {
+            match clean_progress::spawn_detached_clean(&paths) {
+                Ok(pid) => {
+                    app.clean_progress = Some(clean_progress::CleanProgress::new(pid));
+                    if let Some(dir) = clean_progress::log_dir() {
+                        event_handler.start_clean_tail(dir.join(format!("{pid}.jsonl")));
+                    }
+                }
+                Err(e) => {
+                    app.set_error(format!("Failed to spawn cleanup: {e}"));
                 }
             }
         }
@@ -353,20 +418,38 @@ fn handle_confirm_worktree_cleanup_key_event(app: &mut App, key: KeyEvent) {
 }
 
 /// Handles key events based on the current view and sub-mode.
-fn handle_key_event(app: &mut App, key: KeyEvent) {
+fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
+    // One-shot banners: any key press dismisses them so they do not
+    // linger over later renders.
+    app.last_clean_summary = None;
+    if app.clean_progress.as_ref().is_some_and(|p| p.done) {
+        app.clear_clean_progress();
+    }
+
     match app.view {
         View::Session => handle_session_view_key_event(app, key),
         View::Worktree => handle_worktree_view_key_event(app, key),
+        View::Clean => handle_clean_view_key_event(app, key),
     }
 }
 
-fn handle_session_view_key_event(app: &mut App, key: KeyEvent) {
+fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     // Tab cycles views from any non-text-input session sub-mode.
     if app.mode == AppMode::Normal
         && let (KeyCode::Tab, _) = (key.code, key.modifiers)
     {
         app.cycle_view();
-        return;
+        return KeyEffects::default();
+    }
+    // `c` from Normal mode enters the clean view from the session list.
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Char('c'), KeyModifiers::NONE) = (key.code, key.modifiers)
+    {
+        app.enter_clean_view();
+        return KeyEffects {
+            request_clean_pr_fetch: true,
+            ..Default::default()
+        };
     }
 
     match app.mode {
@@ -377,9 +460,10 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) {
             handle_confirm_worktree_cleanup_key_event(app, key);
         }
     }
+    KeyEffects::default()
 }
 
-fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
+fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     // Sub-mode dispatcher: confirmations have their own keys.
     if let WorktreeMode::Confirm { .. } = app.worktree_view.mode {
         match key.code {
@@ -393,7 +477,7 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         }
-        return;
+        return KeyEffects::default();
     }
 
     app.clear_error();
@@ -401,6 +485,13 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
         (KeyCode::Tab, _) => app.cycle_view(),
         (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
         (KeyCode::Esc, _) => app.quit(),
+        (KeyCode::Char('c'), KeyModifiers::NONE) => {
+            app.enter_clean_view();
+            return KeyEffects {
+                request_clean_pr_fetch: true,
+                ..Default::default()
+            };
+        }
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
             app.worktree_view.select_next();
         }
@@ -420,6 +511,47 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
+    KeyEffects::default()
+}
+
+/// Handles key events in the clean view (modal-style; Tab is a no-op).
+fn handle_clean_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
+    app.clear_error();
+    match (key.code, key.modifiers) {
+        // Cancel: return to the previous view without acting.
+        (KeyCode::Esc, _)
+        | (KeyCode::Char('n'), KeyModifiers::NONE)
+        | (KeyCode::Char('q'), KeyModifiers::NONE) => {
+            app.exit_clean_view();
+        }
+        // Confirm: spawn detached child with all To-delete paths and
+        // return to the previous view so progress can show in the
+        // bottom bar of session / worktree view.
+        (KeyCode::Char('y'), KeyModifiers::NONE) => {
+            let paths = app.clean_view.to_delete_paths();
+            if paths.is_empty() {
+                // Nothing to do — quietly fall back.
+                app.exit_clean_view();
+                return KeyEffects::default();
+            }
+            app.exit_clean_view();
+            return KeyEffects {
+                spawn_detached_clean: Some(paths),
+                ..Default::default()
+            };
+        }
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+            app.clean_view.select_next();
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+            app.clean_view.select_previous();
+        }
+        (KeyCode::Enter, _) => {
+            app.clean_view.toggle_selected_section();
+        }
+        _ => {}
+    }
+    KeyEffects::default()
 }
 
 fn focus_selected_worktree_session(app: &mut App) {
@@ -1036,6 +1168,127 @@ mod tests {
             wt_path.exists(),
             "worktree directory should remain when cleanup is declined"
         );
+    }
+
+    // =========================================================================
+    // Clean view key flow tests
+    // =========================================================================
+
+    use crate::commands::cc::tui::app::View;
+    use crate::commands::cc::tui::clean_view::{CleanRow, CleanSection};
+
+    fn clean_row(section: CleanSection, repo: &str, name: &str, path: &str) -> CleanRow {
+        CleanRow {
+            repo: repo.to_string(),
+            branch: name.to_string(),
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            session_count: 0,
+            has_active: false,
+            updated_at: None,
+            status_label: "PR merged".to_string(),
+            pr_merged: section == CleanSection::ToDelete,
+            section,
+        }
+    }
+
+    #[test]
+    fn pressing_c_from_session_view_enters_clean_and_requests_pr_fetch() {
+        let mut app = create_test_app_with_sessions(1);
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
+        assert_eq!(app.view, View::Clean);
+        assert!(effects.request_clean_pr_fetch);
+    }
+
+    #[test]
+    fn pressing_c_from_worktree_view_enters_clean() {
+        let mut app = create_test_app_with_sessions(0);
+        app.view = View::Worktree;
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
+        assert_eq!(app.view, View::Clean);
+        assert_eq!(app.clean_return_view, View::Worktree);
+        assert!(effects.request_clean_pr_fetch);
+    }
+
+    #[rstest]
+    #[case::esc(KeyCode::Esc)]
+    #[case::n(KeyCode::Char('n'))]
+    #[case::q(KeyCode::Char('q'))]
+    fn clean_view_cancel_returns_to_previous_view(#[case] code: KeyCode) {
+        let mut app = create_test_app_with_sessions(0);
+        app.view = View::Worktree;
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        assert_eq!(app.view, View::Clean);
+        handle_key_event(&mut app, key(code));
+        assert_eq!(app.view, View::Worktree);
+    }
+
+    #[test]
+    fn clean_view_enter_toggles_section() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        app.set_clean_rows(vec![
+            clean_row(CleanSection::ToDelete, "r1", "feat-a", "/tmp/a"),
+            clean_row(CleanSection::Kept, "r1", "fix-b", "/tmp/b"),
+        ]);
+        let before = app.clean_view.selected_row().expect("row");
+        assert_eq!(before.section, CleanSection::ToDelete);
+
+        handle_key_event(&mut app, key(KeyCode::Enter));
+
+        let after = app.clean_view.selected_row().expect("row");
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.section, CleanSection::Kept);
+    }
+
+    #[test]
+    fn clean_view_y_with_pending_paths_emits_spawn_effect() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        app.set_clean_rows(vec![clean_row(
+            CleanSection::ToDelete,
+            "r1",
+            "feat-a",
+            "/tmp/a",
+        )]);
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('y')));
+        assert_eq!(app.view, View::Session); // returned to caller view
+        assert_eq!(
+            effects.spawn_detached_clean,
+            Some(vec![PathBuf::from("/tmp/a")])
+        );
+    }
+
+    #[test]
+    fn clean_view_y_with_empty_to_delete_just_exits() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        app.set_clean_rows(vec![clean_row(CleanSection::Kept, "r1", "fix-b", "/tmp/b")]);
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('y')));
+        assert_eq!(app.view, View::Session);
+        assert!(effects.spawn_detached_clean.is_none());
+    }
+
+    #[test]
+    fn tab_inside_clean_view_is_noop() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        let view_before = app.view;
+        handle_key_event(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.view, view_before);
+    }
+
+    #[test]
+    fn first_keypress_dismisses_last_clean_summary_banner() {
+        let mut app = create_test_app_with_sessions(1);
+        app.set_last_clean_summary(super::clean_progress::LastCleanSummary {
+            log_path: PathBuf::from("/tmp/x.jsonl"),
+            ok: 1,
+            failed: 0,
+        });
+        assert!(app.last_clean_summary.is_some());
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+        assert!(app.last_clean_summary.is_none());
     }
 
     #[test]

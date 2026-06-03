@@ -10,6 +10,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{App, AppMode, View};
+use super::clean_view::{CleanListEntry, CleanLoadState, CleanSection};
 use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
@@ -135,6 +136,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let title = match app.view {
         View::Session => "  Claude Code Sessions",
         View::Worktree => "  Worktrees           ",
+        View::Clean => "  Clean worktrees     ",
     };
     let status_line = Line::from(vec![
         Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
@@ -178,6 +180,138 @@ fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<
     match app.view {
         View::Session => render_session_list(frame, area, app, now),
         View::Worktree => render_worktree_list(frame, area, app),
+        View::Clean => render_clean_list(frame, area, app),
+    }
+}
+
+/// Renders the clean view: To delete / Kept sections, repo group
+/// headers under each section, one row per worktree.
+fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let term_width = area.width as usize;
+    let state = app.clean_view.state.clone();
+    match state {
+        CleanLoadState::LoadingPr => {
+            let p = Paragraph::new("  Loading PR status...")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(p, area);
+            return;
+        }
+        CleanLoadState::Failed(err) => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Failed to load PR status: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(err, Style::default().fg(Color::Red)),
+            ]);
+            frame.render_widget(Paragraph::new(line), area);
+            return;
+        }
+        CleanLoadState::Ready(_) => {}
+    }
+
+    let entries = app.clean_view.list_entries();
+    if entries.is_empty() {
+        let p =
+            Paragraph::new("  No worktrees to clean.").style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(p, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|e| create_clean_list_item(e, term_width))
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
+
+    frame.render_stateful_widget(list, area, &mut app.clean_view.list_state);
+}
+
+fn create_clean_list_item(entry: &CleanListEntry, term_width: usize) -> ListItem<'static> {
+    let dim_style = Style::default().fg(Color::DarkGray);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+
+    match entry {
+        CleanListEntry::SectionHeader { section, count } => {
+            let label = match section {
+                CleanSection::ToDelete => format!("── To delete ({count}) "),
+                CleanSection::Kept => format!("── Kept ({count}) "),
+            };
+            let color = match section {
+                CleanSection::ToDelete => Color::Red,
+                CleanSection::Kept => Color::Green,
+            };
+            // Pad with em-dashes to fill the row visually.
+            let pad_width = term_width.saturating_sub(label.width()).min(80);
+            let mut padded = label.clone();
+            for _ in 0..pad_width {
+                padded.push('─');
+            }
+            let line = Line::from(vec![Span::styled(
+                padded,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )]);
+            ListItem::new(vec![line])
+        }
+        CleanListEntry::RepoHeader(name) => {
+            let line = Line::from(vec![Span::styled(
+                format!("▼ {name}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]);
+            ListItem::new(vec![line])
+        }
+        CleanListEntry::Row(row) => {
+            let (symbol, color) = if row.has_active {
+                ("◐", Color::Yellow)
+            } else if row.session_count > 0 {
+                ("●", Color::Green)
+            } else {
+                ("◌", Color::DarkGray)
+            };
+            let repo_color = repo_label_color(&row.repo);
+            let bar = Span::styled("▎", Style::default().fg(repo_color));
+
+            let primary = if row.repo == row.name || row.branch.is_empty() {
+                row.repo.clone()
+            } else {
+                format!("{} {}", row.repo, row.branch)
+            };
+            let label = format!("[{}]", row.status_label);
+            let primary_truncated =
+                truncate(&primary, term_width.saturating_sub(8 + label.width() + 2));
+
+            let line1 = Line::from(vec![
+                Span::raw("  "),
+                Span::styled(symbol.to_string(), Style::default().fg(color)),
+                Span::raw(" "),
+                bar.clone(),
+                Span::raw(" "),
+                Span::styled(primary_truncated, bold),
+                Span::raw("  "),
+                Span::styled(label, dim_style),
+            ]);
+
+            let detail = format!(
+                "{} session{} · {}",
+                row.session_count,
+                if row.session_count == 1 { "" } else { "s" },
+                row.path.display()
+            );
+            let detail = truncate(&detail, term_width.saturating_sub(8));
+            let line2 = Line::from(vec![
+                Span::raw("    "),
+                bar,
+                Span::raw(" "),
+                Span::styled(detail, dim_style),
+            ]);
+
+            ListItem::new(vec![line1, line2])
+        }
     }
 }
 
@@ -383,6 +517,30 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
 fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
+    if app.view == View::Clean {
+        render_clean_help(frame, area, app);
+        return;
+    }
+
+    // While a detached clean is in flight (or a startup banner is
+    // queued) the help bar's first line carries a progress / summary
+    // notice instead of the usual key hints.
+    if let Some(line) = clean_status_line(app) {
+        let help_lines = vec![
+            line,
+            Line::from(vec![
+                Span::styled("  q", bold),
+                Span::raw(": quit  "),
+                Span::styled("Tab", bold),
+                Span::raw(": switch view"),
+            ]),
+        ];
+        let help =
+            Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(help, area);
+        return;
+    }
+
     // Worktree view has its own help line set.
     if app.view == View::Worktree {
         let help_lines: Vec<Line> = match &app.worktree_view.mode {
@@ -545,6 +703,86 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let help = Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, area);
+}
+
+/// Status line shown in place of the regular help bar's top row when a
+/// detached cleanup is in flight or a one-shot startup summary is
+/// queued. Returns `None` when there is nothing notable to display.
+fn clean_status_line(app: &App) -> Option<Line<'static>> {
+    let progress_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let summary_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    if let Some(progress) = &app.clean_progress {
+        return Some(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(progress.render_line(), progress_style),
+        ]));
+    }
+    if let Some(summary) = &app.last_clean_summary {
+        return Some(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(summary.message(), summary_style),
+        ]));
+    }
+    None
+}
+
+/// Help / confirmation bar for the clean view. The bottom line is the
+/// `Clean N worktree (M active excluded)? [y/N]` prompt; the line
+/// above lists the basic key bindings.
+fn render_clean_help(frame: &mut Frame, area: Rect, app: &App) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::DarkGray);
+    let warn = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    let (to_delete, kept_active) = app.clean_view.summary();
+    let prompt = if to_delete == 0 {
+        "  Nothing to clean. ".to_string()
+    } else if kept_active > 0 {
+        format!(
+            "  Clean {to_delete} worktree{} ({kept_active} active excluded)? ",
+            if to_delete == 1 { "" } else { "s" }
+        )
+    } else {
+        format!(
+            "  Clean {to_delete} worktree{}? ",
+            if to_delete == 1 { "" } else { "s" }
+        )
+    };
+
+    let help_line = Line::from(vec![
+        Span::styled("  j/k", bold),
+        Span::raw(": move  "),
+        Span::styled("Enter", bold),
+        Span::raw(": toggle section  "),
+        Span::styled("y", bold),
+        Span::raw(": run  "),
+        Span::styled("n/Esc/q", bold),
+        Span::raw(": cancel"),
+    ]);
+    let prompt_line = if to_delete == 0 {
+        Line::from(vec![
+            Span::styled(prompt, dim),
+            Span::styled("n/Esc/q", bold),
+            Span::raw(": back"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(prompt, warn),
+            Span::styled("y", bold),
+            Span::raw(": run  "),
+            Span::styled("N", bold),
+            Span::raw(": cancel"),
+        ])
+    };
+    let help = Paragraph::new(Text::from(vec![help_line, prompt_line]))
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, area);
 }
 
