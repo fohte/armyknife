@@ -239,9 +239,7 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
     let _ = tx.send(AppEvent::WorktreesLoaded(result));
 }
 
-/// One-shot stale-session cleanup, run off the startup path.
-/// Triggers a full reload only when something was actually removed,
-/// so the common no-op case does not pay another `list_sessions` scan.
+/// One-shot stale-session cleanup run from `EventHandler::new`.
 fn handle_stale_session_cleanup(tx: Sender<AppEvent>) {
     if let Ok(true) = store::cleanup_stale_sessions() {
         let _ = tx.send(AppEvent::SessionsChanged(None));

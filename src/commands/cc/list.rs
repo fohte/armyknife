@@ -32,7 +32,7 @@ pub struct ListArgs {
 /// Displays all Claude Code sessions in a formatted table.
 pub fn run(args: &ListArgs) -> Result<()> {
     // Clean up stale sessions first
-    let _ = store::cleanup_stale_sessions()?;
+    store::cleanup_stale_sessions()?;
 
     // Load all sessions
     let sessions = store::list_sessions()?;
