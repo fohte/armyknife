@@ -119,7 +119,11 @@ impl CleanProgress {
             out.push_str(p);
         }
         if self.failed > 0 {
-            out.push_str(&format!(" ({} errors)", self.failed));
+            out.push_str(&format!(
+                " ({} error{})",
+                self.failed,
+                if self.failed == 1 { "" } else { "s" }
+            ));
         }
         out
     }
@@ -188,9 +192,15 @@ pub fn spawn_detached_clean(paths: &[PathBuf]) -> Result<u32> {
         });
     }
 
-    let child = cmd
-        .spawn()
-        .context("failed to spawn clean-detached child")?;
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            // Roll back the persisted paths file; without the child it
+            // would only ever be cleaned up by the OS `/tmp` GC.
+            let _ = fs::remove_file(&file_path);
+            return Err(anyhow::Error::new(e).context("failed to spawn clean-detached child"));
+        }
+    };
 
     Ok(child.id())
 }
@@ -239,34 +249,32 @@ pub fn read_new_events(path: &Path, mut cursor: u64) -> Result<(Vec<CleanLogEven
 }
 
 /// On watch startup, find the most recently completed clean log,
-/// return its summary, and delete it ("read receipt"). Returns `None`
-/// when no completed log is present.
+/// return its summary, and delete it ("read receipt"). Walks
+/// newest-first so an in-progress log from a concurrent watch never
+/// masks an older completed log.
 pub fn pop_last_summary(dir: &Path) -> Option<LastCleanSummary> {
     let entries = fs::read_dir(dir).ok()?;
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        match &newest {
-            Some((ts, _)) if *ts >= modified => {}
-            _ => newest = Some((modified, path)),
+    let mut candidates: Vec<(SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    for (_, path) in candidates {
+        if let Some(summary) = extract_summary(&path) {
+            // Consume only completed logs; partial logs stay until
+            // they finish or are GC'd by TTL.
+            let _ = fs::remove_file(&path);
+            return Some(summary);
         }
     }
-    let (_, path) = newest?;
-    let summary = extract_summary(&path)?;
-    // Delete only after we have a usable summary — partial logs stay
-    // around so the next watch startup can pick them up if the cleanup
-    // finishes later.
-    let _ = fs::remove_file(&path);
-    Some(summary)
+    None
 }
 
 fn extract_summary(path: &Path) -> Option<LastCleanSummary> {
@@ -367,7 +375,7 @@ mod tests {
 
     #[rstest]
     #[case::live(false, 3, 1, 0, "Cleaning... (1/3) /a")]
-    #[case::with_failures(false, 3, 1, 1, "Cleaning... (1/3) /a (1 errors)")]
+    #[case::with_failures(false, 3, 1, 1, "Cleaning... (1/3) /a (1 error)")]
     #[case::done(true, 0, 5, 1, "Cleaned 5 worktrees, 1 failed")]
     fn render_line_formats(
         #[case] done: bool,
@@ -516,6 +524,39 @@ mod tests {
         assert!(!newer.exists());
         // Older log is left for a future startup or the time-based GC.
         assert!(older.exists());
+    }
+
+    #[rstest]
+    fn pop_last_summary_skips_in_progress_log_to_surface_older_done() {
+        // A concurrent watch's in-progress log must not mask a prior
+        // completed log: the user would otherwise never see the
+        // summary even though it is on disk.
+        let tmp = TempDir::new().expect("tempdir");
+        let done = tmp.path().join("100.jsonl");
+        let in_progress = tmp.path().join("200.jsonl");
+        fs::write(
+            &done,
+            indoc! {r#"
+                {"event":"start","ts":"2024-01-01T00:00:00Z","total":1}
+                {"event":"done","ts":"2024-01-01T00:00:01Z","ok":3,"failed":0}
+            "#},
+        )
+        .expect("write done");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(
+            &in_progress,
+            indoc! {r#"
+                {"event":"start","ts":"2024-01-01T01:00:00Z","total":5}
+                {"event":"ok","ts":"2024-01-01T01:00:01Z","path":"/x"}
+            "#},
+        )
+        .expect("write in-progress");
+
+        let summary = pop_last_summary(tmp.path()).expect("summary");
+        assert_eq!(summary.ok, 3);
+        // Done log consumed; in-progress log preserved.
+        assert!(!done.exists());
+        assert!(in_progress.exists());
     }
 
     #[rstest]

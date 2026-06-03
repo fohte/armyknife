@@ -13,9 +13,7 @@ use super::clean_view::{CleanRowInput, build_clean_rows};
 use super::worktree_view::WorktreeRow;
 use crate::commands::cc::auto_pause::parse_duration;
 use crate::commands::cc::types::Session;
-use crate::infra::git::{
-    GitRepo, github_owner_and_repo, merge_status_from_git, merge_status_from_pr,
-};
+use crate::infra::git::{GitRepo, github_owner_and_repo, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
 use crate::shared::config::load_config;
 
@@ -25,7 +23,6 @@ pub async fn fetch_clean_inputs(
     rows: Vec<WorktreeRow>,
     sessions: Vec<Session>,
 ) -> Result<Vec<super::clean_view::CleanRow>, String> {
-    // 1. Resolve per-repo GitHub owner/repo from local git config.
     let mut repo_ids: Vec<Option<(String, String)>> = Vec::with_capacity(rows.len());
     for row in &rows {
         let id = GitRepo::open_at(&row.path)
@@ -34,7 +31,6 @@ pub async fn fetch_clean_inputs(
         repo_ids.push(id);
     }
 
-    // 2. Build batched query for all worktrees that resolved to a GitHub repo.
     let queries: Vec<BranchPrQuery> = rows
         .iter()
         .zip(repo_ids.iter())
@@ -61,7 +57,6 @@ pub async fn fetch_clean_inputs(
             .map_err(|e| e.to_string())?
     };
 
-    // 3. Assemble inputs: prefer PR-based status, fall back to git.
     let inputs: Vec<CleanRowInput> = rows
         .into_iter()
         .zip(repo_ids)
@@ -71,19 +66,13 @@ pub async fn fetch_clean_inputs(
                     .get(&(owner.clone(), repo.clone(), row.branch.clone()))
                     .and_then(|opt| opt.as_ref())
             });
-            let (merge_status, pr_number, pr_state) = if let Some(info) = pr_info {
-                (
+            let (merge_status, pr_number, pr_state) = match pr_info {
+                Some(info) => (
                     Some(merge_status_from_pr(info)),
                     Some(info.number),
                     Some(info.state.clone()),
-                )
-            } else if let Ok(repo) = GitRepo::open_at(&row.path) {
-                // Git fallback always returns NotMerged for now (see
-                // `merge_status_from_git`), but call it for shape so
-                // future changes there propagate automatically.
-                (Some(merge_status_from_git(&repo, &row.branch)), None, None)
-            } else {
-                (None, None, None)
+                ),
+                None => (None, None, None),
             };
             CleanRowInput {
                 row,
@@ -94,8 +83,9 @@ pub async fn fetch_clean_inputs(
         })
         .collect();
 
-    // 4. Honour the configured auto-pause timeout so "active" here means
-    //    the same thing as in wm clean / cc sweep.
+    // Match wm clean / cc sweep so "active" means the same thing across
+    // commands; without this, a session active per one definition could
+    // be torn down per another.
     let timeout = load_config()
         .ok()
         .and_then(|c| parse_duration(&c.cc.auto_pause.timeout).ok())

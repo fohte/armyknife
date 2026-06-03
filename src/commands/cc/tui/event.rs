@@ -141,8 +141,12 @@ impl EventHandler {
         let tx = self.sender.clone();
         thread::spawn(move || {
             let mut cursor = 0u64;
-            // Bounded retry on missing file so we do not poll forever
-            // if the child never managed to create its log.
+            // Only the pre-`Start` phase is bounded so we do not poll
+            // forever when the child died before writing anything.
+            // Past `Start`, a single large `rm -rf` may write no events
+            // for minutes; an early timeout there would freeze the UI
+            // progress and never deliver the `Done` summary.
+            let mut started = false;
             let mut empty_polls = 0usize;
             loop {
                 thread::sleep(TAIL_INTERVAL);
@@ -156,6 +160,12 @@ impl EventHandler {
                     .iter()
                     .any(|e| matches!(e, CleanLogEvent::Done { .. }));
                 if !events.is_empty() {
+                    if events
+                        .iter()
+                        .any(|e| matches!(e, CleanLogEvent::Start { .. }))
+                    {
+                        started = true;
+                    }
                     empty_polls = 0;
                     if tx.send(AppEvent::CleanLogEvents(events)).is_err() {
                         break;
@@ -163,11 +173,8 @@ impl EventHandler {
                     if done {
                         break;
                     }
-                } else {
+                } else if !started {
                     empty_polls += 1;
-                    // ~60s with no activity → assume the child died before
-                    // writing anything; the UI surfaces this via the
-                    // missing `Done` summary.
                     if empty_polls > 120 {
                         break;
                     }
