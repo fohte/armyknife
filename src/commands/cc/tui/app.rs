@@ -8,18 +8,22 @@ use ratatui::widgets::ListState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::clean_progress::{CleanLogEvent, CleanProgress, LastCleanSummary};
+use super::clean_view::CleanView;
 use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
 use super::worktree_view::{
     WorktreeMode, WorktreeRow, WorktreeView, canonicalize_or_self, session_lives_under,
 };
 
-/// Top-level view selection. Tab cycles between these.
+/// Top-level view selection. Tab cycles between Session and Worktree
+/// only; `Clean` is reached via `c` and exited via Esc/n/q.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     #[default]
     Session,
     Worktree,
+    Clean,
 }
 
 impl View {
@@ -27,6 +31,7 @@ impl View {
         match self {
             View::Session => View::Worktree,
             View::Worktree => View::Session,
+            View::Clean => View::Clean,
         }
     }
 }
@@ -91,8 +96,19 @@ pub struct App {
     tree_ordered_indices: Vec<usize>,
     /// Currently active top-level view.
     pub view: View,
+    /// View to return to when the user exits the clean view (Esc/n/q).
+    pub clean_return_view: View,
     /// Worktree-view state (background-loaded list, sub-mode, selection).
     pub worktree_view: WorktreeView,
+    /// Clean-view state (sections, selection, PR-fetch progress).
+    pub clean_view: CleanView,
+    /// In-flight detached clean progress. `Some` from the moment the
+    /// user confirms `y` in the clean view; cleared once the bottom-bar
+    /// summary has been on screen long enough for the user to read it.
+    pub clean_progress: Option<CleanProgress>,
+    /// One-shot "last clean: N ok, M failed" banner shown on the next
+    /// render and cleared on the first key press.
+    pub last_clean_summary: Option<LastCleanSummary>,
 }
 
 impl App {
@@ -153,7 +169,11 @@ impl App {
             repo_name_cache: HashMap::new(),
             worktree_label_cache: HashMap::new(),
             view: View::Session,
+            clean_return_view: View::Session,
             worktree_view: WorktreeView::new(),
+            clean_view: CleanView::new(),
+            clean_progress: None,
+            last_clean_summary: None,
         };
         app.rebuild_tree_order();
         app
@@ -472,8 +492,11 @@ impl App {
             .map(|(r, n)| (r.as_str(), n.as_str()))
     }
 
-    /// Cycles the active view.
+    /// Cycles the active view. No-op when in `Clean`.
     pub fn cycle_view(&mut self) {
+        if self.view == View::Clean {
+            return;
+        }
         self.view = self.view.next();
         if self.view == View::Worktree {
             // Make sure overlay reflects the latest session list whenever the
@@ -846,6 +869,96 @@ impl App {
     /// Rebuilds the title cache for all sessions.
     fn rebuild_title_cache(&mut self) {
         self.title_cache = build_title_cache(&self.sessions);
+    }
+
+    /// Snapshot of the currently discovered worktree rows, suitable for
+    /// driving the clean view's PR fetch. Returns an empty vec while the
+    /// discovery is still loading or failed.
+    pub fn worktree_rows_snapshot(&self) -> Vec<WorktreeRow> {
+        match &self.worktree_view.state {
+            super::worktree_view::WorktreeLoadState::Loaded(rows) => rows.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Switch into the clean view. Records the current view so the user
+    /// can return via Esc/n/q, then resets the clean state to
+    /// LoadingPr — the caller wires up the actual PR fetch.
+    pub fn enter_clean_view(&mut self) {
+        if self.view == View::Clean {
+            return;
+        }
+        self.clean_return_view = self.view;
+        self.view = View::Clean;
+        self.clean_view.reset();
+    }
+
+    /// Leave the clean view without acting on the partition; returns
+    /// to whichever view the user came from.
+    pub fn exit_clean_view(&mut self) {
+        self.view = self.clean_return_view;
+    }
+
+    /// Install the freshly partitioned rows after PR fetch completes.
+    /// Drops any path that an in-flight cleanup has already removed so
+    /// the user never sees a row that no longer exists on disk.
+    pub fn set_clean_rows(&mut self, mut rows: Vec<super::clean_view::CleanRow>) {
+        if let Some(progress) = &self.clean_progress {
+            let deleted: Vec<PathBuf> = progress
+                .confirmed_deleted
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+            if !deleted.is_empty() {
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
+            }
+        }
+        self.clean_view.set_rows(rows);
+    }
+
+    /// Mark the PR fetch as failed; the clean view shows the error and
+    /// the user can press n/Esc to back out.
+    pub fn set_clean_failed(&mut self, error: String) {
+        self.clean_view.set_failed(error);
+    }
+
+    /// Fold a batch of JSONL events from the detached child into the
+    /// live progress state and drop any worktree rows that the child
+    /// confirmed deleted.
+    pub fn apply_clean_log_events(&mut self, events: &[CleanLogEvent]) {
+        let Some(progress) = self.clean_progress.as_mut() else {
+            return;
+        };
+        for event in events {
+            progress.apply(event);
+        }
+        // Drop deleted rows from both lists so the cleanup is reflected
+        // without a fresh discovery pass.
+        let deleted: Vec<PathBuf> = progress.deleted_paths.iter().map(PathBuf::from).collect();
+        if !deleted.is_empty() {
+            if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
+                &mut self.worktree_view.state
+            {
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
+            }
+            self.clean_view.remove_paths(&deleted);
+            // Mark the deleted paths as drained so we do not pop the
+            // same rows twice on the next batch.
+            progress.deleted_paths.clear();
+        }
+    }
+
+    /// Dismiss the bottom-bar summary. Called on the first key press
+    /// after the detached child reports `Done` so the stale "Cleaned
+    /// X, failed Y" line does not linger.
+    pub fn clear_clean_progress(&mut self) {
+        self.clean_progress = None;
+    }
+
+    /// Install a startup banner from the most recently completed clean
+    /// run. Cleared by the first key press.
+    pub fn set_last_clean_summary(&mut self, summary: LastCleanSummary) {
+        self.last_clean_summary = Some(summary);
     }
 
     /// Incrementally updates the title cache for changed sessions only.

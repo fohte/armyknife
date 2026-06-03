@@ -1,0 +1,616 @@
+//! Clean view state for the cc watch TUI.
+//!
+//! Reached by pressing `c` from session view or worktree view. Shows the
+//! same worktree list as the worktree view, but partitioned into
+//! "To delete" (merged PR & no active session) and "Kept" (everything
+//! else). The user can toggle individual rows between sections with
+//! Enter, then press `y` to spawn `a cc clean-detached` as a detached
+//! child that survives the parent watch process.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use ratatui::widgets::ListState;
+
+use super::worktree_view::WorktreeRow;
+use crate::commands::cc::types::Session;
+use crate::infra::git::MergeStatus;
+use crate::infra::github::PrState;
+use crate::shared::active_session::{NoActivityProbe, contains_active_session};
+
+/// Loading state of the asynchronous PR-status fetch that drives the
+/// initial To delete / Kept partition.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CleanLoadState {
+    #[default]
+    LoadingPr,
+    Ready(Vec<CleanRow>),
+    Failed(String),
+}
+
+/// Which section a row currently belongs to. Defaults are computed from
+/// PR status + active session presence; the user can override per row
+/// with Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanSection {
+    ToDelete,
+    Kept,
+}
+
+impl CleanSection {
+    pub fn toggle(self) -> Self {
+        match self {
+            CleanSection::ToDelete => CleanSection::Kept,
+            CleanSection::Kept => CleanSection::ToDelete,
+        }
+    }
+}
+
+/// One worktree row in the clean view, enriched with PR status and the
+/// active-session marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanRow {
+    pub repo: String,
+    pub branch: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub session_count: usize,
+    pub has_active: bool,
+    pub updated_at: Option<DateTime<Utc>>,
+    /// Display-only summary of PR / activity status, e.g.
+    /// `"PR #1 merged"`, `"no PR · active"`. Shown in the `[label]`
+    /// slot of the row format.
+    pub status_label: String,
+    /// True when the latest known PR was merged. Used together with
+    /// `has_active` to set the default section.
+    pub pr_merged: bool,
+    pub section: CleanSection,
+}
+
+/// Rendered entries in display order.
+///
+/// `SectionHeader` and `RepoHeader` are non-selectable; only `Row`
+/// entries can carry the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CleanListEntry {
+    SectionHeader { section: CleanSection, count: usize },
+    RepoHeader(String),
+    Row(CleanRow),
+}
+
+/// Persistent state for the clean view.
+#[derive(Debug, Default)]
+pub struct CleanView {
+    pub state: CleanLoadState,
+    pub list_state: ListState,
+}
+
+impl CleanView {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Begin a fresh clean session: discard any prior partition and
+    /// switch back to LoadingPr.
+    pub fn reset(&mut self) {
+        self.state = CleanLoadState::LoadingPr;
+        self.list_state.select(None);
+    }
+
+    pub fn set_failed(&mut self, error: String) {
+        self.state = CleanLoadState::Failed(error);
+    }
+
+    /// Sorts deterministically so re-entering the view does not jump the
+    /// cursor onto a different row when the underlying set is the same.
+    pub fn set_rows(&mut self, mut rows: Vec<CleanRow>) {
+        sort_rows(&mut rows);
+        self.state = CleanLoadState::Ready(rows);
+        self.select_first_row();
+    }
+
+    pub fn rows(&self) -> &[CleanRow] {
+        match &self.state {
+            CleanLoadState::Ready(rows) => rows,
+            _ => &[],
+        }
+    }
+
+    /// Build the rendered entry list with section + repo group headers.
+    pub fn list_entries(&self) -> Vec<CleanListEntry> {
+        let CleanLoadState::Ready(rows) = &self.state else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for section in [CleanSection::ToDelete, CleanSection::Kept] {
+            let section_rows: Vec<&CleanRow> =
+                rows.iter().filter(|r| r.section == section).collect();
+            out.push(CleanListEntry::SectionHeader {
+                section,
+                count: section_rows.len(),
+            });
+            let mut current_repo: Option<&str> = None;
+            for row in section_rows {
+                if current_repo != Some(row.repo.as_str()) {
+                    out.push(CleanListEntry::RepoHeader(row.repo.clone()));
+                    current_repo = Some(row.repo.as_str());
+                }
+                out.push(CleanListEntry::Row(row.clone()));
+            }
+        }
+        out
+    }
+
+    pub fn selectable_indices(&self) -> Vec<usize> {
+        self.list_entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| matches!(e, CleanListEntry::Row(_)).then_some(i))
+            .collect()
+    }
+
+    pub fn select_first_row(&mut self) {
+        if let Some(&i) = self.selectable_indices().first() {
+            self.list_state.select(Some(i));
+        } else {
+            self.list_state.select(None);
+        }
+    }
+
+    fn step(&mut self, delta: isize) {
+        let sel = self.selectable_indices();
+        if sel.is_empty() {
+            return;
+        }
+        let cur_pos = self
+            .list_state
+            .selected()
+            .and_then(|c| sel.iter().position(|&i| i == c));
+        let len = sel.len() as isize;
+        let next = match cur_pos {
+            Some(p) => (((p as isize) + delta).rem_euclid(len)) as usize,
+            None => 0,
+        };
+        self.list_state.select(Some(sel[next]));
+    }
+
+    pub fn select_next(&mut self) {
+        self.step(1);
+    }
+
+    pub fn select_previous(&mut self) {
+        self.step(-1);
+    }
+
+    /// Returns the row currently under the cursor, if any.
+    pub fn selected_row(&self) -> Option<CleanRow> {
+        let idx = self.list_state.selected()?;
+        match self.list_entries().get(idx)? {
+            CleanListEntry::Row(r) => Some(r.clone()),
+            _ => None,
+        }
+    }
+
+    /// Toggle the section of the row at the current cursor. Returns true
+    /// if a toggle actually happened. The cursor is re-anchored to the
+    /// same row in its new section so the user sees their action take
+    /// effect without losing focus.
+    pub fn toggle_selected_section(&mut self) -> bool {
+        let Some(current) = self.selected_row() else {
+            return false;
+        };
+        let CleanLoadState::Ready(rows) = &mut self.state else {
+            return false;
+        };
+        let Some(row) = rows.iter_mut().find(|r| r.path == current.path) else {
+            return false;
+        };
+        row.section = row.section.toggle();
+        let target_path = row.path.clone();
+
+        sort_rows(rows);
+
+        // Re-anchor the cursor on the same worktree in its new section.
+        let new_index = self
+            .list_entries()
+            .iter()
+            .enumerate()
+            .find_map(|(i, e)| match e {
+                CleanListEntry::Row(r) if r.path == target_path => Some(i),
+                _ => None,
+            });
+        self.list_state.select(new_index);
+        true
+    }
+
+    /// All paths currently in the To delete section, in display order.
+    pub fn to_delete_paths(&self) -> Vec<PathBuf> {
+        self.rows()
+            .iter()
+            .filter(|r| r.section == CleanSection::ToDelete)
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    /// Counts of (to_delete, kept_with_active).
+    pub fn summary(&self) -> (usize, usize) {
+        let to_delete = self
+            .rows()
+            .iter()
+            .filter(|r| r.section == CleanSection::ToDelete)
+            .count();
+        let kept_active = self
+            .rows()
+            .iter()
+            .filter(|r| r.section == CleanSection::Kept && r.has_active)
+            .count();
+        (to_delete, kept_active)
+    }
+
+    /// Remove rows whose path matches any of `paths`. Used by the
+    /// progress watcher to drop entries the detached child confirms
+    /// it deleted, without re-running discovery.
+    pub fn remove_paths(&mut self, paths: &[PathBuf]) {
+        let CleanLoadState::Ready(rows) = &mut self.state else {
+            return;
+        };
+        rows.retain(|r| !paths.iter().any(|p| p == &r.path));
+    }
+}
+
+fn section_order(section: CleanSection) -> u8 {
+    match section {
+        CleanSection::ToDelete => 0,
+        CleanSection::Kept => 1,
+    }
+}
+
+fn sort_rows(rows: &mut [CleanRow]) {
+    rows.sort_by(|a, b| {
+        section_order(a.section)
+            .cmp(&section_order(b.section))
+            .then_with(|| a.repo.cmp(&b.repo))
+            .then_with(|| a.branch.cmp(&b.branch))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+/// Input pair to [`build_clean_rows`]: the worktree the user picked plus
+/// the merge status fetched from GitHub. `merge_status` is `None` when
+/// no PR was found or the lookup failed; rows without PR info default
+/// to Kept.
+#[derive(Debug, Clone)]
+pub struct CleanRowInput {
+    pub row: WorktreeRow,
+    pub merge_status: Option<MergeStatus>,
+    pub pr_number: Option<u64>,
+    pub pr_state: Option<PrState>,
+}
+
+/// Compose the partitioned row list from worktree discovery output,
+/// PR fetch result, and the live session list. Pure function — no I/O.
+pub fn build_clean_rows(
+    inputs: Vec<CleanRowInput>,
+    sessions: &[Session],
+    now: DateTime<Utc>,
+    timeout: Duration,
+) -> Vec<CleanRow> {
+    inputs
+        .into_iter()
+        .map(|input| {
+            let CleanRowInput {
+                row,
+                merge_status,
+                pr_number,
+                pr_state,
+            } = input;
+
+            // `contains_active_session` canonicalizes the worktree path
+            // and each session cwd, so it works even if the worktree
+            // discovery pass left the path uncanonicalized.
+            let has_active =
+                contains_active_session(&row.path, sessions, &NoActivityProbe, now, timeout);
+
+            let pr_merged = matches!(merge_status, Some(MergeStatus::Merged { .. }));
+            let status_label = format_status_label(pr_state, pr_number, has_active);
+
+            // Default partition: PR merged AND no active session → delete.
+            // Everything else → keep. The user can override with Enter.
+            let section = if pr_merged && !has_active {
+                CleanSection::ToDelete
+            } else {
+                CleanSection::Kept
+            };
+
+            let updated_at = sessions
+                .iter()
+                .filter(|s| super::worktree_view::session_lives_under(&s.cwd, &row.path))
+                .map(|s| s.updated_at)
+                .max();
+
+            CleanRow {
+                repo: row.repo,
+                branch: row.branch,
+                name: row.name,
+                path: row.path,
+                session_count: row.session_count,
+                has_active,
+                updated_at,
+                status_label,
+                pr_merged,
+                section,
+            }
+        })
+        .collect()
+}
+
+fn format_status_label(
+    pr_state: Option<PrState>,
+    pr_number: Option<u64>,
+    has_active: bool,
+) -> String {
+    let core = match (pr_state, pr_number) {
+        (Some(PrState::Merged), Some(n)) => format!("PR #{n} merged"),
+        (Some(PrState::Open), Some(n)) => format!("PR #{n} open"),
+        (Some(PrState::Closed), Some(n)) => format!("PR #{n} closed"),
+        (Some(PrState::Merged), None) => "PR merged".to_string(),
+        (Some(PrState::Open), None) => "PR open".to_string(),
+        (Some(PrState::Closed), None) => "PR closed".to_string(),
+        (None, _) => "no PR".to_string(),
+    };
+    if has_active {
+        format!("{core} · active")
+    } else {
+        core
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::cc::types::{Session, SessionStatus};
+    use chrono::Utc;
+    use rstest::{fixture, rstest};
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    fn wt_row(repo: &str, branch: &str, name: &str, path: &str) -> WorktreeRow {
+        WorktreeRow {
+            repo: repo.to_string(),
+            branch: branch.to_string(),
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            session_count: 0,
+            has_active: false,
+        }
+    }
+
+    fn merged_input(
+        repo: &str,
+        branch: &str,
+        name: &str,
+        path: &str,
+        number: u64,
+    ) -> CleanRowInput {
+        CleanRowInput {
+            row: wt_row(repo, branch, name, path),
+            merge_status: Some(MergeStatus::Merged {
+                reason: format!("#{number} merged"),
+            }),
+            pr_number: Some(number),
+            pr_state: Some(PrState::Merged),
+        }
+    }
+
+    fn open_input(repo: &str, branch: &str, name: &str, path: &str, number: u64) -> CleanRowInput {
+        CleanRowInput {
+            row: wt_row(repo, branch, name, path),
+            merge_status: Some(MergeStatus::NotMerged {
+                reason: format!("#{number} open"),
+            }),
+            pr_number: Some(number),
+            pr_state: Some(PrState::Open),
+        }
+    }
+
+    fn no_pr_input(repo: &str, branch: &str, name: &str, path: &str) -> CleanRowInput {
+        CleanRowInput {
+            row: wt_row(repo, branch, name, path),
+            merge_status: None,
+            pr_number: None,
+            pr_state: None,
+        }
+    }
+
+    #[fixture]
+    fn view_with_rows() -> CleanView {
+        let mut v = CleanView::new();
+        let rows = build_clean_rows(
+            vec![
+                merged_input("repo1", "feat/a", "feat-a", "/tmp/r1/wt-a", 1),
+                open_input("repo1", "fix/b", "fix-b", "/tmp/r1/wt-b", 2),
+                no_pr_input("repo2", "trunk", "trunk", "/tmp/r2/wt-c"),
+            ],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        );
+        v.set_rows(rows);
+        v
+    }
+
+    #[rstest]
+    fn merged_row_defaults_to_delete(view_with_rows: CleanView) {
+        let merged = view_with_rows
+            .rows()
+            .iter()
+            .find(|r| r.name == "feat-a")
+            .expect("merged row");
+        assert_eq!(merged.section, CleanSection::ToDelete);
+        assert_eq!(merged.status_label, "PR #1 merged");
+    }
+
+    #[rstest]
+    #[case::open("fix-b", CleanSection::Kept, "PR #2 open")]
+    #[case::no_pr("trunk", CleanSection::Kept, "no PR")]
+    fn non_merged_rows_default_to_kept(
+        view_with_rows: CleanView,
+        #[case] name: &str,
+        #[case] expected_section: CleanSection,
+        #[case] expected_label: &str,
+    ) {
+        let row = view_with_rows
+            .rows()
+            .iter()
+            .find(|r| r.name == name)
+            .expect("row");
+        assert_eq!(row.section, expected_section);
+        assert_eq!(row.status_label, expected_label);
+    }
+
+    #[rstest]
+    fn list_entries_groups_by_section_then_repo(view_with_rows: CleanView) {
+        let entries = view_with_rows.list_entries();
+        // Sections: ToDelete (1 row, repo1) + Kept (2 rows, repo1 + repo2)
+        // = 2 section headers + 2 repo headers (ToDelete:repo1, Kept:repo1) + 1 repo header (Kept:repo2) + 3 rows
+        // = 2 + 3 + 3 = 8
+        assert_eq!(entries.len(), 8);
+        assert!(matches!(
+            entries[0],
+            CleanListEntry::SectionHeader {
+                section: CleanSection::ToDelete,
+                count: 1
+            }
+        ));
+        assert!(matches!(&entries[1], CleanListEntry::RepoHeader(r) if r == "repo1"));
+        assert!(matches!(&entries[2], CleanListEntry::Row(r) if r.name == "feat-a"));
+        assert!(matches!(
+            entries[3],
+            CleanListEntry::SectionHeader {
+                section: CleanSection::Kept,
+                count: 2
+            }
+        ));
+    }
+
+    #[rstest]
+    fn selectable_indices_skip_headers(view_with_rows: CleanView) {
+        let entries = view_with_rows.list_entries();
+        let sel = view_with_rows.selectable_indices();
+        for &i in &sel {
+            assert!(matches!(entries[i], CleanListEntry::Row(_)));
+        }
+        assert_eq!(sel.len(), 3);
+    }
+
+    #[rstest]
+    fn select_next_wraps_through_rows(mut view_with_rows: CleanView) {
+        let initial = view_with_rows.list_state.selected().expect("initial");
+        view_with_rows.select_next();
+        let next = view_with_rows.list_state.selected().expect("next");
+        assert!(next > initial);
+        // Wrap eventually.
+        view_with_rows.select_next();
+        view_with_rows.select_next();
+        let after_wrap = view_with_rows.list_state.selected().expect("wrap");
+        assert_eq!(after_wrap, initial);
+    }
+
+    #[rstest]
+    fn toggle_moves_row_between_sections(mut view_with_rows: CleanView) {
+        // Cursor starts on the first ToDelete row ("feat-a").
+        let before = view_with_rows.selected_row().expect("row");
+        assert_eq!(before.section, CleanSection::ToDelete);
+
+        assert!(view_with_rows.toggle_selected_section());
+
+        let after = view_with_rows.selected_row().expect("row");
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.section, CleanSection::Kept);
+    }
+
+    #[rstest]
+    fn to_delete_paths_reflect_partition(view_with_rows: CleanView) {
+        let paths = view_with_rows.to_delete_paths();
+        assert_eq!(paths, vec![PathBuf::from("/tmp/r1/wt-a")]);
+    }
+
+    #[rstest]
+    fn summary_counts_active_excluded(mut view_with_rows: CleanView) {
+        // Force one Kept row to look active so summary sees it.
+        if let CleanLoadState::Ready(rows) = &mut view_with_rows.state
+            && let Some(r) = rows.iter_mut().find(|r| r.name == "trunk")
+        {
+            r.has_active = true;
+        }
+        let (to_delete, kept_active) = view_with_rows.summary();
+        assert_eq!(to_delete, 1);
+        assert_eq!(kept_active, 1);
+    }
+
+    #[rstest]
+    fn remove_paths_drops_matching_rows(mut view_with_rows: CleanView) {
+        view_with_rows.remove_paths(&[PathBuf::from("/tmp/r1/wt-a")]);
+        assert!(
+            view_with_rows
+                .rows()
+                .iter()
+                .all(|r| r.path != Path::new("/tmp/r1/wt-a"))
+        );
+        assert_eq!(view_with_rows.rows().len(), 2);
+    }
+
+    fn session(id: &str, cwd: PathBuf) -> Session {
+        Session {
+            session_id: id.to_string(),
+            cwd,
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Running,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+        }
+    }
+
+    #[rstest]
+    fn merged_with_active_session_defaults_to_kept() {
+        // A merged PR row whose worktree still has an active session must
+        // default to Kept so we do not blow away in-flight work.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).expect("mkdir");
+
+        let row = WorktreeRow {
+            repo: "r".to_string(),
+            branch: "b".to_string(),
+            name: "wt".to_string(),
+            path: super::super::worktree_view::canonicalize_or_self(&wt),
+            session_count: 1,
+            has_active: false,
+        };
+        let input = CleanRowInput {
+            row,
+            merge_status: Some(MergeStatus::Merged {
+                reason: "#9 merged".to_string(),
+            }),
+            pr_number: Some(9),
+            pr_state: Some(PrState::Merged),
+        };
+
+        let sessions = vec![session("s1", wt.clone())];
+        let rows = build_clean_rows(vec![input], &sessions, Utc::now(), Duration::from_secs(60));
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].section, CleanSection::Kept);
+        assert!(rows[0].has_active);
+        assert!(rows[0].status_label.contains("active"));
+    }
+}
