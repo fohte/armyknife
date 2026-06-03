@@ -1150,9 +1150,9 @@ fn resolve_session_labels_for_path(cwd: &Path) -> (String, String) {
         .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
         .unwrap_or_else(basename_fallback);
 
-    let workdir = repo.workdir().to_path_buf();
     let branch = repo.current_branch().ok();
     let worktree_name = branch.filter(|b| b != "HEAD").unwrap_or_else(|| {
+        let workdir = repo.workdir();
         workdir
             .file_name()
             .and_then(|n| n.to_str())
