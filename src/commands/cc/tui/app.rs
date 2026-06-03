@@ -8,7 +8,7 @@ use ratatui::widgets::ListState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::clean_progress::{CleanLogEvent, CleanProgress, LastCleanSummary};
+use super::clean_progress::{CleanLogEvent, CleanProgress};
 use super::clean_view::CleanView;
 use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
@@ -106,9 +106,6 @@ pub struct App {
     /// user confirms `y` in the clean view; cleared once the bottom-bar
     /// summary has been on screen long enough for the user to read it.
     pub clean_progress: Option<CleanProgress>,
-    /// One-shot "last clean: N ok, M failed" banner shown on the next
-    /// render and cleared on the first key press.
-    pub last_clean_summary: Option<LastCleanSummary>,
 }
 
 impl App {
@@ -173,7 +170,6 @@ impl App {
             worktree_view: WorktreeView::new(),
             clean_view: CleanView::new(),
             clean_progress: None,
-            last_clean_summary: None,
         };
         app.rebuild_tree_order();
         app
@@ -953,12 +949,6 @@ impl App {
     /// X, failed Y" line does not linger.
     pub fn clear_clean_progress(&mut self) {
         self.clean_progress = None;
-    }
-
-    /// Install a startup banner from the most recently completed clean
-    /// run. Cleared by the first key press.
-    pub fn set_last_clean_summary(&mut self, summary: LastCleanSummary) {
-        self.last_clean_summary = Some(summary);
     }
 
     /// Incrementally updates the title cache for changed sessions only.

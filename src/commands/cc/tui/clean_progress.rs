@@ -18,18 +18,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::commands::cc::clean_detached;
-use crate::shared::cache;
-use crate::shared::log::{
-    current_log_path, find_latest_event, read_jsonl_lines_since, short_run_id,
-};
+use crate::shared::log::{current_log_path, read_jsonl_lines_since, short_run_id};
 
 /// How often the tail thread polls the rotating log.
 pub const TAIL_INTERVAL: Duration = Duration::from_millis(500);
-
-/// How many past daily log files `pop_last_summary` will look back over.
-/// Matches the rotation retention so a summary is recoverable for as long
-/// as the underlying log itself is.
-pub const SUMMARY_LOOKBACK_DAYS: usize = 7;
 
 /// One semantic event extracted from the tracing log. Independent of
 /// the wire encoding so the rest of the TUI doesn't have to know
@@ -162,81 +154,6 @@ impl CleanProgress {
         }
         out
     }
-}
-
-/// Summary of the most recently completed clean run, used for the
-/// one-shot banner on watch startup.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LastCleanSummary {
-    pub run_id: String,
-    pub ok: usize,
-    pub failed: usize,
-}
-
-impl LastCleanSummary {
-    pub fn message(&self) -> String {
-        if self.failed > 0 {
-            format!(
-                "Last clean: {} ok, {} failed (cc-clean log under {})",
-                self.ok,
-                self.failed,
-                crate::shared::log::logs_dir()
-                    .map(|d| d.display().to_string())
-                    .unwrap_or_else(|| "~/.cache/armyknife/logs/".to_string())
-            )
-        } else {
-            format!("Last clean: {} ok, {} failed", self.ok, self.failed)
-        }
-    }
-}
-
-/// State file recording the `run_id` of the summary we already showed,
-/// so a re-launched `cc watch` doesn't keep re-surfacing the same one.
-fn last_shown_path() -> Option<PathBuf> {
-    cache::base_dir().map(|d| d.join("cc-clean-last-shown"))
-}
-
-fn load_last_shown_run_id() -> Option<String> {
-    let path = last_shown_path()?;
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn save_last_shown_run_id(run_id: &str) {
-    let Some(path) = last_shown_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&path, run_id);
-}
-
-/// Walk the rotating log backwards (up to [`SUMMARY_LOOKBACK_DAYS`])
-/// for the most recent `cc.clean.done` event whose `run_id` differs
-/// from the one we last surfaced. Returns `None` when there is nothing
-/// new — the log itself is left intact (rotation handles lifetime).
-pub fn pop_last_summary() -> Option<LastCleanSummary> {
-    let last_shown = load_last_shown_run_id();
-    let target = clean_detached::EVENT_TARGET;
-    let event = find_latest_event(
-        |v| {
-            v.get("target").and_then(|t| t.as_str()) == Some(target)
-                && v.get("event").and_then(|e| e.as_str()) == Some("cc.clean.done")
-                && v.get("span")
-                    .and_then(|s| s.get("run_id"))
-                    .and_then(|r| r.as_str())
-                    .is_some_and(|id| Some(id.to_string()) != last_shown)
-        },
-        SUMMARY_LOOKBACK_DAYS,
-    )?;
-    let run_id = event.get("span")?.get("run_id")?.as_str()?.to_string();
-    let ok = event.get("ok")?.as_u64()? as usize;
-    let failed = event.get("failed")?.as_u64()? as usize;
-    save_last_shown_run_id(&run_id);
-    Some(LastCleanSummary { run_id, ok, failed })
 }
 
 /// Spawn `a cc clean-detached` as a fully detached process. The child
