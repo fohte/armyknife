@@ -910,7 +910,7 @@ impl App {
                 .map(PathBuf::from)
                 .collect();
             if !deleted.is_empty() {
-                rows.retain(|r| !deleted.iter().any(|d| canonicalize_or_self(d) == r.path));
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
             }
         }
         self.clean_view.set_rows(rows);
@@ -939,7 +939,7 @@ impl App {
             if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
                 &mut self.worktree_view.state
             {
-                rows.retain(|r| !deleted.iter().any(|d| canonicalize_or_self(d) == r.path));
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
             }
             self.clean_view.remove_paths(&deleted);
             // Mark the deleted paths as drained so we do not pop the

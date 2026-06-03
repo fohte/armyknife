@@ -139,13 +139,20 @@ impl EventHandler {
     /// [`clean_progress::TAIL_INTERVAL`].
     pub fn start_clean_tail(&self, log_path: PathBuf) {
         let tx = self.sender.clone();
+        // Log file is named `<pid>.jsonl`; reuse that PID for a
+        // post-`Start` liveness check so we exit when the child dies
+        // without ever writing `Done`.
+        let pid: Option<i32> = log_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.parse().ok());
         thread::spawn(move || {
             let mut cursor = 0u64;
-            // Only the pre-`Start` phase is bounded so we do not poll
-            // forever when the child died before writing anything.
-            // Past `Start`, a single large `rm -rf` may write no events
-            // for minutes; an early timeout there would freeze the UI
-            // progress and never deliver the `Done` summary.
+            // Only the pre-`Start` phase is bounded by polling count so
+            // we do not loop forever when the child died before writing
+            // anything. Past `Start`, a single large `rm -rf` may write
+            // no events for minutes, so we fall back to a per-PID
+            // liveness check instead of a fixed timeout.
             let mut started = false;
             let mut empty_polls = 0usize;
             loop {
@@ -173,7 +180,16 @@ impl EventHandler {
                     if done {
                         break;
                     }
-                } else if !started {
+                } else if started {
+                    // SAFETY: signal 0 only checks for existence and
+                    // permission to signal the target — no signal is
+                    // actually delivered. Safe to call from any thread.
+                    if let Some(p) = pid
+                        && unsafe { libc::kill(p, 0) } != 0
+                    {
+                        break;
+                    }
+                } else {
                     empty_polls += 1;
                     if empty_polls > 120 {
                         break;
