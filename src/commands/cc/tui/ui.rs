@@ -460,9 +460,6 @@ fn render_session_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTi
         app.confirmed_query.clone()
     };
 
-    // Cache miss falls back to empty strings; the async resolver fills the
-    // cache and the row re-renders on a subsequent frame.
-
     // Build tree structure from sessions
     let tree_entries = build_session_tree(&filtered_sessions);
 

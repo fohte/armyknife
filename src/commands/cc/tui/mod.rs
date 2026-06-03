@@ -66,7 +66,6 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let event_handler = EventHandler::new()?;
 
     loop {
-        // Render itself never blocks on git I/O; resolution runs in a worker.
         let unresolved = app.claim_unresolved_label_cwds();
         if !unresolved.is_empty() {
             event_handler.start_session_labels_resolve(unresolved);

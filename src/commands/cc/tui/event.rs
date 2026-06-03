@@ -120,8 +120,7 @@ impl EventHandler {
 
     /// Resolve session labels (repo + worktree names) for `cwds` in the
     /// background. The result arrives as [`AppEvent::SessionLabelsResolved`].
-    /// Each call spawns a one-shot thread; the caller is expected to
-    /// deduplicate cwds (see `App::take_unresolved_label_cwds`).
+    /// Callers must deduplicate cwds (see `App::claim_unresolved_label_cwds`).
     pub fn start_session_labels_resolve(&self, cwds: Vec<PathBuf>) {
         if cwds.is_empty() {
             return;
