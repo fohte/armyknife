@@ -66,6 +66,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let event_handler = EventHandler::new()?;
 
     loop {
+        // Render itself never blocks on git I/O; resolution runs in a worker.
+        let unresolved = app.claim_unresolved_label_cwds();
+        if !unresolved.is_empty() {
+            event_handler.start_session_labels_resolve(unresolved);
+        }
+
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         let first_event = event_handler.next()?;
@@ -92,6 +98,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
                 AppEvent::WorktreesLoaded(Err(err)) => {
                     app.set_worktrees_failed(err);
+                }
+                AppEvent::SessionLabelsResolved(results) => {
+                    app.apply_resolved_labels(results);
                 }
                 AppEvent::CleanPrFetched(Ok(rows)) => {
                     app.set_clean_rows(rows);
