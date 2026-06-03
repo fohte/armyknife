@@ -65,14 +65,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
-    // Startup hygiene for the detached-clean log dir: GC stale logs and
-    // surface a one-shot summary if a prior watch missed the Done event.
-    if let Some(dir) = clean_progress::log_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        clean_progress::gc_old_logs(&dir, clean_progress::LOG_TTL, std::time::SystemTime::now());
-        if let Some(summary) = clean_progress::pop_last_summary(&dir) {
-            app.set_last_clean_summary(summary);
-        }
+    // Surface the most recent detached-clean summary the user has not
+    // yet seen. Retention itself is handled by the shared rotating
+    // log infrastructure, so no GC pass is needed here.
+    if let Some(summary) = clean_progress::pop_last_summary() {
+        app.set_last_clean_summary(summary);
     }
 
     loop {
@@ -122,10 +119,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         }
         if let Some(paths) = effects.spawn_detached_clean {
             match clean_progress::spawn_detached_clean(&paths) {
-                Ok(pid) => {
-                    app.clean_progress = Some(clean_progress::CleanProgress::new(pid));
-                    if let Some(dir) = clean_progress::log_dir() {
-                        event_handler.start_clean_tail(dir.join(format!("{pid}.jsonl")));
+                Ok(run_id) => {
+                    app.clean_progress = Some(clean_progress::CleanProgress::new(run_id.clone()));
+                    if let Some(log_path) = clean_progress::live_log_path() {
+                        event_handler.start_clean_tail(log_path, run_id);
                     }
                 }
                 Err(e) => {
@@ -1282,7 +1279,7 @@ mod tests {
     fn first_keypress_dismisses_last_clean_summary_banner() {
         let mut app = create_test_app_with_sessions(1);
         app.set_last_clean_summary(super::clean_progress::LastCleanSummary {
-            log_path: PathBuf::from("/tmp/x.jsonl"),
+            run_id: "abc".to_string(),
             ok: 1,
             failed: 0,
         });

@@ -137,31 +137,34 @@ impl EventHandler {
     /// clean child. Stops on the first `Done` event or when the
     /// receiver is dropped. Polling cadence matches
     /// [`clean_progress::TAIL_INTERVAL`].
-    pub fn start_clean_tail(&self, log_path: PathBuf) {
+    pub fn start_clean_tail(&self, initial_log_path: PathBuf, run_id: String) {
         let tx = self.sender.clone();
-        // Log file is named `<pid>.jsonl`; reuse that PID for a
-        // post-`Start` liveness check so we exit when the child dies
-        // without ever writing `Done`.
-        let pid: Option<i32> = log_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.parse().ok());
         thread::spawn(move || {
+            let mut log_path = initial_log_path;
             let mut cursor = 0u64;
-            // Only the pre-`Start` phase is bounded by polling count so
-            // we do not loop forever when the child died before writing
+            // The pre-`Start` phase is bounded by polling count so we
+            // do not loop forever when the child dies before writing
             // anything. Past `Start`, a single large `rm -rf` may write
-            // no events for minutes, so we fall back to a per-PID
-            // liveness check instead of a fixed timeout.
+            // no events for minutes — the post-`Start` exit condition
+            // is simply receiving the matching `Done` event.
             let mut started = false;
             let mut empty_polls = 0usize;
             loop {
                 thread::sleep(TAIL_INTERVAL);
-                let (events, new_cursor) = match clean_progress::read_new_events(&log_path, cursor)
+                // Date rollover: today's log path changes at midnight UTC.
+                // When that happens, the new file starts at offset 0 so
+                // we reset the cursor before reading.
+                if let Some(today) = clean_progress::live_log_path()
+                    && today != log_path
                 {
-                    Ok(pair) => pair,
-                    Err(_) => break,
-                };
+                    log_path = today;
+                    cursor = 0;
+                }
+                let (events, new_cursor) =
+                    match clean_progress::read_new_events(&log_path, cursor, &run_id) {
+                        Ok(pair) => pair,
+                        Err(_) => break,
+                    };
                 cursor = new_cursor;
                 let done = events
                     .iter()
@@ -180,16 +183,7 @@ impl EventHandler {
                     if done {
                         break;
                     }
-                } else if started {
-                    // SAFETY: signal 0 only checks for existence and
-                    // permission to signal the target — no signal is
-                    // actually delivered. Safe to call from any thread.
-                    if let Some(p) = pid
-                        && unsafe { libc::kill(p, 0) } != 0
-                    {
-                        break;
-                    }
-                } else {
+                } else if !started {
                     empty_polls += 1;
                     if empty_polls > 120 {
                         break;
