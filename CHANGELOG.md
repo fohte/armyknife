@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.191](https://github.com/fohte/armyknife/compare/v0.1.190...v0.1.191) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** resolve session labels off the render path ([#592](https://github.com/fohte/armyknife/issues/592)) ([125d814](https://github.com/fohte/armyknife/commit/125d814386c2d95b42a634759034961218cda31f))
+
 ## [0.1.190](https://github.com/fohte/armyknife/compare/v0.1.189...v0.1.190) (2026-06-03)
 
 
