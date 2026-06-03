@@ -1176,9 +1176,11 @@ fn resolve_worktree_root(cwd: &Path) -> Option<PathBuf> {
     Some(repo.workdir().to_path_buf())
 }
 
-/// Loads sessions from disk with cleanup.
+/// Loads sessions from disk.
+///
+/// Does not perform stale-session cleanup; that runs once at startup in
+/// a background thread (see `EventHandler::new`).
 fn load_sessions() -> Result<Vec<Session>> {
-    store::cleanup_stale_sessions()?;
     store::list_sessions()
 }
 
