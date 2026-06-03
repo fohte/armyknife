@@ -15,7 +15,7 @@
 //! recipes.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, Utc};
@@ -90,42 +90,6 @@ pub fn read_jsonl_lines_since(
     }
     let new_cursor = cursor + consumable.len() as u64;
     Ok((events, new_cursor))
-}
-
-/// Walk the rotating log files newest-first (up to `max_days_back`
-/// days) and return the most recent event whose top-level JSON matches
-/// `predicate`. Within each file, lines are scanned bottom-up so the
-/// freshest event wins.
-pub fn find_latest_event(
-    predicate: impl Fn(&serde_json::Value) -> bool,
-    max_days_back: usize,
-) -> Option<serde_json::Value> {
-    let today = Utc::now().date_naive();
-    for day_offset in 0..=max_days_back {
-        let date = today.checked_sub_signed(chrono::TimeDelta::days(day_offset as i64))?;
-        let Some(path) = log_path_for_date(date) else {
-            continue;
-        };
-        let Ok(file) = File::open(&path) else {
-            continue;
-        };
-        // Collect the file's lines newest-first. Daily log files are
-        // small enough that buffering them in memory is cheaper than
-        // a real reverse line reader.
-        let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
-        for line in lines.into_iter().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
-                && predicate(&v)
-            {
-                return Some(v);
-            }
-        }
-    }
-    None
 }
 
 /// Generates a short 8-character hex id that callers attach to a span as

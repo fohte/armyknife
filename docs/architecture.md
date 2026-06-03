@@ -58,8 +58,6 @@ PR statuses are fetched asynchronously when the clean view is entered (batched G
 
 Pressing `y` confirms the partition: the watch process generates a `run_id` and spawns `a cc clean-detached --run-id <id>` as a **fully detached child** (`setsid`, stdio routed to `/dev/null`) so closing `cc watch` does not abort the cleanup. The child journals each event (`cc.clean.start` / `cc.clean.ok` / `cc.clean.err` / `cc.clean.done`) into the shared rotating tracing log at `~/.cache/armyknife/logs/armyknife.log.YYYY-MM-DD` under a `run_id` span. While `cc watch` is alive, it tails today's log file every 500 ms, filters lines by `run_id`, and renders `Cleaning... (i/N) <path>` (with `(N error)` when any failure has been observed) in the bottom bar; on completion it shows `Cleaned X, failed Y` until the next key press.
 
-On `cc watch` startup, the most recent `cc.clean.done` event from the last 7 days of rotating logs that has not yet been surfaced is shown once as `Last clean: N ok, M failed`. When `M > 0`, the banner also points to the log directory so the user can `jq 'select(.span.run_id == "<id>")' …` to retrieve every per-path `cc.clean.err` message. The "already shown" run id is remembered in `~/.cache/armyknife/cc-clean-last-shown`, and rotation/retention of the underlying log is handled by the shared `shared::log` infrastructure (no dedicated GC path lives in the clean view).
-
 ## Internal Subcommands
 
 Subcommands marked with `#[command(hide = true)]` are not user-facing entry points; they exist as spawn targets for other commands and are listed here for discoverability.

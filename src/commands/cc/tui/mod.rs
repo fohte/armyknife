@@ -65,13 +65,6 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
-    // Surface the most recent detached-clean summary the user has not
-    // yet seen. Retention itself is handled by the shared rotating
-    // log infrastructure, so no GC pass is needed here.
-    if let Some(summary) = clean_progress::pop_last_summary() {
-        app.set_last_clean_summary(summary);
-    }
-
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
@@ -418,7 +411,6 @@ fn handle_confirm_worktree_cleanup_key_event(app: &mut App, key: KeyEvent) {
 fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     // One-shot banners: any key press dismisses them so they do not
     // linger over later renders.
-    app.last_clean_summary = None;
     if app.clean_progress.as_ref().is_some_and(|p| p.done) {
         app.clear_clean_progress();
     }
@@ -1273,19 +1265,6 @@ mod tests {
         let view_before = app.view;
         handle_key_event(&mut app, key(KeyCode::Tab));
         assert_eq!(app.view, view_before);
-    }
-
-    #[test]
-    fn first_keypress_dismisses_last_clean_summary_banner() {
-        let mut app = create_test_app_with_sessions(1);
-        app.set_last_clean_summary(super::clean_progress::LastCleanSummary {
-            run_id: "abc".to_string(),
-            ok: 1,
-            failed: 0,
-        });
-        assert!(app.last_clean_summary.is_some());
-        handle_key_event(&mut app, key(KeyCode::Char('j')));
-        assert!(app.last_clean_summary.is_none());
     }
 
     #[test]

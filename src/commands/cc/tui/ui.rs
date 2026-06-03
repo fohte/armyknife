@@ -707,28 +707,17 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Status line shown in place of the regular help bar's top row when a
-/// detached cleanup is in flight or a one-shot startup summary is
-/// queued. Returns `None` when there is nothing notable to display.
+/// detached cleanup is in flight. Returns `None` when there is nothing
+/// notable to display.
 fn clean_status_line(app: &App) -> Option<Line<'static>> {
     let progress_style = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
-    let summary_style = Style::default()
-        .fg(Color::Green)
-        .add_modifier(Modifier::BOLD);
-    if let Some(progress) = &app.clean_progress {
-        return Some(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(progress.render_line(), progress_style),
-        ]));
-    }
-    if let Some(summary) = &app.last_clean_summary {
-        return Some(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(summary.message(), summary_style),
-        ]));
-    }
-    None
+    let progress = app.clean_progress.as_ref()?;
+    Some(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(progress.render_line(), progress_style),
+    ]))
 }
 
 /// Help / confirmation bar for the clean view. The bottom line is the
