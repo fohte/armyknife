@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.190](https://github.com/fohte/armyknife/compare/v0.1.189...v0.1.190) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** defer stale session cleanup off cc watch startup path ([#591](https://github.com/fohte/armyknife/issues/591)) ([730c4a1](https://github.com/fohte/armyknife/commit/730c4a1af976df6237da5731d607594640b5ecd6))
+
 ## [0.1.189](https://github.com/fohte/armyknife/compare/v0.1.188...v0.1.189) (2026-06-03)
 
 
