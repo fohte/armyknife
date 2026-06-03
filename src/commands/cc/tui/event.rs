@@ -91,6 +91,12 @@ impl EventHandler {
             handle_worktree_discovery(wt_tx);
         });
 
+        // Run stale cleanup off the startup path.
+        let cleanup_tx = tx.clone();
+        thread::spawn(move || {
+            handle_stale_session_cleanup(cleanup_tx);
+        });
+
         // Set up file system watcher
         let sender = tx.clone();
         let watcher = setup_file_watcher(tx)?;
@@ -231,6 +237,15 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
     })();
 
     let _ = tx.send(AppEvent::WorktreesLoaded(result));
+}
+
+/// One-shot stale-session cleanup, run off the startup path.
+/// Triggers a full reload only when something was actually removed,
+/// so the common no-op case does not pay another `list_sessions` scan.
+fn handle_stale_session_cleanup(tx: Sender<AppEvent>) {
+    if let Ok(true) = store::cleanup_stale_sessions() {
+        let _ = tx.send(AppEvent::SessionsChanged(None));
+    }
 }
 
 /// Handles tick events for periodic UI updates.
