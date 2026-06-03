@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.189](https://github.com/fohte/armyknife/compare/v0.1.188...v0.1.189) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** drop startup clean-summary banner ([#589](https://github.com/fohte/armyknife/issues/589)) ([92b3dec](https://github.com/fohte/armyknife/commit/92b3dec3f8e4e5c30815cd3663baa9d87fa865d9))
+
 ## [0.1.188](https://github.com/fohte/armyknife/compare/v0.1.187...v0.1.188) (2026-06-03)
 
 
