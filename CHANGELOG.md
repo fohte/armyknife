@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.192](https://github.com/fohte/armyknife/compare/v0.1.191...v0.1.192) (2026-06-04)
+
+
+### Features
+
+* **wm/new:** run in background when invoked from Claude Code ([#595](https://github.com/fohte/armyknife/issues/595)) ([1e635f6](https://github.com/fohte/armyknife/commit/1e635f676a32f46ac350e70b99191dfde3499a22))
+
 ## [0.1.191](https://github.com/fohte/armyknife/compare/v0.1.190...v0.1.191) (2026-06-03)
 
 
