@@ -60,10 +60,20 @@ pub fn build_layout_commands(
     // subsequent pane operation by the fully-qualified `{session}:={name}.N`
     // target so the attached client's active window never flips, not even for
     // a single frame.
-    let mut new_window_args = vec!["new-window", "-t", session, "-c", cwd, "-n", window_name];
-    if background {
-        new_window_args.insert(1, "-d");
-    }
+    let new_window_args = if background {
+        vec![
+            "new-window",
+            "-d",
+            "-t",
+            session,
+            "-c",
+            cwd,
+            "-n",
+            window_name,
+        ]
+    } else {
+        vec!["new-window", "-t", session, "-c", cwd, "-n", window_name]
+    };
     commands.push(TmuxCommand::new(&new_window_args));
 
     let pane_prefix = if background {
