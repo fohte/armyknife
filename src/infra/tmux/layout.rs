@@ -56,20 +56,32 @@ pub fn build_layout_commands(
         ]));
     }
 
-    // Create new window (first pane is created automatically)
-    commands.push(TmuxCommand::new(&[
-        "new-window",
-        "-t",
-        session,
-        "-c",
-        cwd,
-        "-n",
-        window_name,
-    ]));
+    // In background mode, create the window detached (`-d`) and address every
+    // subsequent pane operation by the fully-qualified `{session}:={name}.N`
+    // target so the attached client's active window never flips, not even for
+    // a single frame.
+    let mut new_window_args = vec!["new-window", "-t", session, "-c", cwd, "-n", window_name];
+    if background {
+        new_window_args.insert(1, "-d");
+    }
+    commands.push(TmuxCommand::new(&new_window_args));
+
+    let pane_prefix = if background {
+        format!("{session}:={window_name}.")
+    } else {
+        String::new()
+    };
 
     // Recursively process layout tree to collect split commands and pane info.
     // Pane indices are 1-based in tmux (new-window creates pane 1).
-    collect_layout(layout, &mut commands, &mut pane_entries, cwd, 1);
+    collect_layout(
+        layout,
+        &mut commands,
+        &mut pane_entries,
+        cwd,
+        1,
+        &pane_prefix,
+    );
 
     // Find the last claude pane index so only it performs temp file cleanup
     let last_claude_index = prompt_file.and_then(|_| {
@@ -80,14 +92,29 @@ pub fn build_layout_commands(
 
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
-        let pane_target = format!("{}", i + 1);
+        let pane_target = format!("{pane_prefix}{}", i + 1);
         let cleanup = last_claude_index == Some(i);
         let cmd = apply_prompt_if_claude(&entry.command, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
-        // then send Enter separately.
-        commands.push(TmuxCommand::new(&["send-keys", "-l", "--", &cmd]));
-        commands.push(TmuxCommand::new(&["send-keys", "C-m"]));
+        // then send Enter separately. In background mode the active pane stays
+        // on the user's current window, so send-keys must target the new pane
+        // explicitly; in foreground the prior select-pane already makes the
+        // target active so the -t argument is omitted to keep behavior intact.
+        if background {
+            commands.push(TmuxCommand::new(&[
+                "send-keys",
+                "-t",
+                &pane_target,
+                "-l",
+                "--",
+                &cmd,
+            ]));
+            commands.push(TmuxCommand::new(&["send-keys", "-t", &pane_target, "C-m"]));
+        } else {
+            commands.push(TmuxCommand::new(&["send-keys", "-l", "--", &cmd]));
+            commands.push(TmuxCommand::new(&["send-keys", "C-m"]));
+        }
     }
 
     // Focus the last pane with focus: true
@@ -98,7 +125,7 @@ pub fn build_layout_commands(
         .map(|(i, _)| i);
 
     if let Some(idx) = focus_pane_index {
-        let pane_target = format!("{}", idx + 1);
+        let pane_target = format!("{pane_prefix}{}", idx + 1);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
     }
 
@@ -112,14 +139,6 @@ pub fn build_layout_commands(
             session,
             key,
         ]));
-    }
-
-    // In background mode, restore the target session's previously active
-    // window so creating the worktree window doesn't steal focus when the
-    // attached client is already on this session.
-    if background {
-        let last = format!("{session}:-");
-        commands.push(TmuxCommand::new(&["select-window", "-t", &last]));
     }
 
     commands
@@ -137,6 +156,7 @@ fn collect_layout(
     panes: &mut Vec<PaneEntry>,
     cwd: &str,
     pane_offset: usize,
+    pane_prefix: &str,
 ) {
     match node {
         LayoutNode::Pane(pane) => {
@@ -147,7 +167,7 @@ fn collect_layout(
         }
         LayoutNode::Split(split) => {
             // Process first child (uses current pane at pane_offset)
-            collect_layout(&split.first, commands, panes, cwd, pane_offset);
+            collect_layout(&split.first, commands, panes, cwd, pane_offset, pane_prefix);
 
             let first_pane_count = count_panes(&split.first);
 
@@ -158,7 +178,7 @@ fn collect_layout(
                 SplitDirection::Horizontal => "-h",
                 SplitDirection::Vertical => "-v",
             };
-            let target = format!("{}", pane_offset);
+            let target = format!("{pane_prefix}{pane_offset}");
             commands.push(TmuxCommand::new(&[
                 "split-window",
                 direction_flag,
@@ -170,7 +190,14 @@ fn collect_layout(
 
             // Process second child
             let second_offset = pane_offset + first_pane_count;
-            collect_layout(&split.second, commands, panes, cwd, second_offset);
+            collect_layout(
+                &split.second,
+                commands,
+                panes,
+                cwd,
+                second_offset,
+                pane_prefix,
+            );
         }
     }
 }
@@ -738,30 +765,61 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::foreground_no_restore(false, None)]
-    #[case::background_restores_previous_window(true, Some("sess:-"))]
-    fn build_layout_commands_background_mode(
-        #[case] background: bool,
-        #[case] expected_tail_target: Option<&str>,
-    ) {
+    #[test]
+    fn build_layout_commands_background_detaches_new_window_and_qualifies_pane_targets() {
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], background);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], true);
 
-        match expected_tail_target {
-            Some(target) => assert_eq!(
-                commands.last().expect("commands is not empty"),
-                &cmd(&["select-window", "-t", target])
-            ),
-            None => {
-                for c in &commands {
-                    assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
-                }
+        // new-window must be detached so the attached client's view does not flip.
+        assert_eq!(
+            commands[0],
+            cmd(&["new-window", "-d", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // Every pane-targeting command must address the new window explicitly
+        // via {session}:={window_name}.{pane}, never the bare pane index.
+        let qualified = "sess:=dev.";
+        for c in &commands[1..] {
+            if matches!(
+                c.args.first().map(String::as_str),
+                Some("select-pane" | "send-keys" | "split-window")
+            ) {
+                let target_idx = c
+                    .args
+                    .iter()
+                    .position(|a| a == "-t")
+                    .expect("pane-addressing command without -t");
+                let target = &c.args[target_idx + 1];
+                assert!(
+                    target.starts_with(qualified),
+                    "expected target `{target}` to start with `{qualified}`",
+                );
             }
+        }
+    }
+
+    #[test]
+    fn build_layout_commands_foreground_keeps_unqualified_targets() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+
+        // new-window is left attached (no `-d`).
+        assert_eq!(
+            commands[0],
+            cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // No previous-window restore command is appended.
+        for c in &commands {
+            assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
         }
     }
 
