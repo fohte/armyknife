@@ -533,9 +533,7 @@ fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    // CC 等から自動起動された場合にユーザーの作業フォーカスを奪わないよう、
-    // CLAUDECODE が set されているときは window 切替を抑止する。target_session
-    // に attach していないケースでは末尾の select-window が no-op になるだけ。
+    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
     let background = std::env::var("CLAUDECODE").is_ok();
 
     // Setup tmux window using config layout
