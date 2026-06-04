@@ -485,6 +485,8 @@ Git worktree management with tmux integration.
 
 Worktrees that contain an active Claude Code session (any session not paused/ended, with pending background tasks, or with recent tmux pane input) are kept by default regardless of merge status. The `STATUS` column shows `active session` for those entries. Pass `--force` to override.
 
+`new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the tmux window is built in the background without stealing focus from the current window. Run from a human shell, focus switches to the new window as before.
+
 ### Hooks
 
 armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.

@@ -39,6 +39,7 @@ pub fn build_layout_commands(
     layout: &LayoutNode,
     prompt_file: Option<&Path>,
     env_vars: &[(&str, &str)],
+    background: bool,
 ) -> Vec<TmuxCommand> {
     let mut commands = Vec::new();
     let mut pane_entries: Vec<PaneEntry> = Vec::new();
@@ -55,20 +56,42 @@ pub fn build_layout_commands(
         ]));
     }
 
-    // Create new window (first pane is created automatically)
-    commands.push(TmuxCommand::new(&[
-        "new-window",
-        "-t",
-        session,
-        "-c",
-        cwd,
-        "-n",
-        window_name,
-    ]));
+    // In background mode, create the window detached (`-d`) and address every
+    // subsequent pane operation by the fully-qualified `{session}:={name}.N`
+    // target so the attached client's active window never flips, not even for
+    // a single frame.
+    let new_window_args = if background {
+        vec![
+            "new-window",
+            "-d",
+            "-t",
+            session,
+            "-c",
+            cwd,
+            "-n",
+            window_name,
+        ]
+    } else {
+        vec!["new-window", "-t", session, "-c", cwd, "-n", window_name]
+    };
+    commands.push(TmuxCommand::new(&new_window_args));
+
+    let pane_prefix = if background {
+        format!("{session}:={window_name}.")
+    } else {
+        String::new()
+    };
 
     // Recursively process layout tree to collect split commands and pane info.
     // Pane indices are 1-based in tmux (new-window creates pane 1).
-    collect_layout(layout, &mut commands, &mut pane_entries, cwd, 1);
+    collect_layout(
+        layout,
+        &mut commands,
+        &mut pane_entries,
+        cwd,
+        1,
+        &pane_prefix,
+    );
 
     // Find the last claude pane index so only it performs temp file cleanup
     let last_claude_index = prompt_file.and_then(|_| {
@@ -79,14 +102,29 @@ pub fn build_layout_commands(
 
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
-        let pane_target = format!("{}", i + 1);
+        let pane_target = format!("{pane_prefix}{}", i + 1);
         let cleanup = last_claude_index == Some(i);
         let cmd = apply_prompt_if_claude(&entry.command, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
-        // then send Enter separately.
-        commands.push(TmuxCommand::new(&["send-keys", "-l", "--", &cmd]));
-        commands.push(TmuxCommand::new(&["send-keys", "C-m"]));
+        // then send Enter separately. In background mode the active pane stays
+        // on the user's current window, so send-keys must target the new pane
+        // explicitly; in foreground the prior select-pane already makes the
+        // target active so the -t argument is omitted to keep behavior intact.
+        if background {
+            commands.push(TmuxCommand::new(&[
+                "send-keys",
+                "-t",
+                &pane_target,
+                "-l",
+                "--",
+                &cmd,
+            ]));
+            commands.push(TmuxCommand::new(&["send-keys", "-t", &pane_target, "C-m"]));
+        } else {
+            commands.push(TmuxCommand::new(&["send-keys", "-l", "--", &cmd]));
+            commands.push(TmuxCommand::new(&["send-keys", "C-m"]));
+        }
     }
 
     // Focus the last pane with focus: true
@@ -97,7 +135,7 @@ pub fn build_layout_commands(
         .map(|(i, _)| i);
 
     if let Some(idx) = focus_pane_index {
-        let pane_target = format!("{}", idx + 1);
+        let pane_target = format!("{pane_prefix}{}", idx + 1);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
     }
 
@@ -128,6 +166,7 @@ fn collect_layout(
     panes: &mut Vec<PaneEntry>,
     cwd: &str,
     pane_offset: usize,
+    pane_prefix: &str,
 ) {
     match node {
         LayoutNode::Pane(pane) => {
@@ -138,7 +177,7 @@ fn collect_layout(
         }
         LayoutNode::Split(split) => {
             // Process first child (uses current pane at pane_offset)
-            collect_layout(&split.first, commands, panes, cwd, pane_offset);
+            collect_layout(&split.first, commands, panes, cwd, pane_offset, pane_prefix);
 
             let first_pane_count = count_panes(&split.first);
 
@@ -149,7 +188,7 @@ fn collect_layout(
                 SplitDirection::Horizontal => "-h",
                 SplitDirection::Vertical => "-v",
             };
-            let target = format!("{}", pane_offset);
+            let target = format!("{pane_prefix}{pane_offset}");
             commands.push(TmuxCommand::new(&[
                 "split-window",
                 direction_flag,
@@ -161,7 +200,14 @@ fn collect_layout(
 
             // Process second child
             let second_offset = pane_offset + first_pane_count;
-            collect_layout(&split.second, commands, panes, cwd, second_offset);
+            collect_layout(
+                &split.second,
+                commands,
+                panes,
+                cwd,
+                second_offset,
+                pane_prefix,
+            );
         }
     }
 }
@@ -215,10 +261,19 @@ pub fn build_layout(
     layout: &LayoutNode,
     prompt: Option<&str>,
     env_vars: &[(&str, &str)],
+    background: bool,
 ) -> anyhow::Result<()> {
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
-    let commands = build_layout_commands(session, cwd, window_name, layout, prompt_path, env_vars);
+    let commands = build_layout_commands(
+        session,
+        cwd,
+        window_name,
+        layout,
+        prompt_path,
+        env_vars,
+        background,
+    );
     execute_commands(&commands)?;
     Ok(())
 }
@@ -325,7 +380,7 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -357,7 +412,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -393,7 +448,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -437,7 +492,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -478,8 +533,15 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
+        let commands = build_layout_commands(
+            "sess",
+            "/tmp",
+            "dev",
+            &layout,
+            Some(&prompt_path),
+            &[],
+            false,
+        );
 
         assert_eq!(
             commands,
@@ -521,7 +583,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // The last select-pane should target pane 2 (the last focused pane)
         let last_cmd = commands.last().unwrap();
@@ -543,7 +605,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
@@ -578,7 +640,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -623,8 +685,15 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
+        let commands = build_layout_commands(
+            "sess",
+            "/tmp",
+            "dev",
+            &layout,
+            Some(&prompt_path),
+            &[],
+            false,
+        );
 
         assert_eq!(
             commands,
@@ -671,7 +740,8 @@ mod tests {
             (label_key, "my-label"),
             (ancestors_key, "parent-1,parent-2"),
         ];
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, false);
 
         // set-environment commands should come before new-window
         assert_eq!(
@@ -706,13 +776,71 @@ mod tests {
     }
 
     #[test]
+    fn build_layout_commands_background_detaches_new_window_and_qualifies_pane_targets() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], true);
+
+        // new-window must be detached so the attached client's view does not flip.
+        assert_eq!(
+            commands[0],
+            cmd(&["new-window", "-d", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // Every pane-targeting command must address the new window explicitly
+        // via {session}:={window_name}.{pane}, never the bare pane index.
+        let qualified = "sess:=dev.";
+        for c in &commands[1..] {
+            if matches!(
+                c.args.first().map(String::as_str),
+                Some("select-pane" | "send-keys" | "split-window")
+            ) {
+                let target_idx = c
+                    .args
+                    .iter()
+                    .position(|a| a == "-t")
+                    .expect("pane-addressing command without -t");
+                let target = &c.args[target_idx + 1];
+                assert!(
+                    target.starts_with(qualified),
+                    "expected target `{target}` to start with `{qualified}`",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_layout_commands_foreground_keeps_unqualified_targets() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+
+        // new-window is left attached (no `-d`).
+        assert_eq!(
+            commands[0],
+            cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
+        );
+
+        // No previous-window restore command is appended.
+        for c in &commands {
+            assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
+        }
+    }
+
+    #[test]
     fn empty_env_vars_no_set_environment() {
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // First command should be new-window, not set-environment
         assert_eq!(
