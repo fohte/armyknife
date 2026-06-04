@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.194](https://github.com/fohte/armyknife/compare/v0.1.193...v0.1.194) (2026-06-04)
+
+
+### Dependencies
+
+* update rust crate reqwest to v0.13.4 ([#572](https://github.com/fohte/armyknife/issues/572)) ([d4ba723](https://github.com/fohte/armyknife/commit/d4ba7238ee60251b762a281502d564ae58e65d9d))
+
 ## [0.1.193](https://github.com/fohte/armyknife/compare/v0.1.192...v0.1.193) (2026-06-04)
 
 
