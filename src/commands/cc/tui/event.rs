@@ -5,10 +5,15 @@ use notify::{
     EventKind, RecommendedWatcher, RecursiveMode, Watcher,
     event::{CreateKind, ModifyKind, RemoveKind},
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+
+use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
+use super::clean_view::CleanRow;
+use super::worktree_view::WorktreeRow;
+use crate::commands::cc::types::Session;
 
 /// Key event with code and modifiers.
 #[derive(Debug, Clone, Copy)]
@@ -41,11 +46,26 @@ pub enum AppEvent {
     SessionsChanged(Option<Vec<SessionChange>>),
     /// Tick for periodic updates.
     Tick,
+    /// Background worktree discovery finished.
+    WorktreesLoaded(std::result::Result<Vec<super::worktree_view::WorktreeRow>, String>),
+    /// Background session-label (repo name + worktree name) resolution
+    /// finished for one batch of cwds.
+    SessionLabelsResolved(Vec<(PathBuf, String, String)>),
+    /// PR status fetch for the clean view completed.
+    CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
+    /// One or more JSONL events from the detached clean child.
+    CleanLogEvents(Vec<CleanLogEvent>),
 }
 
 /// Event handler that combines keyboard input and file system events.
 pub struct EventHandler {
     receiver: Receiver<AppEvent>,
+    /// Cloned for ad-hoc background work (clean PR fetch, tail thread).
+    sender: Sender<AppEvent>,
+    /// Tokio runtime handle captured at construction so async PR fetches
+    /// can be spawned without nesting a fresh runtime — `cc watch` is
+    /// invoked from inside the top-level tokio runtime.
+    rt_handle: Option<tokio::runtime::Handle>,
     /// Watcher must be kept alive to receive events.
     _watcher: Option<RecommendedWatcher>,
 }
@@ -68,11 +88,26 @@ impl EventHandler {
             handle_tick_events(tick_tx);
         });
 
+        // Spawn worktree discovery thread (one-shot).
+        let wt_tx = tx.clone();
+        thread::spawn(move || {
+            handle_worktree_discovery(wt_tx);
+        });
+
+        // Run stale cleanup off the startup path.
+        let cleanup_tx = tx.clone();
+        thread::spawn(move || {
+            handle_stale_session_cleanup(cleanup_tx);
+        });
+
         // Set up file system watcher
+        let sender = tx.clone();
         let watcher = setup_file_watcher(tx)?;
 
         Ok(Self {
             receiver: rx,
+            sender,
+            rt_handle: tokio::runtime::Handle::try_current().ok(),
             _watcher: watcher,
         })
     }
@@ -87,6 +122,98 @@ impl EventHandler {
     /// Non-blocking receive: returns `Some(event)` if available, `None` otherwise.
     pub fn try_next(&self) -> Option<AppEvent> {
         self.receiver.try_recv().ok()
+    }
+
+    /// Resolve session labels (repo + worktree names) for `cwds` in the
+    /// background. The result arrives as [`AppEvent::SessionLabelsResolved`].
+    /// Callers must deduplicate cwds (see `App::claim_unresolved_label_cwds`).
+    pub fn start_session_labels_resolve(&self, cwds: Vec<PathBuf>) {
+        if cwds.is_empty() {
+            return;
+        }
+        let tx = self.sender.clone();
+        thread::spawn(move || {
+            let results = super::app::resolve_labels_for_cwds(&cwds);
+            let _ = tx.send(AppEvent::SessionLabelsResolved(results));
+        });
+    }
+
+    /// Kick off a one-shot PR-status fetch for the clean view. Returns
+    /// immediately; the result arrives as [`AppEvent::CleanPrFetched`].
+    /// If the runtime handle is unavailable, the failure is reported
+    /// through the same event so the user always gets a banner.
+    pub fn start_clean_pr_fetch(&self, rows: Vec<WorktreeRow>, sessions: Vec<Session>) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::CleanPrFetched(Err(
+                "tokio runtime is not available".to_string(),
+            )));
+            return;
+        };
+        rt.spawn(async move {
+            let result = super::pr_fetch::fetch_clean_inputs(rows, sessions).await;
+            let _ = tx.send(AppEvent::CleanPrFetched(result));
+        });
+    }
+
+    /// Begin tailing `log_path` for JSONL events from the detached
+    /// clean child. Stops on the first `Done` event or when the
+    /// receiver is dropped. Polling cadence matches
+    /// [`clean_progress::TAIL_INTERVAL`].
+    pub fn start_clean_tail(&self, initial_log_path: PathBuf, run_id: String) {
+        let tx = self.sender.clone();
+        thread::spawn(move || {
+            let mut log_path = initial_log_path;
+            let mut cursor = 0u64;
+            // The pre-`Start` phase is bounded by polling count so we
+            // do not loop forever when the child dies before writing
+            // anything. Past `Start`, a single large `rm -rf` may write
+            // no events for minutes — the post-`Start` exit condition
+            // is simply receiving the matching `Done` event.
+            let mut started = false;
+            let mut empty_polls = 0usize;
+            loop {
+                thread::sleep(TAIL_INTERVAL);
+                // Date rollover: today's log path changes at midnight UTC.
+                // When that happens, the new file starts at offset 0 so
+                // we reset the cursor before reading.
+                if let Some(today) = clean_progress::live_log_path()
+                    && today != log_path
+                {
+                    log_path = today;
+                    cursor = 0;
+                }
+                let (events, new_cursor) =
+                    match clean_progress::read_new_events(&log_path, cursor, &run_id) {
+                        Ok(pair) => pair,
+                        Err(_) => break,
+                    };
+                cursor = new_cursor;
+                let done = events
+                    .iter()
+                    .any(|e| matches!(e, CleanLogEvent::Done { .. }));
+                if !events.is_empty() {
+                    if events
+                        .iter()
+                        .any(|e| matches!(e, CleanLogEvent::Start { .. }))
+                    {
+                        started = true;
+                    }
+                    empty_polls = 0;
+                    if tx.send(AppEvent::CleanLogEvents(events)).is_err() {
+                        break;
+                    }
+                    if done {
+                        break;
+                    }
+                } else if !started {
+                    empty_polls += 1;
+                    if empty_polls > 120 {
+                        break;
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -107,6 +234,32 @@ fn handle_keyboard_events(tx: Sender<AppEvent>) {
                 break;
             }
         }
+    }
+}
+
+/// Performs a one-shot scan for worktrees under the configured repos root.
+/// Sends a single `WorktreesLoaded` event when finished.
+fn handle_worktree_discovery(tx: Sender<AppEvent>) {
+    use crate::shared::config::load_config;
+    use crate::shared::repos_root::resolve_repos_root;
+
+    let result = (|| -> std::result::Result<Vec<super::worktree_view::WorktreeRow>, String> {
+        let config = load_config().map_err(|e| e.to_string())?;
+        let repos_root =
+            resolve_repos_root(config.wm.repos_root.as_deref()).map_err(|e| e.to_string())?;
+        Ok(super::worktree_view::discover_worktree_rows(
+            &repos_root,
+            &config.wm.worktrees_dir,
+        ))
+    })();
+
+    let _ = tx.send(AppEvent::WorktreesLoaded(result));
+}
+
+/// One-shot stale-session cleanup run from `EventHandler::new`.
+fn handle_stale_session_cleanup(tx: Sender<AppEvent>) {
+    if let Ok(true) = store::cleanup_stale_sessions() {
+        let _ = tx.send(AppEvent::SessionsChanged(None));
     }
 }
 
@@ -244,9 +397,11 @@ mod tests {
 
     #[test]
     fn test_try_next_returns_none_on_empty_channel() {
-        let (_tx, rx) = mpsc::channel::<AppEvent>();
+        let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx,
+            rt_handle: None,
             _watcher: None,
         };
         assert!(handler.try_next().is_none());
@@ -257,6 +412,8 @@ mod tests {
         let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx.clone(),
+            rt_handle: None,
             _watcher: None,
         };
 
@@ -284,6 +441,8 @@ mod tests {
         let (tx, rx) = mpsc::channel::<AppEvent>();
         let handler = EventHandler {
             receiver: rx,
+            sender: tx.clone(),
+            rt_handle: None,
             _watcher: None,
         };
 

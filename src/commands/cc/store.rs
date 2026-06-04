@@ -310,22 +310,22 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 /// Sessions without tmux_info are kept (they may be running outside tmux).
 /// If tmux server is not available, cleanup is skipped to avoid incorrectly
 /// deleting sessions (is_pane_alive returns false when server is down).
-pub fn cleanup_stale_sessions() -> Result<()> {
+pub fn cleanup_stale_sessions() -> Result<bool> {
     // Skip cleanup if tmux server is not available to avoid false negatives
     if !tmux::is_server_available() {
-        return Ok(());
+        return Ok(false);
     }
 
     // Fetch all alive pane IDs in a single tmux call (O(1) instead of O(N)).
     // Skip cleanup on error to avoid misidentifying all sessions as stale.
     let alive_panes = match tmux::list_all_pane_ids() {
         Ok(panes) => panes,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(false),
     };
     cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), |cwd| cwd.exists())
 }
 
-fn cleanup_stale_sessions_impl<F, G>(is_pane_alive: F, cwd_exists: G) -> Result<()>
+fn cleanup_stale_sessions_impl<F, G>(is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
     F: Fn(&str) -> bool,
     G: Fn(&Path) -> bool,
@@ -333,17 +333,19 @@ where
     cleanup_stale_sessions_in(&sessions_dir()?, is_pane_alive, cwd_exists)
 }
 
-fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<()>
+/// Returns whether at least one session file was removed.
+fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
     F: Fn(&str) -> bool,
     G: Fn(&Path) -> bool,
 {
     if !dir.exists() {
-        return Ok(());
+        return Ok(false);
     }
 
     let now = Utc::now();
     let retention = TimeDelta::days(ENDED_SESSION_RETENTION_DAYS);
+    let mut removed_any = false;
 
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -380,13 +382,15 @@ where
             && now - session.updated_at > retention;
 
         if stale_pane || orphaned_paused || expired_ended {
-            let _ = fs::remove_file(&path);
+            if fs::remove_file(&path).is_ok() {
+                removed_any = true;
+            }
             let lock_path = path.with_extension("json.lock");
             let _ = fs::remove_file(&lock_path);
         }
     }
 
-    Ok(())
+    Ok(removed_any)
 }
 
 #[cfg(test)]

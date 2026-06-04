@@ -5,11 +5,36 @@ use crate::infra::tmux;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use super::clean_progress::{CleanLogEvent, CleanProgress};
+use super::clean_view::CleanView;
 use super::event::{SessionChange, SessionChangeType};
 use super::session_tree::build_session_tree;
+use super::worktree_view::{
+    WorktreeMode, WorktreeRow, WorktreeView, canonicalize_or_self, session_lives_under,
+};
+
+/// Top-level view selection. Tab cycles between Session and Worktree
+/// only; `Clean` is reached via `c` and exited via Esc/n/q.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Session,
+    Worktree,
+    Clean,
+}
+
+impl View {
+    pub fn next(self) -> Self {
+        match self {
+            View::Session => View::Worktree,
+            View::Worktree => View::Session,
+            View::Clean => View::Clean,
+        }
+    }
+}
 
 /// Application mode.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -59,13 +84,28 @@ pub struct App {
     /// Cache of session titles for display (keyed by session_id).
     /// Built on load/reload for fast UI rendering.
     title_cache: HashMap<String, String>,
-    /// Cache of repository names (keyed by cwd path).
-    /// Avoids repeated git I/O from `get_repo_root_in` on every render frame.
-    repo_name_cache: HashMap<PathBuf, String>,
+    /// Cache of (repo_name, worktree_name) keyed by cwd path.
+    /// Populated asynchronously; render must not block on libgit2 I/O.
+    worktree_label_cache: HashMap<PathBuf, (String, String)>,
+    /// Cwds whose async resolution is in flight. Guards `claim_unresolved_label_cwds`
+    /// against re-dispatch before the corresponding result event arrives.
+    pending_label_cwds: HashSet<PathBuf>,
     /// Tree-ordered indices into `sessions`.
     /// Updated each render by the UI layer after building the session tree.
     /// Maps display position (list_state index) to sessions index.
     tree_ordered_indices: Vec<usize>,
+    /// Currently active top-level view.
+    pub view: View,
+    /// View to return to when the user exits the clean view (Esc/n/q).
+    pub clean_return_view: View,
+    /// Worktree-view state (background-loaded list, sub-mode, selection).
+    pub worktree_view: WorktreeView,
+    /// Clean-view state (sections, selection, PR-fetch progress).
+    pub clean_view: CleanView,
+    /// In-flight detached clean progress. `Some` from the moment the
+    /// user confirms `y` in the clean view; cleared once the bottom-bar
+    /// summary has been on screen long enough for the user to read it.
+    pub clean_progress: Option<CleanProgress>,
 }
 
 impl App {
@@ -123,7 +163,13 @@ impl App {
             searchable_text_cache: None,
             tree_ordered_indices: Vec::new(),
             title_cache,
-            repo_name_cache: HashMap::new(),
+            worktree_label_cache: HashMap::new(),
+            pending_label_cwds: HashSet::new(),
+            view: View::Session,
+            clean_return_view: View::Session,
+            worktree_view: WorktreeView::new(),
+            clean_view: CleanView::new(),
+            clean_progress: None,
         };
         app.rebuild_tree_order();
         app
@@ -405,20 +451,153 @@ impl App {
         self.title_cache.get(session_id).map(String::as_str)
     }
 
-    /// Ensures repo names are cached for the given cwd paths.
-    /// Only resolves (via git I/O) for paths not already in the cache.
-    pub fn ensure_repo_names_resolved(&mut self, cwds: &[PathBuf]) {
-        for cwd in cwds {
-            if !self.repo_name_cache.contains_key(cwd) {
-                let name = resolve_repo_name_for_path(cwd);
-                self.repo_name_cache.insert(cwd.clone(), name);
+    /// Cache lookup only. Misses are expected for sessions whose async
+    /// resolution has not yet completed.
+    pub fn get_cached_worktree_labels(&self, cwd: &std::path::Path) -> Option<(&str, &str)> {
+        self.worktree_label_cache
+            .get(cwd)
+            .map(|(r, n)| (r.as_str(), n.as_str()))
+    }
+
+    /// Returns cwds present in `sessions` whose worktree labels are neither
+    /// cached nor currently being resolved, and marks them as pending.
+    /// Callers dispatch the returned list to a background resolver.
+    pub fn claim_unresolved_label_cwds(&mut self) -> Vec<PathBuf> {
+        let mut seen: HashSet<&Path> = HashSet::new();
+        let mut out = Vec::new();
+        for session in &self.sessions {
+            let cwd = session.cwd.as_path();
+            if !seen.insert(cwd) {
+                continue;
             }
+            if self.worktree_label_cache.contains_key(cwd) {
+                continue;
+            }
+            if self.pending_label_cwds.contains(cwd) {
+                continue;
+            }
+            out.push(cwd.to_path_buf());
+        }
+        for cwd in &out {
+            self.pending_label_cwds.insert(cwd.clone());
+        }
+        out
+    }
+
+    /// Inserts the results of an async label resolution into the cache.
+    pub fn apply_resolved_labels(&mut self, results: Vec<(PathBuf, String, String)>) {
+        for (cwd, repo, worktree) in results {
+            self.pending_label_cwds.remove(&cwd);
+            self.worktree_label_cache.insert(cwd, (repo, worktree));
         }
     }
 
-    /// Returns the cached repository name for a given cwd path.
-    pub fn get_cached_repo_name(&self, cwd: &std::path::Path) -> Option<&str> {
-        self.repo_name_cache.get(cwd).map(String::as_str)
+    /// Cycles the active view. No-op when in `Clean`.
+    pub fn cycle_view(&mut self) {
+        if self.view == View::Clean {
+            return;
+        }
+        self.view = self.view.next();
+        if self.view == View::Worktree {
+            // Make sure overlay reflects the latest session list whenever the
+            // user lands on the worktree view.
+            self.worktree_view.refresh_session_overlay(&self.sessions);
+        }
+    }
+
+    /// Installs the freshly loaded worktree rows.
+    pub fn set_worktrees(&mut self, rows: Vec<WorktreeRow>) {
+        self.worktree_view.set_rows(rows);
+        self.worktree_view.refresh_session_overlay(&self.sessions);
+    }
+
+    /// Marks worktree discovery as failed (background thread error) and
+    /// also surfaces the error in the global error banner so the user
+    /// notices it without switching to the worktree view first.
+    pub fn set_worktrees_failed(&mut self, error: String) {
+        self.set_error(format!("Failed to load worktrees: {error}"));
+        self.worktree_view.set_failed(error);
+    }
+
+    /// In worktree view, returns the most recently updated session inside the
+    /// currently selected worktree (used for `Enter` → focus pane).
+    pub fn worktree_view_focus_session(&self) -> Option<&Session> {
+        let row = self.worktree_view.selected_worktree()?;
+        // `row.path` is already canonicalized at discovery time.
+        self.sessions
+            .iter()
+            .filter(|s| canonicalize_or_self(&s.cwd).starts_with(&row.path))
+            .max_by_key(|s| s.updated_at)
+    }
+
+    /// Enters Confirm sub-mode on the selected worktree (for `d`).
+    pub fn worktree_view_request_delete(&mut self) {
+        if let Some(row) = self.worktree_view.selected_worktree() {
+            self.worktree_view.mode = WorktreeMode::Confirm {
+                worktree_path: row.path,
+                session_count: row.session_count,
+                has_active: row.has_active,
+            };
+        }
+    }
+
+    /// Cancels the pending worktree-view confirmation.
+    pub fn worktree_view_cancel_confirm(&mut self) {
+        self.worktree_view.mode = WorktreeMode::Normal;
+    }
+
+    /// Deletes the worktree via `cleanup_worktree_resources` (git worktree,
+    /// branch, tmux windows, session files). Does not consult merge status.
+    pub fn worktree_view_confirm_delete(&mut self) -> anyhow::Result<()> {
+        let path = match &self.worktree_view.mode {
+            WorktreeMode::Confirm { worktree_path, .. } => worktree_path.clone(),
+            _ => return Ok(()),
+        };
+
+        self.worktree_view.mode = WorktreeMode::Normal;
+
+        use crate::shared::cleanup;
+        let result = cleanup::cleanup_worktree_resources(&path)?;
+
+        if result.worktree_deleted {
+            // Drop sessions whose cwd is gone.
+            if let Some(ref wt_root) = result.worktree_root {
+                let to_remove: Vec<String> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| session_lives_under(&s.cwd, wt_root))
+                    .map(|s| s.session_id.clone())
+                    .collect();
+                for id in &to_remove {
+                    self.remove_session(id);
+                }
+            }
+            let prev_selection = self.worktree_view.list_state.selected();
+            if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
+                &mut self.worktree_view.state
+            {
+                rows.retain(|r| r.path != path);
+            }
+            self.worktree_view.refresh_session_overlay(&self.sessions);
+            // Keep the cursor near the deleted row: pick the first
+            // selectable index >= the old position, otherwise the last.
+            let sel = self.worktree_view.selectable_indices();
+            let next = prev_selection
+                .and_then(|p| {
+                    sel.iter()
+                        .find(|&&i| i >= p)
+                        .copied()
+                        .or_else(|| sel.last().copied())
+                })
+                .or_else(|| sel.first().copied());
+            self.worktree_view.list_state.select(next);
+        } else {
+            self.set_error(format!(
+                "Worktree not deleted: {} (use `a wm clean` to investigate)",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Exits search mode, confirming the search.
@@ -692,6 +871,90 @@ impl App {
         self.title_cache = build_title_cache(&self.sessions);
     }
 
+    /// Snapshot of the currently discovered worktree rows, suitable for
+    /// driving the clean view's PR fetch. Returns an empty vec while the
+    /// discovery is still loading or failed.
+    pub fn worktree_rows_snapshot(&self) -> Vec<WorktreeRow> {
+        match &self.worktree_view.state {
+            super::worktree_view::WorktreeLoadState::Loaded(rows) => rows.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Switch into the clean view. Records the current view so the user
+    /// can return via Esc/n/q, then resets the clean state to
+    /// LoadingPr — the caller wires up the actual PR fetch.
+    pub fn enter_clean_view(&mut self) {
+        if self.view == View::Clean {
+            return;
+        }
+        self.clean_return_view = self.view;
+        self.view = View::Clean;
+        self.clean_view.reset();
+    }
+
+    /// Leave the clean view without acting on the partition; returns
+    /// to whichever view the user came from.
+    pub fn exit_clean_view(&mut self) {
+        self.view = self.clean_return_view;
+    }
+
+    /// Install the freshly partitioned rows after PR fetch completes.
+    /// Drops any path that an in-flight cleanup has already removed so
+    /// the user never sees a row that no longer exists on disk.
+    pub fn set_clean_rows(&mut self, mut rows: Vec<super::clean_view::CleanRow>) {
+        if let Some(progress) = &self.clean_progress {
+            let deleted: Vec<PathBuf> = progress
+                .confirmed_deleted
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+            if !deleted.is_empty() {
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
+            }
+        }
+        self.clean_view.set_rows(rows);
+    }
+
+    /// Mark the PR fetch as failed; the clean view shows the error and
+    /// the user can press n/Esc to back out.
+    pub fn set_clean_failed(&mut self, error: String) {
+        self.clean_view.set_failed(error);
+    }
+
+    /// Fold a batch of JSONL events from the detached child into the
+    /// live progress state and drop any worktree rows that the child
+    /// confirmed deleted.
+    pub fn apply_clean_log_events(&mut self, events: &[CleanLogEvent]) {
+        let Some(progress) = self.clean_progress.as_mut() else {
+            return;
+        };
+        for event in events {
+            progress.apply(event);
+        }
+        // Drop deleted rows from both lists so the cleanup is reflected
+        // without a fresh discovery pass.
+        let deleted: Vec<PathBuf> = progress.deleted_paths.iter().map(PathBuf::from).collect();
+        if !deleted.is_empty() {
+            if let super::worktree_view::WorktreeLoadState::Loaded(rows) =
+                &mut self.worktree_view.state
+            {
+                rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
+            }
+            self.clean_view.remove_paths(&deleted);
+            // Mark the deleted paths as drained so we do not pop the
+            // same rows twice on the next batch.
+            progress.deleted_paths.clear();
+        }
+    }
+
+    /// Dismiss the bottom-bar summary. Called on the first key press
+    /// after the detached child reports `Done` so the stale "Cleaned
+    /// X, failed Y" line does not linger.
+    pub fn clear_clean_progress(&mut self) {
+        self.clean_progress = None;
+    }
+
     /// Incrementally updates the title cache for changed sessions only.
     fn rebuild_title_cache_incremental(&mut self, changes: &[SessionChange]) {
         for change in changes {
@@ -756,7 +1019,7 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 }
 
 /// Gets the title display name for a session.
-/// Priority: label (armyknife) > firstPrompt (Claude Code) > tmux session:window > cwd.
+/// Priority: label (armyknife) > firstPrompt (Claude Code) > cwd basename.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
     // Prefer armyknife's own label (set via env var or auto-generated)
@@ -766,13 +1029,6 @@ fn get_title_display_name(session: &Session) -> String {
 
     if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
         return title;
-    }
-
-    if let Some(ref tmux_info) = session.tmux_info {
-        return claude_sessions::normalize_title(&format!(
-            "{}:{}",
-            tmux_info.session_name, tmux_info.window_name
-        ));
     }
 
     // Extract last component of cwd path
@@ -858,26 +1114,53 @@ fn build_searchable_text(session: &Session) -> String {
     parts.join(" ")
 }
 
-/// Resolves the repository name for a given cwd path.
-/// Uses `get_repo_root_in` to find the git worktree root, then takes its
-/// last path component. Falls back to cwd's last component on error.
-fn resolve_repo_name_for_path(cwd: &std::path::Path) -> String {
-    use crate::infra::git::get_repo_root_in;
-    use std::path::Path;
+/// Resolves session labels for the given cwds on the calling thread.
+/// Intended for use by a background worker; not called from render.
+pub(super) fn resolve_labels_for_cwds(cwds: &[PathBuf]) -> Vec<(PathBuf, String, String)> {
+    cwds.iter()
+        .map(|cwd| {
+            let (repo, worktree) = resolve_session_labels_for_path(cwd);
+            (cwd.clone(), repo, worktree)
+        })
+        .collect()
+}
 
-    let root = get_repo_root_in(cwd).ok().and_then(|r| {
-        Path::new(&r)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-    });
+/// Resolves (repo_name, worktree_name) for `cwd` using a single libgit2
+/// open. `repo_name` is the main worktree's basename; `worktree_name` is the
+/// current branch when resolvable, otherwise the cwd's workdir basename.
+/// Falls back to the cwd basename when the path is outside a git repo.
+fn resolve_session_labels_for_path(cwd: &Path) -> (String, String) {
+    use crate::infra::git::open_repo_at;
 
-    root.unwrap_or_else(|| {
+    let basename_fallback = || {
         cwd.file_name()
             .and_then(|n| n.to_str())
             .map(String::from)
             .unwrap_or_else(|| cwd.display().to_string())
-    })
+    };
+
+    let Ok(repo) = open_repo_at(cwd) else {
+        let fallback = basename_fallback();
+        return (fallback.clone(), fallback);
+    };
+
+    let repo_name = repo
+        .main_workdir()
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+        .unwrap_or_else(basename_fallback);
+
+    let branch = repo.current_branch().ok();
+    let worktree_name = branch.filter(|b| b != "HEAD").unwrap_or_else(|| {
+        let workdir = repo.workdir();
+        workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| workdir.display().to_string())
+    });
+
+    (repo_name, worktree_name)
 }
 
 /// Resolves the git worktree root for `cwd`. Returns `None` if `cwd` is not
@@ -893,9 +1176,11 @@ fn resolve_worktree_root(cwd: &Path) -> Option<PathBuf> {
     Some(repo.workdir().to_path_buf())
 }
 
-/// Loads sessions from disk with cleanup.
+/// Loads sessions from disk.
+///
+/// Does not perform stale-session cleanup; that runs once at startup in
+/// a background thread (see `EventHandler::new`).
 fn load_sessions() -> Result<Vec<Session>> {
-    store::cleanup_stale_sessions()?;
     store::list_sessions()
 }
 
@@ -1335,50 +1620,69 @@ mod tests {
     }
 
     // =========================================================================
-    // resolve_repo_name tests
+    // session label resolution tests
     // =========================================================================
 
     #[rstest]
-    #[case::normal_path("/home/user/project", "project")]
-    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife")]
-    #[case::root_path("/", "/")]
-    fn test_resolve_repo_name_fallback(#[case] cwd: &str, #[case] expected: &str) {
-        assert_eq!(resolve_repo_name_for_path(&PathBuf::from(cwd)), expected);
+    #[case::normal_path("/home/user/project", "project", "project")]
+    #[case::nested_path("/home/user/ghq/github.com/fohte/armyknife", "armyknife", "armyknife")]
+    fn test_resolve_session_labels_fallback(
+        #[case] cwd: &str,
+        #[case] expected_repo: &str,
+        #[case] expected_wt: &str,
+    ) {
+        let (repo, wt) = resolve_session_labels_for_path(&PathBuf::from(cwd));
+        assert_eq!(repo, expected_repo);
+        assert_eq!(wt, expected_wt);
     }
 
     #[test]
-    fn test_resolve_repo_name_from_git_repo() {
-        // Create a temp directory with a known repo name subdirectory,
-        // so get_repo_root_in returns a path whose file_name is "my-repo".
-        let parent = tempfile::TempDir::new().unwrap();
-        let repo_dir = parent.path().join("my-repo");
-        std::fs::create_dir_all(&repo_dir).unwrap();
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_dir)
-            .args(["init", "-q"])
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let subdir = repo_dir.join("some").join("subdir");
-        std::fs::create_dir_all(&subdir).unwrap();
-
-        assert_eq!(resolve_repo_name_for_path(&subdir), "my-repo");
+    fn test_get_cached_worktree_labels_miss_returns_none() {
+        let app = create_test_app(vec![]);
+        let cwd = PathBuf::from("/home/user/project");
+        assert!(app.get_cached_worktree_labels(&cwd).is_none());
     }
 
     #[test]
-    fn test_ensure_repo_names_resolved() {
+    fn test_apply_resolved_labels_populates_cache() {
         let mut app = create_test_app(vec![]);
         let cwd = PathBuf::from("/home/user/project");
 
-        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
-        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
+        app.apply_resolved_labels(vec![(
+            cwd.clone(),
+            "project".to_string(),
+            "main".to_string(),
+        )]);
 
-        // Second call should not change the cache
-        app.ensure_repo_names_resolved(std::slice::from_ref(&cwd));
-        assert_eq!(app.get_cached_repo_name(&cwd), Some("project"));
+        assert_eq!(
+            app.get_cached_worktree_labels(&cwd),
+            Some(("project", "main"))
+        );
+    }
+
+    #[test]
+    fn test_claim_unresolved_label_cwds_dedups_and_marks_pending() {
+        let mut app = create_test_app(vec![create_test_session("a"), create_test_session("b")]);
+        // Both default sessions share cwd `/tmp/test`, so only one cwd is returned.
+        let first = app.claim_unresolved_label_cwds();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0], PathBuf::from("/tmp/test"));
+
+        // Second call returns nothing (already pending).
+        let second = app.claim_unresolved_label_cwds();
+        assert!(second.is_empty());
+
+        // After the result is applied the cwd is cached and stays cached.
+        app.apply_resolved_labels(vec![(
+            PathBuf::from("/tmp/test"),
+            "test".to_string(),
+            "main".to_string(),
+        )]);
+        let third = app.claim_unresolved_label_cwds();
+        assert!(third.is_empty());
+        assert_eq!(
+            app.get_cached_worktree_labels(&PathBuf::from("/tmp/test")),
+            Some(("test", "main"))
+        );
     }
 }

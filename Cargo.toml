@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.184"
+version = "0.1.193"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
@@ -34,7 +34,7 @@ chrono = { version = "=0.4.44", features = ["serde"] }
 clap = { version = "=4.5.61", features = ["derive"] }
 clap_complete = "=4.5.67"
 reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "json", "query"] }
-open = "=5.3.3"
+open = "=5.3.5"
 percent-encoding = "=2.3.2"
 tokio = { version = "=1.50.0", features = ["rt-multi-thread", "macros"] }
 indoc = "=2.0.7"

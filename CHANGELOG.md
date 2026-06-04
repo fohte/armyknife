@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.1.193](https://github.com/fohte/armyknife/compare/v0.1.192...v0.1.193) (2026-06-04)
+
+
+### Dependencies
+
+* update rust crate open to v5.3.5 ([#563](https://github.com/fohte/armyknife/issues/563)) ([89683a9](https://github.com/fohte/armyknife/commit/89683a9f948728a605a4144a0df9b310e54e7bb0))
+
+## [0.1.192](https://github.com/fohte/armyknife/compare/v0.1.191...v0.1.192) (2026-06-04)
+
+
+### Features
+
+* **wm/new:** run in background when invoked from Claude Code ([#595](https://github.com/fohte/armyknife/issues/595)) ([1e635f6](https://github.com/fohte/armyknife/commit/1e635f676a32f46ac350e70b99191dfde3499a22))
+
+## [0.1.191](https://github.com/fohte/armyknife/compare/v0.1.190...v0.1.191) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** resolve session labels off the render path ([#592](https://github.com/fohte/armyknife/issues/592)) ([125d814](https://github.com/fohte/armyknife/commit/125d814386c2d95b42a634759034961218cda31f))
+
+## [0.1.190](https://github.com/fohte/armyknife/compare/v0.1.189...v0.1.190) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** defer stale session cleanup off cc watch startup path ([#591](https://github.com/fohte/armyknife/issues/591)) ([730c4a1](https://github.com/fohte/armyknife/commit/730c4a1af976df6237da5731d607594640b5ecd6))
+
+## [0.1.189](https://github.com/fohte/armyknife/compare/v0.1.188...v0.1.189) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cc/tui:** drop startup clean-summary banner ([#589](https://github.com/fohte/armyknife/issues/589)) ([92b3dec](https://github.com/fohte/armyknife/commit/92b3dec3f8e4e5c30815cd3663baa9d87fa865d9))
+
+## [0.1.188](https://github.com/fohte/armyknife/compare/v0.1.187...v0.1.188) (2026-06-03)
+
+
+### Features
+
+* **cc/tui:** add clean view to cc watch with detached cleanup ([#587](https://github.com/fohte/armyknife/issues/587)) ([e421e65](https://github.com/fohte/armyknife/commit/e421e654c99c060fc8b4cf5bac5513ca0ee03dd8))
+
+## [0.1.187](https://github.com/fohte/armyknife/compare/v0.1.186...v0.1.187) (2026-06-02)
+
+
+### Features
+
+* **cc/tui:** add worktree view alongside session view in cc watch ([#585](https://github.com/fohte/armyknife/issues/585)) ([5cbd5f4](https://github.com/fohte/armyknife/commit/5cbd5f41f09fec8e69ddb9ffbebb3314b371fd22))
+
+## [0.1.186](https://github.com/fohte/armyknife/compare/v0.1.185...v0.1.186) (2026-06-02)
+
+
+### Features
+
+* **wm/clean:** protect worktrees with active sessions from deletion ([#582](https://github.com/fohte/armyknife/issues/582)) ([cb709ee](https://github.com/fohte/armyknife/commit/cb709ee779cca844aaf580f6918156808c61789e))
+
+## [0.1.185](https://github.com/fohte/armyknife/compare/v0.1.184...v0.1.185) (2026-06-02)
+
+
+### Features
+
+* **cc:** add hidden clean-detached subcommand ([#581](https://github.com/fohte/armyknife/issues/581)) ([bbb62b1](https://github.com/fohte/armyknife/commit/bbb62b13e6283ecc8eaa638dbc3ce803d8bf052d))
+
 ## [0.1.184](https://github.com/fohte/armyknife/compare/v0.1.183...v0.1.184) (2026-05-31)
 
 

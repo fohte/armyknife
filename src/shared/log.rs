@@ -14,8 +14,11 @@
 //! See `docs/logging.md` for caller-side conventions and debugging
 //! recipes.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
+use chrono::{NaiveDate, Utc};
 use tracing_appender::rolling::{Builder, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
@@ -30,6 +33,63 @@ const RETENTION: usize = 7;
 /// `~/.cache/armyknife/logs/` on every platform; `None` when no home dir.
 pub fn logs_dir() -> Option<PathBuf> {
     super::cache::base_dir().map(|d| d.join("logs"))
+}
+
+/// Today's log file path, matching the daily rotation scheme used by
+/// `tracing_appender`. Returns `None` when no cache dir is available.
+pub fn current_log_path() -> Option<PathBuf> {
+    log_path_for_date(Utc::now().date_naive())
+}
+
+/// Log file path for a specific UTC date. Useful for tail readers that
+/// follow a single day's worth of events.
+pub fn log_path_for_date(date: NaiveDate) -> Option<PathBuf> {
+    logs_dir().map(|d| d.join(format!("{FILENAME_PREFIX}.{date}")))
+}
+
+/// Read JSON-parsed lines past `cursor` from a rotating log file.
+/// Skips the trailing partial line so callers see only complete events.
+/// Returns the new cursor; pass it back on the next call to resume.
+///
+/// Missing files are treated as empty so callers can `start_clean_tail`
+/// before the producer's first write.
+pub fn read_jsonl_lines_since(
+    path: &Path,
+    mut cursor: u64,
+) -> std::io::Result<(Vec<serde_json::Value>, u64)> {
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), cursor));
+        }
+        Err(e) => return Err(e),
+    };
+    let len = file.metadata()?.len();
+    if len < cursor {
+        // Rotation / truncation: restart from the top.
+        cursor = 0;
+    }
+    file.seek(SeekFrom::Start(cursor))?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)?;
+    let (consumable, _trailing) = match buf.rfind('\n') {
+        Some(idx) => (&buf[..=idx], &buf[idx + 1..]),
+        None => ("", buf.as_str()),
+    };
+    let mut events = Vec::new();
+    for line in consumable.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Skip undecodable lines instead of aborting: one corrupt line
+        // must not stop a live progress display or a summary scan.
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            events.push(v);
+        }
+    }
+    let new_cursor = cursor + consumable.len() as u64;
+    Ok((events, new_cursor))
 }
 
 /// Generates a short 8-character hex id that callers attach to a span as
@@ -89,4 +149,54 @@ pub fn init() {
         .with(filter)
         .with(layer)
         .try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+    use rstest::rstest;
+    use serde_json::json;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[rstest]
+    fn read_jsonl_lines_since_returns_complete_lines() {
+        let tmp = TempDir::new().expect("tempdir");
+        let log = tmp.path().join("log");
+        fs::write(
+            &log,
+            indoc! {r#"
+                {"a":1}
+                {"b":2}
+            "#},
+        )
+        .expect("write");
+
+        let (events, cursor) = read_jsonl_lines_since(&log, 0).expect("read");
+        assert_eq!(events, vec![json!({"a":1}), json!({"b":2})]);
+        let (events, _) = read_jsonl_lines_since(&log, cursor).expect("re-read");
+        assert!(events.is_empty());
+    }
+
+    #[rstest]
+    fn read_jsonl_lines_since_skips_partial_tail() {
+        let tmp = TempDir::new().expect("tempdir");
+        let log = tmp.path().join("log");
+        let payload = concat!("{\"a\":1}\n", "{\"b\":");
+        fs::write(&log, payload).expect("write");
+
+        let (events, cursor) = read_jsonl_lines_since(&log, 0).expect("read");
+        assert_eq!(events, vec![json!({"a":1})]);
+        assert!(cursor < payload.len() as u64);
+    }
+
+    #[rstest]
+    fn read_jsonl_lines_since_handles_missing_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let (events, cursor) =
+            read_jsonl_lines_since(&tmp.path().join("missing"), 0).expect("read");
+        assert!(events.is_empty());
+        assert_eq!(cursor, 0);
+    }
 }
