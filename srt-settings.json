@@ -8,5 +8,6 @@
     "denyRead": [],
     "allowWrite": ["/tmp", "."],
     "denyWrite": []
-  }
+  },
+  "enableWeakerNestedSandbox": true
 }
