@@ -533,6 +533,11 @@ fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
+    // CC 等から自動起動された場合にユーザーの作業フォーカスを奪わないよう、
+    // CLAUDECODE が set されているときは window 切替を抑止する。target_session
+    // に attach していないケースでは末尾の select-window が no-op になるだけ。
+    let background = std::env::var("CLAUDECODE").is_ok();
+
     // Setup tmux window using config layout
     setup_tmux_window(
         repo_root,
@@ -541,11 +546,13 @@ fn run_worktree_creation(
         final_prompt.as_deref(),
         config,
         &env_refs,
+        background,
     )?;
 
+    let suffix = if background { " (background)" } else { "" };
     println!(
-        "Created worktree '{}' and opened tmux window",
-        worktree_name
+        "Created worktree '{}' and opened tmux window{}",
+        worktree_name, suffix
     );
 
     Ok(())
@@ -559,6 +566,7 @@ fn setup_tmux_window(
     prompt: Option<&str>,
     config: &Config,
     env_vars: &[(&str, &str)],
+    background: bool,
 ) -> Result<()> {
     let target_session = tmux::get_session_name(repo_root, &config.wm.worktrees_dir);
 
@@ -571,10 +579,13 @@ fn setup_tmux_window(
         &config.wm.layout,
         prompt,
         env_vars,
+        background,
     )
     .context("Failed to create tmux layout")?;
 
-    tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
+    if !background {
+        tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
+    }
 
     Ok(())
 }

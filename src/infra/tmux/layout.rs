@@ -39,6 +39,7 @@ pub fn build_layout_commands(
     layout: &LayoutNode,
     prompt_file: Option<&Path>,
     env_vars: &[(&str, &str)],
+    background: bool,
 ) -> Vec<TmuxCommand> {
     let mut commands = Vec::new();
     let mut pane_entries: Vec<PaneEntry> = Vec::new();
@@ -111,6 +112,14 @@ pub fn build_layout_commands(
             session,
             key,
         ]));
+    }
+
+    // In background mode, restore the target session's previously active
+    // window so creating the worktree window doesn't steal focus when the
+    // attached client is already on this session.
+    if background {
+        let last = format!("{session}:-");
+        commands.push(TmuxCommand::new(&["select-window", "-t", &last]));
     }
 
     commands
@@ -215,10 +224,19 @@ pub fn build_layout(
     layout: &LayoutNode,
     prompt: Option<&str>,
     env_vars: &[(&str, &str)],
+    background: bool,
 ) -> anyhow::Result<()> {
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
-    let commands = build_layout_commands(session, cwd, window_name, layout, prompt_path, env_vars);
+    let commands = build_layout_commands(
+        session,
+        cwd,
+        window_name,
+        layout,
+        prompt_path,
+        env_vars,
+        background,
+    );
     execute_commands(&commands)?;
     Ok(())
 }
@@ -325,7 +343,7 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -357,7 +375,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -393,7 +411,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -437,7 +455,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -478,8 +496,15 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
+        let commands = build_layout_commands(
+            "sess",
+            "/tmp",
+            "dev",
+            &layout,
+            Some(&prompt_path),
+            &[],
+            false,
+        );
 
         assert_eq!(
             commands,
@@ -521,7 +546,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // The last select-pane should target pane 2 (the last focused pane)
         let last_cmd = commands.last().unwrap();
@@ -543,7 +568,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
@@ -578,7 +603,7 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         assert_eq!(
             commands,
@@ -623,8 +648,15 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, Some(&prompt_path), &[]);
+        let commands = build_layout_commands(
+            "sess",
+            "/tmp",
+            "dev",
+            &layout,
+            Some(&prompt_path),
+            &[],
+            false,
+        );
 
         assert_eq!(
             commands,
@@ -671,7 +703,8 @@ mod tests {
             (label_key, "my-label"),
             (ancestors_key, "parent-1,parent-2"),
         ];
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, false);
 
         // set-environment commands should come before new-window
         assert_eq!(
@@ -705,6 +738,33 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::foreground_no_restore(false, None)]
+    #[case::background_restores_previous_window(true, Some("sess:-"))]
+    fn build_layout_commands_background_mode(
+        #[case] background: bool,
+        #[case] expected_tail_target: Option<&str>,
+    ) {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], background);
+
+        match expected_tail_target {
+            Some(target) => assert_eq!(
+                commands.last().expect("commands is not empty"),
+                &cmd(&["select-window", "-t", target])
+            ),
+            None => {
+                for c in &commands {
+                    assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn empty_env_vars_no_set_environment() {
         let layout = LayoutNode::Pane(PaneConfig {
@@ -712,7 +772,7 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[]);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
 
         // First command should be new-window, not set-environment
         assert_eq!(
