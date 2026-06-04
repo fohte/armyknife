@@ -122,11 +122,16 @@ jobs:
       - name: Install srt dependencies
         run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
 
-      - name: Enable bwrap namespace creation
+      - name: Enable unprivileged user namespaces
         run: |
-          # Ubuntu 24.04+ restricts unprivileged user namespaces by default.
-          # Set setuid bit on bwrap to allow namespace creation.
-          sudo chmod u+s "$(which bwrap)"
+          # Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1,
+          # which allows unshare(CLONE_NEWUSER) but strips capabilities from
+          # the new namespace. Both bwrap and srt's apply-seccomp helper need
+          # capability-bearing user namespaces (see srt README "Ubuntu 24.04+
+          # note"). The previously-used `chmod u+s bwrap` workaround only
+          # covered bwrap itself — apply-seccomp's nested userns still lost
+          # caps, breaking seccomp setup.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # Build outside sandbox (needs network for crates.io), run tests inside sandbox.
       # This catches filesystem side effects while allowing normal dependency resolution.
