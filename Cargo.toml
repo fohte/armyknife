@@ -33,7 +33,7 @@ anyhow = "=1.0.102"
 chrono = { version = "=0.4.44", features = ["serde"] }
 clap = { version = "=4.5.61", features = ["derive"] }
 clap_complete = "=4.5.67"
-reqwest = { version = "=0.12.18", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "json", "query"] }
 open = "=5.3.5"
 percent-encoding = "=2.3.2"
 tokio = { version = "=1.50.0", features = ["rt-multi-thread", "macros"] }
