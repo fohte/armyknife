@@ -21,7 +21,16 @@ shfmt = "3.13.1"
 
 [tasks.test]
 description = "Run tests in sandbox"
-run = ["cargo test --no-run", "srt --settings ./srt-settings.json cargo test"]
+# TMPDIR must point to a path on srt's write-allow list; otherwise tempfile-
+# based tests fail inside the sandbox. /tmp/claude is allow-listed by default.
+run = [
+  "mkdir -p /tmp/claude",
+  "cargo test --no-run",
+  "srt --settings ./srt-settings.json cargo test",
+]
 [tasks.test.env]
 # Disable sccache (if configured locally) to avoid sandbox permission issues
 RUSTC_WRAPPER = ""
+# srt reads both CLAUDE_CODE_TMPDIR and CLAUDE_TMPDIR depending on its version.
+CLAUDE_CODE_TMPDIR = "/tmp/claude"
+CLAUDE_TMPDIR = "/tmp/claude"
