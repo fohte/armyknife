@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
+use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::types::{Session, SessionStatus};
@@ -104,7 +105,15 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
-    let report = sweep_impl(&sessions_dir, timeout, &sender, &probe, args.dry_run)?;
+    let bg_probe = LsofBgTaskProbe;
+    let report = sweep_impl(
+        &sessions_dir,
+        timeout,
+        &sender,
+        &probe,
+        &bg_probe,
+        args.dry_run,
+    )?;
     tracing::info!(
         event = "cc.sweep.summary",
         scanned = report.scanned,
@@ -201,13 +210,19 @@ pub struct SweepReport {
 /// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
 /// timeout has elapsed. Ended sessions are ignored entirely so that the
 /// counts match what `a cc list` displays.
-pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
+pub(crate) fn sweep_impl<S, P, B>(
     sessions_dir: &Path,
     timeout: Duration,
     sender: &S,
     probe: &P,
+    bg_probe: &B,
     dry_run: bool,
-) -> Result<SweepReport> {
+) -> Result<SweepReport>
+where
+    S: SignalSender,
+    P: SessionProbe,
+    B: BgTaskProbe,
+{
     let mut report = SweepReport::default();
 
     if !sessions_dir.exists() {
@@ -235,7 +250,7 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
             continue;
         };
 
-        let session = match store::load_session_from(sessions_dir, session_id)? {
+        let mut session = match store::load_session_from(sessions_dir, session_id)? {
             Some(s) => s,
             None => continue,
         };
@@ -245,6 +260,17 @@ pub(crate) fn sweep_impl<S: SignalSender, P: SessionProbe>(
         // restore their label / ancestor chain -- they never need pausing.
         if session.status == SessionStatus::Ended {
             continue;
+        }
+
+        if sweep_pending_bg_tasks(&mut session, bg_probe) {
+            tracing::info!(
+                event = "cc.sweep.bg_task.swept",
+                session = %session.session_id,
+                remaining = session.pending_bg_task_ids.len(),
+            );
+            if !dry_run {
+                store::save_session_to(sessions_dir, &session)?;
+            }
         }
 
         report.scanned += 1;
@@ -349,6 +375,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
+    use super::super::bg_task::test_support::{AllDeadBgTaskProbe, FakeBgTaskProbe};
     use super::super::signal::test_support::RecordingSender;
     use super::super::store::save_session_to;
     use super::super::types::{Session, SessionStatus};
@@ -441,6 +468,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -474,6 +502,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -502,6 +531,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -525,6 +555,7 @@ mod tests {
             Duration::from_secs(3600),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -555,6 +586,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -584,6 +616,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -617,6 +650,7 @@ mod tests {
             Duration::from_secs(60),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -654,6 +688,7 @@ mod tests {
             Duration::from_secs(30 * 60),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -690,6 +725,7 @@ mod tests {
             Duration::from_secs(30 * 60),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -711,11 +747,13 @@ mod tests {
 
         let sender = RecordingSender::default();
         let probe = FakeProbe::with_pids(&[("bg-busy", 4242)]);
+        let bg_probe = FakeBgTaskProbe::with_alive(&["bg-1"]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(60),
             &sender,
             &probe,
+            &bg_probe,
             false,
         )
         .expect("sweep");
@@ -734,6 +772,43 @@ mod tests {
     }
 
     #[rstest]
+    fn stale_pending_bg_task_is_dropped_and_session_paused(test_dir: TestDir) {
+        // The Claude conversation ended without reading `BashOutput`, so a
+        // bg id was orphaned in pending_bg_task_ids even though the process
+        // has long since exited. Sweep must drop the stale id and then
+        // pause the session normally.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("stale-bg", SessionStatus::Stopped, old);
+        session.pending_bg_task_ids.insert("dead-bg".to_string());
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        // No bg ids in the alive set -> probe treats "dead-bg" as dead.
+        let probe = FakeProbe::with_pids(&[("stale-bg", 4242)]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(60),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 1);
+        assert_eq!(report.active, 0);
+
+        let reloaded = store::load_session_from(&test_dir.path, "stale-bg")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Paused);
+        assert!(
+            reloaded.pending_bg_task_ids.is_empty(),
+            "stale bg id should be removed from pending set"
+        );
+    }
+
+    #[rstest]
     fn dry_run_does_not_signal_or_save(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-dry", SessionStatus::Stopped, old);
@@ -746,6 +821,7 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             true,
         )
         .expect("sweep");
@@ -790,6 +866,7 @@ mod tests {
             Duration::from_secs(60),
             &sender,
             &probe,
+            &AllDeadBgTaskProbe,
             false,
         )
         .expect("sweep");
@@ -809,8 +886,15 @@ mod tests {
         let sender = RecordingSender::default();
         let probe = FakeProbe::default();
         let nonexistent = test_dir.path.join("does-not-exist");
-        let report = sweep_impl(&nonexistent, Duration::from_secs(1), &sender, &probe, false)
-            .expect("sweep should succeed even if dir is missing");
+        let report = sweep_impl(
+            &nonexistent,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            false,
+        )
+        .expect("sweep should succeed even if dir is missing");
         assert_eq!(report, SweepReport::default());
     }
 }

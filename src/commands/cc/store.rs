@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::{TimeDelta, Utc};
 
+use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::error::CcError;
 use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
@@ -277,24 +278,39 @@ pub fn sort_sessions(sessions: &mut [Session]) {
 
 /// Lists all active sessions from disk.
 /// Reads all .json files in the sessions directory, excluding ended sessions.
+///
+/// Side effect: drops dead `pending_bg_task_ids` and re-persists the session
+/// when the set changed.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
+    list_sessions_in(&dir, &LsofBgTaskProbe)
+}
 
+pub(crate) fn list_sessions_in<P: BgTaskProbe>(dir: &Path, bg_probe: &P) -> Result<Vec<Session>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut sessions = Vec::new();
 
-    for entry in fs::read_dir(&dir)? {
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.extension().is_some_and(|ext| ext == "json")
             && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(session) = serde_json::from_str::<Session>(&content)
+            && let Ok(mut session) = serde_json::from_str::<Session>(&content)
             && session.status != SessionStatus::Ended
         {
+            if sweep_pending_bg_tasks(&mut session, bg_probe)
+                && let Err(e) = save_session_to(dir, &session)
+            {
+                tracing::warn!(
+                    event = "cc.list_sessions.persist_swept_failed",
+                    session = %session.session_id,
+                    error = %e,
+                );
+            }
             sessions.push(session);
         }
     }
