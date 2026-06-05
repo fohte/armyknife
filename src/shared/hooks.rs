@@ -1,8 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::Command;
 
-use crate::shared::dirs;
+use crate::shared::{command, dirs};
 
 /// Returns the path to a hook script: `{config_dir}/armyknife/hooks/{hook_name}`
 fn hook_path(hook_name: &str) -> Option<PathBuf> {
@@ -32,7 +31,7 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
         anyhow::bail!("hook '{}' exists but is not executable", path.display());
     }
 
-    let mut cmd = Command::new(&path);
+    let mut cmd = command::new(&path);
     for (key, value) in env_vars {
         cmd.env(key, value);
     }
