@@ -1,0 +1,48 @@
+id: no-direct-command-new
+valid:
+  # Wrapper call is the canonical form
+  - |
+    fn f() {
+        let _ = command::new("git");
+    }
+  # Inside `#[cfg(test)] mod tests` block: tests may use Command directly
+  - |
+    #[cfg(test)]
+    mod tests {
+        use std::process::Command;
+        fn t() {
+            let _ = Command::new("git");
+        }
+    }
+  # Nested module under `#[cfg(test)] mod tests` is also excluded
+  - |
+    #[cfg(test)]
+    mod tests {
+        mod inner {
+            fn t() {
+                let _ = Command::new("git");
+            }
+        }
+    }
+invalid:
+  # Bare Command::new in production code
+  - |
+    fn f() {
+        let _ = Command::new("git");
+    }
+  # Fully qualified std path
+  - |
+    fn f() {
+        let _ = std::process::Command::new("git");
+    }
+  # tokio variant
+  - |
+    fn f() {
+        let _ = tokio::process::Command::new("git");
+    }
+  # `#[cfg(test)]` on a function (not a mod) does not exempt callers
+  - |
+    #[cfg(test)]
+    fn helper() {
+        let _ = Command::new("git");
+    }
