@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.195](https://github.com/fohte/armyknife/compare/v0.1.194...v0.1.195) (2026-06-05)
+
+
+### Bug Fixes
+
+* **mise/test:** pin TMPDIR to /tmp/claude inside srt sandbox ([#605](https://github.com/fohte/armyknife/issues/605)) ([337d8b1](https://github.com/fohte/armyknife/commit/337d8b1ed5af5e96fe96eceb6e71bc2f935c215e))
+
 ## [0.1.194](https://github.com/fohte/armyknife/compare/v0.1.193...v0.1.194) (2026-06-04)
 
 
