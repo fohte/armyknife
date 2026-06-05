@@ -10,7 +10,7 @@ use std::process::Command;
 use super::types::Session;
 
 pub trait BgTaskProbe {
-    fn is_alive(&self, session: &Session, bg_id: &str) -> bool;
+    fn is_alive(&self, cwd: &Path, session_id: &str, bg_id: &str) -> bool;
 }
 
 /// Mirrors Claude Code's own `~/.claude/projects/<dir>` naming scheme. Probe
@@ -37,8 +37,8 @@ pub fn bg_task_output_path(cwd: &Path, session_id: &str, bg_id: &str) -> PathBuf
 pub struct LsofBgTaskProbe;
 
 impl BgTaskProbe for LsofBgTaskProbe {
-    fn is_alive(&self, session: &Session, bg_id: &str) -> bool {
-        let path = bg_task_output_path(&session.cwd, &session.session_id, bg_id);
+    fn is_alive(&self, cwd: &Path, session_id: &str, bg_id: &str) -> bool {
+        let path = bg_task_output_path(cwd, session_id, bg_id);
         if !path.exists() {
             // fail-open: the output file may not have been created yet in
             // the brief window between PostToolUse hook and Claude Code
@@ -62,19 +62,23 @@ pub fn sweep_pending_bg_tasks<P: BgTaskProbe>(session: &mut Session, probe: &P) 
     if session.pending_bg_task_ids.is_empty() {
         return false;
     }
-    let dead: Vec<String> = session
-        .pending_bg_task_ids
-        .iter()
-        .filter(|bg| !probe.is_alive(session, bg))
-        .cloned()
-        .collect();
-    if dead.is_empty() {
-        return false;
-    }
-    for d in &dead {
-        session.pending_bg_task_ids.remove(d);
-    }
-    true
+    // Destructure so the retain closure borrows pending_bg_task_ids mutably
+    // and cwd / session_id immutably without conflict.
+    let Session {
+        pending_bg_task_ids,
+        cwd,
+        session_id,
+        ..
+    } = session;
+    let mut changed = false;
+    pending_bg_task_ids.retain(|bg| {
+        let alive = probe.is_alive(cwd, session_id, bg);
+        if !alive {
+            changed = true;
+        }
+        alive
+    });
+    changed
 }
 
 #[cfg(test)]
@@ -103,7 +107,7 @@ pub(crate) mod test_support {
     }
 
     impl BgTaskProbe for FakeBgTaskProbe {
-        fn is_alive(&self, _session: &Session, bg_id: &str) -> bool {
+        fn is_alive(&self, _cwd: &Path, _session_id: &str, bg_id: &str) -> bool {
             self.alive.borrow().contains(bg_id)
         }
     }
@@ -113,7 +117,7 @@ pub(crate) mod test_support {
     pub(crate) struct AllDeadBgTaskProbe;
 
     impl BgTaskProbe for AllDeadBgTaskProbe {
-        fn is_alive(&self, _session: &Session, _bg_id: &str) -> bool {
+        fn is_alive(&self, _cwd: &Path, _session_id: &str, _bg_id: &str) -> bool {
             false
         }
     }

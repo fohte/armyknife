@@ -278,21 +278,50 @@ pub fn sort_sessions(sessions: &mut [Session]) {
 
 /// Lists all active sessions from disk.
 /// Reads all .json files in the sessions directory, excluding ended sessions.
-///
-/// Side effect: drops dead `pending_bg_task_ids` and re-persists each session
-/// whose set changed. Persist failures are logged and swallowed; the returned
-/// `Session` reflects the post-sweep in-memory state regardless of disk state.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
-    list_sessions_in(&dir, &LsofBgTaskProbe)
-}
 
-pub(crate) fn list_sessions_in<P: BgTaskProbe>(dir: &Path, bg_probe: &P) -> Result<Vec<Session>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut sessions = Vec::new();
+
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().is_some_and(|ext| ext == "json")
+            && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(session) = serde_json::from_str::<Session>(&content)
+            && session.status != SessionStatus::Ended
+        {
+            sessions.push(session);
+        }
+    }
+
+    sort_sessions(&mut sessions);
+
+    Ok(sessions)
+}
+
+/// Probes every non-ended session's `pending_bg_task_ids` for liveness and
+/// drops dead ids. Run explicitly by commands that need an up-to-date view
+/// before `list_sessions` (e.g. `wm clean`); `list_sessions` itself stays
+/// side-effect-free so frequent read paths (TUI render, `cc list`) do not
+/// spawn `lsof`.
+pub fn sweep_pending_bg_tasks_in_all_sessions() -> Result<()> {
+    let dir = sessions_dir()?;
+    sweep_pending_bg_tasks_in_all_sessions_in(&dir, &LsofBgTaskProbe)
+}
+
+pub(crate) fn sweep_pending_bg_tasks_in_all_sessions_in<P: BgTaskProbe>(
+    dir: &Path,
+    bg_probe: &P,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
 
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -318,17 +347,14 @@ pub(crate) fn list_sessions_in<P: BgTaskProbe>(dir: &Path, bg_probe: &P) -> Resu
             && let Err(e) = save_session_to(dir, &session)
         {
             tracing::warn!(
-                event = "cc.list_sessions.persist_swept_failed",
+                event = "cc.sweep_bg.persist_failed",
                 session = %session.session_id,
                 error = %e,
             );
         }
-        sessions.push(session);
     }
 
-    sort_sessions(&mut sessions);
-
-    Ok(sessions)
+    Ok(())
 }
 
 /// Removes stale sessions from disk.
