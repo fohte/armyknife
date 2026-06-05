@@ -5,9 +5,9 @@
 //! still alive. Probe is fail-open: any ambiguity (missing file, lsof error)
 //! is treated as alive so a live task is never dropped from the pending set.
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::types::Session;
+use crate::shared::command;
 
 pub trait BgTaskProbe {
     fn is_alive(&self, cwd: &Path, session_id: &str, bg_id: &str) -> bool;
@@ -46,7 +46,7 @@ impl BgTaskProbe for LsofBgTaskProbe {
             // task is never dropped.
             return true;
         }
-        match Command::new("lsof").arg("-t").arg("--").arg(&path).output() {
+        match command::new("lsof").arg("-t").arg("--").arg(&path).output() {
             Ok(out) => out.status.success() && !out.stdout.trim_ascii().is_empty(),
             // fail-open on lsof error so a transient failure does not drop
             // a live bg id.
