@@ -13,6 +13,9 @@ note: |
   Replace with:
     use crate::shared::command;
     let cmd = command::new("program");
+
+  For tokio::process::Command, use:
+    let cmd = tokio::process::Command::from(command::new("program"));
 rule:
   any:
     - pattern: Command::new($_)

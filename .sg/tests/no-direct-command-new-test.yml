@@ -5,6 +5,11 @@ valid:
     fn f() {
         let _ = command::new("git");
     }
+  # Tokio command constructed from the wrapper is valid
+  - |
+    fn f() {
+        let _ = tokio::process::Command::from(command::new("git"));
+    }
   # Inside `#[cfg(test)] mod tests` block: tests may use Command directly
   - |
     #[cfg(test)]
