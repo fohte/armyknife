@@ -6,6 +6,7 @@ pub mod config;
 pub mod diff;
 pub mod dirs;
 pub mod env_var;
+pub mod hex;
 pub mod hooks;
 pub mod human_in_the_loop;
 pub mod log;

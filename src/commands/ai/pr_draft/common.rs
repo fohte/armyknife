@@ -210,7 +210,7 @@ impl DraftFile {
         let content = fs::read_to_string(&self.path)?;
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(crate::shared::hex::encode(&hasher.finalize()))
     }
 
     #[cfg(test)]
