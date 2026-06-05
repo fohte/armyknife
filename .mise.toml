@@ -21,7 +21,29 @@ shfmt = "3.13.1"
 
 [tasks.test]
 description = "Run tests in sandbox"
-run = ["cargo test --no-run", "srt --settings ./srt-settings.json cargo test"]
+# srt was originally built for Claude Code's sandbox and hard-codes Claude
+# Code conventions: /tmp/claude is the only tmp path in its default write-
+# allow list, and it picks the sandbox-injected TMPDIR from the host
+# CLAUDE_CODE_TMPDIR / CLAUDE_TMPDIR env (falling back to /tmp/claude).
+# We adopt those conventions rather than fight them.
+#
+# Without this:
+#   - When the caller exports CLAUDE_CODE_TMPDIR (e.g. Claude Code sets a
+#     UID-suffixed /tmp/claude-<uid>), srt forwards that value into the
+#     sandbox as TMPDIR, but the path is not on srt's write-allow list, so
+#     every TempDir-using test fails with EPERM.
+#   - When no env is set, srt defaults TMPDIR to /tmp/claude, which is
+#     fine but only exists if something created it.
+run = [
+  "mkdir -p /tmp/claude",
+  "cargo test --no-run",
+  "srt --settings ./srt-settings.json cargo test",
+]
 [tasks.test.env]
 # Disable sccache (if configured locally) to avoid sandbox permission issues
 RUSTC_WRAPPER = ""
+# Override whatever the host exports so srt always lands on its own
+# default-allowed path. The two var names cover both naming schemes srt has
+# used across versions.
+CLAUDE_CODE_TMPDIR = "/tmp/claude"
+CLAUDE_TMPDIR = "/tmp/claude"
