@@ -279,8 +279,9 @@ pub fn sort_sessions(sessions: &mut [Session]) {
 /// Lists all active sessions from disk.
 /// Reads all .json files in the sessions directory, excluding ended sessions.
 ///
-/// Side effect: drops dead `pending_bg_task_ids` and re-persists the session
-/// when the set changed.
+/// Side effect: drops dead `pending_bg_task_ids` and re-persists each session
+/// whose set changed. Persist failures are logged and swallowed; the returned
+/// `Session` reflects the post-sweep in-memory state regardless of disk state.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
     list_sessions_in(&dir, &LsofBgTaskProbe)
@@ -297,22 +298,32 @@ pub(crate) fn list_sessions_in<P: BgTaskProbe>(dir: &Path, bg_probe: &P) -> Resu
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().is_some_and(|ext| ext == "json")
-            && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(mut session) = serde_json::from_str::<Session>(&content)
-            && session.status != SessionStatus::Ended
-        {
-            if sweep_pending_bg_tasks(&mut session, bg_probe)
-                && let Err(e) = save_session_to(dir, &session)
-            {
-                tracing::warn!(
-                    event = "cc.list_sessions.persist_swept_failed",
-                    session = %session.session_id,
-                    error = %e,
-                );
-            }
-            sessions.push(session);
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
         }
+        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Go through `load_session_from` so the read is performed under the
+        // same shared lock that `save_session_to` takes exclusively. A raw
+        // `read_to_string` here would race with a concurrent hook writing a
+        // new bg id and our subsequent save would overwrite it.
+        let Some(mut session) = load_session_from(dir, session_id)? else {
+            continue;
+        };
+        if session.status == SessionStatus::Ended {
+            continue;
+        }
+        if sweep_pending_bg_tasks(&mut session, bg_probe)
+            && let Err(e) = save_session_to(dir, &session)
+        {
+            tracing::warn!(
+                event = "cc.list_sessions.persist_swept_failed",
+                session = %session.session_id,
+                error = %e,
+            );
+        }
+        sessions.push(session);
     }
 
     sort_sessions(&mut sessions);

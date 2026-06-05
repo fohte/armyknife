@@ -1,11 +1,9 @@
-//! Liveness probe for Claude Code background task ids tracked in
-//! `Session::pending_bg_task_ids`.
+//! Liveness probe for Claude Code background task ids.
 //!
-//! Each bg task's stdout/stderr is written to
-//! `/tmp/claude-<uid>/<encoded-cwd>/<session_id>/tasks/<bg_id>.output`,
-//! held open by the task process until exit. `lsof -t -- <file>` returns
-//! the writer pid (rc=0, non-empty stdout) while open, empty (rc=1) once
-//! the process has exited.
+//! Claude Code holds the per-bg-task output file open for writing until the
+//! task exits, so `lsof -t -- <file>` returning a pid means the writer is
+//! still alive. Probe is fail-open: any ambiguity (missing file, lsof error)
+//! is treated as alive so a live task is never dropped from the pending set.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,13 +13,9 @@ pub trait BgTaskProbe {
     fn is_alive(&self, session: &Session, bg_id: &str) -> bool;
 }
 
-/// Encodes a working directory into the project subdirectory name Claude
-/// Code uses under `/tmp/claude-<uid>/`. The rule is "replace every `/` and
-/// `.` with `-`", which matches Claude Code's own `~/.claude/projects/<dir>`
-/// naming scheme. E.g.:
-///
-///   /Users/fohte/ghq/github.com/fohte/armyknife
-///   -> -Users-fohte-ghq-github-com-fohte-armyknife
+/// Mirrors Claude Code's own `~/.claude/projects/<dir>` naming scheme. Probe
+/// correctness depends on staying in sync with that scheme; if it drifts the
+/// probe will look at the wrong file and always report alive.
 pub fn encode_project_dir(cwd: &Path) -> String {
     cwd.to_string_lossy()
         .chars()
@@ -30,6 +24,8 @@ pub fn encode_project_dir(cwd: &Path) -> String {
 }
 
 pub fn bg_task_output_path(cwd: &Path, session_id: &str, bg_id: &str) -> PathBuf {
+    // SAFETY: getuid() has no preconditions and is documented as always
+    // succeeding on POSIX systems.
     let uid = unsafe { libc::getuid() };
     PathBuf::from(format!("/tmp/claude-{uid}"))
         .join(encode_project_dir(cwd))
@@ -170,6 +166,7 @@ mod tests {
 
     #[rstest]
     fn bg_task_output_path_includes_encoded_cwd_session_and_bg_id() {
+        // SAFETY: getuid() has no preconditions on POSIX.
         let uid = unsafe { libc::getuid() };
         let path = bg_task_output_path(Path::new("/tmp/wt"), "sess-abc", "bg-xyz");
         let expected = PathBuf::from(format!(
