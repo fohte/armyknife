@@ -163,7 +163,9 @@ impl CleanProgress {
 /// matching events.
 pub fn spawn_detached_clean(paths: &[PathBuf]) -> Result<String> {
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
+
+    use crate::shared::command;
 
     let exe = std::env::current_exe().context("failed to resolve current exe")?;
     let run_id = short_run_id();
@@ -180,7 +182,7 @@ pub fn spawn_detached_clean(paths: &[PathBuf]) -> Result<String> {
         .keep()
         .map_err(|e| anyhow::anyhow!("failed to persist paths file: {e}"))?;
 
-    let mut cmd = Command::new(&exe);
+    let mut cmd = command::new(&exe);
     cmd.arg("cc")
         .arg("clean-detached")
         .arg("--paths-file")
