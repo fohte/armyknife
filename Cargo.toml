@@ -41,7 +41,7 @@ indoc = "=2.0.7"
 lazy-regex = "=3.6.0"
 libc = "=0.2.186"
 regex = "=1.12.3"
-self_update = { version = "=0.44.0", features = ["rustls", "compression-flate2"], default-features = false }
+self_update = { version = "=0.44.0", features = ["reqwest", "rustls", "compression-flate2"], default-features = false }
 schemars = { version = "=1.2.1", optional = true }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
