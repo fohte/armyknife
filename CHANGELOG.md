@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.198](https://github.com/fohte/armyknife/compare/v0.1.197...v0.1.198) (2026-06-05)
+
+
+### Dependencies
+
+* update rust crate self_update to v0.44.0 ([#602](https://github.com/fohte/armyknife/issues/602)) ([2cea8ec](https://github.com/fohte/armyknife/commit/2cea8ec7f5ec3ddc0b6c41f8e642ad9093629dc1))
+
 ## [0.1.197](https://github.com/fohte/armyknife/compare/v0.1.196...v0.1.197) (2026-06-05)
 
 
