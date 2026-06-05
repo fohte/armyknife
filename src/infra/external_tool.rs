@@ -205,8 +205,8 @@ impl ExternalTool {
     /// a clear "not found" error on spawn).
     pub fn command(self) -> Command {
         match self.resolve_path() {
-            Some(p) => Command::new(p),
-            None => Command::new(self.binary()),
+            Some(p) => command::new(p),
+            None => command::new(self.binary()),
         }
     }
 }

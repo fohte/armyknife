@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::infra::git::GitRepo;
+use crate::shared::command;
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)

@@ -29,11 +29,7 @@ pub fn ensure_icon() -> Option<PathBuf> {
 fn short_hash(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(data);
-    hex_encode(&digest[..4])
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::shared::hex::encode(&digest[..4])
 }
 
 #[cfg(test)]
@@ -55,11 +51,6 @@ mod tests {
     #[test]
     fn short_hash_differs_for_different_input() {
         assert_ne!(short_hash(b"aaa"), short_hash(b"bbb"));
-    }
-
-    #[test]
-    fn hex_encode_produces_lowercase_hex() {
-        assert_eq!(hex_encode(&[0x00, 0xff, 0x0a]), "00ff0a");
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! Test utilities for creating temporary git repositories.
 
 use std::path::PathBuf;
-use std::process::Command;
 use tempfile::TempDir;
 
 use super::repo::{GitRepo, open_repo_at};
+use crate::shared::command;
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)

@@ -67,6 +67,6 @@ impl ApprovalManager {
         let content = fs::read_to_string(&self.document_path)?;
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(crate::shared::hex::encode(&hasher.finalize()))
     }
 }

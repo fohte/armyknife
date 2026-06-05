@@ -1,0 +1,31 @@
+id: no-direct-command-new
+language: rust
+severity: error
+files:
+  - 'src/**/*.rs'
+ignores:
+  - 'src/shared/command.rs'
+message: |
+  Use `crate::shared::command::new` instead of constructing `Command` directly.
+  The wrapper caches PATH resolution per-process so repeated spawns of the same
+  program skip rescanning every PATH entry.
+note: |
+  Replace with:
+    use crate::shared::command;
+    let cmd = command::new("program");
+
+  For tokio::process::Command, use:
+    let cmd = tokio::process::Command::from(command::new("program"));
+rule:
+  any:
+    - pattern: Command::new($_)
+    - pattern: std::process::Command::new($_)
+    - pattern: tokio::process::Command::new($_)
+  not:
+    inside:
+      stopBy: end
+      pattern:
+        selector: mod_item
+        context: |-
+          #[cfg(test)]
+          mod $NAME { $$$ }
