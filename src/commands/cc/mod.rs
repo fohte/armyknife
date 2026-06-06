@@ -1,5 +1,6 @@
 mod auto_compact;
 pub(crate) mod auto_pause;
+pub(crate) mod bg_task;
 mod claude_sessions;
 mod clean_detached;
 mod error;

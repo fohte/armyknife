@@ -10,7 +10,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::commands::cc::auto_pause::parse_duration;
-use crate::commands::cc::store::list_sessions;
+use crate::commands::cc::store::{list_sessions, sweep_pending_bg_tasks_in_all_sessions};
 use crate::commands::cc::types::Session;
 use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
@@ -284,6 +284,14 @@ fn apply_active_session_protection(
 ) {
     if force {
         return;
+    }
+
+    // Drop stale pending_bg_task_ids before listing so a session whose only
+    // remaining liveness signal is a long-dead bg id stops protecting its
+    // worktree. The launchd-driven `cc sweep` runs every 5 min, which is too
+    // coarse for an interactive `wm clean` invocation.
+    if let Err(e) = sweep_pending_bg_tasks_in_all_sessions() {
+        eprintln!("Warning: failed to sweep stale bg tasks: {e}");
     }
 
     let sessions = match list_sessions() {
