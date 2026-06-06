@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.200](https://github.com/fohte/armyknife/compare/v0.1.199...v0.1.200) (2026-06-06)
+
+
+### Bug Fixes
+
+* **cc:** expire stale pending_bg_task_ids ([#616](https://github.com/fohte/armyknife/issues/616)) ([8340266](https://github.com/fohte/armyknife/commit/834026620088243f8848967b2e77de927f48adf7))
+
 ## [0.1.199](https://github.com/fohte/armyknife/compare/v0.1.198...v0.1.199) (2026-06-05)
 
 
