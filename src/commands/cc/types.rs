@@ -17,6 +17,13 @@ pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
 /// directly instead of re-running `a cc window-status` on every redraw.
 pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 
+/// Tmux pane-scoped user option holding the Claude Code status symbol for the
+/// pane's prompt indicator. Written by `a cc hook` only when the pane's
+/// session is `Paused`, so downstream consumers (e.g. starship) can read
+/// `#{@armyknife-cc-pane-status}` to surface a resumable session in the zsh
+/// prompt without polling.
+pub const TMUX_PANE_STATUS_OPTION: &str = "@armyknife-cc-pane-status";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,

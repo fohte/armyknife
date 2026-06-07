@@ -312,6 +312,7 @@ Claude Code session monitoring with tmux integration.
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
+| `pane-status <pane_id>`                |         | Print the Claude Code status symbol for a tmux pane (Paused only)        |
 
 #### Setup
 
@@ -451,6 +452,10 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#W'
 ```
 
 `a cc window-status <window_id>` prints the same symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
+
+#### Pane status
+
+`a cc hook` also pushes a per-pane prompt indicator into the pane-scoped user option `@armyknife-cc-pane-status`. It holds `⏸` when the pane's Claude Code session is paused (e.g. SIGTERMed by `auto_pause`) and the empty string otherwise — including `Running` / `WaitingInput` / `Stopped`, where the claude TUI is in front of the zsh prompt and the indicator would not be visible. Downstream prompt renderers (e.g. starship via a custom command that reads `tmux show-options -p -v -t "$TMUX_PANE" @armyknife-cc-pane-status`) can surface the symbol to signal a resumable session waiting in the background. `a cc pane-status <pane_id>` prints the same value on demand.
 
 #### Environment Variables
 

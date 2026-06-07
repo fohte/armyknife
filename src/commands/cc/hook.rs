@@ -15,6 +15,7 @@ use lazy_regex::regex_replace_all;
 use super::auto_compact;
 use super::claude_sessions;
 use super::error::CcError;
+use super::pane_status;
 use super::store;
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use super::window_status;
@@ -227,7 +228,7 @@ fn process_hook_event_impl(
         // Recompute the window's aggregated status so the just-ended session
         // stops contributing a symbol.
         if side_effects.tmux {
-            sync_window_status(ended_pane_id.as_deref(), sessions_dir);
+            sync_tmux_status(ended_pane_id.as_deref(), sessions_dir);
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -403,7 +404,7 @@ fn process_hook_event_impl(
     // are skipped when the rendered value is unchanged, so an event that does
     // not alter the visible status (e.g. running → running) costs no redraw.
     if side_effects.tmux {
-        sync_window_status(
+        sync_tmux_status(
             session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
             sessions_dir,
         );
@@ -464,20 +465,22 @@ fn process_hook_event_impl(
 }
 
 /// Pushes the aggregated window status for the window containing `pane_id`
-/// into its tmux user option.
+/// and the pane's own prompt-indicator status into their respective tmux user
+/// options.
 ///
-/// No-op when there is no pane (session ran outside tmux) or the window
-/// cannot be resolved (pane gone, tmux unavailable). Errors are ignored: the
-/// window option is best-effort.
+/// No-op when there is no pane (session ran outside tmux). The pane-level
+/// write does not depend on resolving a window, so it still runs when the
+/// window lookup fails. Errors are ignored: both options are best-effort.
 ///
 /// Only the window the pane *currently* belongs to is recomputed. Moving a
 /// pane across windows (`move-pane` / `break-pane`) leaves the source
 /// window's option stale until one of its own sessions next fires a hook —
 /// rare enough not to warrant tracking each pane's previous window.
-fn sync_window_status(pane_id: Option<&str>, sessions_dir: &Path) {
+fn sync_tmux_status(pane_id: Option<&str>, sessions_dir: &Path) {
     let Some(pane_id) = pane_id else {
         return;
     };
+    let _ = pane_status::sync_pane_option(pane_id, sessions_dir);
     let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
         return;
     };
