@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.201](https://github.com/fohte/armyknife/compare/v0.1.200...v0.1.201) (2026-06-07)
+
+
+### Features
+
+* **cc:** push `[@armyknife-cc-pane-has-paused](https://github.com/armyknife-cc-pane-has-paused)` into a pane option ([#623](https://github.com/fohte/armyknife/issues/623)) ([ed939a1](https://github.com/fohte/armyknife/commit/ed939a129bbdf1127c93fcfc94bf2acea3c44cd2))
+
 ## [0.1.200](https://github.com/fohte/armyknife/compare/v0.1.199...v0.1.200) (2026-06-06)
 
 
