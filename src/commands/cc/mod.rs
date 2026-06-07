@@ -26,7 +26,7 @@ pub use clean_detached::CleanDetachedArgs;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
-pub use pane_status::PaneStatusArgs;
+pub use pane_status::HasPausedArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
@@ -67,9 +67,10 @@ pub enum CcCommands {
     #[command(name = "window-status")]
     WindowStatus(WindowStatusArgs),
 
-    /// Print the Claude Code status symbol for a tmux pane
-    #[command(name = "pane-status")]
-    PaneStatus(PaneStatusArgs),
+    /// Print `1` when the tmux pane carries a Paused Claude Code session,
+    /// the empty string otherwise.
+    #[command(name = "pane-has-paused")]
+    PaneHasPaused(HasPausedArgs),
 
     /// Internal: non-interactive batch worktree cleanup for `cc watch`.
     #[command(name = "clean-detached", hide = true)]
@@ -88,7 +89,7 @@ impl CcCommands {
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
-            Self::PaneStatus(args) => pane_status::run(args)?,
+            Self::PaneHasPaused(args) => pane_status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args)?,
         }
         Ok(())

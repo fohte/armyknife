@@ -17,12 +17,16 @@ pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
 /// directly instead of re-running `a cc window-status` on every redraw.
 pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 
-/// Tmux pane-scoped user option holding the Claude Code status symbol for the
-/// pane's prompt indicator. Written by `a cc hook` only when the pane's
-/// session is `Paused`, so downstream consumers (e.g. starship) can read
-/// `#{@armyknife-cc-pane-status}` to surface a resumable session in the zsh
-/// prompt without polling.
-pub const TMUX_PANE_STATUS_OPTION: &str = "@armyknife-cc-pane-status";
+/// Tmux pane-scoped boolean flag indicating that the pane holds a `Paused`
+/// Claude Code session (auto_pause SIGTERMed it, conversation is resumable).
+/// `a cc hook` writes `"1"` while the session is Paused and the empty string
+/// otherwise, so downstream consumers (e.g. starship) can read
+/// `#{@armyknife-cc-pane-has-paused}` to surface a resumable session in the
+/// zsh prompt without polling. Only this single transition is surfaced
+/// because every other state either keeps the claude TUI in front of the
+/// prompt (Running / WaitingInput / Stopped) or has no session to resume
+/// (Ended).
+pub const TMUX_PANE_HAS_PAUSED_OPTION: &str = "@armyknife-cc-pane-has-paused";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
