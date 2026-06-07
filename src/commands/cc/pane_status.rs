@@ -26,7 +26,7 @@ pub struct HasPausedArgs {
 /// to the pane's `@armyknife-cc-pane-has-paused` option (see
 /// `sync_pane_option`); this command exists for manual inspection.
 pub fn run(args: &HasPausedArgs) -> Result<()> {
-    let rendered = render_for_pane(&args.pane_id, &store::sessions_dir()?)?;
+    let rendered = render_for_pane(&args.pane_id, &store::sessions_dir()?)?.unwrap_or("");
 
     let mut stdout = io::stdout().lock();
     write!(stdout, "{rendered}")?;
@@ -37,31 +37,42 @@ pub fn run(args: &HasPausedArgs) -> Result<()> {
 /// Recomputes the pane's has-paused flag and writes it to the pane's
 /// `@armyknife-cc-pane-has-paused` user option. See `paused_flag` for which
 /// statuses set the flag.
-pub fn sync_pane_option(pane_id: &str, sessions_dir: &Path) -> Result<()> {
-    let rendered = render_for_pane(pane_id, sessions_dir)?;
+///
+/// Pass `Some(status)` when the caller already has the session in memory
+/// (e.g. the hook event handler) to skip the tmux subprocess + disk read
+/// that the fallback path would otherwise incur on every event.
+pub fn sync_pane_option(
+    pane_id: &str,
+    status: Option<SessionStatus>,
+    sessions_dir: &Path,
+) -> Result<()> {
+    let rendered = match status {
+        Some(s) => paused_flag(s).unwrap_or(""),
+        None => render_for_pane(pane_id, sessions_dir)?.unwrap_or(""),
+    };
 
     let current = tmux::get_pane_option(pane_id, TMUX_PANE_HAS_PAUSED_OPTION);
-    if !pane_option_changed(current.as_deref(), &rendered) {
+    if !pane_option_changed(current.as_deref(), rendered) {
         return Ok(());
     }
 
-    tmux::set_pane_option(pane_id, TMUX_PANE_HAS_PAUSED_OPTION, &rendered)?;
+    tmux::set_pane_option(pane_id, TMUX_PANE_HAS_PAUSED_OPTION, rendered)?;
 
     Ok(())
 }
 
 /// Loads the pane's bound session (via its `@armyknife-last-claude-code-session-id`
-/// option) and renders the has-paused flag. Returns an empty string when
-/// the pane has no session option, the session file is gone, or the session
-/// is not Paused.
-fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<String> {
+/// option) and renders the has-paused flag. Returns `None` when the pane
+/// has no session option, the session file is gone, or the session is not
+/// Paused.
+fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<Option<&'static str>> {
     let Some(session_id) = tmux::get_pane_option(pane_id, TMUX_SESSION_OPTION) else {
-        return Ok(String::new());
+        return Ok(None);
     };
     let Some(session) = store::load_session_from(sessions_dir, &session_id)? else {
-        return Ok(String::new());
+        return Ok(None);
     };
-    Ok(paused_flag(session.status).unwrap_or("").to_string())
+    Ok(paused_flag(session.status))
 }
 
 /// Returns `Some("1")` only for `Paused` sessions: those panes are back at

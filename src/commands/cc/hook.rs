@@ -228,7 +228,13 @@ fn process_hook_event_impl(
         // Recompute the window's aggregated status so the just-ended session
         // stops contributing a symbol.
         if side_effects.tmux {
-            sync_tmux_status(ended_pane_id.as_deref(), sessions_dir);
+            // The session has just ended; pass Ended so the pane option is
+            // cleared without re-reading the (now-deleted) session file.
+            sync_tmux_status(
+                ended_pane_id.as_deref(),
+                Some(SessionStatus::Ended),
+                sessions_dir,
+            );
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -406,6 +412,7 @@ fn process_hook_event_impl(
     if side_effects.tmux {
         sync_tmux_status(
             session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+            Some(session.status),
             sessions_dir,
         );
     }
@@ -476,11 +483,11 @@ fn process_hook_event_impl(
 /// pane across windows (`move-pane` / `break-pane`) leaves the source
 /// window's option stale until one of its own sessions next fires a hook —
 /// rare enough not to warrant tracking each pane's previous window.
-fn sync_tmux_status(pane_id: Option<&str>, sessions_dir: &Path) {
+fn sync_tmux_status(pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
     let Some(pane_id) = pane_id else {
         return;
     };
-    let _ = pane_status::sync_pane_option(pane_id, sessions_dir);
+    let _ = pane_status::sync_pane_option(pane_id, status, sessions_dir);
     let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
         return;
     };
