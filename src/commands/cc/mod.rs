@@ -8,6 +8,7 @@ mod focus;
 mod hook;
 mod list;
 pub(crate) mod pane_input;
+mod pane_status;
 mod resume;
 mod resurrect;
 mod signal;
@@ -25,6 +26,7 @@ pub use clean_detached::CleanDetachedArgs;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
+pub use pane_status::HasPausedArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
@@ -65,6 +67,11 @@ pub enum CcCommands {
     #[command(name = "window-status")]
     WindowStatus(WindowStatusArgs),
 
+    /// Print `1` when the tmux pane carries a Paused Claude Code session,
+    /// the empty string otherwise.
+    #[command(name = "pane-has-paused")]
+    PaneHasPaused(HasPausedArgs),
+
     /// Internal: non-interactive batch worktree cleanup for `cc watch`.
     #[command(name = "clean-detached", hide = true)]
     CleanDetached(CleanDetachedArgs),
@@ -82,6 +89,7 @@ impl CcCommands {
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
+            Self::PaneHasPaused(args) => pane_status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args)?,
         }
         Ok(())

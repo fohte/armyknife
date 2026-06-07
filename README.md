@@ -312,6 +312,7 @@ Claude Code session monitoring with tmux integration.
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
+| `pane-has-paused <pane_id>`            |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
 
 #### Setup
 
@@ -451,6 +452,10 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#W'
 ```
 
 `a cc window-status <window_id>` prints the same symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
+
+#### Pane has-paused flag
+
+`a cc hook` also pushes a per-pane boolean flag into the pane-scoped user option `@armyknife-cc-pane-has-paused`. It holds `1` when the pane's Claude Code session is paused (e.g. SIGTERMed by `auto_pause`) and the empty string otherwise — including `Running` / `WaitingInput` / `Stopped`, where the claude TUI is in front of the zsh prompt and the indicator would not be visible. Downstream prompt renderers (e.g. starship via a custom command that reads `tmux show-options -p -v -t "$TMUX_PANE" @armyknife-cc-pane-has-paused`) can surface a label to signal a resumable session waiting in the background. A boolean flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (flag set) from a user-driven Ctrl-C exit (flag clear). `a cc pane-has-paused <pane_id>` prints the same value on demand.
 
 #### Environment Variables
 
