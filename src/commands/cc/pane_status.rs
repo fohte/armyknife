@@ -59,15 +59,19 @@ fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<String> {
     Ok(format_pane_symbol(session.status).unwrap_or("").to_string())
 }
 
-/// Formats the pane status symbol for embedding in the zsh prompt.
+/// Formats the pane status label for embedding in the zsh prompt.
 ///
-/// Returns `Some("⏸")` only for `Paused` sessions: those panes are back at
-/// the zsh prompt with a resumable Claude Code conversation in the
+/// Returns `Some("paused")` only for `Paused` sessions: those panes are
+/// back at the zsh prompt with a resumable Claude Code conversation in the
 /// background, which the indicator exists to surface. Every other status
 /// returns `None` so the option holds an empty string.
+///
+/// The status name is used rather than the `⏸` icon so that the prompt
+/// distinguishes "armyknife paused this session" from "user pressed Ctrl-C
+/// to exit", which look identical when only a glyph is shown.
 fn format_pane_symbol(status: SessionStatus) -> Option<&'static str> {
     match status {
-        SessionStatus::Paused => Some(SessionStatus::Paused.display_symbol()),
+        SessionStatus::Paused => Some(SessionStatus::Paused.display_name()),
         _ => None,
     }
 }
@@ -88,7 +92,7 @@ mod tests {
     #[case::running(SessionStatus::Running, None)]
     #[case::waiting(SessionStatus::WaitingInput, None)]
     #[case::stopped(SessionStatus::Stopped, None)]
-    #[case::paused(SessionStatus::Paused, Some("\u{23f8}"))]
+    #[case::paused(SessionStatus::Paused, Some("paused"))]
     #[case::ended(SessionStatus::Ended, None)]
     fn test_format_pane_symbol(#[case] status: SessionStatus, #[case] expected: Option<&str>) {
         assert_eq!(format_pane_symbol(status), expected);
@@ -96,10 +100,10 @@ mod tests {
 
     #[rstest]
     #[case::unset_and_empty(None, "", false)]
-    #[case::unset_and_nonempty(None, "\u{23f8}", true)]
-    #[case::unchanged(Some("\u{23f8}"), "\u{23f8}", false)]
-    #[case::cleared(Some("\u{23f8}"), "", true)]
-    #[case::set_from_empty(Some(""), "\u{23f8}", true)]
+    #[case::unset_and_nonempty(None, "paused", true)]
+    #[case::unchanged(Some("paused"), "paused", false)]
+    #[case::cleared(Some("paused"), "", true)]
+    #[case::set_from_empty(Some(""), "paused", true)]
     fn test_pane_status_changed(
         #[case] current: Option<&str>,
         #[case] rendered: &str,

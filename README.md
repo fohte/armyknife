@@ -312,7 +312,7 @@ Claude Code session monitoring with tmux integration.
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
-| `pane-status <pane_id>`                |         | Print the Claude Code status symbol for a tmux pane (Paused only)        |
+| `pane-status <pane_id>`                |         | Print the Claude Code status name for a tmux pane (Paused only)          |
 
 #### Setup
 
@@ -455,7 +455,7 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#W'
 
 #### Pane status
 
-`a cc hook` also pushes a per-pane prompt indicator into the pane-scoped user option `@armyknife-cc-pane-status`. It holds `⏸` when the pane's Claude Code session is paused (e.g. SIGTERMed by `auto_pause`) and the empty string otherwise — including `Running` / `WaitingInput` / `Stopped`, where the claude TUI is in front of the zsh prompt and the indicator would not be visible. Downstream prompt renderers (e.g. starship via a custom command that reads `tmux show-options -p -v -t "$TMUX_PANE" @armyknife-cc-pane-status`) can surface the symbol to signal a resumable session waiting in the background. `a cc pane-status <pane_id>` prints the same value on demand.
+`a cc hook` also pushes a per-pane prompt indicator into the pane-scoped user option `@armyknife-cc-pane-status`. It holds `paused` when the pane's Claude Code session is paused (e.g. SIGTERMed by `auto_pause`) and the empty string otherwise — including `Running` / `WaitingInput` / `Stopped`, where the claude TUI is in front of the zsh prompt and the indicator would not be visible. Downstream prompt renderers (e.g. starship via a custom command that reads `tmux show-options -p -v -t "$TMUX_PANE" @armyknife-cc-pane-status`) can surface the label to signal a resumable session waiting in the background. The status name is used rather than the `⏸` icon so the prompt can distinguish an armyknife-paused session from a user-driven Ctrl-C exit. `a cc pane-status <pane_id>` prints the same value on demand.
 
 #### Environment Variables
 
