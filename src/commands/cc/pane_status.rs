@@ -30,12 +30,8 @@ pub fn run(args: &PaneStatusArgs) -> Result<()> {
 }
 
 /// Recomputes the pane's Claude Code status symbol and writes it to the
-/// pane's `@armyknife-cc-pane-status` user option.
-///
-/// Only the `Paused` state contributes a symbol: in every other state
-/// (Running / WaitingInput / Stopped) the claude TUI occupies the pane so
-/// the zsh prompt is not visible, and `Ended` panes have no resumable
-/// session to surface.
+/// pane's `@armyknife-cc-pane-status` user option. See `format_pane_symbol`
+/// for which statuses contribute a symbol.
 pub fn sync_pane_option(pane_id: &str, sessions_dir: &Path) -> Result<()> {
     let rendered = render_for_pane(pane_id, sessions_dir)?;
 
