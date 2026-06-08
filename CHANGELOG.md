@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.206](https://github.com/fohte/armyknife/compare/v0.1.205...v0.1.206) (2026-06-08)
+
+
+### Bug Fixes
+
+* **cc:** clean up Paused sessions whose pane has been closed ([#631](https://github.com/fohte/armyknife/issues/631)) ([2a48fa4](https://github.com/fohte/armyknife/commit/2a48fa403100ad5e990ad445898c54a05030df83))
+
 ## [0.1.205](https://github.com/fohte/armyknife/compare/v0.1.204...v0.1.205) (2026-06-08)
 
 
