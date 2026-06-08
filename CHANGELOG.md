@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.204](https://github.com/fohte/armyknife/compare/v0.1.203...v0.1.204) (2026-06-08)
+
+
+### Dependencies
+
+* update rust crate shlex to v2 ([#613](https://github.com/fohte/armyknife/issues/613)) ([4f3922c](https://github.com/fohte/armyknife/commit/4f3922c52e2b8e8f261a2ff0fde61ee211b3f233))
+
 ## [0.1.203](https://github.com/fohte/armyknife/compare/v0.1.202...v0.1.203) (2026-06-08)
 
 
