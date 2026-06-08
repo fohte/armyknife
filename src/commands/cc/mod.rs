@@ -14,6 +14,7 @@ mod resurrect;
 mod signal;
 pub(crate) mod store;
 mod sweep;
+pub(crate) mod tmux_sync;
 mod tui;
 pub(crate) mod types;
 mod watch;
