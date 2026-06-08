@@ -345,10 +345,10 @@ where
     Ok(report)
 }
 
-/// Sends SIGTERM to `pid`, flips the session status to Paused, and pushes the
-/// new status into the pane / window tmux options so downstream prompts (e.g.
-/// the starship `⏸` indicator) can detect the resumable session without a
-/// follow-up hook event -- the SIGTERM'd Claude Code will not fire one.
+/// Sends SIGTERM to `pid` and flips the session status to Paused.
+///
+/// Also pushes the new status into the pane / window tmux options because the
+/// SIGTERM'd Claude Code will not fire a follow-up hook to do it.
 fn pause_session<S: SignalSender, T: TmuxStatusSyncer>(
     sessions_dir: &Path,
     mut session: Session,
@@ -913,9 +913,6 @@ mod tests {
 
     #[rstest]
     fn pause_pushes_tmux_status_for_pane(test_dir: TestDir) {
-        // The SIGTERM kills claude before it can fire another Stop hook, so
-        // the only chance to write the pane's `@armyknife-cc-pane-has-paused`
-        // (and the window's aggregated status) is right here in pause_session.
         let old = Utc::now() - TimeDelta::hours(1);
         let mut session = make_session("sess-tmux", SessionStatus::Stopped, old);
         session.tmux_info = Some(TmuxInfo {
