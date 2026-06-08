@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.203](https://github.com/fohte/armyknife/compare/v0.1.202...v0.1.203) (2026-06-08)
+
+
+### Dependencies
+
+* update rust crate uuid to v1.23.2 ([#610](https://github.com/fohte/armyknife/issues/610)) ([35d3e38](https://github.com/fohte/armyknife/commit/35d3e386111febd6f29c92a8c5a2b03f8aa58083))
+
 ## [0.1.202](https://github.com/fohte/armyknife/compare/v0.1.201...v0.1.202) (2026-06-08)
 
 
