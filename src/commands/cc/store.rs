@@ -610,12 +610,18 @@ mod tests {
         }
 
         #[rstest]
-        fn removes_session_with_nonexistent_pane(temp_session_dir: TempSessionDir) {
+        #[case::running(SessionStatus::Running)]
+        #[case::paused(SessionStatus::Paused)]
+        fn removes_session_with_dead_pane(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+        ) {
             let session_id = "dead-pane-test";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
 
             let mut session = create_test_session(session_id);
+            session.status = status;
             session.tmux_info = Some(TmuxInfo {
                 session_name: "test".to_string(),
                 window_name: "test".to_string(),
@@ -633,41 +639,7 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
-            assert!(
-                !path.exists(),
-                "session with nonexistent pane should be removed"
-            );
-        }
-
-        #[rstest]
-        fn removes_paused_session_with_dead_pane(temp_session_dir: TempSessionDir) {
-            let session_id = "paused-dead-pane";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
-
-            let mut session = create_test_session(session_id);
-            session.status = SessionStatus::Paused;
-            session.tmux_info = Some(TmuxInfo {
-                session_name: "test".to_string(),
-                window_name: "test".to_string(),
-                window_index: 0,
-                pane_id: "%99999".to_string(),
-            });
-            save_session_to(&temp_session_dir.sessions_path, &session)
-                .expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
-
-            cleanup_stale_sessions_in(
-                &temp_session_dir.sessions_path,
-                mock_pane_always_dead,
-                mock_cwd_always_exists,
-            )
-            .expect("cleanup should succeed");
-
-            assert!(
-                !path.exists(),
-                "paused session with dead pane is unrecoverable and should be removed"
-            );
+            assert!(!path.exists(), "session with dead pane should be removed");
         }
 
         #[rstest]
