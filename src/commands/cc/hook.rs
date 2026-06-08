@@ -15,10 +15,9 @@ use lazy_regex::regex_replace_all;
 use super::auto_compact;
 use super::claude_sessions;
 use super::error::CcError;
-use super::pane_status;
 use super::store;
+use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
-use super::window_status;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -471,27 +470,8 @@ fn process_hook_event_impl(
     Ok(ProcessResult::SessionSaved)
 }
 
-/// Pushes the aggregated window status for the window containing `pane_id`
-/// and the pane's own prompt-indicator status into their respective tmux user
-/// options.
-///
-/// No-op when there is no pane (session ran outside tmux). The pane-level
-/// write does not depend on resolving a window, so it still runs when the
-/// window lookup fails. Errors are ignored: both options are best-effort.
-///
-/// Only the window the pane *currently* belongs to is recomputed. Moving a
-/// pane across windows (`move-pane` / `break-pane`) leaves the source
-/// window's option stale until one of its own sessions next fires a hook —
-/// rare enough not to warrant tracking each pane's previous window.
 fn sync_tmux_status(pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
-    let Some(pane_id) = pane_id else {
-        return;
-    };
-    let _ = pane_status::sync_pane_option(pane_id, status, sessions_dir);
-    let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
-        return;
-    };
-    let _ = window_status::sync_window_option(&window_id, sessions_dir);
+    LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
 }
 
 /// Reads raw content from stdin.

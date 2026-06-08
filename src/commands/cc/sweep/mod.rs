@@ -22,6 +22,7 @@ use super::auto_pause::{self, PauseDecision};
 use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
+use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
 use crate::shared::active_session::{ActivityProbe, TmuxActivityProbe, effective_updated_at};
@@ -106,12 +107,14 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         dry_run = args.dry_run,
     );
     let bg_probe = LsofBgTaskProbe;
+    let syncer = LiveTmuxStatusSyncer;
     let report = sweep_impl(
         &sessions_dir,
         timeout,
         &sender,
         &probe,
         &bg_probe,
+        &syncer,
         args.dry_run,
     )?;
     tracing::info!(
@@ -210,18 +213,20 @@ pub struct SweepReport {
 /// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
 /// timeout has elapsed. Ended sessions are ignored entirely so that the
 /// counts match what `a cc list` displays.
-pub(crate) fn sweep_impl<S, P, B>(
+pub(crate) fn sweep_impl<S, P, B, T>(
     sessions_dir: &Path,
     timeout: Duration,
     sender: &S,
     probe: &P,
     bg_probe: &B,
+    syncer: &T,
     dry_run: bool,
 ) -> Result<SweepReport>
 where
     S: SignalSender,
     P: SessionProbe,
     B: BgTaskProbe,
+    T: TmuxStatusSyncer,
 {
     let mut report = SweepReport::default();
 
@@ -317,7 +322,7 @@ where
                     session = %session.session_id,
                     pid = pid,
                 );
-                pause_session(sessions_dir, session, pid, sender)?;
+                pause_session(sessions_dir, session, pid, sender, syncer)?;
                 report.paused += 1;
             }
             PauseDecision::NotYetElapsed => {
@@ -340,12 +345,16 @@ where
     Ok(report)
 }
 
-/// Sends SIGTERM to `pid` and flips the session status to Paused.
-fn pause_session<S: SignalSender>(
+/// Sends SIGTERM to `pid`, flips the session status to Paused, and pushes the
+/// new status into the pane / window tmux options so downstream prompts (e.g.
+/// the starship `⏸` indicator) can detect the resumable session without a
+/// follow-up hook event -- the SIGTERM'd Claude Code will not fire one.
+fn pause_session<S: SignalSender, T: TmuxStatusSyncer>(
     sessions_dir: &Path,
     mut session: Session,
     pid: u32,
     sender: &S,
+    syncer: &T,
 ) -> Result<()> {
     // Best-effort SIGTERM. ESRCH (process already gone) is not fatal -- we
     // still want to flip the status so `cc resume` can restore the session.
@@ -362,6 +371,13 @@ fn pause_session<S: SignalSender>(
 
     session.status = SessionStatus::Paused;
     store::save_session_to(sessions_dir, &session)?;
+
+    syncer.sync(
+        session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+        Some(session.status),
+        sessions_dir,
+    );
+
     Ok(())
 }
 
@@ -378,7 +394,8 @@ mod tests {
     use super::super::bg_task::test_support::{AllDeadBgTaskProbe, FakeBgTaskProbe};
     use super::super::signal::test_support::RecordingSender;
     use super::super::store::save_session_to;
-    use super::super::types::{Session, SessionStatus};
+    use super::super::tmux_sync::test_support::RecordingTmuxStatusSyncer;
+    use super::super::types::{Session, SessionStatus, TmuxInfo};
     use super::*;
 
     struct TestDir {
@@ -469,6 +486,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -503,6 +521,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -532,6 +551,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -556,6 +576,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -587,6 +608,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -617,6 +639,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -651,6 +674,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -689,6 +713,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -726,6 +751,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -754,6 +780,7 @@ mod tests {
             &sender,
             &probe,
             &bg_probe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -791,6 +818,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -822,6 +850,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             true,
         )
         .expect("sweep");
@@ -867,6 +896,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
@@ -882,6 +912,74 @@ mod tests {
     }
 
     #[rstest]
+    fn pause_pushes_tmux_status_for_pane(test_dir: TestDir) {
+        // The SIGTERM kills claude before it can fire another Stop hook, so
+        // the only chance to write the pane's `@armyknife-cc-pane-has-paused`
+        // (and the window's aggregated status) is right here in pause_session.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("sess-tmux", SessionStatus::Stopped, old);
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        });
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("sess-tmux", 4242)]);
+        let syncer = RecordingTmuxStatusSyncer::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            &syncer,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(report.paused, 1);
+        assert_eq!(
+            *syncer.calls.borrow(),
+            vec![(
+                Some("%42".to_string()),
+                Some(SessionStatus::Paused),
+                test_dir.path.clone(),
+            )],
+        );
+    }
+
+    #[rstest]
+    fn pause_without_tmux_info_still_calls_syncer_with_none(test_dir: TestDir) {
+        // Sessions without tmux_info (claude run outside tmux) must still go
+        // through the pause flow; syncer receives pane_id=None.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-no-tmux", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("sess-no-tmux", 4242)]);
+        let syncer = RecordingTmuxStatusSyncer::default();
+        sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            &syncer,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(
+            *syncer.calls.borrow(),
+            vec![(None, Some(SessionStatus::Paused), test_dir.path.clone())],
+        );
+    }
+
+    #[rstest]
     fn missing_sessions_dir_is_not_an_error(test_dir: TestDir) {
         let sender = RecordingSender::default();
         let probe = FakeProbe::default();
@@ -892,6 +990,7 @@ mod tests {
             &sender,
             &probe,
             &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep should succeed even if dir is missing");
