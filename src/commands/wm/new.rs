@@ -845,8 +845,6 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        // For the "preexisting" case, create the branch before adding the
-        // worktree so the cleanup must preserve it.
         if !branch_was_created {
             git_in(&test_repo.path(), &["branch", "rollback-branch"]);
         }
