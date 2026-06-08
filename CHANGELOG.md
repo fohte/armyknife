@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.202](https://github.com/fohte/armyknife/compare/v0.1.201...v0.1.202) (2026-06-08)
+
+
+### Bug Fixes
+
+* **cc:** sync tmux pane option after sweep auto_pause ([#626](https://github.com/fohte/armyknife/issues/626)) ([884326c](https://github.com/fohte/armyknife/commit/884326cc85c68b0305da4c618867ece442a50607))
+
 ## [0.1.201](https://github.com/fohte/armyknife/compare/v0.1.200...v0.1.201) (2026-06-07)
 
 
