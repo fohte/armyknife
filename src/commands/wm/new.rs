@@ -398,6 +398,7 @@ fn run_worktree_creation(
     // Determine action based on branch existence and flags.
     // Track the resolved branch/base for --agent context injection.
     let (actual_branch, actual_base);
+    let branch_was_created;
 
     if args.force {
         // Force create new branch with prefix
@@ -407,6 +408,9 @@ fn run_worktree_creation(
             .clone()
             .unwrap_or_else(|| format!("origin/{main_branch}"));
         let branch = format!("{branch_prefix}{name_no_prefix}");
+
+        // ForceNewBranch may reset a pre-existing branch's tip.
+        branch_was_created = !repo_branch_exists(&repo, &branch);
 
         git_worktree_add(
             &repo,
@@ -424,6 +428,7 @@ fn run_worktree_creation(
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
         actual_branch = name.to_string();
+        branch_was_created = false;
         // actual_base is only used when --agent is set
         actual_base = if args.agent {
             let main_branch = get_main_branch_for_repo(&repo)?;
@@ -438,6 +443,7 @@ fn run_worktree_creation(
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
 
             actual_branch = branch_with_prefix;
+            branch_was_created = false;
             actual_base = if args.agent {
                 let main_branch = get_main_branch_for_repo(&repo)?;
                 format!("origin/{main_branch}")
@@ -464,6 +470,7 @@ fn run_worktree_creation(
 
             actual_branch = branch;
             actual_base = base_branch;
+            branch_was_created = true;
         }
     }
 
@@ -490,13 +497,14 @@ fn run_worktree_creation(
         prompt.map(String::from)
     };
 
-    // Run post-worktree-create hook (failures abort `wm new`).
+    // Run post-worktree-create hook. Hook failures roll back the worktree
+    // (and the branch, if we created it) before propagating the error.
     if args.skip_hooks {
         eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
     } else {
         let worktree_abs =
             std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
-        hooks::run_hook(
+        if let Err(hook_err) = hooks::run_hook(
             "post-worktree-create",
             &[
                 (
@@ -506,7 +514,10 @@ fn run_worktree_creation(
                 (EnvVars::branch_name_name(), &actual_branch),
                 (EnvVars::repo_root_name(), repo_root),
             ],
-        )?;
+        ) {
+            rollback_worktree(&repo, &worktree_name, &actual_branch, branch_was_created);
+            return Err(hook_err);
+        }
     }
 
     // Build environment variables for child session
@@ -554,6 +565,39 @@ fn run_worktree_creation(
     );
 
     Ok(())
+}
+
+fn rollback_worktree(repo: &GitRepo, worktree_name: &str, branch: &str, branch_was_created: bool) {
+    eprintln!("post-worktree-create hook failed; rolling back worktree '{worktree_name}'");
+
+    let removed = match super::worktree::delete_worktree(repo, worktree_name) {
+        Ok(true) => true,
+        Ok(false) => {
+            eprintln!(
+                "warning: worktree '{worktree_name}' could not be removed. \
+                 Run `a wm clean` or remove it manually before re-running `a wm new`."
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: failed to remove worktree '{worktree_name}': {e}. \
+                 Run `a wm clean` or remove it manually before re-running `a wm new`."
+            );
+            false
+        }
+    };
+
+    // Skip branch deletion when the worktree still references it; git would
+    // refuse the delete anyway, and leaving the branch lets the user retry
+    // after manual worktree cleanup.
+    if !removed {
+        return;
+    }
+
+    if branch_was_created && super::worktree::delete_branch_if_exists(repo, branch) {
+        eprintln!("Deleted branch '{branch}'");
+    }
 }
 
 /// Setup a tmux window using the configured layout.
@@ -789,6 +833,56 @@ mod tests {
         add_worktree_for_branch(&repo, &worktree_dir, "remote-branch").unwrap();
         assert!(worktree_dir.exists());
         assert!(repo.local_branch_exists("remote-branch"));
+    }
+
+    #[rstest]
+    #[case::created_branch(true, false)]
+    #[case::preexisting_branch(false, true)]
+    fn rollback_worktree_removes_worktree_and_optionally_branch(
+        #[case] branch_was_created: bool,
+        #[case] branch_should_remain: bool,
+    ) {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        // For the "preexisting" case, create the branch before adding the
+        // worktree so the cleanup must preserve it.
+        if !branch_was_created {
+            git_in(&test_repo.path(), &["branch", "rollback-branch"]);
+        }
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("rollback-branch");
+
+        if branch_was_created {
+            git_worktree_add(
+                &repo,
+                &worktree_dir,
+                WorktreeAddMode::NewBranch {
+                    branch: "rollback-branch",
+                    base: "HEAD",
+                },
+            )
+            .unwrap();
+        } else {
+            add_worktree_for_branch(&repo, &worktree_dir, "rollback-branch").unwrap();
+        }
+        assert!(worktree_dir.exists());
+        assert!(repo.local_branch_exists("rollback-branch"));
+
+        rollback_worktree(
+            &repo,
+            "rollback-branch",
+            "rollback-branch",
+            branch_was_created,
+        );
+
+        assert!(!worktree_dir.exists());
+        assert_eq!(
+            repo.local_branch_exists("rollback-branch"),
+            branch_should_remain,
+        );
     }
 
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
