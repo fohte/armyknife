@@ -600,14 +600,14 @@ fn rollback_worktree(
         Ok(false) => {
             eprintln!(
                 "warning: worktree '{worktree_name}' could not be removed. \
-                 Run `a wm clean` or remove it manually before re-running `a wm new`."
+                 Run `a wm delete` or remove it manually before re-running `a wm new`."
             );
             false
         }
         Err(e) => {
             eprintln!(
                 "warning: failed to remove worktree '{worktree_name}': {e}. \
-                 Run `a wm clean` or remove it manually before re-running `a wm new`."
+                 Run `a wm delete` or remove it manually before re-running `a wm new`."
             );
             false
         }
