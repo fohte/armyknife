@@ -969,16 +969,25 @@ mod tests {
         )
         .unwrap();
 
-        let advanced_tip = run_git(
-            &workdir,
-            [
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&workdir)
+            .args([
                 "commit-tree",
                 "-m",
                 "advance",
                 &format!("{original_tip}^{{tree}}"),
-            ],
-        )
-        .unwrap();
+            ])
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "commit-tree failed");
+        let advanced_tip = String::from_utf8(output.stdout).unwrap().trim().to_string();
         run_git(
             &workdir,
             ["update-ref", "refs/heads/rollback-branch", &advanced_tip],
