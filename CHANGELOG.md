@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.207](https://github.com/fohte/armyknife/compare/v0.1.206...v0.1.207) (2026-06-09)
+
+
+### Bug Fixes
+
+* **wm:** roll back worktree when post-worktree-create hook fails ([#633](https://github.com/fohte/armyknife/issues/633)) ([3062107](https://github.com/fohte/armyknife/commit/3062107ee2b59073c8aca43961673e658376aebe))
+
 ## [0.1.206](https://github.com/fohte/armyknife/compare/v0.1.205...v0.1.206) (2026-06-08)
 
 
