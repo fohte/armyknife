@@ -411,12 +411,13 @@ fn run_worktree_creation(
 
         // ForceNewBranch resets a pre-existing local branch's tip; capture
         // it so rollback can restore the user's branch to its previous
-        // commit on hook failure.
+        // commit on hook failure. Without the prior tip we cannot undo the
+        // reset safely, so refuse rather than risk silent branch loss.
         branch_rollback = if repo.local_branch_exists(&branch) {
-            match run_git(repo.workdir(), ["rev-parse", &branch]) {
-                Ok(tip) => BranchRollback::RestoreTip(tip),
-                Err(_) => BranchRollback::Keep,
-            }
+            let tip = run_git(repo.workdir(), ["rev-parse", &branch]).with_context(|| {
+                format!("Failed to capture tip of '{branch}' before force reset")
+            })?;
+            BranchRollback::RestoreTip(tip)
         } else {
             BranchRollback::Delete
         };
@@ -617,6 +618,13 @@ fn rollback_worktree(
     // refuse the delete/update anyway, and leaving state intact lets the user
     // retry after manual worktree cleanup.
     if !removed {
+        if let BranchRollback::RestoreTip(tip) = branch_rollback {
+            eprintln!(
+                "warning: branch '{branch}' was force-reset and cannot be restored \
+                 while the worktree remains. After removing the worktree, run \
+                 `git update-ref refs/heads/{branch} {tip}`."
+            );
+        }
         return;
     }
 
@@ -877,18 +885,35 @@ mod tests {
         assert!(repo.local_branch_exists("remote-branch"));
     }
 
-    #[rstest]
-    fn rollback_worktree_deletes_created_branch() {
+    use crate::commands::name_branch::{Backend, Result as NameBranchResult};
+    use rstest::{fixture, rstest};
+
+    struct RollbackEnv {
+        // hold the TempDir so files survive the test
+        _test_repo: TestRepo,
+        repo: GitRepo,
+        worktree_dir: PathBuf,
+    }
+
+    #[fixture]
+    fn rollback_env() -> RollbackEnv {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
-
         let worktrees_dir = test_repo.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
         let worktree_dir = worktrees_dir.join("rollback-branch");
+        RollbackEnv {
+            _test_repo: test_repo,
+            repo,
+            worktree_dir,
+        }
+    }
 
+    #[rstest]
+    fn rollback_worktree_deletes_created_branch(rollback_env: RollbackEnv) {
         git_worktree_add(
-            &repo,
-            &worktree_dir,
+            &rollback_env.repo,
+            &rollback_env.worktree_dir,
             WorktreeAddMode::NewBranch {
                 branch: "rollback-branch",
                 base: "HEAD",
@@ -897,53 +922,46 @@ mod tests {
         .unwrap();
 
         rollback_worktree(
-            &repo,
+            &rollback_env.repo,
             "rollback-branch",
             "rollback-branch",
             &BranchRollback::Delete,
         );
 
-        assert!(!worktree_dir.exists());
-        assert!(!repo.local_branch_exists("rollback-branch"));
+        assert!(!rollback_env.worktree_dir.exists());
+        assert!(!rollback_env.repo.local_branch_exists("rollback-branch"));
     }
 
     #[rstest]
-    fn rollback_worktree_keeps_preexisting_branch() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
+    fn rollback_worktree_keeps_preexisting_branch(rollback_env: RollbackEnv) {
+        git_in(rollback_env.repo.workdir(), &["branch", "rollback-branch"]);
 
-        git_in(&test_repo.path(), &["branch", "rollback-branch"]);
-
-        let worktrees_dir = test_repo.path().join(".worktrees");
-        std::fs::create_dir_all(&worktrees_dir).unwrap();
-        let worktree_dir = worktrees_dir.join("rollback-branch");
-
-        add_worktree_for_branch(&repo, &worktree_dir, "rollback-branch").unwrap();
+        add_worktree_for_branch(
+            &rollback_env.repo,
+            &rollback_env.worktree_dir,
+            "rollback-branch",
+        )
+        .unwrap();
 
         rollback_worktree(
-            &repo,
+            &rollback_env.repo,
             "rollback-branch",
             "rollback-branch",
             &BranchRollback::Keep,
         );
 
-        assert!(!worktree_dir.exists());
-        assert!(repo.local_branch_exists("rollback-branch"));
+        assert!(!rollback_env.worktree_dir.exists());
+        assert!(rollback_env.repo.local_branch_exists("rollback-branch"));
     }
 
     #[rstest]
-    fn rollback_worktree_restores_force_reset_branch_tip() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let original_tip = run_git(&test_repo.path(), ["rev-parse", "HEAD"]).unwrap();
-        let worktrees_dir = test_repo.path().join(".worktrees");
-        std::fs::create_dir_all(&worktrees_dir).unwrap();
-        let worktree_dir = worktrees_dir.join("rollback-branch");
+    fn rollback_worktree_restores_force_reset_branch_tip(rollback_env: RollbackEnv) {
+        let workdir = rollback_env.repo.workdir().to_path_buf();
+        let original_tip = run_git(&workdir, ["rev-parse", "HEAD"]).unwrap();
 
         git_worktree_add(
-            &repo,
-            &worktree_dir,
+            &rollback_env.repo,
+            &rollback_env.worktree_dir,
             WorktreeAddMode::NewBranch {
                 branch: "rollback-branch",
                 base: "HEAD",
@@ -952,7 +970,7 @@ mod tests {
         .unwrap();
 
         let advanced_tip = run_git(
-            &test_repo.path(),
+            &workdir,
             [
                 "commit-tree",
                 "-m",
@@ -962,29 +980,26 @@ mod tests {
         )
         .unwrap();
         run_git(
-            &test_repo.path(),
+            &workdir,
             ["update-ref", "refs/heads/rollback-branch", &advanced_tip],
         )
         .unwrap();
         assert_ne!(original_tip, advanced_tip);
 
         rollback_worktree(
-            &repo,
+            &rollback_env.repo,
             "rollback-branch",
             "rollback-branch",
             &BranchRollback::RestoreTip(original_tip.clone()),
         );
 
-        assert!(!worktree_dir.exists());
-        assert!(repo.local_branch_exists("rollback-branch"));
+        assert!(!rollback_env.worktree_dir.exists());
+        assert!(rollback_env.repo.local_branch_exists("rollback-branch"));
         assert_eq!(
-            run_git(&test_repo.path(), ["rev-parse", "rollback-branch"]).unwrap(),
+            run_git(&workdir, ["rev-parse", "rollback-branch"]).unwrap(),
             original_tip,
         );
     }
-
-    use crate::commands::name_branch::{Backend, Result as NameBranchResult};
-    use rstest::rstest;
 
     /// Mock backend for testing
     struct MockBackend {

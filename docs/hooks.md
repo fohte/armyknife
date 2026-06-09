@@ -8,7 +8,13 @@ A hook fails the calling command if it exits with a non-zero status, or if the f
 
 ## `post-worktree-create`
 
-Runs after `a wm new` finishes creating a worktree.
+Runs after `a wm new` finishes creating a worktree. If the hook exits non-zero, `a wm new` removes the worktree it just created and rewinds the associated branch before propagating the error:
+
+- A branch newly created in this invocation is deleted.
+- A branch that pre-existed and was only checked out is left alone.
+- A branch that `--force` rewrote is restored to its previous tip.
+
+If the worktree cannot be removed automatically, the branch is left intact and `a wm new` points the user at `a wm delete` for manual cleanup.
 
 | Variable                  | Description                           |
 | ------------------------- | ------------------------------------- |
