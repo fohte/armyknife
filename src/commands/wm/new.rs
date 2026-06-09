@@ -398,7 +398,7 @@ fn run_worktree_creation(
     // Determine action based on branch existence and flags.
     // Track the resolved branch/base for --agent context injection.
     let (actual_branch, actual_base);
-    let branch_was_created;
+    let branch_rollback;
 
     if args.force {
         // Force create new branch with prefix
@@ -409,8 +409,17 @@ fn run_worktree_creation(
             .unwrap_or_else(|| format!("origin/{main_branch}"));
         let branch = format!("{branch_prefix}{name_no_prefix}");
 
-        // ForceNewBranch may reset a pre-existing branch's tip.
-        branch_was_created = !repo_branch_exists(&repo, &branch);
+        // ForceNewBranch resets a pre-existing local branch's tip; capture
+        // it so rollback can restore the user's branch to its previous
+        // commit on hook failure.
+        branch_rollback = if repo.local_branch_exists(&branch) {
+            match run_git(repo.workdir(), ["rev-parse", &branch]) {
+                Ok(tip) => BranchRollback::RestoreTip(tip),
+                Err(_) => BranchRollback::Keep,
+            }
+        } else {
+            BranchRollback::Delete
+        };
 
         git_worktree_add(
             &repo,
@@ -428,7 +437,7 @@ fn run_worktree_creation(
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
         actual_branch = name.to_string();
-        branch_was_created = false;
+        branch_rollback = BranchRollback::Keep;
         // actual_base is only used when --agent is set
         actual_base = if args.agent {
             let main_branch = get_main_branch_for_repo(&repo)?;
@@ -443,7 +452,7 @@ fn run_worktree_creation(
             add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
 
             actual_branch = branch_with_prefix;
-            branch_was_created = false;
+            branch_rollback = BranchRollback::Keep;
             actual_base = if args.agent {
                 let main_branch = get_main_branch_for_repo(&repo)?;
                 format!("origin/{main_branch}")
@@ -470,7 +479,7 @@ fn run_worktree_creation(
 
             actual_branch = branch;
             actual_base = base_branch;
-            branch_was_created = true;
+            branch_rollback = BranchRollback::Delete;
         }
     }
 
@@ -515,7 +524,7 @@ fn run_worktree_creation(
                 (EnvVars::repo_root_name(), repo_root),
             ],
         ) {
-            rollback_worktree(&repo, &worktree_name, &actual_branch, branch_was_created);
+            rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback);
             return Err(hook_err);
         }
     }
@@ -567,7 +576,23 @@ fn run_worktree_creation(
     Ok(())
 }
 
-fn rollback_worktree(repo: &GitRepo, worktree_name: &str, branch: &str, branch_was_created: bool) {
+/// How to roll back the branch associated with a worktree after a
+/// post-worktree-create hook failure.
+enum BranchRollback {
+    /// Branch was created in this invocation; delete it.
+    Delete,
+    /// Branch pre-existed and was not modified; leave it alone.
+    Keep,
+    /// Branch was force-reset to a new base; restore its previous tip.
+    RestoreTip(String),
+}
+
+fn rollback_worktree(
+    repo: &GitRepo,
+    worktree_name: &str,
+    branch: &str,
+    branch_rollback: &BranchRollback,
+) {
     eprintln!("post-worktree-create hook failed; rolling back worktree '{worktree_name}'");
 
     let removed = match super::worktree::delete_worktree(repo, worktree_name) {
@@ -588,15 +613,32 @@ fn rollback_worktree(repo: &GitRepo, worktree_name: &str, branch: &str, branch_w
         }
     };
 
-    // Skip branch deletion when the worktree still references it; git would
-    // refuse the delete anyway, and leaving the branch lets the user retry
-    // after manual worktree cleanup.
+    // Skip branch mutation while the worktree still references it; git would
+    // refuse the delete/update anyway, and leaving state intact lets the user
+    // retry after manual worktree cleanup.
     if !removed {
         return;
     }
 
-    if branch_was_created && super::worktree::delete_branch_if_exists(repo, branch) {
-        eprintln!("Deleted branch '{branch}'");
+    match branch_rollback {
+        BranchRollback::Delete => {
+            if super::worktree::delete_branch_if_exists(repo, branch) {
+                eprintln!("Deleted branch '{branch}'");
+            }
+        }
+        BranchRollback::Keep => {}
+        BranchRollback::RestoreTip(tip) => {
+            match run_git(
+                repo.workdir(),
+                ["update-ref", &format!("refs/heads/{branch}"), tip],
+            ) {
+                Ok(_) => eprintln!("Restored branch '{branch}' to {tip}"),
+                Err(e) => eprintln!(
+                    "warning: failed to restore branch '{branch}' to {tip}: {e}. \
+                     Recover with `git update-ref refs/heads/{branch} {tip}` or `git reflog`."
+                ),
+            }
+        }
     }
 }
 
@@ -836,50 +878,108 @@ mod tests {
     }
 
     #[rstest]
-    #[case::created_branch(true, false)]
-    #[case::preexisting_branch(false, true)]
-    fn rollback_worktree_removes_worktree_and_optionally_branch(
-        #[case] branch_was_created: bool,
-        #[case] branch_should_remain: bool,
-    ) {
+    fn rollback_worktree_deletes_created_branch() {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
-
-        if !branch_was_created {
-            git_in(&test_repo.path(), &["branch", "rollback-branch"]);
-        }
 
         let worktrees_dir = test_repo.path().join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
         let worktree_dir = worktrees_dir.join("rollback-branch");
 
-        if branch_was_created {
-            git_worktree_add(
-                &repo,
-                &worktree_dir,
-                WorktreeAddMode::NewBranch {
-                    branch: "rollback-branch",
-                    base: "HEAD",
-                },
-            )
-            .unwrap();
-        } else {
-            add_worktree_for_branch(&repo, &worktree_dir, "rollback-branch").unwrap();
-        }
-        assert!(worktree_dir.exists());
-        assert!(repo.local_branch_exists("rollback-branch"));
+        git_worktree_add(
+            &repo,
+            &worktree_dir,
+            WorktreeAddMode::NewBranch {
+                branch: "rollback-branch",
+                base: "HEAD",
+            },
+        )
+        .unwrap();
 
         rollback_worktree(
             &repo,
             "rollback-branch",
             "rollback-branch",
-            branch_was_created,
+            &BranchRollback::Delete,
         );
 
         assert!(!worktree_dir.exists());
+        assert!(!repo.local_branch_exists("rollback-branch"));
+    }
+
+    #[rstest]
+    fn rollback_worktree_keeps_preexisting_branch() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        git_in(&test_repo.path(), &["branch", "rollback-branch"]);
+
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("rollback-branch");
+
+        add_worktree_for_branch(&repo, &worktree_dir, "rollback-branch").unwrap();
+
+        rollback_worktree(
+            &repo,
+            "rollback-branch",
+            "rollback-branch",
+            &BranchRollback::Keep,
+        );
+
+        assert!(!worktree_dir.exists());
+        assert!(repo.local_branch_exists("rollback-branch"));
+    }
+
+    #[rstest]
+    fn rollback_worktree_restores_force_reset_branch_tip() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+
+        let original_tip = run_git(&test_repo.path(), ["rev-parse", "HEAD"]).unwrap();
+        let worktrees_dir = test_repo.path().join(".worktrees");
+        std::fs::create_dir_all(&worktrees_dir).unwrap();
+        let worktree_dir = worktrees_dir.join("rollback-branch");
+
+        git_worktree_add(
+            &repo,
+            &worktree_dir,
+            WorktreeAddMode::NewBranch {
+                branch: "rollback-branch",
+                base: "HEAD",
+            },
+        )
+        .unwrap();
+
+        let advanced_tip = run_git(
+            &test_repo.path(),
+            [
+                "commit-tree",
+                "-m",
+                "advance",
+                &format!("{original_tip}^{{tree}}"),
+            ],
+        )
+        .unwrap();
+        run_git(
+            &test_repo.path(),
+            ["update-ref", "refs/heads/rollback-branch", &advanced_tip],
+        )
+        .unwrap();
+        assert_ne!(original_tip, advanced_tip);
+
+        rollback_worktree(
+            &repo,
+            "rollback-branch",
+            "rollback-branch",
+            &BranchRollback::RestoreTip(original_tip.clone()),
+        );
+
+        assert!(!worktree_dir.exists());
+        assert!(repo.local_branch_exists("rollback-branch"));
         assert_eq!(
-            repo.local_branch_exists("rollback-branch"),
-            branch_should_remain,
+            run_git(&test_repo.path(), ["rev-parse", "rollback-branch"]).unwrap(),
+            original_tip,
         );
     }
 
