@@ -1238,6 +1238,26 @@ mod tests {
     }
 
     #[test]
+    fn seeding_after_empty_worktree_discovery_transitions_to_ready() {
+        // Regression: discovery finishing with zero worktrees previously
+        // left the view stuck on "Loading worktrees..." because the
+        // empty-rows branch never transitioned out of LoadingPr.
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        app.set_worktrees(Vec::new());
+        let seeded = app.seed_clean_view_if_pending();
+        assert!(!seeded);
+        assert!(matches!(
+            app.clean_view.state,
+            crate::commands::cc::tui::clean_view::CleanLoadState::Ready(_)
+        ));
+        assert_eq!(
+            app.clean_view.pr_fetch,
+            crate::commands::cc::tui::clean_view::PrFetchStatus::Done
+        );
+    }
+
+    #[test]
     fn seeding_after_worktrees_arrive_kicks_off_pr_fetch() {
         let mut app = create_test_app_with_sessions(0);
         handle_key_event(&mut app, key(KeyCode::Char('c')));

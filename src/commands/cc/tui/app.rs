@@ -912,11 +912,20 @@ impl App {
         {
             return false;
         }
-        let rows = self.worktree_rows_snapshot();
+        // Distinguish "discovery still running" from "discovery done
+        // with zero worktrees" — the latter must transition out of
+        // LoadingPr so the empty-list placeholder renders instead of a
+        // permanent "Loading worktrees..." banner.
+        let super::worktree_view::WorktreeLoadState::Loaded(rows) = &self.worktree_view.state
+        else {
+            return false;
+        };
         if rows.is_empty() {
+            self.clean_view.set_initial_rows(Vec::new());
+            self.clean_view.pr_fetch = super::clean_view::PrFetchStatus::Done;
             return false;
         }
-        let initial = super::pr_fetch::build_initial_clean_rows(rows, &self.sessions);
+        let initial = super::pr_fetch::build_initial_clean_rows(rows.clone(), &self.sessions);
         self.clean_view.set_initial_rows(initial);
         true
     }
