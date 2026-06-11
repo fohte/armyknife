@@ -20,15 +20,36 @@ use crate::infra::git::MergeStatus;
 use crate::infra::github::PrState;
 use crate::shared::active_session::{NoActivityProbe, is_session_active};
 
-/// Loading state of the asynchronous PR-status fetch that drives the
-/// initial To delete / Kept partition.
+/// Top-level state of the clean view.
+///
+/// Rows are populated immediately from the worktree snapshot when the
+/// view opens, so `Ready` arrives before PR status. PR loading progress
+/// is tracked separately on `CleanView::pr_fetch`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CleanLoadState {
+    /// Rows not yet built — only seen before the initial sync build runs.
     #[default]
     LoadingPr,
     Ready(Vec<CleanRow>),
+    /// Catastrophic load failure (e.g. no worktree snapshot). PR-fetch
+    /// failures use [`PrFetchStatus::Failed`] and keep the row list.
     Failed(String),
 }
+
+/// Independent status of the async PR-info fetch. Drives whether the
+/// section toggle is allowed and how rows render their PR column.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PrFetchStatus {
+    #[default]
+    Loading,
+    Done,
+    Failed(String),
+}
+
+/// Status label shown before the async PR fetch completes.
+pub const PR_FETCHING_LABEL: &str = "fetching...";
+/// Status label after the async PR fetch fails.
+pub const PR_FETCH_FAILED_LABEL: &str = "PR fetch failed";
 
 /// Which section a row currently belongs to. Defaults are computed from
 /// PR status + active session presence; the user can override per row
@@ -84,9 +105,16 @@ pub enum CleanListEntry {
 }
 
 /// Persistent state for the clean view.
+///
+/// `state` and `pr_fetch` are independent axes: `state` describes the
+/// rendered row list (initial / ready / catastrophically failed),
+/// `pr_fetch` describes the async PR-info fetch (loading / done /
+/// failed). All mutators in this module are responsible for keeping
+/// the two in sync — do not write only one when both should move.
 #[derive(Debug, Default)]
 pub struct CleanView {
     pub state: CleanLoadState,
+    pub pr_fetch: PrFetchStatus,
     pub list_state: ListState,
 }
 
@@ -96,22 +124,94 @@ impl CleanView {
     }
 
     /// Begin a fresh clean session: discard any prior partition and
-    /// switch back to LoadingPr.
+    /// switch back to LoadingPr / PR-loading.
     pub fn reset(&mut self) {
         self.state = CleanLoadState::LoadingPr;
+        self.pr_fetch = PrFetchStatus::Loading;
         self.list_state.select(None);
     }
 
+    /// Record a PR-fetch failure without throwing away the row list.
+    /// Rows still showing the "fetching..." placeholder are rewritten
+    /// so the user can tell which entries never resolved.
     pub fn set_failed(&mut self, error: String) {
-        self.state = CleanLoadState::Failed(error);
+        if let CleanLoadState::Ready(rows) = &mut self.state {
+            for row in rows.iter_mut() {
+                if row.status_label == PR_FETCHING_LABEL {
+                    row.status_label = PR_FETCH_FAILED_LABEL.to_string();
+                }
+            }
+            self.pr_fetch = PrFetchStatus::Failed(error);
+        } else {
+            self.state = CleanLoadState::Failed(error.clone());
+            self.pr_fetch = PrFetchStatus::Failed(error);
+        }
+    }
+
+    /// Install the initial row list built synchronously from the
+    /// worktree snapshot. PR columns are placeholders; the async fetch
+    /// fills them via [`Self::apply_pr_results`].
+    pub fn set_initial_rows(&mut self, mut rows: Vec<CleanRow>) {
+        sort_rows(&mut rows);
+        self.state = CleanLoadState::Ready(rows);
+        self.pr_fetch = PrFetchStatus::Loading;
+        self.select_first_row();
+    }
+
+    /// Merge PR-enriched rows into the current row list by path. Rows
+    /// the async pass did not return are left as-is; new rows it
+    /// returned (none expected in practice) are appended.
+    pub fn apply_pr_results(&mut self, mut updated: Vec<CleanRow>) {
+        // Preserve the selected row across the merge so the cursor does
+        // not jump when the partition shifts (e.g. a row newly resolves
+        // as "merged + no active session" and moves into ToDelete).
+        let selected_path = self.selected_row().map(|r| r.path);
+        let CleanLoadState::Ready(rows) = &mut self.state else {
+            sort_rows(&mut updated);
+            self.state = CleanLoadState::Ready(updated);
+            self.pr_fetch = PrFetchStatus::Done;
+            self.select_first_row();
+            return;
+        };
+        for row in rows.iter_mut() {
+            if let Some(pos) = updated.iter().position(|u| u.path == row.path) {
+                *row = updated.swap_remove(pos);
+            }
+        }
+        rows.extend(updated);
+        sort_rows(rows);
+        self.pr_fetch = PrFetchStatus::Done;
+        if let Some(path) = selected_path {
+            let new_index = self
+                .list_entries()
+                .iter()
+                .enumerate()
+                .find_map(|(i, e)| match e {
+                    CleanListEntry::Row(r) if r.path == path => Some(i),
+                    _ => None,
+                });
+            if new_index.is_some() {
+                self.list_state.select(new_index);
+                return;
+            }
+        }
+        self.select_first_row();
     }
 
     /// Sorts deterministically so re-entering the view does not jump the
     /// cursor onto a different row when the underlying set is the same.
+    #[cfg(test)]
     pub fn set_rows(&mut self, mut rows: Vec<CleanRow>) {
         sort_rows(&mut rows);
         self.state = CleanLoadState::Ready(rows);
+        self.pr_fetch = PrFetchStatus::Done;
         self.select_first_row();
+    }
+
+    /// True while the section toggle should be blocked because the
+    /// default partition is not yet known.
+    pub fn is_pr_loading(&self) -> bool {
+        matches!(self.pr_fetch, PrFetchStatus::Loading)
     }
 
     pub fn rows(&self) -> &[CleanRow] {
@@ -232,6 +332,11 @@ impl CleanView {
     /// same row in its new section so the user sees their action take
     /// effect without losing focus.
     pub fn toggle_selected_section(&mut self) -> bool {
+        // Toggle requires the resolved partition; block until PR fetch
+        // completes.
+        if self.is_pr_loading() {
+            return false;
+        }
         let Some(current) = self.selected_row() else {
             return false;
         };
@@ -321,6 +426,11 @@ pub struct CleanRowInput {
     pub merge_status: Option<MergeStatus>,
     pub pr_number: Option<u64>,
     pub pr_state: Option<PrState>,
+    /// False while the async PR fetch has not yet returned for this
+    /// row. Drives the placeholder status label and forces the row to
+    /// the Kept section so an unconfirmed default cannot suggest
+    /// deletion.
+    pub pr_loaded: bool,
 }
 
 /// Compose the partitioned row list from worktree discovery output,
@@ -345,6 +455,7 @@ pub fn build_clean_rows(
                 merge_status,
                 pr_number,
                 pr_state,
+                pr_loaded,
             } = input;
 
             let has_active = canonical_sessions
@@ -353,11 +464,15 @@ pub fn build_clean_rows(
                 .any(|(_, s)| is_session_active(s, &NoActivityProbe, now, timeout));
 
             let pr_merged = matches!(merge_status, Some(MergeStatus::Merged { .. }));
-            let status_label = format_status_label(pr_state, pr_number, has_active);
+            let status_label = if pr_loaded {
+                format_status_label(pr_state, pr_number, has_active)
+            } else {
+                PR_FETCHING_LABEL.to_string()
+            };
 
             // Default partition: PR merged AND no active session → delete.
-            // Everything else → keep. The user can override with Enter.
-            let section = if pr_merged && !has_active {
+            // Everything else (including not-yet-loaded rows) → keep.
+            let section = if pr_loaded && pr_merged && !has_active {
                 CleanSection::ToDelete
             } else {
                 CleanSection::Kept
@@ -445,6 +560,7 @@ mod tests {
             }),
             pr_number: Some(number),
             pr_state: Some(PrState::Merged),
+            pr_loaded: true,
         }
     }
 
@@ -456,6 +572,7 @@ mod tests {
             }),
             pr_number: Some(number),
             pr_state: Some(PrState::Open),
+            pr_loaded: true,
         }
     }
 
@@ -465,6 +582,17 @@ mod tests {
             merge_status: None,
             pr_number: None,
             pr_state: None,
+            pr_loaded: true,
+        }
+    }
+
+    fn pending_input(repo: &str, branch: &str, name: &str, path: &str) -> CleanRowInput {
+        CleanRowInput {
+            row: wt_row(repo, branch, name, path),
+            merge_status: None,
+            pr_number: None,
+            pr_state: None,
+            pr_loaded: false,
         }
     }
 
@@ -715,6 +843,7 @@ mod tests {
             }),
             pr_number: Some(9),
             pr_state: Some(PrState::Merged),
+            pr_loaded: true,
         };
 
         let sessions = vec![session("s1", wt.clone())];
@@ -724,5 +853,106 @@ mod tests {
         assert_eq!(rows[0].section, CleanSection::Kept);
         assert!(rows[0].has_active);
         assert!(rows[0].status_label.contains("active"));
+    }
+
+    #[rstest]
+    fn pending_row_defaults_to_kept_with_fetching_label() {
+        let rows = build_clean_rows(
+            vec![pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a")],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].section, CleanSection::Kept);
+        assert_eq!(rows[0].status_label, PR_FETCHING_LABEL);
+        assert!(!rows[0].pr_merged);
+    }
+
+    #[rstest]
+    fn apply_pr_results_replaces_labels_and_repartitions() {
+        let mut v = CleanView::new();
+        let initial = build_clean_rows(
+            vec![
+                pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a"),
+                pending_input("r1", "fix/b", "fix-b", "/tmp/r1/wt-b"),
+            ],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        );
+        v.set_initial_rows(initial);
+        assert_eq!(v.pr_fetch, PrFetchStatus::Loading);
+        assert!(v.rows().iter().all(|r| r.status_label == PR_FETCHING_LABEL));
+        assert!(v.rows().iter().all(|r| r.section == CleanSection::Kept));
+
+        let resolved = build_clean_rows(
+            vec![
+                merged_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a", 1),
+                open_input("r1", "fix/b", "fix-b", "/tmp/r1/wt-b", 2),
+            ],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        );
+        v.apply_pr_results(resolved);
+
+        assert_eq!(v.pr_fetch, PrFetchStatus::Done);
+        let by_name: std::collections::HashMap<_, _> = v
+            .rows()
+            .iter()
+            .map(|r| (r.name.clone(), r.clone()))
+            .collect();
+        assert_eq!(by_name["feat-a"].section, CleanSection::ToDelete);
+        assert_eq!(by_name["feat-a"].status_label, "PR #1 merged");
+        assert_eq!(by_name["fix-b"].section, CleanSection::Kept);
+        assert_eq!(by_name["fix-b"].status_label, "PR #2 open");
+    }
+
+    #[rstest]
+    fn toggle_blocked_while_pr_loading() {
+        let mut v = CleanView::new();
+        v.set_initial_rows(build_clean_rows(
+            vec![pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a")],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        ));
+        assert!(!v.toggle_selected_section());
+        assert_eq!(v.rows()[0].section, CleanSection::Kept);
+    }
+
+    #[rstest]
+    fn toggle_works_after_pr_fetch_done() {
+        let mut v = CleanView::new();
+        v.set_initial_rows(build_clean_rows(
+            vec![pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a")],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        ));
+        v.apply_pr_results(build_clean_rows(
+            vec![open_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a", 1)],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        ));
+        assert!(v.toggle_selected_section());
+        assert_eq!(v.rows()[0].section, CleanSection::ToDelete);
+    }
+
+    #[rstest]
+    fn set_failed_after_initial_rows_rewrites_pending_labels() {
+        let mut v = CleanView::new();
+        v.set_initial_rows(build_clean_rows(
+            vec![pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a")],
+            &[],
+            Utc::now(),
+            Duration::from_secs(60),
+        ));
+        v.set_failed("boom".to_string());
+        assert_eq!(v.pr_fetch, PrFetchStatus::Failed("boom".to_string()));
+        assert_eq!(v.rows()[0].status_label, PR_FETCH_FAILED_LABEL);
+        assert!(matches!(v.state, CleanLoadState::Ready(_)));
     }
 }

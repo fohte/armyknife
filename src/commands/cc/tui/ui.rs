@@ -10,7 +10,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{App, AppMode, View};
-use super::clean_view::{CleanListEntry, CleanLoadState, CleanSection};
+use super::clean_view::{CleanListEntry, CleanLoadState, CleanSection, PrFetchStatus};
 use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
@@ -193,7 +193,10 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime
     let state = app.clean_view.state.clone();
     match state {
         CleanLoadState::LoadingPr => {
-            let p = Paragraph::new("  Loading PR status...")
+            // No initial worktree snapshot yet — the only thing to show
+            // is the pending state. Once the snapshot arrives the view
+            // re-renders as Ready.
+            let p = Paragraph::new("  Loading worktrees...")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(p, area);
             return;
@@ -220,6 +223,22 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime
         return;
     }
 
+    // Reserve one line at the top for the PR-fetch status banner when
+    // the fetch is either still running or has failed.
+    let banner = pr_fetch_banner(&app.clean_view.pr_fetch);
+    let (banner_area, list_area) = if banner.is_some() {
+        let chunks = Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, area)
+    };
+    if let (Some(area), Some(p)) = (banner_area, banner) {
+        frame.render_widget(p, area);
+    }
+
     let items: Vec<ListItem> = entries
         .iter()
         .map(|e| create_clean_list_item(e, term_width, now))
@@ -229,7 +248,27 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime
         .highlight_style(Style::default().bg(Color::DarkGray))
         .highlight_symbol(">");
 
-    frame.render_stateful_widget(list, area, &mut app.clean_view.list_state);
+    frame.render_stateful_widget(list, list_area, &mut app.clean_view.list_state);
+}
+
+fn pr_fetch_banner(status: &PrFetchStatus) -> Option<Paragraph<'static>> {
+    match status {
+        PrFetchStatus::Loading => Some(
+            Paragraph::new("  Fetching PR status... (toggle disabled)")
+                .style(Style::default().fg(Color::DarkGray)),
+        ),
+        PrFetchStatus::Failed(err) => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  PR fetch failed: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(err.clone(), Style::default().fg(Color::Red)),
+            ]);
+            Some(Paragraph::new(line))
+        }
+        PrFetchStatus::Done => None,
+    }
 }
 
 fn create_clean_list_item(
