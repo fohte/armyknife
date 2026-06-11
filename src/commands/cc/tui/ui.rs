@@ -1940,6 +1940,26 @@ mod tests {
     }
 
     #[test]
+    fn test_render_clean_view_emits_both_section_headers() {
+        // Both section headers should render even when one section is
+        // empty (e.g. all rows default to Kept while PR fetch loads).
+        let now = Utc::now();
+        let output = render_to_string_with(&[], None, now, 80, 16, |app| {
+            app.set_worktrees(vec![wt_row(
+                "armyknife",
+                "feat/a",
+                "feat-a",
+                "/tmp/armyknife/.worktrees/feat-a",
+            )]);
+            app.enter_clean_view();
+        });
+        assert!(
+            output.contains("To delete") && output.contains("Kept"),
+            "expected both section headers, got:\n{output}",
+        );
+    }
+
+    #[test]
     fn test_render_worktree_view_loading_snapshot() {
         let now = Utc::now();
         let output = render_to_string_with(&[], None, now, 80, 9, |app| {

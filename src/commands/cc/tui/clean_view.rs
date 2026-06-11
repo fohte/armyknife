@@ -774,6 +774,7 @@ mod tests {
             }),
             pr_number: Some(1),
             pr_state: Some(PrState::Merged),
+            pr_loaded: true,
         };
         // Ended sessions are not "active", so the merged row stays in
         // ToDelete while still surfacing the (defunct) session as a

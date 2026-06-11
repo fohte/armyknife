@@ -1222,6 +1222,7 @@ mod tests {
             path: PathBuf::from("/tmp/r1/feat-a"),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }]);
     }
 
