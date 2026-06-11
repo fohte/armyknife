@@ -11,6 +11,7 @@ use std::time::Duration;
 use chrono::Utc;
 use ratatui::widgets::ListState;
 
+use super::worktree_session_children::{SessionChild, sessions_under_worktree_from_canonical};
 use crate::commands::cc::types::Session;
 use crate::shared::active_session::{NoActivityProbe, is_session_active};
 
@@ -30,6 +31,9 @@ pub struct WorktreeRow {
     pub session_count: usize,
     /// True if at least one session inside is "active" per shared probe.
     pub has_active: bool,
+    /// Sessions living under this worktree, newest-first. Populated by
+    /// `refresh_session_overlay`.
+    pub sessions: Vec<SessionChild>,
 }
 
 /// Symbol used in the status column for this worktree.
@@ -70,12 +74,14 @@ pub enum WorktreeMode {
     },
 }
 
-/// An entry in the rendered worktree list — either a repo group header
-/// or one selectable worktree row.
+/// An entry in the rendered worktree list — a repo group header, a
+/// selectable worktree row, or a selectable session row nested under
+/// a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorktreeListEntry {
     RepoHeader(String),
     Worktree(WorktreeRow),
+    Session(SessionChild),
 }
 
 /// Loading state of the background worktree discovery.
@@ -144,6 +150,7 @@ impl WorktreeView {
             row.has_active = in_wt
                 .iter()
                 .any(|s| is_session_active(s, &probe, now, timeout));
+            row.sessions = sessions_under_worktree_from_canonical(&row.path, &canonical_sessions);
         }
     }
 
@@ -160,12 +167,32 @@ impl WorktreeView {
                 current_repo = Some(row.repo.as_str());
             }
             out.push(WorktreeListEntry::Worktree(row.clone()));
+            for s in &row.sessions {
+                out.push(WorktreeListEntry::Session(s.clone()));
+            }
         }
         out
     }
 
-    /// Indices in `list_entries()` that point to selectable worktree rows.
+    /// Indices in `list_entries()` that point to selectable rows
+    /// (worktree rows + nested session rows). Repo headers are skipped.
     pub fn selectable_indices(&self) -> Vec<usize> {
+        self.list_entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                matches!(
+                    e,
+                    WorktreeListEntry::Worktree(_) | WorktreeListEntry::Session(_)
+                )
+                .then_some(i)
+            })
+            .collect()
+    }
+
+    /// Indices that point to worktree rows specifically — used for
+    /// number-jump (`1`..`9`) where session rows are not navigable.
+    fn worktree_indices(&self) -> Vec<usize> {
         self.list_entries()
             .iter()
             .enumerate()
@@ -174,7 +201,12 @@ impl WorktreeView {
     }
 
     pub fn select_first_worktree(&mut self) {
-        if let Some(&i) = self.selectable_indices().first() {
+        // Prefer the first worktree row over any session row so the
+        // cursor lands somewhere meaningful for `d` (delete) without
+        // requiring the user to scroll past nested sessions.
+        if let Some(&i) = self.worktree_indices().first() {
+            self.list_state.select(Some(i));
+        } else if let Some(&i) = self.selectable_indices().first() {
             self.list_state.select(Some(i));
         } else {
             self.list_state.select(None);
@@ -212,9 +244,9 @@ impl WorktreeView {
     }
 
     pub fn select_by_number(&mut self, num: usize) {
-        let sel = self.selectable_indices();
-        if num > 0 && num <= sel.len() {
-            self.list_state.select(Some(sel[num - 1]));
+        let wt = self.worktree_indices();
+        if num > 0 && num <= wt.len() {
+            self.list_state.select(Some(wt[num - 1]));
         }
     }
 
@@ -223,6 +255,15 @@ impl WorktreeView {
         let entries = self.list_entries();
         match entries.get(idx)? {
             WorktreeListEntry::Worktree(row) => Some(row.clone()),
+            _ => None,
+        }
+    }
+
+    /// Returns the session row currently under the cursor, if any.
+    pub fn selected_session_child(&self) -> Option<SessionChild> {
+        let idx = self.list_state.selected()?;
+        match self.list_entries().get(idx)? {
+            WorktreeListEntry::Session(s) => Some(s.clone()),
             _ => None,
         }
     }
@@ -280,6 +321,7 @@ pub fn discover_worktree_rows(repos_root: &Path, worktrees_dir: &str) -> Vec<Wor
                 path: canonicalize_or_self(&wt.path),
                 session_count: 0,
                 has_active: false,
+                sessions: Vec::new(),
             });
         }
     }
@@ -302,6 +344,7 @@ mod tests {
             path: PathBuf::from(path),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }
     }
 
@@ -412,6 +455,67 @@ mod tests {
     }
 
     #[rstest]
+    fn list_entries_nests_sessions_under_worktree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).expect("mkdir");
+
+        let mut v = WorktreeView::new();
+        v.set_rows(vec![WorktreeRow {
+            repo: "r".to_string(),
+            branch: "b".to_string(),
+            name: "wt".to_string(),
+            path: canonicalize_or_self(&wt),
+            session_count: 0,
+            has_active: false,
+            sessions: Vec::new(),
+        }]);
+        v.refresh_session_overlay(&[
+            session_at("a", wt.clone(), SessionStatus::Running),
+            session_at("b", wt.clone(), SessionStatus::Running),
+        ]);
+
+        let entries = v.list_entries();
+        // RepoHeader + Worktree + 2 Session
+        assert_eq!(entries.len(), 4);
+        assert!(matches!(entries[0], WorktreeListEntry::RepoHeader(_)));
+        assert!(matches!(entries[1], WorktreeListEntry::Worktree(_)));
+        assert!(matches!(entries[2], WorktreeListEntry::Session(_)));
+        assert!(matches!(entries[3], WorktreeListEntry::Session(_)));
+
+        // Both the worktree row and the two session rows are selectable.
+        assert_eq!(v.selectable_indices(), vec![1, 2, 3]);
+    }
+
+    #[rstest]
+    fn selected_session_child_returns_session_under_cursor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).expect("mkdir");
+
+        let mut v = WorktreeView::new();
+        v.set_rows(vec![WorktreeRow {
+            repo: "r".to_string(),
+            branch: "b".to_string(),
+            name: "wt".to_string(),
+            path: canonicalize_or_self(&wt),
+            session_count: 0,
+            has_active: false,
+            sessions: Vec::new(),
+        }]);
+        v.refresh_session_overlay(&[session_at("only", wt.clone(), SessionStatus::Running)]);
+
+        // Cursor on the worktree row: no session child returned.
+        assert_eq!(v.list_state.selected(), Some(1));
+        assert!(v.selected_session_child().is_none());
+
+        // Step down onto the session row.
+        v.select_next();
+        let child = v.selected_session_child().expect("session child");
+        assert_eq!(child.session_id, "only");
+    }
+
+    #[rstest]
     fn refresh_session_overlay_counts_sessions_under_path() {
         // Build a temp dir so canonicalize succeeds and starts_with checks
         // run against the same realpath the rows hold.
@@ -431,6 +535,7 @@ mod tests {
             path: canonicalize_or_self(&wt),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }]);
 
         let sessions = vec![

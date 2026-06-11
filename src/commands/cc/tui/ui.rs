@@ -15,6 +15,7 @@ use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
 };
+use super::worktree_session_children::{create_session_child_list_item, format_relative_time};
 use super::worktree_view::{WorktreeListEntry, WorktreeLoadState, WorktreeMode, WorktreeStatus};
 
 /// Minimum width for session info on line 1
@@ -179,14 +180,15 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     match app.view {
         View::Session => render_session_list(frame, area, app, now),
-        View::Worktree => render_worktree_list(frame, area, app),
-        View::Clean => render_clean_list(frame, area, app),
+        View::Worktree => render_worktree_list(frame, area, app, now),
+        View::Clean => render_clean_list(frame, area, app, now),
     }
 }
 
 /// Renders the clean view: To delete / Kept sections, repo group
-/// headers under each section, one row per worktree.
-fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
+/// headers under each section, one row per worktree, then nested
+/// session rows under each worktree.
+fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let term_width = area.width as usize;
     let state = app.clean_view.state.clone();
     match state {
@@ -239,7 +241,7 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|e| create_clean_list_item(e, term_width))
+        .map(|e| create_clean_list_item(e, term_width, now))
         .collect();
 
     let list = List::new(items)
@@ -269,11 +271,16 @@ fn pr_fetch_banner(status: &PrFetchStatus) -> Option<Paragraph<'static>> {
     }
 }
 
-fn create_clean_list_item(entry: &CleanListEntry, term_width: usize) -> ListItem<'static> {
+fn create_clean_list_item(
+    entry: &CleanListEntry,
+    term_width: usize,
+    now: DateTime<Utc>,
+) -> ListItem<'static> {
     let dim_style = Style::default().fg(Color::DarkGray);
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     match entry {
+        CleanListEntry::Session(child) => create_session_child_list_item(child, now),
         CleanListEntry::SectionHeader { section, count } => {
             let label = match section {
                 CleanSection::ToDelete => format!("── To delete ({count}) "),
@@ -355,7 +362,7 @@ fn create_clean_list_item(entry: &CleanListEntry, term_width: usize) -> ListItem
 }
 
 /// Renders the worktree list, grouped by repo.
-fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App) {
+fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let term_width = area.width as usize;
     let state = app.worktree_view.state.clone();
     match state {
@@ -389,7 +396,7 @@ fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|e| create_worktree_list_item(e, term_width))
+        .map(|e| create_worktree_list_item(e, term_width, now))
         .collect();
 
     let list = List::new(items)
@@ -408,11 +415,16 @@ fn worktree_status_glyph(status: WorktreeStatus) -> (&'static str, Color) {
     }
 }
 
-fn create_worktree_list_item(entry: &WorktreeListEntry, term_width: usize) -> ListItem<'static> {
+fn create_worktree_list_item(
+    entry: &WorktreeListEntry,
+    term_width: usize,
+    now: DateTime<Utc>,
+) -> ListItem<'static> {
     let dim_style = Style::default().fg(Color::DarkGray);
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     match entry {
+        WorktreeListEntry::Session(child) => create_session_child_list_item(child, now),
         WorktreeListEntry::RepoHeader(name) => {
             let line = Line::from(vec![Span::styled(
                 format!("▼ {}", name),
@@ -777,7 +789,7 @@ fn render_clean_help(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("  j/k", bold),
         Span::raw(": move  "),
         Span::styled("Enter", bold),
-        Span::raw(": toggle section  "),
+        Span::raw(": toggle / focus session  "),
         Span::styled("y", bold),
         Span::raw(": run  "),
         Span::styled("n/Esc/q", bold),
@@ -1163,30 +1175,6 @@ fn get_session_info(session: &Session, repo: &str, worktree_name: &str) -> Strin
             .unwrap_or_else(|| session.cwd.display().to_string())
     };
     claude_sessions::normalize_title(&raw)
-}
-
-/// Formats a datetime as a relative time string.
-fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let duration = now.signed_duration_since(dt);
-
-    let seconds = duration.num_seconds();
-    if seconds < 0 {
-        return "just now".to_string();
-    }
-
-    let minutes = seconds / 60;
-    let hours = minutes / 60;
-    let days = hours / 24;
-
-    if seconds < 60 {
-        "just now".to_string()
-    } else if minutes < 60 {
-        format!("{}m ago", minutes)
-    } else if hours < 24 {
-        format!("{}h ago", hours)
-    } else {
-        format!("{}d ago", days)
-    }
 }
 
 /// Splits text into spans, highlighting portions that match any of the search words.
@@ -1910,6 +1898,7 @@ mod tests {
             path: PathBuf::from(path),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }
     }
 
@@ -1948,6 +1937,26 @@ mod tests {
             "};
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_clean_view_emits_both_section_headers() {
+        // Both section headers should render even when one section is
+        // empty (e.g. all rows default to Kept while PR fetch loads).
+        let now = Utc::now();
+        let output = render_to_string_with(&[], None, now, 80, 16, |app| {
+            app.set_worktrees(vec![wt_row(
+                "armyknife",
+                "feat/a",
+                "feat-a",
+                "/tmp/armyknife/.worktrees/feat-a",
+            )]);
+            app.enter_clean_view();
+        });
+        assert!(
+            output.contains("To delete") && output.contains("Kept"),
+            "expected both section headers, got:\n{output}",
+        );
     }
 
     #[test]
