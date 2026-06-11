@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.210](https://github.com/fohte/armyknife/compare/v0.1.209...v0.1.210) (2026-06-11)
+
+
+### Features
+
+* **cc/tui:** show sessions as tree children under worktree rows in the clean view ([#639](https://github.com/fohte/armyknife/issues/639)) ([e3916e9](https://github.com/fohte/armyknife/commit/e3916e98bf88d75d00093e36990c522fe2e431ae))
+
 ## [0.1.209](https://github.com/fohte/armyknife/compare/v0.1.208...v0.1.209) (2026-06-11)
 
 
