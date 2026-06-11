@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.209](https://github.com/fohte/armyknife/compare/v0.1.208...v0.1.209) (2026-06-11)
+
+
+### Dependencies
+
+* update rust crate chrono to v0.4.45 ([#642](https://github.com/fohte/armyknife/issues/642)) ([7102966](https://github.com/fohte/armyknife/commit/7102966fe78e26740cfa3f86a01ef18f1f88a570))
+
 ## [0.1.208](https://github.com/fohte/armyknife/compare/v0.1.207...v0.1.208) (2026-06-11)
 
 
