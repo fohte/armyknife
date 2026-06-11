@@ -5,6 +5,7 @@ mod event;
 mod pr_fetch;
 mod session_tree;
 mod ui;
+mod worktree_session_children;
 mod worktree_view;
 
 use std::collections::HashMap;
@@ -544,7 +545,11 @@ fn handle_clean_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             app.clean_view.select_previous();
         }
         (KeyCode::Enter, _) => {
-            app.clean_view.toggle_selected_section();
+            if let Some(child) = app.clean_view.selected_session_child() {
+                focus_session_child(app, &child);
+            } else {
+                app.clean_view.toggle_selected_section();
+            }
         }
         _ => {}
     }
@@ -552,6 +557,10 @@ fn handle_clean_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 }
 
 fn focus_selected_worktree_session(app: &mut App) {
+    if let Some(child) = app.worktree_view.selected_session_child() {
+        focus_session_child(app, &child);
+        return;
+    }
     let pane_id = match app.worktree_view_focus_session() {
         Some(s) => match s.tmux_info.as_ref() {
             Some(t) => t.pane_id.clone(),
@@ -564,6 +573,16 @@ fn focus_selected_worktree_session(app: &mut App) {
             app.set_error("No sessions in this worktree to focus".to_string());
             return;
         }
+    };
+    if let Err(e) = tmux::focus_pane(&pane_id) {
+        app.set_error(format!("Failed to focus tmux pane: {e}"));
+    }
+}
+
+fn focus_session_child(app: &mut App, child: &self::worktree_session_children::SessionChild) {
+    let Some(pane_id) = child.pane_id.clone() else {
+        app.set_error("No tmux pane for this session".to_string());
+        return;
     };
     if let Err(e) = tmux::focus_pane(&pane_id) {
         app.set_error(format!("Failed to focus tmux pane: {e}"));
@@ -1186,6 +1205,7 @@ mod tests {
             status_label: "PR merged".to_string(),
             pr_merged: section == CleanSection::ToDelete,
             section,
+            sessions: Vec::new(),
         }
     }
 

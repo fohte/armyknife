@@ -15,6 +15,7 @@ use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
 };
+use super::worktree_session_children::create_session_child_list_item;
 use super::worktree_view::{WorktreeListEntry, WorktreeLoadState, WorktreeMode, WorktreeStatus};
 
 /// Minimum width for session info on line 1
@@ -179,14 +180,15 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     match app.view {
         View::Session => render_session_list(frame, area, app, now),
-        View::Worktree => render_worktree_list(frame, area, app),
-        View::Clean => render_clean_list(frame, area, app),
+        View::Worktree => render_worktree_list(frame, area, app, now),
+        View::Clean => render_clean_list(frame, area, app, now),
     }
 }
 
 /// Renders the clean view: To delete / Kept sections, repo group
-/// headers under each section, one row per worktree.
-fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
+/// headers under each section, one row per worktree, then nested
+/// session rows under each worktree.
+fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let term_width = area.width as usize;
     let state = app.clean_view.state.clone();
     match state {
@@ -220,7 +222,7 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|e| create_clean_list_item(e, term_width))
+        .map(|e| create_clean_list_item(e, term_width, now))
         .collect();
 
     let list = List::new(items)
@@ -230,11 +232,16 @@ fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.clean_view.list_state);
 }
 
-fn create_clean_list_item(entry: &CleanListEntry, term_width: usize) -> ListItem<'static> {
+fn create_clean_list_item(
+    entry: &CleanListEntry,
+    term_width: usize,
+    now: DateTime<Utc>,
+) -> ListItem<'static> {
     let dim_style = Style::default().fg(Color::DarkGray);
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     match entry {
+        CleanListEntry::Session(child) => create_session_child_list_item(child, now),
         CleanListEntry::SectionHeader { section, count } => {
             let label = match section {
                 CleanSection::ToDelete => format!("── To delete ({count}) "),
@@ -316,7 +323,7 @@ fn create_clean_list_item(entry: &CleanListEntry, term_width: usize) -> ListItem
 }
 
 /// Renders the worktree list, grouped by repo.
-fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App) {
+fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let term_width = area.width as usize;
     let state = app.worktree_view.state.clone();
     match state {
@@ -350,7 +357,7 @@ fn render_worktree_list(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|e| create_worktree_list_item(e, term_width))
+        .map(|e| create_worktree_list_item(e, term_width, now))
         .collect();
 
     let list = List::new(items)
@@ -369,11 +376,16 @@ fn worktree_status_glyph(status: WorktreeStatus) -> (&'static str, Color) {
     }
 }
 
-fn create_worktree_list_item(entry: &WorktreeListEntry, term_width: usize) -> ListItem<'static> {
+fn create_worktree_list_item(
+    entry: &WorktreeListEntry,
+    term_width: usize,
+    now: DateTime<Utc>,
+) -> ListItem<'static> {
     let dim_style = Style::default().fg(Color::DarkGray);
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     match entry {
+        WorktreeListEntry::Session(child) => create_session_child_list_item(child, now),
         WorktreeListEntry::RepoHeader(name) => {
             let line = Line::from(vec![Span::styled(
                 format!("▼ {}", name),
@@ -738,7 +750,7 @@ fn render_clean_help(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("  j/k", bold),
         Span::raw(": move  "),
         Span::styled("Enter", bold),
-        Span::raw(": toggle section  "),
+        Span::raw(": toggle / focus session  "),
         Span::styled("y", bold),
         Span::raw(": run  "),
         Span::styled("n/Esc/q", bold),
@@ -1871,6 +1883,7 @@ mod tests {
             path: PathBuf::from(path),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }
     }
 

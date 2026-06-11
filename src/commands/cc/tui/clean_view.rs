@@ -13,7 +13,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 
-use super::worktree_view::WorktreeRow;
+use super::worktree_session_children::{SessionChild, sessions_under_worktree_from_canonical};
+use super::worktree_view::{WorktreeRow, canonicalize_or_self};
 use crate::commands::cc::types::Session;
 use crate::infra::git::MergeStatus;
 use crate::infra::github::PrState;
@@ -66,17 +67,22 @@ pub struct CleanRow {
     /// `has_active` to set the default section.
     pub pr_merged: bool,
     pub section: CleanSection,
+    /// Sessions living under this worktree, newest-first.
+    pub sessions: Vec<SessionChild>,
 }
 
 /// Rendered entries in display order.
 ///
-/// `SectionHeader` and `RepoHeader` are non-selectable; only `Row`
-/// entries can carry the cursor.
+/// `SectionHeader` and `RepoHeader` are non-selectable. `Row` (a
+/// worktree) and `Session` (a session living under that worktree)
+/// are both selectable, but they take different Enter actions —
+/// `Row` toggles the clean section, `Session` focuses the tmux pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanListEntry {
     SectionHeader { section: CleanSection, count: usize },
     RepoHeader(String),
     Row(CleanRow),
+    Session(SessionChild),
 }
 
 /// Persistent state for the clean view.
@@ -138,12 +144,29 @@ impl CleanView {
                     current_repo = Some(row.repo.as_str());
                 }
                 out.push(CleanListEntry::Row(row.clone()));
+                for s in &row.sessions {
+                    out.push(CleanListEntry::Session(s.clone()));
+                }
             }
         }
         out
     }
 
+    /// Selectable rows include both worktree rows and the nested
+    /// session rows. Enter dispatches by variant in the key handler.
     pub fn selectable_indices(&self) -> Vec<usize> {
+        self.list_entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                matches!(e, CleanListEntry::Row(_) | CleanListEntry::Session(_)).then_some(i)
+            })
+            .collect()
+    }
+
+    /// Indices that point to worktree rows only — used by
+    /// `select_first_row` so the cursor lands on a toggle target.
+    fn worktree_row_indices(&self) -> Vec<usize> {
         self.list_entries()
             .iter()
             .enumerate()
@@ -152,7 +175,11 @@ impl CleanView {
     }
 
     pub fn select_first_row(&mut self) {
-        if let Some(&i) = self.selectable_indices().first() {
+        // Prefer landing on a worktree row over a nested session so
+        // Enter immediately maps to a toggle action.
+        if let Some(&i) = self.worktree_row_indices().first() {
+            self.list_state.select(Some(i));
+        } else if let Some(&i) = self.selectable_indices().first() {
             self.list_state.select(Some(i));
         } else {
             self.list_state.select(None);
@@ -189,6 +216,15 @@ impl CleanView {
         let idx = self.list_state.selected()?;
         match self.list_entries().get(idx)? {
             CleanListEntry::Row(r) => Some(r.clone()),
+            _ => None,
+        }
+    }
+
+    /// Returns the session child currently under the cursor, if any.
+    pub fn selected_session_child(&self) -> Option<SessionChild> {
+        let idx = self.list_state.selected()?;
+        match self.list_entries().get(idx)? {
+            CleanListEntry::Session(s) => Some(s.clone()),
             _ => None,
         }
     }
@@ -297,6 +333,13 @@ pub fn build_clean_rows(
     now: DateTime<Utc>,
     timeout: Duration,
 ) -> Vec<CleanRow> {
+    // Canonicalize cwds once for the whole batch; otherwise N inputs ×
+    // M sessions canonicalize N×M times across contains_active_session,
+    // session_lives_under, and sessions_under_worktree.
+    let canonical_sessions: Vec<(PathBuf, &Session)> = sessions
+        .iter()
+        .map(|s| (canonicalize_or_self(&s.cwd), s))
+        .collect();
     inputs
         .into_iter()
         .map(|input| {
@@ -324,11 +367,14 @@ pub fn build_clean_rows(
                 CleanSection::Kept
             };
 
-            let updated_at = sessions
+            let updated_at = canonical_sessions
                 .iter()
-                .filter(|s| super::worktree_view::session_lives_under(&s.cwd, &row.path))
-                .map(|s| s.updated_at)
+                .filter(|(c, _)| c.starts_with(&row.path))
+                .map(|(_, s)| s.updated_at)
                 .max();
+
+            let session_children =
+                sessions_under_worktree_from_canonical(&row.path, &canonical_sessions);
 
             CleanRow {
                 repo: row.repo,
@@ -341,6 +387,7 @@ pub fn build_clean_rows(
                 status_label,
                 pr_merged,
                 section,
+                sessions: session_children,
             }
         })
         .collect()
@@ -384,6 +431,7 @@ mod tests {
             path: PathBuf::from(path),
             session_count: 0,
             has_active: false,
+            sessions: Vec::new(),
         }
     }
 
@@ -581,6 +629,73 @@ mod tests {
     }
 
     #[rstest]
+    fn list_entries_nest_sessions_under_worktree_row_and_skip_toggle() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).expect("mkdir");
+
+        let row = WorktreeRow {
+            repo: "r".to_string(),
+            branch: "b".to_string(),
+            name: "wt".to_string(),
+            path: super::super::worktree_view::canonicalize_or_self(&wt),
+            session_count: 1,
+            has_active: false,
+            sessions: Vec::new(),
+        };
+        let input = CleanRowInput {
+            row,
+            merge_status: Some(MergeStatus::Merged {
+                reason: "#1 merged".to_string(),
+            }),
+            pr_number: Some(1),
+            pr_state: Some(PrState::Merged),
+        };
+        // Ended sessions are not "active", so the merged row stays in
+        // ToDelete while still surfacing the (defunct) session as a
+        // tree child.
+        let mut session_obj = session("s1", wt.clone());
+        session_obj.status = SessionStatus::Ended;
+        let rows = build_clean_rows(
+            vec![input],
+            &[session_obj],
+            Utc::now(),
+            Duration::from_secs(60),
+        );
+        let mut v = CleanView::new();
+        v.set_rows(rows);
+
+        let entries = v.list_entries();
+        // SectionHeader(ToDelete) + RepoHeader(r) + Row + Session +
+        // SectionHeader(Kept, count=0).
+        assert_eq!(entries.len(), 5);
+        assert!(matches!(entries[2], CleanListEntry::Row(_)));
+        assert!(matches!(entries[3], CleanListEntry::Session(_)));
+
+        // Both Row and Session rows are selectable; the cursor lands on
+        // the Row first so Enter still defaults to toggle.
+        assert_eq!(v.selectable_indices(), vec![2, 3]);
+        assert_eq!(v.list_state.selected(), Some(2));
+
+        // Step onto the session row: selected_session_child returns it,
+        // selected_row returns None, and toggle_selected_section is a
+        // no-op on this row.
+        v.select_next();
+        assert_eq!(v.list_state.selected(), Some(3));
+        let child = v.selected_session_child().expect("child");
+        assert_eq!(child.session_id, "s1");
+        assert!(v.selected_row().is_none());
+
+        // Toggle attempted on a session row must NOT move the worktree
+        // between sections — the underlying row is still ToDelete.
+        v.toggle_selected_section();
+        assert_eq!(
+            v.rows().iter().map(|r| r.section).collect::<Vec<_>>(),
+            vec![CleanSection::ToDelete],
+        );
+    }
+
+    #[rstest]
     fn merged_with_active_session_defaults_to_kept() {
         // A merged PR row whose worktree still has an active session must
         // default to Kept so we do not blow away in-flight work.
@@ -595,6 +710,7 @@ mod tests {
             path: super::super::worktree_view::canonicalize_or_self(&wt),
             session_count: 1,
             has_active: false,
+            sessions: Vec::new(),
         };
         let input = CleanRowInput {
             row,
