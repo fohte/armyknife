@@ -580,11 +580,11 @@ fn focus_selected_worktree_session(app: &mut App) {
 }
 
 fn focus_session_child(app: &mut App, child: &self::worktree_session_children::SessionChild) {
-    let Some(pane_id) = child.pane_id.clone() else {
+    let Some(pane_id) = child.pane_id.as_deref() else {
         app.set_error("No tmux pane for this session".to_string());
         return;
     };
-    if let Err(e) = tmux::focus_pane(&pane_id) {
+    if let Err(e) = tmux::focus_pane(pane_id) {
         app.set_error(format!("Failed to focus tmux pane: {e}"));
     }
 }

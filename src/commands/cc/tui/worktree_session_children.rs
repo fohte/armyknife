@@ -97,9 +97,9 @@ pub fn create_session_child_list_item(
 
     let line = Line::from(vec![
         Span::raw("    "),
-        Span::styled(connector.to_string(), dim),
+        Span::styled(connector, dim),
         Span::raw(" "),
-        Span::styled(symbol.to_string(), s_style),
+        Span::styled(symbol, s_style),
         Span::raw(" "),
         Span::styled(
             child.label.clone(),
@@ -112,7 +112,7 @@ pub fn create_session_child_list_item(
     ListItem::new(vec![line])
 }
 
-fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
+pub(super) fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let duration = now.signed_duration_since(dt);
     let seconds = duration.num_seconds();
     if seconds < 60 {

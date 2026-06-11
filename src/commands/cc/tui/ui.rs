@@ -15,7 +15,7 @@ use super::session_tree::{
     TreeEntry, build_line1_tree_prefix, build_line2_tree_prefix, build_parent_child_connector,
     build_separator_tree_prefix, build_session_tree,
 };
-use super::worktree_session_children::create_session_child_list_item;
+use super::worktree_session_children::{create_session_child_list_item, format_relative_time};
 use super::worktree_view::{WorktreeListEntry, WorktreeLoadState, WorktreeMode, WorktreeStatus};
 
 /// Minimum width for session info on line 1
@@ -1136,30 +1136,6 @@ fn get_session_info(session: &Session, repo: &str, worktree_name: &str) -> Strin
             .unwrap_or_else(|| session.cwd.display().to_string())
     };
     claude_sessions::normalize_title(&raw)
-}
-
-/// Formats a datetime as a relative time string.
-fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let duration = now.signed_duration_since(dt);
-
-    let seconds = duration.num_seconds();
-    if seconds < 0 {
-        return "just now".to_string();
-    }
-
-    let minutes = seconds / 60;
-    let hours = minutes / 60;
-    let days = hours / 24;
-
-    if seconds < 60 {
-        "just now".to_string()
-    } else if minutes < 60 {
-        format!("{}m ago", minutes)
-    } else if hours < 24 {
-        format!("{}h ago", hours)
-    } else {
-        format!("{}d ago", days)
-    }
 }
 
 /// Splits text into spans, highlighting portions that match any of the search words.

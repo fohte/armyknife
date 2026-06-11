@@ -18,7 +18,7 @@ use super::worktree_view::{WorktreeRow, canonicalize_or_self};
 use crate::commands::cc::types::Session;
 use crate::infra::git::MergeStatus;
 use crate::infra::github::PrState;
-use crate::shared::active_session::{NoActivityProbe, contains_active_session};
+use crate::shared::active_session::{NoActivityProbe, is_session_active};
 
 /// Loading state of the asynchronous PR-status fetch that drives the
 /// initial To delete / Kept partition.
@@ -331,9 +331,8 @@ pub fn build_clean_rows(
     now: DateTime<Utc>,
     timeout: Duration,
 ) -> Vec<CleanRow> {
-    // Canonicalize cwds once for the whole batch; otherwise N inputs ×
-    // M sessions canonicalize N×M times across contains_active_session,
-    // session_lives_under, and sessions_under_worktree.
+    // Canonicalize cwds once for the whole batch so the has_active /
+    // updated_at / session-children passes do not each re-canonicalize.
     let canonical_sessions: Vec<(PathBuf, &Session)> = sessions
         .iter()
         .map(|s| (canonicalize_or_self(&s.cwd), s))
@@ -348,11 +347,10 @@ pub fn build_clean_rows(
                 pr_state,
             } = input;
 
-            // `contains_active_session` canonicalizes the worktree path
-            // and each session cwd, so it works even if the worktree
-            // discovery pass left the path uncanonicalized.
-            let has_active =
-                contains_active_session(&row.path, sessions, &NoActivityProbe, now, timeout);
+            let has_active = canonical_sessions
+                .iter()
+                .filter(|(c, _)| c.starts_with(&row.path))
+                .any(|(_, s)| is_session_active(s, &NoActivityProbe, now, timeout));
 
             let pr_merged = matches!(merge_status, Some(MergeStatus::Merged { .. }));
             let status_label = format_status_label(pr_state, pr_number, has_active);
