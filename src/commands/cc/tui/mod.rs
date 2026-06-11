@@ -94,6 +94,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::Tick => {}
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
                     app.set_worktrees(rows);
+                    // If the user opened the clean view before discovery
+                    // finished, seed it now and kick off the PR fetch.
+                    if app.seed_clean_view_if_pending() {
+                        effects.request_clean_pr_fetch = true;
+                    }
                 }
                 AppEvent::WorktreesLoaded(Err(err)) => {
                     app.set_worktrees_failed(err);
@@ -102,7 +107,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                     app.apply_resolved_labels(results);
                 }
                 AppEvent::CleanPrFetched(Ok(rows)) => {
-                    app.set_clean_rows(rows);
+                    app.apply_clean_pr_results(rows);
                 }
                 AppEvent::CleanPrFetched(Err(err)) => {
                     app.set_clean_failed(err);
@@ -442,9 +447,9 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     if app.mode == AppMode::Normal
         && let (KeyCode::Char('c'), KeyModifiers::NONE) = (key.code, key.modifiers)
     {
-        app.enter_clean_view();
+        let seeded = app.enter_clean_view();
         return KeyEffects {
-            request_clean_pr_fetch: true,
+            request_clean_pr_fetch: seeded,
             ..Default::default()
         };
     }
@@ -483,9 +488,9 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
         (KeyCode::Esc, _) => app.quit(),
         (KeyCode::Char('c'), KeyModifiers::NONE) => {
-            app.enter_clean_view();
+            let seeded = app.enter_clean_view();
             return KeyEffects {
-                request_clean_pr_fetch: true,
+                request_clean_pr_fetch: seeded,
                 ..Default::default()
             };
         }
@@ -1189,9 +1194,21 @@ mod tests {
         }
     }
 
+    fn seed_one_worktree(app: &mut App) {
+        app.set_worktrees(vec![crate::commands::cc::tui::worktree_view::WorktreeRow {
+            repo: "r1".to_string(),
+            branch: "feat-a".to_string(),
+            name: "feat-a".to_string(),
+            path: PathBuf::from("/tmp/r1/feat-a"),
+            session_count: 0,
+            has_active: false,
+        }]);
+    }
+
     #[test]
     fn pressing_c_from_session_view_enters_clean_and_requests_pr_fetch() {
         let mut app = create_test_app_with_sessions(1);
+        seed_one_worktree(&mut app);
         let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
         assert_eq!(app.view, View::Clean);
         assert!(effects.request_clean_pr_fetch);
@@ -1200,11 +1217,39 @@ mod tests {
     #[test]
     fn pressing_c_from_worktree_view_enters_clean() {
         let mut app = create_test_app_with_sessions(0);
+        seed_one_worktree(&mut app);
         app.view = View::Worktree;
         let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
         assert_eq!(app.view, View::Clean);
         assert_eq!(app.clean_return_view, View::Worktree);
         assert!(effects.request_clean_pr_fetch);
+    }
+
+    #[test]
+    fn pressing_c_without_worktree_snapshot_defers_pr_fetch() {
+        // No worktree snapshot yet — entering clean must not kick off
+        // a PR fetch against an empty row list.
+        let mut app = create_test_app_with_sessions(0);
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
+        assert_eq!(app.view, View::Clean);
+        assert!(!effects.request_clean_pr_fetch);
+        assert!(matches!(
+            app.clean_view.state,
+            crate::commands::cc::tui::clean_view::CleanLoadState::LoadingPr
+        ));
+    }
+
+    #[test]
+    fn seeding_after_worktrees_arrive_kicks_off_pr_fetch() {
+        let mut app = create_test_app_with_sessions(0);
+        handle_key_event(&mut app, key(KeyCode::Char('c')));
+        // Late-arriving worktrees should seed the view and trigger fetch.
+        seed_one_worktree(&mut app);
+        assert!(app.seed_clean_view_if_pending());
+        assert!(matches!(
+            app.clean_view.state,
+            crate::commands::cc::tui::clean_view::CleanLoadState::Ready(_)
+        ));
     }
 
     #[rstest]

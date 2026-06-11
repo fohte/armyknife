@@ -882,15 +882,43 @@ impl App {
     }
 
     /// Switch into the clean view. Records the current view so the user
-    /// can return via Esc/n/q, then resets the clean state to
-    /// LoadingPr — the caller wires up the actual PR fetch.
-    pub fn enter_clean_view(&mut self) {
+    /// can return via Esc/n/q, then seeds the row list synchronously
+    /// from the worktree snapshot so the user sees rows immediately
+    /// while the async PR fetch runs.
+    ///
+    /// Returns true when the worktree snapshot was non-empty and the
+    /// caller should kick off the PR fetch. If false, the clean view
+    /// stays in `LoadingPr` and seeding is deferred to
+    /// [`Self::seed_clean_view_if_pending`] once worktrees arrive.
+    pub fn enter_clean_view(&mut self) -> bool {
         if self.view == View::Clean {
-            return;
+            return false;
         }
         self.clean_return_view = self.view;
         self.view = View::Clean;
         self.clean_view.reset();
+        self.seed_clean_view_if_pending()
+    }
+
+    /// Seed the clean view from the current worktree snapshot when it
+    /// is still waiting for its initial rows. Returns true when seeding
+    /// actually happened so the caller can kick off the PR fetch.
+    pub fn seed_clean_view_if_pending(&mut self) -> bool {
+        if self.view != View::Clean
+            || !matches!(
+                self.clean_view.state,
+                super::clean_view::CleanLoadState::LoadingPr
+            )
+        {
+            return false;
+        }
+        let rows = self.worktree_rows_snapshot();
+        if rows.is_empty() {
+            return false;
+        }
+        let initial = super::pr_fetch::build_initial_clean_rows(rows, &self.sessions);
+        self.clean_view.set_initial_rows(initial);
+        true
     }
 
     /// Leave the clean view without acting on the partition; returns
@@ -899,10 +927,28 @@ impl App {
         self.view = self.clean_return_view;
     }
 
-    /// Install the freshly partitioned rows after PR fetch completes.
-    /// Drops any path that an in-flight cleanup has already removed so
-    /// the user never sees a row that no longer exists on disk.
+    /// Install fully PR-enriched rows directly. Used by tests; the
+    /// production code path goes through [`Self::apply_clean_pr_results`]
+    /// instead so the placeholder list set up in `enter_clean_view`
+    /// merges with the async result.
+    #[cfg(test)]
     pub fn set_clean_rows(&mut self, mut rows: Vec<super::clean_view::CleanRow>) {
+        rows = self.filter_already_cleaned(rows);
+        self.clean_view.set_rows(rows);
+    }
+
+    /// Merge PR-enriched rows returned by the async fetch into the
+    /// placeholder list seeded on entry. Drops any path that an
+    /// in-flight cleanup has already removed.
+    pub fn apply_clean_pr_results(&mut self, rows: Vec<super::clean_view::CleanRow>) {
+        let rows = self.filter_already_cleaned(rows);
+        self.clean_view.apply_pr_results(rows);
+    }
+
+    fn filter_already_cleaned(
+        &self,
+        mut rows: Vec<super::clean_view::CleanRow>,
+    ) -> Vec<super::clean_view::CleanRow> {
         if let Some(progress) = &self.clean_progress {
             let deleted: Vec<PathBuf> = progress
                 .confirmed_deleted
@@ -913,7 +959,7 @@ impl App {
                 rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
             }
         }
-        self.clean_view.set_rows(rows);
+        rows
     }
 
     /// Mark the PR fetch as failed; the clean view shows the error and
