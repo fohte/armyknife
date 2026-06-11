@@ -1227,8 +1227,6 @@ mod tests {
 
     #[test]
     fn pressing_c_without_worktree_snapshot_defers_pr_fetch() {
-        // No worktree snapshot yet — entering clean must not kick off
-        // a PR fetch against an empty row list.
         let mut app = create_test_app_with_sessions(0);
         let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
         assert_eq!(app.view, View::Clean);
@@ -1243,7 +1241,6 @@ mod tests {
     fn seeding_after_worktrees_arrive_kicks_off_pr_fetch() {
         let mut app = create_test_app_with_sessions(0);
         handle_key_event(&mut app, key(KeyCode::Char('c')));
-        // Late-arriving worktrees should seed the view and trigger fetch.
         seed_one_worktree(&mut app);
         assert!(app.seed_clean_view_if_pending());
         assert!(matches!(
