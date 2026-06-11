@@ -73,10 +73,8 @@ pub struct CleanRow {
 
 /// Rendered entries in display order.
 ///
-/// `SectionHeader` and `RepoHeader` are non-selectable. `Row` (a
-/// worktree) and `Session` (a session living under that worktree)
-/// are both selectable, but they take different Enter actions —
-/// `Row` toggles the clean section, `Session` focuses the tmux pane.
+/// `SectionHeader` and `RepoHeader` are non-selectable; `Row` and
+/// `Session` are both selectable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanListEntry {
     SectionHeader { section: CleanSection, count: usize },
