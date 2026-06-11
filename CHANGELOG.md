@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.208](https://github.com/fohte/armyknife/compare/v0.1.207...v0.1.208) (2026-06-11)
+
+
+### Features
+
+* **cc/tui/clean:** show worktree list immediately on clean window open ([#640](https://github.com/fohte/armyknife/issues/640)) ([b7bdcce](https://github.com/fohte/armyknife/commit/b7bdccebf4311c20c94c8f6a30f033daa0d84a69))
+
 ## [0.1.207](https://github.com/fohte/armyknife/compare/v0.1.206...v0.1.207) (2026-06-09)
 
 
