@@ -15,7 +15,7 @@ pub struct DeleteArgs {
     /// Worktree path or name (default: current directory)
     pub worktree: Option<String>,
 
-    /// Force delete without confirmation even if not merged
+    /// Force delete without confirmation even if the branch is neither merged nor closed
     #[arg(short, long)]
     pub force: bool,
 }
@@ -66,13 +66,13 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     Ok(())
 }
 
-/// Checks if the worktree's branch is merged and prompts for confirmation if not.
+/// Prompts for confirmation when the worktree's branch is neither merged nor closed.
 async fn check_merge_status(repo: &GitRepo, worktree_name: &str, force: bool) -> Result<()> {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
     if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
         let merge_status = get_merge_status(branch).await;
-        if !merge_status.is_merged() && !force {
+        if !merge_status.should_cleanup() && !force {
             eprintln!(
                 "Warning: Branch '{}' is not merged ({})",
                 branch,
