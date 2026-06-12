@@ -66,7 +66,6 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     Ok(())
 }
 
-/// Prompts for confirmation when the worktree's branch is neither merged nor closed.
 async fn check_merge_status(repo: &GitRepo, worktree_name: &str, force: bool) -> Result<()> {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
