@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.212](https://github.com/fohte/armyknife/compare/v0.1.211...v0.1.212) (2026-06-12)
+
+
+### Bug Fixes
+
+* **wm/delete:** skip confirmation prompt for branches of closed PRs ([#651](https://github.com/fohte/armyknife/issues/651)) ([eae2beb](https://github.com/fohte/armyknife/commit/eae2bebb85ee2d1cdd09bce012bc2474865d7e14))
+
 ## [0.1.211](https://github.com/fohte/armyknife/compare/v0.1.210...v0.1.211) (2026-06-12)
 
 
