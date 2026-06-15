@@ -7,6 +7,7 @@
 mod branch;
 pub(crate) mod cmd;
 mod error;
+mod fetch_lock;
 mod github;
 mod repo;
 #[cfg(test)]
