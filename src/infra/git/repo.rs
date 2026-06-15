@@ -9,6 +9,7 @@ use anyhow::Context;
 
 use super::cmd::{run_git, run_git_optional};
 use super::error::{GitError, Result};
+use super::fetch_lock::{FETCH_TTL, fetch_with_coalescing};
 use super::github::get_owner_repo;
 
 /// Handle to a git repository (regular or linked worktree).
@@ -67,6 +68,10 @@ impl GitRepo {
 
     pub fn workdir(&self) -> &Path {
         &self.workdir
+    }
+
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
     }
 
     pub fn is_worktree(&self) -> bool {
@@ -208,8 +213,13 @@ pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
 }
 
 /// Fetch from origin with prune to remove stale remote-tracking references.
+///
+/// Concurrent callers against the same repository are serialized through a
+/// per-repo file lock, and recent fetches are coalesced via a TTL so a burst
+/// of parallel `wm new` invocations only pays for a single network fetch.
 pub fn fetch_with_prune(repo: &GitRepo) -> Result<()> {
-    repo.fetch_origin_prune()
+    let lock_path = repo.common_dir().join("armyknife-fetch.lock");
+    fetch_with_coalescing(&lock_path, FETCH_TTL, || repo.fetch_origin_prune())
 }
 
 /// Get the remote URL for "origin".
