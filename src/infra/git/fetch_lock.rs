@@ -121,10 +121,18 @@ impl Drop for FlockGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::cell::Cell;
+    use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
+
+    #[fixture]
+    fn lock_path() -> (TempDir, PathBuf) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fetch.lock");
+        (dir, path)
+    }
 
     #[rstest]
     #[case::no_prior_fetch(None, 100, 30, false)]
@@ -144,10 +152,9 @@ mod tests {
         assert_eq!(should_skip_fetch(last, now, ttl), expected);
     }
 
-    #[test]
-    fn test_fetch_runs_on_first_call_and_skips_within_ttl() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("fetch.lock");
+    #[rstest]
+    fn test_fetch_runs_on_first_call_and_skips_within_ttl(lock_path: (TempDir, PathBuf)) {
+        let (_dir, path) = lock_path;
         let calls = Cell::new(0u32);
         let ttl = Duration::from_secs(3600);
 
@@ -165,10 +172,9 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
 
-    #[test]
-    fn test_fetch_runs_every_call_when_ttl_zero() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("fetch.lock");
+    #[rstest]
+    fn test_fetch_runs_every_call_when_ttl_zero(lock_path: (TempDir, PathBuf)) {
+        let (_dir, path) = lock_path;
         let calls = Cell::new(0u32);
         let ttl = Duration::from_secs(0);
 
@@ -183,10 +189,9 @@ mod tests {
         assert_eq!(calls.get(), 3);
     }
 
-    #[test]
-    fn test_fetch_error_does_not_record_timestamp() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("fetch.lock");
+    #[rstest]
+    fn test_fetch_error_does_not_record_timestamp(lock_path: (TempDir, PathBuf)) {
+        let (_dir, path) = lock_path;
         let calls = Cell::new(0u32);
         let ttl = Duration::from_secs(3600);
 
@@ -205,10 +210,9 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
-    #[test]
-    fn test_corrupted_lock_file_self_heals() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("fetch.lock");
+    #[rstest]
+    fn test_corrupted_lock_file_self_heals(lock_path: (TempDir, PathBuf)) {
+        let (_dir, path) = lock_path;
         std::fs::write(&path, "not a number").unwrap();
         let calls = Cell::new(0u32);
         let ttl = Duration::from_secs(3600);
