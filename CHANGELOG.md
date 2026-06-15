@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.213](https://github.com/fohte/armyknife/compare/v0.1.212...v0.1.213) (2026-06-15)
+
+
+### Bug Fixes
+
+* **wm:** avoid ref-lock errors on parallel fetch ([#661](https://github.com/fohte/armyknife/issues/661)) ([1214ff8](https://github.com/fohte/armyknife/commit/1214ff836c6557a4d24db27b7f4b3436288b4af8))
+
 ## [0.1.212](https://github.com/fohte/armyknife/compare/v0.1.211...v0.1.212) (2026-06-12)
 
 
