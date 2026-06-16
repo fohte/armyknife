@@ -20,10 +20,15 @@ const APPROVAL_ID_DOMAIN: &[u8] = b"approval-id-v1\n";
 /// derivations live in disjoint input spaces.
 const APPROVAL_MAC_DOMAIN: &[u8] = b"approval-mac-v1\n";
 
-/// Environment variable that overrides the approval directory. Intended
-/// for tests running under the srt sandbox where `~/Library/...` is not
-/// writable. Not a stable public API.
+/// Environment variable that overrides the approval directory. Read
+/// only; this code never calls `setenv`, so concurrent readers are safe.
 const APPROVAL_DIR_ENV: &str = "ARMYKNIFE_APPROVAL_DIR";
+
+/// Process-wide test override. Initialised once by
+/// `shared::testing::init_approval_dir` before any test interacts with
+/// `ApprovalManager`; never written from production code.
+#[doc(hidden)]
+pub static TEST_APPROVAL_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Manages document approval state.
 ///
@@ -164,6 +169,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn approvals_dir() -> PathBuf {
+    if let Some(dir) = TEST_APPROVAL_DIR_OVERRIDE.get() {
+        return dir.clone();
+    }
     if let Some(v) = std::env::var_os(APPROVAL_DIR_ENV)
         && !v.is_empty()
     {
@@ -195,12 +203,21 @@ fn state_dir() -> PathBuf {
 
 #[cfg(unix)]
 fn create_dir_secure(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if !dir.exists() {
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        return Ok(());
+    }
+    // Tighten loose permissions left by a prior process. `mkdir` honours
+    // umask, so a pre-existing approvals dir is not guaranteed to be 0700.
+    let meta = std::fs::metadata(dir)?;
+    let mut perms = meta.permissions();
+    if perms.mode() & 0o077 != 0 {
+        perms.set_mode(0o700);
+        std::fs::set_permissions(dir, perms)?;
     }
     Ok(())
 }
@@ -213,7 +230,7 @@ fn create_dir_secure(dir: &Path) -> std::io::Result<()> {
 #[cfg(unix)]
 fn write_file_secure(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -222,6 +239,15 @@ fn write_file_secure(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         .mode(0o600)
         .open(path)?;
     file.write_all(contents)?;
+
+    // `OpenOptions::mode` only applies when the file is created; an
+    // existing file keeps its old permissions. Force 0600 after writing
+    // so reused approval records are never world-readable.
+    let mut perms = file.metadata()?.permissions();
+    if perms.mode() & 0o077 != 0 {
+        perms.set_mode(0o600);
+        file.set_permissions(perms)?;
+    }
     Ok(())
 }
 
