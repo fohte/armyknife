@@ -235,9 +235,8 @@ mod tests {
         path
     }
 
-    /// Run `body` with `XDG_CONFIG_HOME` / `HOME` pointed at an empty temp dir
-    /// so `load_config()` does not read the developer's real config and break
-    /// when the schema evolves out from under it.
+    /// Isolate `load_config()` from the developer's real `XDG_CONFIG_HOME` /
+    /// `HOME` so tests do not depend on host config state.
     fn with_isolated_config<R>(body: impl FnOnce() -> R) -> R {
         let tmp = tempfile::tempdir().expect("create temp config dir");
         let path = tmp.path().to_string_lossy().to_string();
