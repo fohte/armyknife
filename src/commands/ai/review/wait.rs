@@ -296,6 +296,16 @@ mod tests {
                 MockDetectionClient::new(),
                 make_args_single(Reviewer::CodeRabbit, 1, 5),
             ),
+            "neither_started_both" => {
+                let now = Utc::now();
+                (
+                    MockDetectionClient::new()
+                        .with_review(Reviewer::CodeRabbit, now + ChronoDuration::seconds(1))
+                        .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
+                        .skip_first_n_review_calls(2),
+                    make_args_both(1, 5),
+                )
+            }
             "timeout" => (
                 // Start signals present but no reviews ever appear
                 MockDetectionClient::new()
@@ -312,6 +322,7 @@ mod tests {
         "not_started_coderabbit_only",
         "Review has not started yet"
     )]
+    #[case::neither_started_both("neither_started_both", "Review has not started yet")]
     #[case::timeout("timeout", "Timeout waiting for review after 1 seconds")]
     #[tokio::test]
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
@@ -338,25 +349,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_fails_when_no_reviewer_has_started() {
-        let now = Utc::now();
-        let client = MockDetectionClient::new()
-            .with_review(Reviewer::CodeRabbit, now + ChronoDuration::seconds(1))
-            .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
-            .skip_first_n_review_calls(2); // Skip first check for both reviewers
-
-        let args = make_args_both(1, 5);
-
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Review has not started yet"
-        );
-    }
-
-    #[tokio::test]
     async fn wait_succeeds_when_devin_check_run_present() {
         // When Devin's check run is present, start detection passes
         let now = Utc::now();
@@ -371,18 +363,6 @@ mod tests {
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn wait_requires_start_detection_for_coderabbit_only() {
-        // When only CodeRabbit is specified and no commit status is present, return error
-        let client = MockDetectionClient::new();
-
-        let args = make_args_single(Reviewer::CodeRabbit, 1, 5);
-
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
-        let err = result.unwrap_err();
-        assert_eq!(err.to_string(), "Review has not started yet");
     }
 
     #[tokio::test]
