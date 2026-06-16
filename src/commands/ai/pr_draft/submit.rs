@@ -236,6 +236,7 @@ mod tests {
     }
 
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
+        crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
@@ -438,6 +439,7 @@ mod tests {
         branch: &str,
         pr_number: u64,
     ) -> TestEnv {
+        crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;

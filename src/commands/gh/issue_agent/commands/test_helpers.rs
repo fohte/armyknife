@@ -196,10 +196,12 @@ impl<'a> TestSetup<'a> {
     }
 }
 
-/// Create an .approve file for the given path, simulating `a gh issue-agent review` approval.
+/// Record an approval for the given path, simulating `a gh issue-agent review` approval.
 pub fn approve_file(path: &Path) {
     use crate::shared::human_in_the_loop::ApprovalManager;
+    use crate::shared::testing::init_approval_dir;
 
+    init_approval_dir();
     if path.exists() {
         let manager = ApprovalManager::new(path);
         manager.save().unwrap();
