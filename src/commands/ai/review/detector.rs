@@ -11,7 +11,7 @@ use super::error::Result;
 
 /// How to detect that a reviewer has started working on a PR.
 pub enum StartDetection {
-    /// The bot reacted to the PR body with a specific emoji (e.g., Gemini uses :eyes:).
+    /// The bot reacted to the PR body with a specific emoji.
     BodyReaction { emoji: &'static str },
     /// A GitHub check run with the given name has appeared.
     CheckRun { name: &'static str },
@@ -138,10 +138,10 @@ pub trait DetectionClient: Send + Sync {
 /// by `start_method` / `completion_method`. Override them only when a bot
 /// needs detection logic that cannot be expressed declaratively.
 pub trait ReviewDetector: Send + Sync {
-    /// The bot's GitHub login name (e.g., "gemini-code-assist").
+    /// The bot's GitHub login name (e.g., "devin-ai-integration").
     fn bot_login(&self) -> &'static str;
 
-    /// Command to trigger a review (e.g., "/gemini review"). None if not supported.
+    /// Command to trigger a review. None if not supported.
     fn review_command(&self) -> Option<&'static str> {
         Option::None
     }

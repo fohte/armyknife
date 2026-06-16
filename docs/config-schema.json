@@ -95,10 +95,7 @@
       "properties": {
         "reviewers": {
           "description": "Default reviewers for `a ai review wait` and `a ai review request`.\n`None` means \"fall back to the next layer\" (org -> built-in default).",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "default": null,
           "items": {
             "$ref": "#/$defs/Reviewer"
@@ -183,10 +180,7 @@
         },
         "focus_app": {
           "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "terminal": {
@@ -258,9 +252,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "command"
-      ]
+      "required": ["command"]
     },
     "RepoConfig": {
       "description": "Per-repository configuration.",
@@ -282,10 +274,7 @@
         },
         "language": {
           "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         }
       },
@@ -293,11 +282,6 @@
     },
     "Reviewer": {
       "oneOf": [
-        {
-          "description": "Gemini Code Assist",
-          "type": "string",
-          "const": "gemini"
-        },
         {
           "description": "Devin AI",
           "type": "string",
@@ -328,11 +312,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "direction",
-        "first",
-        "second"
-      ]
+      "required": ["direction", "first", "second"]
     },
     "SplitDirection": {
       "description": "Split direction.",
@@ -390,10 +370,7 @@
         },
         "repos_root": {
           "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "worktrees_dir": {

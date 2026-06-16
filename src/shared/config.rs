@@ -594,7 +594,7 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
 
 /// Recursively merge two YAML values. Mappings merge key-by-key; any other type
 /// (sequence, scalar, null) is replaced wholesale by `overlay`. This means
-/// `reviewers: [gemini]` cleanly overrides a previous `reviewers: [gemini, devin]`
+/// `reviewers: [devin]` cleanly overrides a previous `reviewers: [devin, coderabbit]`
 /// rather than appending.
 fn merge_yaml(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml::Value {
     match (base, overlay) {
@@ -1119,7 +1119,7 @@ mod tests {
                   fohte:
                     ai:
                       review:
-                        reviewers: [gemini, devin]
+                        reviewers: [coderabbit, devin]
                   acme:
                     ai:
                       review:
@@ -1136,7 +1136,7 @@ mod tests {
                   fohte:
                     ai:
                       review:
-                        reviewers: [gemini]
+                        reviewers: [coderabbit]
                   contoso:
                     ai:
                       review:
@@ -1148,7 +1148,7 @@ mod tests {
         let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(
             config.orgs["fohte"].ai.review.reviewers,
-            Some(vec![Reviewer::Gemini])
+            Some(vec![Reviewer::CodeRabbit])
         );
         assert_eq!(
             config.orgs["acme"].ai.review.reviewers,
@@ -1200,7 +1200,7 @@ mod tests {
                   acme:
                     ai:
                       review:
-                        reviewers: [gemini]
+                        reviewers: [coderabbit]
             "},
         )
         .unwrap();
@@ -1209,7 +1209,7 @@ mod tests {
         let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(
             config.orgs["acme"].ai.review.reviewers,
-            Some(vec![Reviewer::Gemini])
+            Some(vec![Reviewer::CodeRabbit])
         );
     }
 
@@ -1223,10 +1223,10 @@ mod tests {
 
     #[rstest]
     #[case::repo_beats_org("fohte", "work-repo", Some(vec![Reviewer::Devin]))]
-    #[case::org_when_no_repo_entry("fohte", "any-repo", Some(vec![Reviewer::Gemini]))]
+    #[case::org_when_no_repo_entry("fohte", "any-repo", Some(vec![Reviewer::CodeRabbit]))]
     // Guards the inner `let`-chain: a repo entry that exists but leaves
     // `ai.review.reviewers` unset must still fall through to the org default.
-    #[case::repo_entry_without_reviewers_falls_back_to_org("fohte", "no-reviewers", Some(vec![Reviewer::Gemini]))]
+    #[case::repo_entry_without_reviewers_falls_back_to_org("fohte", "no-reviewers", Some(vec![Reviewer::CodeRabbit]))]
     #[case::owner_unknown_returns_none("stranger", "any-repo", None)]
     fn resolve_reviewers_precedence(
         #[case] owner: &str,
@@ -1238,7 +1238,7 @@ mod tests {
               fohte:
                 ai:
                   review:
-                    reviewers: [gemini]
+                    reviewers: [coderabbit]
             repos:
               fohte/work-repo:
                 ai:
