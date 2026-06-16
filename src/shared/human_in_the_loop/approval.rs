@@ -25,13 +25,12 @@ const APPROVAL_MAC_DOMAIN: &[u8] = b"approval-mac-v1\n";
 /// writable. Not a stable public API.
 const APPROVAL_DIR_ENV: &str = "ARMYKNIFE_APPROVAL_DIR";
 
-/// Manages document approval state using HMAC-SHA256.
+/// Manages document approval state.
 ///
-/// When a document is approved, an HMAC of its content is written to a
-/// file in the user's state directory under an opaque name derived from
-/// the document path. The name does not embed the document path itself,
-/// so a directory listing reveals neither which document is approved
-/// nor how the filename would be reconstructed.
+/// The approval record lives under the user's state directory keyed by
+/// an opaque, key-derived id, not next to the document. Callers must
+/// pass the same `document_path` representation to `save` and `verify`;
+/// the id is computed from path bytes verbatim.
 pub struct ApprovalManager {
     approve_path: PathBuf,
     document_path: PathBuf,

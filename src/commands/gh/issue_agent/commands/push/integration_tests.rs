@@ -506,6 +506,7 @@ async fn test_push_approval_check(
 
     // Drop the approval record for issue.md that TestSetup creates so the
     // approval check sees this document as unapproved.
+    crate::shared::testing::init_approval_dir();
     let _ =
         crate::shared::human_in_the_loop::ApprovalManager::new(&test_dir.path().join("issue.md"))
             .remove();
