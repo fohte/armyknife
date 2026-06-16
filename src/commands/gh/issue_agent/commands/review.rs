@@ -186,9 +186,9 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         std::process::exit(exit_code::ALREADY_OPEN);
     }
 
-    // Check approval via .approve file rather than the document's frontmatter,
-    // because on_review_complete may have stripped the temporary frontmatter
-    // (for comment files), making the re-read document appear unapproved.
+    // Check approval via the approval record rather than the document's
+    // frontmatter, because on_review_complete may have stripped the temporary
+    // frontmatter (for comment files), making the re-read document appear unapproved.
     let approval = crate::shared::human_in_the_loop::ApprovalManager::new(&path);
     if !approval.exists() {
         eprintln!("Review not approved.");

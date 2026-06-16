@@ -14,7 +14,7 @@ pub mod exit_code;
 mod lock;
 mod tmux;
 
-pub use approval::ApprovalManager;
+pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
 pub use document::{Document, DocumentSchema};
 pub use editor::{LaunchOptions, launch_terminal, run_editor};
 pub use error::{HumanInTheLoopError, Result};

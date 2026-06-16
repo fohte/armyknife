@@ -1,7 +1,6 @@
 use indoc::formatdoc;
 use lazy_regex::{regex_captures, regex_is_match};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -9,7 +8,7 @@ use thiserror::Error;
 
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
-use crate::shared::human_in_the_loop::DocumentSchema;
+use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -160,10 +159,6 @@ impl DraftFile {
         draft_path.with_extension("md.lock")
     }
 
-    pub fn approve_path(draft_path: &Path) -> PathBuf {
-        draft_path.with_extension("md.approve")
-    }
-
     /// Extract owner, repo, and branch from a draft file path.
     /// Path format: /tmp/pr-body-draft/<owner>/<repo>/<branch>.md
     /// Note: branch names can contain "/" (e.g., "feature/foo"), resulting in nested paths.
@@ -206,44 +201,30 @@ impl DraftFile {
         })
     }
 
-    pub fn compute_hash(&self) -> io::Result<String> {
-        let content = fs::read_to_string(&self.path)?;
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        Ok(crate::shared::hex::encode(&hasher.finalize()))
+    fn approval_manager(&self) -> ApprovalManager {
+        ApprovalManager::new(&self.path)
     }
 
     #[cfg(test)]
     pub fn save_approval(&self) -> Result<()> {
-        let hash = self.compute_hash()?;
-        let approve_path = Self::approve_path(&self.path);
-        fs::write(&approve_path, hash)?;
+        self.approval_manager().save()?;
         Ok(())
     }
 
     pub fn remove_approval(&self) -> Result<()> {
-        let approve_path = Self::approve_path(&self.path);
-        if approve_path.exists() {
-            fs::remove_file(&approve_path)?;
-        }
+        self.approval_manager().remove()?;
         Ok(())
     }
 
     pub fn verify_approval(&self) -> Result<()> {
-        let approve_path = Self::approve_path(&self.path);
-
-        if !approve_path.exists() {
-            return Err(PrDraftError::NotApproved.into());
+        match self.approval_manager().verify() {
+            Ok(()) => Ok(()),
+            Err(HumanInTheLoopError::NotApproved) => Err(PrDraftError::NotApproved.into()),
+            Err(HumanInTheLoopError::ModifiedAfterApproval) => {
+                Err(PrDraftError::ModifiedAfterApproval.into())
+            }
+            Err(other) => Err(other.into()),
         }
-
-        let saved_hash = fs::read_to_string(&approve_path)?.trim().to_string();
-        let current_hash = self.compute_hash()?;
-
-        if saved_hash != current_hash {
-            return Err(PrDraftError::ModifiedAfterApproval.into());
-        }
-
-        Ok(())
     }
 
     pub fn remove_lock(&self) -> Result<()> {

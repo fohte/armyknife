@@ -225,8 +225,8 @@ async fn run_with_context(
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;
 
-        // Clean up .approve files after successful push
-        cleanup_approve_files(&changeset, ctx);
+        // Clean up approval records after successful push
+        cleanup_approval_records(&changeset, ctx);
     }
 
     // Show result
@@ -296,8 +296,8 @@ fn verify_changeset_approval(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> a
     Ok(())
 }
 
-/// Remove .approve files for changed files after successful push.
-fn cleanup_approve_files(changeset: &ChangeSet<'_>, ctx: &IssueContext) {
+/// Remove approval records for changed files after successful push.
+fn cleanup_approval_records(changeset: &ChangeSet<'_>, ctx: &IssueContext) {
     let paths = collect_approval_paths(changeset, ctx);
     for path in &paths {
         let manager = ApprovalManager::new(path);

@@ -504,8 +504,12 @@ async fn test_push_approval_check(
         .build()
         .await;
 
-    // Remove the .approve file for issue.md that TestSetup creates
-    let _ = std::fs::remove_file(test_dir.path().join("issue.md.approve"));
+    // Drop the approval record for issue.md that TestSetup creates so the
+    // approval check sees this document as unapproved.
+    crate::shared::testing::init_approval_dir();
+    let _ =
+        crate::shared::human_in_the_loop::ApprovalManager::new(&test_dir.path().join("issue.md"))
+            .remove();
 
     let client = mock.client();
     let result = run_with_client_and_storage(
