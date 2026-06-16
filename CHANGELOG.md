@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.214](https://github.com/fohte/armyknife/compare/v0.1.213...v0.1.214) (2026-06-16)
+
+
+### Features
+
+* **hitl:** authenticate approvals with HMAC and relocate them ([#665](https://github.com/fohte/armyknife/issues/665)) ([e0917b5](https://github.com/fohte/armyknife/commit/e0917b54a0f6642fa6097bdd0e8d8dc5286fe0f1))
+
 ## [0.1.213](https://github.com/fohte/armyknife/compare/v0.1.212...v0.1.213) (2026-06-15)
 
 
