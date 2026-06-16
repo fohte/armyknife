@@ -354,7 +354,6 @@ mod tests {
         let now = Utc::now();
         let client = MockDetectionClient::new()
             .with_check_run("devin-review", None)
-            .with_commit_status("CodeRabbit", "PENDING", now)
             .with_review(Reviewer::CodeRabbit, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
             .skip_first_n_review_calls(2);
