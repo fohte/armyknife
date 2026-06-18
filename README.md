@@ -306,6 +306,7 @@ Claude Code session monitoring with tmux integration.
 | `hook <event>`                         |         | Record session events (called from Claude Code hooks)                    |
 | `list`                                 | `ls`    | List all Claude Code sessions with status                                |
 | `focus <session_id>`                   |         | Focus on a session's tmux pane                                           |
+| `mark-read [-t <pane_id>]`             |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
 | `resume [session_id]`                  | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
 | `resurrect save`                       |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
 | `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
@@ -443,7 +444,15 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 #### Unread stopped sessions
 
-A `stopped` session that has not been visited since it most recently entered the stopped state renders as `✱` (unread) in `a cc watch`, `a cc list`, the tree under `a wm` views, and the per-window `@armyknife-cc-window-status` indicator. As soon as `a cc focus <session_id>` succeeds the session is marked read and the indicator reverts to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
+A `stopped` session that has not been focused since it most recently entered the stopped state renders as `✱` (unread) in `a cc watch`, `a cc list`, the tree under `a wm` views, and the per-window `@armyknife-cc-window-status` indicator. Focusing the pane marks the session read and reverts the indicator to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
+
+Wire `a cc mark-read` into tmux's `pane-focus-in` hook so any path of focusing the pane (TUI `f` key, tmux keybindings, mouse, etc.) clears the unread state:
+
+```tmux
+set-hook -g pane-focus-in 'run-shell -b "a cc mark-read -t #{pane_id}"'
+```
+
+`-b` runs the command in the background so the focus transition is not blocked by the disk write.
 
 #### Window status
 

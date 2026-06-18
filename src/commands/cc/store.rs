@@ -502,7 +502,7 @@ where
 mod tests {
     use super::*;
     use crate::commands::cc::types::SessionStatus;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use rstest::fixture;
     use tempfile::TempDir;
 
@@ -826,6 +826,62 @@ mod tests {
                 path.exists(),
                 "paused session should be kept while its cwd exists"
             );
+        }
+    }
+
+    mod mark_session_read_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
+            let mut s = create_test_session("mark-target");
+            s.status = status;
+            s.read_at = read_at;
+            s
+        }
+
+        #[rstest]
+        // unread Stopped → marked read.
+        #[case::unread_stopped_marked(SessionStatus::Stopped, None, true)]
+        // already-read Stopped → no-op (preserves the existing timestamp).
+        #[case::read_stopped_noop(
+            SessionStatus::Stopped,
+            Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()),
+            false,
+        )]
+        // Running session must not gain read_at.
+        #[case::running_noop(SessionStatus::Running, None, false)]
+        // Ended session is not "Stopped" and must not gain read_at.
+        #[case::ended_noop(SessionStatus::Ended, None, false)]
+        fn marks_only_unread_stopped(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+            #[case] initial: Option<DateTime<Utc>>,
+            #[case] now_should_be_written: bool,
+        ) {
+            let session = make_session(status, initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+            mark_session_read_in(&temp_session_dir.sessions_path, "mark-target", now)
+                .expect("mark-read should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "mark-target")
+                .expect("load")
+                .expect("session exists");
+            let expected = if now_should_be_written {
+                Some(now)
+            } else {
+                initial
+            };
+            assert_eq!(reloaded.read_at, expected);
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+            mark_session_read_in(&temp_session_dir.sessions_path, "ghost", now)
+                .expect("missing session should be ok");
         }
     }
 
