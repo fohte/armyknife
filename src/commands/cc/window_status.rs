@@ -87,7 +87,7 @@ fn render_window_status(sessions: &[Session]) -> String {
     let mut symbols = String::new();
 
     for session in sessions {
-        if let Some(symbol) = format_window_symbol(session.status) {
+        if let Some(symbol) = format_window_symbol(session.status, session.read_at) {
             symbols.push_str(symbol);
         }
     }
@@ -120,11 +120,14 @@ fn window_status_changed(current: Option<&str>, rendered: &str) -> bool {
 /// `reverse` attribute (a common idiom for `window-status-activity-style`),
 /// painting the icon's cell with a color block that breaks out of the rest
 /// of the tab. Shape alone (●/◐/○/⏸) carries the status well enough.
-fn format_window_symbol(status: SessionStatus) -> Option<&'static str> {
+fn format_window_symbol(
+    status: SessionStatus,
+    read_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<&'static str> {
     if status == SessionStatus::Ended {
         return None;
     }
-    Some(status.display_symbol())
+    Some(status.display_symbol_with_read(read_at))
 }
 
 #[cfg(test)]
@@ -149,6 +152,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -158,13 +162,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, Some("\u{25cf}"))]
-    #[case::waiting(SessionStatus::WaitingInput, Some("\u{25d0}"))]
-    #[case::stopped(SessionStatus::Stopped, Some("\u{25cb}"))]
-    #[case::paused(SessionStatus::Paused, Some("\u{23f8}"))]
-    #[case::ended(SessionStatus::Ended, None)]
-    fn test_format_window_symbol(#[case] status: SessionStatus, #[case] expected: Option<&str>) {
-        assert_eq!(format_window_symbol(status), expected);
+    #[case::running(SessionStatus::Running, None, Some("\u{25cf}"))]
+    #[case::waiting(SessionStatus::WaitingInput, None, Some("\u{25d0}"))]
+    #[case::stopped_unread(SessionStatus::Stopped, None, Some("\u{2731}"))]
+    #[case::stopped_read(SessionStatus::Stopped, Some(Utc::now()), Some("\u{25cb}"))]
+    #[case::paused(SessionStatus::Paused, None, Some("\u{23f8}"))]
+    #[case::ended(SessionStatus::Ended, None, None)]
+    fn test_format_window_symbol(
+        #[case] status: SessionStatus,
+        #[case] read_at: Option<chrono::DateTime<Utc>>,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(format_window_symbol(status, read_at), expected);
     }
 
     #[rstest]
@@ -173,7 +182,7 @@ mod tests {
     #[case::paused(&[SessionStatus::Paused], "\u{23f8} ")]
     #[case::running_waiting_stopped(
         &[SessionStatus::Running, SessionStatus::WaitingInput, SessionStatus::Stopped],
-        "\u{25cf}\u{25d0}\u{25cb} "
+        "\u{25cf}\u{25d0}\u{2731} "
     )]
     #[case::skips_ended(
         &[SessionStatus::Ended, SessionStatus::Running],

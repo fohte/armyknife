@@ -441,9 +441,13 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 `min_context_tokens` is measured against the actual prompt size of the latest assistant turn (input + cache_read + cache_creation + output), so it tracks effective context use independent of which model context window (200k vs 1M) is in play.
 
+#### Unread stopped sessions
+
+A `stopped` session that has not been visited since it most recently entered the stopped state renders as `✱` (unread) in `a cc watch`, `a cc list`, the tree under `a wm` views, and the per-window `@armyknife-cc-window-status` indicator. As soon as `a cc focus <session_id>` succeeds the session is marked read and the indicator reverts to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
+
 #### Window status
 
-`a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `○` stopped, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
+`a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
 
 Reference the option from tmux's `window-status-format` to surface per-window session state next to the window name:
 

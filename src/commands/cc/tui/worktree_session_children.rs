@@ -19,6 +19,9 @@ pub struct SessionChild {
     /// `None` when the session has no tmux pane (e.g. resurrect-only state).
     pub pane_id: Option<String>,
     pub status: SessionStatus,
+    /// Mirrors `Session::read_at`. Drives the unread `✱` glyph in the tree
+    /// view: `Stopped` + `None` renders as unread.
+    pub read_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     /// `label` if present, otherwise the cwd basename.
     pub label: String,
@@ -52,6 +55,7 @@ pub fn sessions_under_worktree_from_canonical(
             session_id: s.session_id.clone(),
             pane_id: s.tmux_info.as_ref().map(|t| t.pane_id.clone()),
             status: s.status,
+            read_at: s.read_at,
             updated_at: s.updated_at,
             label: short_label(s),
             is_last: i == last_idx,
@@ -90,7 +94,7 @@ pub fn create_session_child_list_item(
     now: DateTime<Utc>,
 ) -> ListItem<'static> {
     let connector = if child.is_last { "└─" } else { "├─" };
-    let symbol = child.status.display_symbol();
+    let symbol = child.status.display_symbol_with_read(child.read_at);
     let s_style = Style::default().fg(status_color(child.status));
     let dim = Style::default().fg(Color::DarkGray);
     let time_ago = format_relative_time(child.updated_at, now);
@@ -158,6 +162,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -199,6 +204,7 @@ mod tests {
                     session_id: "new".to_string(),
                     pane_id: Some("%2".to_string()),
                     status: SessionStatus::Running,
+                    read_at: None,
                     updated_at: t0,
                     label: "wt".to_string(),
                     is_last: false,
@@ -207,6 +213,7 @@ mod tests {
                     session_id: "old".to_string(),
                     pane_id: Some("%1".to_string()),
                     status: SessionStatus::Running,
+                    read_at: None,
                     updated_at: t0 - chrono::Duration::seconds(120),
                     label: "wt".to_string(),
                     is_last: true,

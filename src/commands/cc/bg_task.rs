@@ -151,6 +151,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: bg_ids.iter().map(|s| s.to_string()).collect(),
+            read_at: None,
         }
     }
 
