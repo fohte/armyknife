@@ -444,15 +444,7 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 #### Unread stopped sessions
 
-A `stopped` session that has not been focused since it most recently entered the stopped state renders as `✱` (unread) in `a cc watch`, `a cc list`, the tree under `a wm` views, and the per-window `@armyknife-cc-window-status` indicator. Focusing the pane marks the session read and reverts the indicator to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
-
-Wire `a cc mark-read` into tmux's `pane-focus-in` hook so any path of focusing the pane (TUI `f` key, tmux keybindings, mouse, etc.) clears the unread state:
-
-```tmux
-set-hook -g pane-focus-in 'run-shell -b "a cc mark-read -t #{pane_id}"'
-```
-
-`-b` runs the command in the background so the focus transition is not blocked by the disk write.
+Stopped sessions that have not been focused since their most recent Stop render as `✱` (unread); focusing the pane reverts them to `○` (read). Wire `a cc mark-read` into tmux's `pane-focus-in` hook to enable this — see [docs/setup.md](docs/setup.md).
 
 #### Window status
 
