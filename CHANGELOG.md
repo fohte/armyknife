@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.216](https://github.com/fohte/armyknife/compare/v0.1.215...v0.1.216) (2026-06-18)
+
+
+### Features
+
+* **cc:** distinguish unread vs read for stopped sessions ([#672](https://github.com/fohte/armyknife/issues/672)) ([8d84774](https://github.com/fohte/armyknife/commit/8d8477446b30032addb2bc9db3f566c46d76b8b1))
+
 ## [0.1.215](https://github.com/fohte/armyknife/compare/v0.1.214...v0.1.215) (2026-06-16)
 
 
