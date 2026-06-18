@@ -62,6 +62,14 @@ pub struct Session {
     /// reports completion or a `KillShell` PostToolUse fires.
     #[serde(default)]
     pub pending_bg_task_ids: BTreeSet<String>,
+    /// Timestamp the user last focused this session via `a cc focus`.
+    /// `None` means the session has never been focused since its last
+    /// transition to `Stopped` (i.e. unread); `Some(_)` means read.
+    /// Reset to `None` every time the session re-enters `Stopped` so a new
+    /// idle turn re-surfaces as unread. Only meaningful while
+    /// `status == Stopped`; other statuses ignore it.
+    #[serde(default)]
+    pub read_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +107,23 @@ pub enum StatusColor {
     Yellow,
     Gray,
     Dim,
+}
+
+impl Session {
+    /// A `Stopped` session is unread when it has never been focused since its
+    /// most recent transition into `Stopped`. Drives the `✱` glyph.
+    pub fn is_unread_stopped(&self) -> bool {
+        self.status == SessionStatus::Stopped && self.read_at.is_none()
+    }
+
+    /// Status symbol that also reflects unread state.
+    pub fn display_symbol(&self) -> &'static str {
+        if self.is_unread_stopped() {
+            "✱"
+        } else {
+            self.status.display_symbol()
+        }
+    }
 }
 
 impl SessionStatus {
@@ -241,5 +266,69 @@ impl HookEvent {
             "session-end" => Ok(Self::SessionEnd),
             _ => Err(CcError::UnknownHookEvent(s.to_string()).into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use std::path::PathBuf;
+
+    fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
+        Session {
+            session_id: "s".to_string(),
+            cwd: PathBuf::from("/tmp/test"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+            read_at,
+        }
+    }
+
+    #[rstest]
+    #[case::running_unread(SessionStatus::Running, None, "\u{25cf}")]
+    #[case::running_read(SessionStatus::Running, Some(()), "\u{25cf}")]
+    #[case::waiting_unread(SessionStatus::WaitingInput, None, "\u{25d0}")]
+    #[case::stopped_unread(SessionStatus::Stopped, None, "\u{2731}")]
+    #[case::stopped_read(SessionStatus::Stopped, Some(()), "\u{25cb}")]
+    #[case::paused_unread(SessionStatus::Paused, None, "\u{23f8}")]
+    #[case::paused_read(SessionStatus::Paused, Some(()), "\u{23f8}")]
+    #[case::ended_unread(SessionStatus::Ended, None, "\u{25cb}")]
+    #[case::ended_read(SessionStatus::Ended, Some(()), "\u{25cb}")]
+    fn session_display_symbol_table(
+        #[case] status: SessionStatus,
+        #[case] read_marker: Option<()>,
+        #[case] expected: &str,
+    ) {
+        let read_at = read_marker.map(|()| Utc::now());
+        assert_eq!(session(status, read_at).display_symbol(), expected);
+    }
+
+    #[test]
+    fn read_at_defaults_to_none_when_missing_from_json() {
+        // Existing on-disk sessions predate `read_at`; deserialization must
+        // treat them as unread rather than failing.
+        let json = serde_json::json!({
+            "session_id": "legacy",
+            "cwd": "/tmp/legacy",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        });
+        let session: Session =
+            serde_json::from_value(json).expect("legacy session should deserialize");
+        assert_eq!(session.read_at, None);
     }
 }

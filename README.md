@@ -306,6 +306,7 @@ Claude Code session monitoring with tmux integration.
 | `hook <event>`                         |         | Record session events (called from Claude Code hooks)                    |
 | `list`                                 | `ls`    | List all Claude Code sessions with status                                |
 | `focus <session_id>`                   |         | Focus on a session's tmux pane                                           |
+| `mark-read [-t <pane_id>]`             |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
 | `resume [session_id]`                  | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
 | `resurrect save`                       |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
 | `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
@@ -441,9 +442,13 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 `min_context_tokens` is measured against the actual prompt size of the latest assistant turn (input + cache_read + cache_creation + output), so it tracks effective context use independent of which model context window (200k vs 1M) is in play.
 
+#### Unread stopped sessions
+
+Stopped sessions that have not been focused since their most recent Stop render as `✱` (unread); focusing the pane reverts them to `○` (read). Wire `a cc mark-read` into tmux's `pane-focus-in` hook to enable this — see [docs/setup.md](docs/setup.md).
+
 #### Window status
 
-`a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `○` stopped, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
+`a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
 
 Reference the option from tmux's `window-status-format` to surface per-window session state next to the window name:
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::error::CcError;
@@ -243,6 +243,53 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
+/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+///
+/// Holds the exclusive lock across the load-modify-save round-trip so a
+/// concurrent hook write of the full session (e.g. a new `last_message`)
+/// is not clobbered by a stale copy. A no-op when the session is missing,
+/// corrupted, no longer `Stopped`, or already marked read — `mark-read`
+/// only flips unread→read, never overwrites a fresh Stop.
+pub(crate) fn mark_session_read_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let path = session_file_in(sessions_dir, session_id)?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    acquire_lock(&lock_file)?;
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
+        return Ok(());
+    };
+    if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+        return Ok(());
+    }
+    session.read_at = Some(now);
+
+    let new_content = serde_json::to_string_pretty(&session)?;
+    let temp_path = path.with_extension("json.tmp");
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(new_content.as_bytes())?;
+    temp_file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
+    Ok(())
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
@@ -451,7 +498,7 @@ where
 mod tests {
     use super::*;
     use crate::commands::cc::types::SessionStatus;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use rstest::fixture;
     use tempfile::TempDir;
 
@@ -487,6 +534,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -777,6 +825,62 @@ mod tests {
         }
     }
 
+    mod mark_session_read_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
+            let mut s = create_test_session("mark-target");
+            s.status = status;
+            s.read_at = read_at;
+            s
+        }
+
+        #[rstest]
+        // unread Stopped → marked read.
+        #[case::unread_stopped_marked(SessionStatus::Stopped, None, true)]
+        // already-read Stopped → no-op (preserves the existing timestamp).
+        #[case::read_stopped_noop(
+            SessionStatus::Stopped,
+            Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()),
+            false,
+        )]
+        // Running session must not gain read_at.
+        #[case::running_noop(SessionStatus::Running, None, false)]
+        // Ended session is not "Stopped" and must not gain read_at.
+        #[case::ended_noop(SessionStatus::Ended, None, false)]
+        fn marks_only_unread_stopped(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+            #[case] initial: Option<DateTime<Utc>>,
+            #[case] now_should_be_written: bool,
+        ) {
+            let session = make_session(status, initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+            mark_session_read_in(&temp_session_dir.sessions_path, "mark-target", now)
+                .expect("mark-read should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "mark-target")
+                .expect("load")
+                .expect("session exists");
+            let expected = if now_should_be_written {
+                Some(now)
+            } else {
+                initial
+            };
+            assert_eq!(reloaded.read_at, expected);
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+            mark_session_read_in(&temp_session_dir.sessions_path, "ghost", now)
+                .expect("missing session should be ok");
+        }
+    }
+
     mod corrupted_file_recovery_tests {
         use super::*;
         use rstest::rstest;
@@ -851,6 +955,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             }
         }
 

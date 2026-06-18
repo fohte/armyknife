@@ -148,7 +148,7 @@ fn render_session_row<W: Write>(
         pad_or_truncate(&title, title_width),
         pad_or_truncate(&session_name, SESSION_WIDTH),
         pad_or_truncate(&window_name, WINDOW_WIDTH),
-        session.status.display_symbol(),
+        session.display_symbol(),
         status_display,
         updated_display
     )?;
@@ -255,6 +255,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -397,6 +398,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -412,6 +414,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -427,6 +430,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
         ];
 
@@ -442,7 +446,7 @@ mod tests {
                 TITLE                          SESSION          WINDOW       STATUS     UPDATED
                 -                              running          -            ● \x1b[32mrunning \x1b[0m just now
                 -                              waiting          -            ◐ \x1b[33mwaiting \x1b[0m just now
-                -                              stopped          -            ○ \x1b[90mstopped \x1b[0m just now
+                -                              stopped          -            ✱ \x1b[90mstopped \x1b[0m just now
             "}
         );
     }
@@ -693,6 +697,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -713,6 +718,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -728,6 +734,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
             },
         ];
 
@@ -742,7 +749,7 @@ mod tests {
                 TITLE                          SESSION          WINDOW       STATUS     UPDATED
                 -                              webapp           dev          ● \x1b[32mrunning \x1b[0m just now
                 -                              api              test         ◐ \x1b[33mwaiting \x1b[0m 5m ago
-                -                              docs             -            ○ \x1b[90mstopped \x1b[0m 1h ago
+                -                              docs             -            ✱ \x1b[90mstopped \x1b[0m 1h ago
             "}
         );
     }

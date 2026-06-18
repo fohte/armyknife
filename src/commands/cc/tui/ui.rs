@@ -905,7 +905,7 @@ fn create_tree_session_item(
     worktree_name: &str,
 ) -> ListItem<'static> {
     let session = entry.session;
-    let status_symbol = session.status.display_symbol();
+    let status_symbol = session.display_symbol();
     let s_color = status_color(session.status);
     let session_info = get_session_info(session, repo_name, worktree_name);
     let label = cached_title
@@ -1397,6 +1397,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -1700,7 +1701,7 @@ mod tests {
             ┌──────────────────────────────────────────────────────────────────────────────┐
             │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 1               │
             └──────────────────────────────────────────────────────────────────────────────┘
-            >○ ▎ docs  just now
+            >✱ ▎ docs  just now
                ▎
 
 

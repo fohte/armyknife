@@ -329,6 +329,7 @@ fn process_hook_event_impl(
                 label: env.session_label.clone(),
                 ancestor_session_ids,
                 pending_bg_task_ids: BTreeSet::new(),
+                read_at: None,
             }
         });
 
@@ -345,6 +346,10 @@ fn process_hook_event_impl(
         && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
     if !keep_paused {
         session.status = status;
+    }
+
+    if session.status == SessionStatus::Stopped {
+        session.read_at = None;
     }
 
     // Update tmux info if available
@@ -1328,6 +1333,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            read_at: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1371,6 +1377,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            read_at: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1539,6 +1546,63 @@ mod tests {
         assert_eq!(reloaded.pending_bg_task_ids, set_of(&["bg-1"]));
     }
 
+    #[rstest]
+    #[case::stop_resets_existing_read(
+        HookEvent::Stop,
+        None,
+        SessionStatus::Stopped,
+        Some(Utc::now()),
+        None
+    )]
+    #[case::running_keeps_read(
+        HookEvent::PreToolUse,
+        None,
+        SessionStatus::Stopped,
+        Some(Utc::now()),
+        Some(()),
+    )]
+    #[case::idle_prompt_resets_read(
+        HookEvent::Notification,
+        Some("idle_prompt"),
+        SessionStatus::Stopped,
+        Some(Utc::now()),
+        None
+    )]
+    fn read_at_reset_on_stopped_transition(
+        #[case] event: HookEvent,
+        #[case] notification_type: Option<&str>,
+        #[case] initial_status: SessionStatus,
+        #[case] initial_read_at: Option<chrono::DateTime<Utc>>,
+        #[case] expected_read_marker: Option<()>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "read-sess".to_string();
+        existing.status = initial_status;
+        existing.read_at = initial_read_at;
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let payload = if let Some(nt) = notification_type {
+            format!(
+                r#"{{"session_id":"read-sess","cwd":"/tmp/test","notification_type":"{}"}}"#,
+                nt
+            )
+        } else {
+            r#"{"session_id":"read-sess","cwd":"/tmp/test"}"#.to_string()
+        };
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "read-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.read_at.is_some(), expected_read_marker.is_some());
+    }
+
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
             session_id: "test-123".to_string(),
@@ -1554,6 +1618,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            read_at: None,
         }
     }
 
@@ -1858,6 +1923,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),
+                read_at: None,
             }
         }
 

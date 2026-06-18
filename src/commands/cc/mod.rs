@@ -7,6 +7,7 @@ mod error;
 mod focus;
 mod hook;
 mod list;
+mod mark_read;
 pub(crate) mod pane_input;
 mod pane_status;
 mod resume;
@@ -27,6 +28,7 @@ pub use clean_detached::CleanDetachedArgs;
 pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
+pub use mark_read::MarkReadArgs;
 pub use pane_status::HasPausedArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
@@ -48,6 +50,10 @@ pub enum CcCommands {
 
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
+
+    /// Mark the pane's Claude Code session as read (wire from tmux pane-focus-in)
+    #[command(name = "mark-read")]
+    MarkRead(MarkReadArgs),
 
     /// Resume a Claude Code session from tmux pane's user option
     #[command(visible_alias = "r")]
@@ -85,6 +91,7 @@ impl CcCommands {
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,
             Self::Focus(args) => focus::run(args)?,
+            Self::MarkRead(args) => mark_read::run(args)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Sweep(args) => sweep::run(args)?,
