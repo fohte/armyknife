@@ -819,9 +819,8 @@ mod tests {
         let repo = test_repo.open();
         let repo_path = test_repo.path();
 
-        // Simulate a remote-tracking branch without spawning a real remote:
-        // point refs/remotes/origin/remote-branch at HEAD, and register `origin`
-        // so `git worktree add --track` can set the upstream config.
+        // Simulate a remote-tracking branch to avoid spawning a real remote,
+        // providing the minimum refs and config required for git worktree --track to resolve.
         let head = run_git(&repo_path, ["rev-parse", "HEAD"]).unwrap();
         run_git(
             &repo_path,
