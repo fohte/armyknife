@@ -87,7 +87,7 @@ fn render_window_status(sessions: &[Session]) -> String {
     let mut symbols = String::new();
 
     for session in sessions {
-        if let Some(symbol) = format_window_symbol(session.status, session.read_at) {
+        if let Some(symbol) = format_window_symbol(session) {
             symbols.push_str(symbol);
         }
     }
@@ -120,14 +120,11 @@ fn window_status_changed(current: Option<&str>, rendered: &str) -> bool {
 /// `reverse` attribute (a common idiom for `window-status-activity-style`),
 /// painting the icon's cell with a color block that breaks out of the rest
 /// of the tab. Shape alone (●/◐/○/⏸) carries the status well enough.
-fn format_window_symbol(
-    status: SessionStatus,
-    read_at: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<&'static str> {
-    if status == SessionStatus::Ended {
+fn format_window_symbol(session: &Session) -> Option<&'static str> {
+    if session.status == SessionStatus::Ended {
         return None;
     }
-    Some(status.display_symbol_with_read(read_at))
+    Some(session.display_symbol())
 }
 
 #[cfg(test)]
@@ -137,7 +134,7 @@ mod tests {
     use rstest::rstest;
     use std::path::PathBuf;
 
-    fn session(status: SessionStatus) -> Session {
+    fn session(status: SessionStatus, read_at: Option<chrono::DateTime<Utc>>) -> Session {
         Session {
             session_id: "test-123".to_string(),
             cwd: PathBuf::from("/tmp/test"),
@@ -152,12 +149,12 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
-            read_at: None,
+            read_at,
         }
     }
 
     fn render(statuses: &[SessionStatus]) -> String {
-        let sessions: Vec<Session> = statuses.iter().copied().map(session).collect();
+        let sessions: Vec<Session> = statuses.iter().copied().map(|s| session(s, None)).collect();
         render_window_status(&sessions)
     }
 
@@ -173,7 +170,7 @@ mod tests {
         #[case] read_at: Option<chrono::DateTime<Utc>>,
         #[case] expected: Option<&str>,
     ) {
-        assert_eq!(format_window_symbol(status, read_at), expected);
+        assert_eq!(format_window_symbol(&session(status, read_at)), expected);
     }
 
     #[rstest]

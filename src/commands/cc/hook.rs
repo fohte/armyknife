@@ -1547,8 +1547,6 @@ mod tests {
     }
 
     #[rstest]
-    // Stop event clears a previously-set read_at, even though the existing
-    // status was already Stopped: a new Stop = new turn = re-surface as unread.
     #[case::stop_resets_existing_read(
         HookEvent::Stop,
         None,
@@ -1556,8 +1554,6 @@ mod tests {
         Some(Utc::now()),
         None
     )]
-    // Running events leave read_at untouched (the prior read mark only
-    // governs the visual at the next Stopped).
     #[case::running_keeps_read(
         HookEvent::PreToolUse,
         None,
@@ -1565,7 +1561,6 @@ mod tests {
         Some(Utc::now()),
         Some(()),
     )]
-    // Notification(idle_prompt) is treated as a Stop-class transition.
     #[case::idle_prompt_resets_read(
         HookEvent::Notification,
         Some("idle_prompt"),

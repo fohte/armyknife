@@ -19,8 +19,6 @@ pub struct SessionChild {
     /// `None` when the session has no tmux pane (e.g. resurrect-only state).
     pub pane_id: Option<String>,
     pub status: SessionStatus,
-    /// Mirrors `Session::read_at`. Drives the unread `✱` glyph in the tree
-    /// view: `Stopped` + `None` renders as unread.
     pub read_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     /// `label` if present, otherwise the cwd basename.
@@ -94,7 +92,11 @@ pub fn create_session_child_list_item(
     now: DateTime<Utc>,
 ) -> ListItem<'static> {
     let connector = if child.is_last { "└─" } else { "├─" };
-    let symbol = child.status.display_symbol_with_read(child.read_at);
+    let symbol = if child.status == SessionStatus::Stopped && child.read_at.is_none() {
+        "✱"
+    } else {
+        child.status.display_symbol()
+    };
     let s_style = Style::default().fg(status_color(child.status));
     let dim = Style::default().fg(Color::DarkGray);
     let time_ago = format_relative_time(child.updated_at, now);

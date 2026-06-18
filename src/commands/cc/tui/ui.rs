@@ -905,7 +905,7 @@ fn create_tree_session_item(
     worktree_name: &str,
 ) -> ListItem<'static> {
     let session = entry.session;
-    let status_symbol = session.status.display_symbol_with_read(session.read_at);
+    let status_symbol = session.display_symbol();
     let s_color = status_color(session.status);
     let session_info = get_session_info(session, repo_name, worktree_name);
     let label = cached_title

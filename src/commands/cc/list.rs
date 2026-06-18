@@ -148,7 +148,7 @@ fn render_session_row<W: Write>(
         pad_or_truncate(&title, title_width),
         pad_or_truncate(&session_name, SESSION_WIDTH),
         pad_or_truncate(&window_name, WINDOW_WIDTH),
-        session.status.display_symbol_with_read(session.read_at),
+        session.display_symbol(),
         status_display,
         updated_display
     )?;

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::error::CcError;
@@ -240,6 +240,57 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     fs::rename(&temp_path, &path)?;
 
     // Lock is automatically released when lock_file is dropped
+    Ok(())
+}
+
+/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+///
+/// Holds the exclusive lock across the load-modify-save round-trip so a
+/// concurrent hook write of the full session (e.g. a new `last_message`)
+/// is not clobbered by a stale copy from `focus`. A no-op when the session
+/// is missing, corrupted, no longer `Stopped`, or already marked read —
+/// `focus` only needs to flip unread→read, never overwrite a fresh Stop.
+pub fn mark_session_read(session_id: &str, now: DateTime<Utc>) -> Result<()> {
+    mark_session_read_in(&sessions_dir()?, session_id, now)
+}
+
+pub(crate) fn mark_session_read_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let path = session_file_in(sessions_dir, session_id)?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    acquire_lock(&lock_file)?;
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
+        return Ok(());
+    };
+    if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+        return Ok(());
+    }
+    session.read_at = Some(now);
+
+    let new_content = serde_json::to_string_pretty(&session)?;
+    let temp_path = path.with_extension("json.tmp");
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(new_content.as_bytes())?;
+    temp_file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
     Ok(())
 }
 

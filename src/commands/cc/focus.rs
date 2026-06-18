@@ -16,8 +16,7 @@ pub struct FocusArgs {
 /// Runs the focus command.
 /// Switches tmux focus to the pane associated with the specified session.
 pub fn run(args: &FocusArgs) -> Result<()> {
-    let sessions_dir = store::sessions_dir()?;
-    let mut session = store::load_session_from(&sessions_dir, &args.session_id)?
+    let session = store::load_session(&args.session_id)?
         .ok_or_else(|| CcError::SessionNotFound(args.session_id.clone()))?;
     let pane_id = session
         .tmux_info
@@ -27,9 +26,8 @@ pub fn run(args: &FocusArgs) -> Result<()> {
 
     tmux::focus_pane(&pane_id)?;
 
-    if session.status == SessionStatus::Stopped && session.read_at.is_none() {
-        session.read_at = Some(Utc::now());
-        store::save_session_to(&sessions_dir, &session)?;
+    if session.status == SessionStatus::Stopped {
+        store::mark_session_read(&args.session_id, Utc::now())?;
     }
 
     Ok(())

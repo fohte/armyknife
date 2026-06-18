@@ -109,6 +109,23 @@ pub enum StatusColor {
     Dim,
 }
 
+impl Session {
+    /// A `Stopped` session is unread when it has never been focused since its
+    /// most recent transition into `Stopped`. Drives the `✱` glyph.
+    pub fn is_unread_stopped(&self) -> bool {
+        self.status == SessionStatus::Stopped && self.read_at.is_none()
+    }
+
+    /// Status symbol that also reflects unread state.
+    pub fn display_symbol(&self) -> &'static str {
+        if self.is_unread_stopped() {
+            "✱"
+        } else {
+            self.status.display_symbol()
+        }
+    }
+}
+
 impl SessionStatus {
     pub fn display_symbol(&self) -> &'static str {
         match self {
@@ -117,16 +134,6 @@ impl SessionStatus {
             Self::Stopped | Self::Ended => "○",
             Self::Paused => "⏸",
         }
-    }
-
-    /// Status symbol that also reflects whether a `Stopped` session has been
-    /// read (focused) since its last transition into `Stopped`. Unread Stopped
-    /// renders as `✱`; everything else delegates to `display_symbol`.
-    pub fn display_symbol_with_read(&self, read_at: Option<DateTime<Utc>>) -> &'static str {
-        if matches!(self, Self::Stopped) && read_at.is_none() {
-            return "✱";
-        }
-        self.display_symbol()
     }
 
     pub fn display_name(&self) -> &'static str {
@@ -266,6 +273,26 @@ impl HookEvent {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::path::PathBuf;
+
+    fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
+        Session {
+            session_id: "s".to_string(),
+            cwd: PathBuf::from("/tmp/test"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+            read_at,
+        }
+    }
 
     #[rstest]
     #[case::running_unread(SessionStatus::Running, None, "\u{25cf}")]
@@ -277,13 +304,13 @@ mod tests {
     #[case::paused_read(SessionStatus::Paused, Some(()), "\u{23f8}")]
     #[case::ended_unread(SessionStatus::Ended, None, "\u{25cb}")]
     #[case::ended_read(SessionStatus::Ended, Some(()), "\u{25cb}")]
-    fn display_symbol_with_read_table(
+    fn session_display_symbol_table(
         #[case] status: SessionStatus,
         #[case] read_marker: Option<()>,
         #[case] expected: &str,
     ) {
         let read_at = read_marker.map(|()| Utc::now());
-        assert_eq!(status.display_symbol_with_read(read_at), expected);
+        assert_eq!(session(status, read_at).display_symbol(), expected);
     }
 
     #[test]
