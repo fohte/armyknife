@@ -28,6 +28,17 @@ pub struct SessionChild {
     pub is_last: bool,
 }
 
+impl SessionChild {
+    /// Same rule as `Session::display_symbol`: unread Stopped → `✱`.
+    pub fn display_symbol(&self) -> &'static str {
+        if self.status == SessionStatus::Stopped && self.read_at.is_none() {
+            "✱"
+        } else {
+            self.status.display_symbol()
+        }
+    }
+}
+
 /// Collects sessions whose cwd lives under `worktree_path`, sorted
 /// newest-first by `updated_at`. Takes pre-canonicalized `(cwd, session)`
 /// pairs so the caller can amortize canonicalize across many worktree
@@ -92,11 +103,7 @@ pub fn create_session_child_list_item(
     now: DateTime<Utc>,
 ) -> ListItem<'static> {
     let connector = if child.is_last { "└─" } else { "├─" };
-    let symbol = if child.status == SessionStatus::Stopped && child.read_at.is_none() {
-        "✱"
-    } else {
-        child.status.display_symbol()
-    };
+    let symbol = child.display_symbol();
     let s_style = Style::default().fg(status_color(child.status));
     let dim = Style::default().fg(Color::DarkGray);
     let time_ago = format_relative_time(child.updated_at, now);

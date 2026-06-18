@@ -247,13 +247,9 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
 ///
 /// Holds the exclusive lock across the load-modify-save round-trip so a
 /// concurrent hook write of the full session (e.g. a new `last_message`)
-/// is not clobbered by a stale copy from `focus`. A no-op when the session
-/// is missing, corrupted, no longer `Stopped`, or already marked read —
-/// `focus` only needs to flip unread→read, never overwrite a fresh Stop.
-pub fn mark_session_read(session_id: &str, now: DateTime<Utc>) -> Result<()> {
-    mark_session_read_in(&sessions_dir()?, session_id, now)
-}
-
+/// is not clobbered by a stale copy. A no-op when the session is missing,
+/// corrupted, no longer `Stopped`, or already marked read — `mark-read`
+/// only flips unread→read, never overwrites a fresh Stop.
 pub(crate) fn mark_session_read_in(
     sessions_dir: &Path,
     session_id: &str,

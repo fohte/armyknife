@@ -3,6 +3,7 @@ use chrono::Utc;
 use clap::Args;
 
 use super::store;
+use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::TMUX_SESSION_OPTION;
 use crate::infra::tmux;
 
@@ -27,7 +28,15 @@ pub fn run(args: &MarkReadArgs) -> Result<()> {
     let Some(session_id) = lookup_session_id(args.pane_id.as_deref()) else {
         return Ok(());
     };
-    store::mark_session_read(&session_id, Utc::now())?;
+    let sessions_dir = store::sessions_dir()?;
+    store::mark_session_read_in(&sessions_dir, &session_id, Utc::now())?;
+
+    // The rendered `@armyknife-cc-window-status` value depends on `read_at`,
+    // so the window option holds the stale `✱` until something resyncs it.
+    // Without this push the indicator would only flip to `○` on the next
+    // hook event for the window — defeating the point of `pane-focus-in`.
+    LiveTmuxStatusSyncer.sync(args.pane_id.as_deref(), None, &sessions_dir);
+
     Ok(())
 }
 
