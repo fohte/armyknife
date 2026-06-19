@@ -141,10 +141,9 @@ impl SideEffects {
         }
     }
 
-    /// Pushes the latest pane / window status into tmux, or records the call
-    /// for tests. The `self.tmux` flag gates the real side effect; the
-    /// `tmux_sync_calls` recorder runs regardless so tests that opt into
-    /// observing the call don't need to also enable real tmux side effects.
+    /// Pushes the latest pane / window status into tmux. In tests, also
+    /// records the call into `tmux_sync_calls` so assertions don't require
+    /// real tmux.
     fn sync_tmux(&self, pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
         #[cfg(test)]
         if let Some(rec) = &self.tmux_sync_calls {
@@ -239,6 +238,11 @@ fn process_hook_event_impl(
     // Claude Code process, its shutdown fires SessionEnd, which would
     // otherwise clobber the Paused marker and break `a cc resume`.
     if event == HookEvent::SessionEnd {
+        // When the session file is gone the pane_id is unrecoverable
+        // (hook input only carries session_id), so we silently drop the
+        // SessionEnd. The pane option is keyed off the pane's bound
+        // session_id and will be reconciled the next time that pane fires
+        // a hook for the new session.
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
             let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
             if session.status != SessionStatus::Paused {
