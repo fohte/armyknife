@@ -140,11 +140,18 @@ fn wait_for_prior_claim(path: &Path) {
 }
 
 fn wait_for_prior_claim_with(path: &Path, poll: Duration, stale_after: Duration) {
+    let start = Instant::now();
     while path.exists() {
-        if let Ok(meta) = fs::metadata(path)
+        let is_stale = if let Ok(meta) = fs::metadata(path)
             && let Ok(modified) = meta.modified()
-            && modified.elapsed().unwrap_or_default() > stale_after
         {
+            modified.elapsed().unwrap_or_default() > stale_after
+        } else {
+            // metadata unavailable: fall back to our own elapsed time so we
+            // don't loop forever on a filesystem that hides mtime.
+            start.elapsed() > stale_after
+        };
+        if is_stale {
             let _ = fs::remove_file(path);
             return;
         }
