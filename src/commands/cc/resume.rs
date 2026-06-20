@@ -1,24 +1,27 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use clap::Args;
 
 use super::error::CcError;
 use super::types::TMUX_SESSION_OPTION;
-use crate::infra::{process, tmux};
+use crate::infra::tmux;
 use crate::shared::cache;
-use crate::shared::command::find_command_path;
+use crate::shared::command::{self, find_command_path};
+use crate::shared::env_var::EnvVars;
 
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
-
 const LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Minimum spacing between two consecutive `claude --resume` startups.
-/// Must be long enough for the first claude to finish reading its
-/// session-id files before the next one starts.
-const LOCK_HOLD: Duration = Duration::from_millis(500);
+const CLAIM_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Force-clear the claim after this duration. Triggers when claude crashes
+/// before its SessionStart hook fires, or when the user has no armyknife
+/// SessionStart hook configured.
+const CLAIM_STALE_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
@@ -39,7 +42,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
 
-    // Serialize claude startup across panes.
+    let claim_path = resume_claim_path()?;
     let lock = match acquire_resume_lock() {
         Ok(lock) => Some(lock),
         Err(e) => {
@@ -50,11 +53,17 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         }
     };
     if lock.is_some() {
-        std::thread::sleep(LOCK_HOLD);
+        wait_for_prior_claim(&claim_path);
+        if let Err(e) = create_resume_claim(&claim_path) {
+            eprintln!("warning: failed to create cc resume claim: {e}");
+        }
     }
     drop(lock);
 
-    let err = process::exec_replace(&claude_path, ["--resume", &session_id]);
+    let err = command::new(&claude_path)
+        .args(["--resume", &session_id])
+        .env(EnvVars::resume_ack_name(), &claim_path)
+        .exec();
     bail!("Failed to exec claude: {}", err)
 }
 
@@ -83,6 +92,15 @@ fn resume_lock_path() -> Result<PathBuf> {
         .ok_or_else(|| CcError::CacheDirNotFound.into())
 }
 
+/// Returns the claim sentinel path: `~/.cache/armyknife/cc/resume.claim`.
+/// Created by `a cc resume`; deleted by `a cc hook` SessionStart to signal
+/// that claude has past its racy session-id read.
+fn resume_claim_path() -> Result<PathBuf> {
+    cache::base_dir()
+        .map(|d| d.join("cc").join("resume.claim"))
+        .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
 fn acquire_resume_lock() -> Result<File> {
     acquire_exclusive_lock_at(&resume_lock_path()?, LOCK_TIMEOUT, LOCK_RETRY_DELAY)
 }
@@ -102,12 +120,12 @@ fn acquire_exclusive_lock_at(
         .truncate(false)
         .open(path)?;
 
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),
             Err(TryLockError::WouldBlock) => {
-                if std::time::Instant::now() >= deadline {
+                if Instant::now() >= deadline {
                     return Err(CcError::LockTimeout(timeout).into());
                 }
                 std::thread::sleep(retry_delay);
@@ -117,11 +135,37 @@ fn acquire_exclusive_lock_at(
     }
 }
 
+fn wait_for_prior_claim(path: &Path) {
+    wait_for_prior_claim_with(path, CLAIM_POLL_INTERVAL, CLAIM_STALE_AFTER);
+}
+
+fn wait_for_prior_claim_with(path: &Path, poll: Duration, stale_after: Duration) {
+    while path.exists() {
+        if let Ok(meta) = fs::metadata(path)
+            && let Ok(modified) = meta.modified()
+            && modified.elapsed().unwrap_or_default() > stale_after
+        {
+            let _ = fs::remove_file(path);
+            return;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
+fn create_resume_claim(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, std::process::id().to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;
     use std::time::{Duration, Instant};
 
+    use filetime::{FileTime, set_file_mtime};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
@@ -176,15 +220,49 @@ mod tests {
     }
 
     #[rstest]
-    fn second_acquire_succeeds_after_first_release(tmpdir: TempDir) {
-        let path = tmpdir.path().join("resume.lock");
-        {
-            let _lock =
-                acquire_exclusive_lock_at(&path, Duration::from_secs(1), Duration::from_millis(10))
-                    .expect("first acquire");
-        }
-        let result =
-            acquire_exclusive_lock_at(&path, Duration::from_secs(1), Duration::from_millis(10));
-        assert_eq!((result.is_ok(), path.exists()), (true, true));
+    fn wait_returns_immediately_when_no_claim(tmpdir: TempDir) {
+        let path = tmpdir.path().join("resume.claim");
+        let start = Instant::now();
+        wait_for_prior_claim_with(&path, Duration::from_millis(50), Duration::from_secs(60));
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[rstest]
+    fn wait_returns_when_claim_removed(tmpdir: TempDir) {
+        let path = tmpdir.path().join("resume.claim");
+        fs::write(&path, "owner").expect("write claim");
+        let path_clone = path.clone();
+        let removed_at = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            fs::remove_file(&path_clone).expect("remove");
+            Instant::now()
+        });
+        let start = Instant::now();
+        wait_for_prior_claim_with(&path, Duration::from_millis(20), Duration::from_secs(60));
+        let waited = start.elapsed();
+        removed_at.join().expect("join");
+        assert_eq!(
+            (waited >= Duration::from_millis(80), path.exists()),
+            (true, false),
+        );
+    }
+
+    #[rstest]
+    fn wait_force_clears_stale_claim(tmpdir: TempDir) {
+        let path = tmpdir.path().join("resume.claim");
+        fs::write(&path, "stale").expect("write claim");
+        let two_hours_ago = std::time::SystemTime::now() - Duration::from_secs(7200);
+        set_file_mtime(&path, FileTime::from_system_time(two_hours_ago)).expect("set mtime");
+
+        wait_for_prior_claim_with(&path, Duration::from_millis(10), Duration::from_secs(60));
+        assert!(!path.exists());
+    }
+
+    #[rstest]
+    fn create_resume_claim_writes_pid(tmpdir: TempDir) {
+        let path = tmpdir.path().join("nested").join("resume.claim");
+        create_resume_claim(&path).expect("create");
+        let content = fs::read_to_string(&path).expect("read");
+        assert_eq!(content, std::process::id().to_string());
     }
 }
