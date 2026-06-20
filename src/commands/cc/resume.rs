@@ -11,15 +11,13 @@ use crate::infra::{process, tmux};
 use crate::shared::cache;
 use crate::shared::command::find_command_path;
 
-/// Per-iteration sleep while waiting to acquire the resume lock.
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
 
-/// Upper bound on time spent waiting for the lock.
 const LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// How long to hold the lock before `exec`ing claude.
-/// Holding past `exec` ensures claude's session-id read settles before the
-/// next waiter's claude startup touches the same files.
+/// Minimum spacing between two consecutive `claude --resume` startups.
+/// Must be long enough for the first claude to finish reading its
+/// session-id files before the next one starts.
 const LOCK_HOLD: Duration = Duration::from_millis(500);
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -41,12 +39,8 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
 
-    // Serialize claude startup across panes. The fd is closed automatically
-    // on exec (Rust opens files with O_CLOEXEC), which releases the flock so
-    // the next waiter can begin its own LOCK_HOLD window.
-    // Best-effort: if the lock can't be acquired (e.g. cache dir broken),
-    // warn and proceed so resume keeps working.
-    let _lock = match acquire_resume_lock() {
+    // Serialize claude startup across panes.
+    let lock = match acquire_resume_lock() {
         Ok(lock) => Some(lock),
         Err(e) => {
             eprintln!(
@@ -55,7 +49,10 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
             None
         }
     };
-    std::thread::sleep(LOCK_HOLD);
+    if lock.is_some() {
+        std::thread::sleep(LOCK_HOLD);
+    }
+    drop(lock);
 
     let err = process::exec_replace(&claude_path, ["--resume", &session_id]);
     bail!("Failed to exec claude: {}", err)
@@ -188,6 +185,6 @@ mod tests {
         }
         let result =
             acquire_exclusive_lock_at(&path, Duration::from_secs(1), Duration::from_millis(10));
-        assert!(result.is_ok());
+        assert_eq!((result.is_ok(), path.exists()), (true, true));
     }
 }
