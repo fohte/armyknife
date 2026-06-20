@@ -815,68 +815,30 @@ mod tests {
 
     #[rstest]
     fn add_worktree_for_branch_tracks_remote_branch() {
-        // Create a "remote" bare repo and a local clone so that --track can
-        // resolve the upstream for origin/*.
-        let remote_dir = tempfile::tempdir().unwrap();
-        let remote_path = remote_dir.path();
-        let status = Command::new("git")
-            .arg("init")
-            .arg("--bare")
-            .arg("-q")
-            .arg("-b")
-            .arg("master")
-            .arg(remote_path)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        let repo_path = test_repo.path();
 
-        // Seed the bare remote with a master commit and remote-branch.
-        let seed_dir = tempfile::tempdir().unwrap();
-        let seed_path = seed_dir.path();
-        let status = Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg("-b")
-            .arg("master")
-            .arg(seed_path)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success());
-        git_in(seed_path, &["commit", "--allow-empty", "-q", "-m", "init"]);
-        git_in(seed_path, &["branch", "remote-branch"]);
-        git_in(
-            seed_path,
-            &["remote", "add", "origin", remote_path.to_str().unwrap()],
-        );
-        git_in(
-            seed_path,
-            &["push", "-q", "origin", "master", "remote-branch"],
-        );
+        // Simulate a remote-tracking branch to avoid spawning a real remote,
+        // providing the minimum refs and config required for git worktree --track to resolve.
+        let head = run_git(&repo_path, ["rev-parse", "HEAD"]).unwrap();
+        run_git(
+            &repo_path,
+            ["update-ref", "refs/remotes/origin/remote-branch", &head],
+        )
+        .unwrap();
+        run_git(&repo_path, ["config", "remote.origin.url", "."]).unwrap();
+        run_git(
+            &repo_path,
+            [
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        )
+        .unwrap();
 
-        // Clone the populated remote.
-        let local_dir = tempfile::tempdir().unwrap();
-        let local_path = local_dir
-            .path()
-            .canonicalize()
-            .unwrap_or_else(|_| local_dir.path().to_path_buf());
-        let status = Command::new("git")
-            .arg("clone")
-            .arg("-q")
-            .arg(remote_path)
-            .arg(&local_path)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let repo = crate::infra::git::open_repo_at(&local_path).unwrap();
-
-        let worktrees_dir = local_path.join(".worktrees");
+        let worktrees_dir = repo_path.join(".worktrees");
         std::fs::create_dir_all(&worktrees_dir).unwrap();
         let worktree_dir = worktrees_dir.join("remote-branch");
 
