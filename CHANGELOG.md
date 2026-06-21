@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.217](https://github.com/fohte/armyknife/compare/v0.1.216...v0.1.217) (2026-06-21)
+
+
+### Bug Fixes
+
+* **cc:** work around concurrent `a cc r` resuming the same session ([#678](https://github.com/fohte/armyknife/issues/678)) ([b86349d](https://github.com/fohte/armyknife/commit/b86349d991a44aa7d357865c0d963d7f2ac8df4e))
+
 ## [0.1.216](https://github.com/fohte/armyknife/compare/v0.1.215...v0.1.216) (2026-06-18)
 
 
