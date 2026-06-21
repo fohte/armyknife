@@ -20,6 +20,7 @@ const PR_HEAD: &str = "ARMYKNIFE_PR_HEAD";
 const PR_BASE: &str = "ARMYKNIFE_PR_BASE";
 const PR_NUMBER: &str = "ARMYKNIFE_PR_NUMBER";
 const PR_IS_UPDATE: &str = "ARMYKNIFE_PR_IS_UPDATE";
+const RESUME_ACK: &str = "ARMYKNIFE_RESUME_ACK";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
 pub struct EnvVars {
@@ -130,5 +131,12 @@ impl EnvVars {
     /// Returns the env var name for PR_IS_UPDATE ("1" when updating, "0" when creating).
     pub fn pr_is_update_name() -> &'static str {
         PR_IS_UPDATE
+    }
+
+    /// Returns the env var name for RESUME_ACK.
+    /// Set by `a cc resume` to a sentinel path; SessionStart hook deletes the file
+    /// to signal the next `a cc resume` that claude has past its session-id read.
+    pub fn resume_ack_name() -> &'static str {
+        RESUME_ACK
     }
 }

@@ -63,6 +63,7 @@ tracing-appender = "=0.2.5"
 uuid = { version = "=1.23.3", features = ["v4"] }
 
 [dev-dependencies]
+filetime = "=0.2.29"
 rstest = "=0.26.1"
 temp-env = "=0.3.6"
 wiremock = "=0.6.5"
