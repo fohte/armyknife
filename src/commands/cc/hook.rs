@@ -1429,26 +1429,14 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let session = Session {
-            session_id: "pane-sess".to_string(),
-            cwd: "/tmp/test".into(),
-            transcript_path: None,
-            tty: None,
-            tmux_info: Some(TmuxInfo {
-                session_name: "main".to_string(),
-                window_name: "claude".to_string(),
-                window_index: 0,
-                pane_id: "%42".to_string(),
-            }),
-            status: initial_status,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            last_message: None,
-            current_tool: None,
-            label: None,
-            ancestor_session_ids: Vec::new(),
-            pending_bg_task_ids: BTreeSet::new(),
-        };
+        let mut session = create_test_session(Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        }));
+        session.session_id = "pane-sess".to_string();
+        session.status = initial_status;
         store::save_session_to(sessions_dir, &session).expect("save");
 
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
