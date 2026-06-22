@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.218](https://github.com/fohte/armyknife/compare/v0.1.217...v0.1.218) (2026-06-22)
+
+
+### Bug Fixes
+
+* **cc:** preserve sweep's Paused pane option on SessionEnd ([#681](https://github.com/fohte/armyknife/issues/681)) ([faf1a4d](https://github.com/fohte/armyknife/commit/faf1a4da9bc6f57cc46ad1a1a9e12bf2a097ea30))
+
 ## [0.1.217](https://github.com/fohte/armyknife/compare/v0.1.216...v0.1.217) (2026-06-21)
 
 
