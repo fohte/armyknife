@@ -105,7 +105,17 @@ struct SideEffects {
     /// without invoking hammerspoon.
     #[cfg(test)]
     removed_notification_groups: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records (pane_id, status, sessions_dir) tuples
+    /// passed to `sync_tmux`. Lets tests assert the call happened with the
+    /// expected status without invoking tmux.
+    #[cfg(test)]
+    tmux_sync_calls: Option<TmuxSyncCallSink>,
 }
+
+#[cfg(test)]
+type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
+#[cfg(test)]
+type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
 
 impl SideEffects {
     fn all() -> Self {
@@ -115,6 +125,8 @@ impl SideEffects {
             auto_compact: true,
             #[cfg(test)]
             removed_notification_groups: None,
+            #[cfg(test)]
+            tmux_sync_calls: None,
         }
     }
 
@@ -125,6 +137,24 @@ impl SideEffects {
             notifications: false,
             auto_compact: false,
             removed_notification_groups: None,
+            tmux_sync_calls: None,
+        }
+    }
+
+    /// Pushes the latest pane / window status into tmux. In tests, also
+    /// records the call into `tmux_sync_calls` so assertions don't require
+    /// real tmux.
+    fn sync_tmux(&self, pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
+        #[cfg(test)]
+        if let Some(rec) = &self.tmux_sync_calls {
+            rec.lock().expect("tmux_sync_calls mutex poisoned").push((
+                pane_id.map(str::to_string),
+                status,
+                sessions_dir.to_path_buf(),
+            ));
+        }
+        if self.tmux {
+            LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
         }
     }
 
@@ -208,9 +238,13 @@ fn process_hook_event_impl(
     // Claude Code process, its shutdown fires SessionEnd, which would
     // otherwise clobber the Paused marker and break `a cc resume`.
     if event == HookEvent::SessionEnd {
-        let mut ended_pane_id = None;
+        // When the session file is gone the pane_id is unrecoverable
+        // (hook input only carries session_id), so we silently drop the
+        // SessionEnd. The pane option is keyed off the pane's bound
+        // session_id and will be reconciled the next time that pane fires
+        // a hook for the new session.
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
-            ended_pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+            let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
             if session.status != SessionStatus::Paused {
                 session.status = SessionStatus::Ended;
                 session.updated_at = Utc::now();
@@ -223,17 +257,10 @@ fn process_hook_event_impl(
                 // still sees it after `a cc resume`.
                 side_effects.remove_notification_group(&input.session_id);
             }
-        }
-        // Recompute the window's aggregated status so the just-ended session
-        // stops contributing a symbol.
-        if side_effects.tmux {
-            // The session has just ended; pass Ended so the pane option is
-            // cleared without re-reading the (now-deleted) session file.
-            sync_tmux_status(
-                ended_pane_id.as_deref(),
-                Some(SessionStatus::Ended),
-                sessions_dir,
-            );
+            // Push the preserved status into the pane option so that sweep's
+            // Paused isn't clobbered back to "" by this SessionEnd: Paused
+            // for sweep auto-pauses, Ended otherwise.
+            side_effects.sync_tmux(pane_id.as_deref(), Some(session.status), sessions_dir);
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -419,13 +446,11 @@ fn process_hook_event_impl(
     // `@armyknife-cc-window-status` tmux option. The write and the status-bar refresh
     // are skipped when the rendered value is unchanged, so an event that does
     // not alter the visible status (e.g. running → running) costs no redraw.
-    if side_effects.tmux {
-        sync_tmux_status(
-            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
-            Some(session.status),
-            sessions_dir,
-        );
-    }
+    side_effects.sync_tmux(
+        session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+        Some(session.status),
+        sessions_dir,
+    );
 
     // Remove stale notifications on every event that reaches here, except
     // Notification events.  Notification(permission_prompt) fires right after
@@ -479,10 +504,6 @@ fn process_hook_event_impl(
     }
 
     Ok(ProcessResult::SessionSaved)
-}
-
-fn sync_tmux_status(pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
-    LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
 }
 
 /// Reads raw content from stdin.
@@ -1422,6 +1443,7 @@ mod tests {
             notifications: false,
             auto_compact: false,
             removed_notification_groups: Some(removed.clone()),
+            tmux_sync_calls: None,
         };
 
         let input: HookInput =
@@ -1433,6 +1455,57 @@ mod tests {
 
         let recorded = removed.lock().expect("lock").clone();
         assert_eq!(recorded, expected_removed);
+    }
+
+    #[rstest]
+    #[case::sweep_paused_keeps_one(SessionStatus::Paused, SessionStatus::Paused)]
+    #[case::user_ended_clears(SessionStatus::Running, SessionStatus::Ended)]
+    #[case::user_ctrlc_from_stopped_clears(SessionStatus::Stopped, SessionStatus::Ended)]
+    fn session_end_syncs_pane_status_preserving_paused(
+        #[case] initial_status: SessionStatus,
+        #[case] expected_synced: SessionStatus,
+    ) {
+        // Sweep flips the status to Paused before SIGTERM, so a Paused
+        // session reaching SessionEnd is the sweep path; that Paused must
+        // be pushed through to tmux unchanged, not turned into Ended.
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut session = create_test_session(Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        }));
+        session.session_id = "pane-sess".to_string();
+        session.status = initial_status;
+        store::save_session_to(sessions_dir, &session).expect("save");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            tmux: false,
+            notifications: false,
+            auto_compact: false,
+            removed_notification_groups: None,
+            tmux_sync_calls: Some(calls.clone()),
+        };
+
+        let input: HookInput =
+            serde_json::from_str(r#"{"session_id":"pane-sess","cwd":"/tmp/test"}"#)
+                .expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::SessionEnd, input, sessions_dir, &side_effects)
+            .expect("hook should succeed");
+
+        let recorded = calls.lock().expect("lock").clone();
+        assert_eq!(
+            recorded,
+            vec![(
+                Some("%42".to_string()),
+                Some(expected_synced),
+                sessions_dir.to_path_buf(),
+            )],
+        );
     }
 
     /// Runs a PostToolUse hook with the given initial pending-id set and the
@@ -1566,6 +1639,7 @@ mod tests {
             notifications: false,
             auto_compact: true,
             removed_notification_groups: None,
+            tmux_sync_calls: None,
         };
 
         let input: HookInput =
