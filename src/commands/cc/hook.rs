@@ -272,12 +272,6 @@ fn process_hook_event_impl(
     // By skipping "startup", we only create sessions for "resume" events (restored sessions)
     // or when source is absent (backward compatibility / other cases).
     if event == HookEvent::SessionStart {
-        // Signal back to `a cc resume` that claude has past its racy
-        // session-id read. The parent set the env to a sentinel path; we
-        // remove the file so the next `a cc resume` (blocked on this
-        // sentinel under flock) can proceed.
-        ack_resume_claim();
-
         // Export session ID to CLAUDE_ENV_FILE so that subsequent Bash commands
         // (e.g., `a wm new`) can automatically discover the parent session ID.
         // This must run for ALL SessionStart events (including "startup") because
@@ -745,22 +739,6 @@ where
     unreachable!()
 }
 
-/// Deletes the resume claim sentinel pointed to by
-/// `ARMYKNIFE_RESUME_ACK`. Set by `a cc resume`, this signals the next
-/// `a cc resume` (blocked on the sentinel under flock) that claude has
-/// past its racy session-id read.
-fn ack_resume_claim() {
-    if let Ok(path) = env::var(EnvVars::resume_ack_name())
-        && !path.is_empty()
-    {
-        ack_resume_claim_at(Path::new(&path));
-    }
-}
-
-fn ack_resume_claim_at(path: &Path) {
-    let _ = fs::remove_file(path);
-}
-
 /// Exports the session ID to Claude Code's env file so that subsequent Bash commands
 /// can access it as `$ARMYKNIFE_SESSION_ID`.
 ///
@@ -1019,19 +997,6 @@ mod tests {
         }
         let json = format!("{{{}}}", json_parts.join(","));
         serde_json::from_str(&json).expect("valid JSON")
-    }
-
-    #[rstest]
-    #[case::existing_sentinel_is_removed(true)]
-    #[case::missing_sentinel_is_no_op(false)]
-    fn ack_resume_claim_at_removes_sentinel(#[case] pre_create: bool) {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let path = tmp.path().join("resume.claim");
-        if pre_create {
-            fs::write(&path, "owner").expect("create sentinel");
-        }
-        ack_resume_claim_at(&path);
-        assert!(!path.exists());
     }
 
     fn create_test_input_with_tool(tool_name: &str, tool_input_json: Option<&str>) -> HookInput {
