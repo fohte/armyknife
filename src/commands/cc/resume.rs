@@ -31,19 +31,57 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 }
 
 fn resolve_session_id_from_pane() -> Result<String> {
-    let session_id = tmux::get_current_pane_option(TMUX_SESSION_OPTION).ok_or_else(|| {
+    let pane_id = current_pane_id()?;
+    tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION).ok_or_else(|| {
         anyhow::anyhow!(
-            "No Claude Code session ID found for this pane (option '{}' not set)",
+            "No Claude Code session ID found for pane {} (option '{}' not set)",
+            pane_id,
             TMUX_SESSION_OPTION
         )
-    })?;
+    })
+}
 
-    if session_id.is_empty() {
-        bail!(
-            "No Claude Code session ID found for this pane (option '{}' is empty)",
-            TMUX_SESSION_OPTION
-        );
+/// Returns the tmux pane ID of the caller, read from `$TMUX_PANE`.
+///
+/// Resolving by `$TMUX_PANE` (set by tmux when it spawns the pane's process)
+/// rather than by tmux's notion of the focused pane is required so that resume
+/// targets the pane that invoked the command even if the user switches focus
+/// before tmux can answer.
+fn current_pane_id() -> Result<String> {
+    match std::env::var("TMUX_PANE") {
+        Ok(value) if !value.is_empty() => Ok(value),
+        _ => bail!("Not running inside a tmux pane: $TMUX_PANE is not set"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_pane_id_returns_value_when_set() {
+        temp_env::with_vars([("TMUX_PANE", Some("%12"))], || {
+            assert_eq!(current_pane_id().ok(), Some("%12".to_string()));
+        });
     }
 
-    Ok(session_id)
+    #[test]
+    fn current_pane_id_errors_when_unset() {
+        temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+            assert_eq!(
+                current_pane_id().unwrap_err().to_string(),
+                "Not running inside a tmux pane: $TMUX_PANE is not set",
+            );
+        });
+    }
+
+    #[test]
+    fn current_pane_id_errors_when_empty() {
+        temp_env::with_vars([("TMUX_PANE", Some(""))], || {
+            assert_eq!(
+                current_pane_id().unwrap_err().to_string(),
+                "Not running inside a tmux pane: $TMUX_PANE is not set",
+            );
+        });
+    }
 }
