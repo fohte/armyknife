@@ -106,7 +106,6 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
- "filetime",
  "indicatif",
  "indoc",
  "lazy-regex",
