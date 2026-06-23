@@ -21,11 +21,9 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         _ => resolve_session_id_from_pane()?,
     };
 
-    // Find claude command path
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
 
-    // Replace current process with `claude --resume <session_id>`; only returns on failure.
     let err = process::exec_replace(&claude_path, ["--resume", &session_id]);
     bail!("Failed to exec claude: {}", err)
 }
