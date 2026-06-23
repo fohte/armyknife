@@ -30,13 +30,15 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
 fn resolve_session_id_from_pane() -> Result<String> {
     let pane_id = current_pane_id()?;
-    tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION).ok_or_else(|| {
-        anyhow::anyhow!(
-            "No Claude Code session ID found for pane {} (option '{}' not set)",
-            pane_id,
-            TMUX_SESSION_OPTION
-        )
-    })
+    tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No Claude Code session ID found for pane {} (option '{}' not set or empty)",
+                pane_id,
+                TMUX_SESSION_OPTION
+            )
+        })
 }
 
 /// Returns the tmux pane ID of the caller, read from `$TMUX_PANE`.
@@ -54,32 +56,26 @@ fn current_pane_id() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn current_pane_id_returns_value_when_set() {
-        temp_env::with_vars([("TMUX_PANE", Some("%12"))], || {
-            assert_eq!(current_pane_id().ok(), Some("%12".to_string()));
-        });
-    }
-
-    #[test]
-    fn current_pane_id_errors_when_unset() {
-        temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
-            assert_eq!(
-                current_pane_id().unwrap_err().to_string(),
-                "Not running inside a tmux pane: $TMUX_PANE is not set",
-            );
-        });
-    }
-
-    #[test]
-    fn current_pane_id_errors_when_empty() {
-        temp_env::with_vars([("TMUX_PANE", Some(""))], || {
-            assert_eq!(
-                current_pane_id().unwrap_err().to_string(),
-                "Not running inside a tmux pane: $TMUX_PANE is not set",
-            );
+    #[rstest]
+    #[case::returns_value_when_set(Some("%12"), Ok("%12".to_string()))]
+    #[case::errors_when_unset(
+        None,
+        Err("Not running inside a tmux pane: $TMUX_PANE is not set".to_string())
+    )]
+    #[case::errors_when_empty(
+        Some(""),
+        Err("Not running inside a tmux pane: $TMUX_PANE is not set".to_string())
+    )]
+    fn current_pane_id_cases(
+        #[case] env_value: Option<&str>,
+        #[case] expected: std::result::Result<String, String>,
+    ) {
+        temp_env::with_vars([("TMUX_PANE", env_value)], || {
+            assert_eq!(current_pane_id().map_err(|e| e.to_string()), expected);
         });
     }
 }
