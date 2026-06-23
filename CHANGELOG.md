@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.219](https://github.com/fohte/armyknife/compare/v0.1.218...v0.1.219) (2026-06-23)
+
+
+### Bug Fixes
+
+* **cc:** resume the pane that launched `a cc r`, not the focused one ([#685](https://github.com/fohte/armyknife/issues/685)) ([90fea38](https://github.com/fohte/armyknife/commit/90fea3826cc853a25f16dff269d1c03b765b3e69))
+
 ## [0.1.218](https://github.com/fohte/armyknife/compare/v0.1.217...v0.1.218) (2026-06-22)
 
 
