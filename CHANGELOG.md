@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.220](https://github.com/fohte/armyknife/compare/v0.1.219...v0.1.220) (2026-06-24)
+
+
+### Dependencies
+
+* update dependency jdx/mise to v2026.6.11 ([#680](https://github.com/fohte/armyknife/issues/680)) ([1d5d8dd](https://github.com/fohte/armyknife/commit/1d5d8dd56e638bb401e961fcae194097ccc76571))
+
 ## [0.1.219](https://github.com/fohte/armyknife/compare/v0.1.218...v0.1.219) (2026-06-23)
 
 
