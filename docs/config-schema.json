@@ -294,11 +294,6 @@
     "Reviewer": {
       "oneOf": [
         {
-          "description": "Gemini Code Assist",
-          "type": "string",
-          "const": "gemini"
-        },
-        {
           "description": "Devin AI",
           "type": "string",
           "const": "devin"

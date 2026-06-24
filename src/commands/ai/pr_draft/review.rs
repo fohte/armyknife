@@ -235,59 +235,78 @@ mod tests {
         path
     }
 
+    /// Isolate `load_config()` from the developer's real `XDG_CONFIG_HOME` /
+    /// `HOME` so tests do not depend on host config state.
+    fn with_isolated_config<R>(body: impl FnOnce() -> R) -> R {
+        let tmp = tempfile::tempdir().expect("create temp config dir");
+        let path = tmp.path().to_string_lossy().to_string();
+        temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(path.as_str())),
+                ("HOME", Some(path.as_str())),
+            ],
+            body,
+        )
+    }
+
     #[test]
     fn run_impl_invokes_pre_pr_review_with_body_file() {
-        let draft_path = write_draft(
-            "owner",
-            "repo_review_hook",
-            "feature/review",
-            "Body referencing #999",
-        );
+        with_isolated_config(|| {
+            let draft_path = write_draft(
+                "owner",
+                "repo_review_hook",
+                "feature/review",
+                "Body referencing #999",
+            );
 
-        let captured = Mutex::new(None);
-        let hook = |name: &str, env: &[(&str, &str)]| -> anyhow::Result<()> {
-            let body_path = env
-                .iter()
-                .find(|(k, _)| *k == EnvVars::pr_body_file_name())
-                .map(|(_, v)| (*v).to_string())
-                .expect("body file env var present");
-            let body_contents = fs::read_to_string(&body_path).expect("body file readable");
-            *captured.lock().expect("capture mutex") = Some((name.to_string(), body_contents));
-            // Abort before reaching start_review (which would try to launch a
-            // terminal in the test environment).
-            anyhow::bail!("stop after hook")
-        };
+            let captured = Mutex::new(None);
+            let hook = |name: &str, env: &[(&str, &str)]| -> anyhow::Result<()> {
+                let body_path = env
+                    .iter()
+                    .find(|(k, _)| *k == EnvVars::pr_body_file_name())
+                    .map(|(_, v)| (*v).to_string())
+                    .expect("body file env var present");
+                let body_contents = fs::read_to_string(&body_path).expect("body file readable");
+                *captured.lock().expect("capture mutex") = Some((name.to_string(), body_contents));
+                // Abort before reaching start_review (which would try to launch a
+                // terminal in the test environment).
+                anyhow::bail!("stop after hook")
+            };
 
-        let args = ReviewArgs {
-            filepath: Some(draft_path.clone()),
-        };
-        let err = run_impl(&args, &hook).expect_err("hook bail must abort run_impl");
-        assert_eq!(err.to_string(), "stop after hook");
+            let args = ReviewArgs {
+                filepath: Some(draft_path.clone()),
+            };
+            let err = run_impl(&args, &hook).expect_err("hook bail must abort run_impl");
+            assert_eq!(err.to_string(), "stop after hook");
 
-        let (name, body_contents) = captured
-            .lock()
-            .expect("capture mutex")
-            .clone()
-            .expect("hook must have been invoked");
-        assert_eq!(name, PRE_PR_REVIEW_HOOK);
-        assert_eq!(body_contents, "Body referencing #999\n");
+            let (name, body_contents) = captured
+                .lock()
+                .expect("capture mutex")
+                .clone()
+                .expect("hook must have been invoked");
+            assert_eq!(name, PRE_PR_REVIEW_HOOK);
+            assert_eq!(body_contents, "Body referencing #999\n");
 
-        let _ = fs::remove_file(&draft_path);
+            let _ = fs::remove_file(&draft_path);
+        });
     }
 
     #[test]
     fn run_impl_returns_hook_error_to_caller() {
-        let draft_path = write_draft("owner", "repo_review_hook_err", "feature/err", "body");
+        with_isolated_config(|| {
+            let draft_path = write_draft("owner", "repo_review_hook_err", "feature/err", "body");
 
-        let hook =
-            |_name: &str, _env: &[(&str, &str)]| -> anyhow::Result<()> { anyhow::bail!("nope") };
+            let hook = |_name: &str, _env: &[(&str, &str)]| -> anyhow::Result<()> {
+                anyhow::bail!("nope")
+            };
 
-        let args = ReviewArgs {
-            filepath: Some(draft_path.clone()),
-        };
-        let err = run_impl(&args, &hook).expect_err("hook failure must propagate");
-        assert_eq!(err.to_string(), "nope");
+            let args = ReviewArgs {
+                filepath: Some(draft_path.clone()),
+            };
+            let err = run_impl(&args, &hook).expect_err("hook failure must propagate");
+            assert_eq!(err.to_string(), "nope");
 
-        let _ = fs::remove_file(&draft_path);
+            let _ = fs::remove_file(&draft_path);
+        });
     }
 }

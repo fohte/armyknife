@@ -71,7 +71,7 @@ orgs: # per-org defaults, keyed by GitHub owner (org or user)
   fohte:
     ai:
       review:
-        reviewers: [gemini] # default reviewers for `a ai review wait`/`request` in this org
+        reviewers: [coderabbit] # default reviewers for `a ai review wait`/`request` in this org
 
 repos: # per-repository overrides, keyed by "owner/repo"
   fohte/dotfiles:
@@ -79,7 +79,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
     direct_commit: true # allow direct commits to the default branch; consumed by external git hooks
     ai:
       review:
-        reviewers: [gemini, devin] # repo-level reviewer override (takes precedence over org)
+        reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
 ```
 
 ### Splitting public and private config
@@ -152,20 +152,20 @@ Request or wait for bot reviews on a PR.
 | `request` | Request a review from a bot reviewer and wait for completion          |
 | `wait`    | Wait for an existing review to complete (does not trigger new review) |
 
-| Option                  | Description                                                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                                                      |
-| `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated (`gemini`, `devin`, `coderabbit`). When omitted, falls back to repo > org config > `gemini, devin` |
-| `--interval <seconds>`  | Polling interval (default: 15)                                                                                                                      |
-| `--timeout <seconds>`   | Timeout (default: 300)                                                                                                                              |
+| Option                  | Description                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                                    |
+| `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated (`devin`, `coderabbit`). When omitted, falls back to repo > org config > `devin` |
+| `--interval <seconds>`  | Polling interval (default: 15)                                                                                                    |
+| `--timeout <seconds>`   | Timeout (default: 300)                                                                                                            |
 
 When `--reviewer` is omitted, the reviewer set is resolved in this order:
 
 1. `repos.<owner>/<repo>.ai.review.reviewers` (per-repo override)
 2. `orgs.<owner>.ai.review.reviewers` (per-org default)
-3. The built-in `[gemini, devin]`
+3. The built-in `[devin]`
 
-This makes it possible to disable a reviewer that isn't enabled in a given org (e.g., `reviewers: [gemini]` for a fohte-only repo) without passing `--reviewer` on every invocation.
+This makes it possible to disable a reviewer that isn't enabled in a given org (e.g., `reviewers: [coderabbit]` for a fohte-only repo) without passing `--reviewer` on every invocation.
 
 ### `a gh`
 
