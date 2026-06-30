@@ -34,7 +34,6 @@ chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.1", features = ["derive"] }
 clap_complete = "=4.6.5"
 reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "json", "query"] }
-open = "=5.3.5"
 percent-encoding = "=2.3.2"
 tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros"] }
 indoc = "=2.0.7"

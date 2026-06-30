@@ -159,9 +159,6 @@ async fn run_impl(
     // Cleanup
     draft.cleanup()?;
 
-    // Open PR in browser
-    gh_client.open_in_browser(&pr_url);
-
     Ok(())
 }
 
