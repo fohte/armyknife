@@ -271,11 +271,19 @@ impl DraftFile {
     }
 }
 
+/// Split content into `(frontmatter_block, yaml_body, body_offset)`.
+/// `body_offset` is the byte index where the post-frontmatter body starts in
+/// the original `content`. Returns `None` if no leading `---` block is found.
+/// Tolerates both LF and CRLF line endings on the delimiters.
+fn split_frontmatter(content: &str) -> Option<(&str, &str, usize)> {
+    let (whole, yaml) = regex_captures!(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?", content)?;
+    Some((whole, yaml, whole.len()))
+}
+
 /// Replace `submit: true` with `submit: false` inside the frontmatter block
-/// only. Content outside the leading `---\n...\n---\n` region is untouched.
+/// only. Content outside the leading `---` region is untouched.
 fn reset_steps_submit_in_content(content: &str) -> String {
-    let fm_re = regex!(r"(?s)\A(---\n.*?\n---\n?)");
-    let Some(m) = fm_re.find(content) else {
+    let Some((fm_block, _yaml, body_offset)) = split_frontmatter(content) else {
         return content.to_string();
     };
 
@@ -283,18 +291,18 @@ fn reset_steps_submit_in_content(content: &str) -> String {
     // values use `(?i:...)` so True/TRUE/Yes/On still match. The trailing
     // group keeps any inline comment and optional CR intact.
     let submit_re = regex!(r"(?m)^(\s+submit:[ \t]*)(?i:true|yes|on)([ \t]*(?:#[^\r\n]*)?\r?)$");
-    let new_fm = submit_re.replace_all(m.as_str(), "${1}false${2}");
+    let new_fm = submit_re.replace_all(fm_block, "${1}false${2}");
 
     let mut result = String::with_capacity(content.len());
     result.push_str(&new_fm);
-    result.push_str(&content[m.end()..]);
+    result.push_str(&content[body_offset..]);
     result
 }
 
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
-    if let Some((whole, yaml_str)) = regex_captures!(r"^---\n([\s\S]*?)\n---\n?", content) {
+    if let Some((_whole, yaml_str, body_offset)) = split_frontmatter(content) {
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
-        let body = content[whole.len()..].to_string();
+        let body = content[body_offset..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((
@@ -569,6 +577,10 @@ mod tests {
             ---
             body
         "}
+    )]
+    #[case::crlf(
+        "---\r\ntitle: T\r\nsteps:\r\n  submit: true\r\n---\r\nbody\r\n",
+        "---\r\ntitle: T\r\nsteps:\r\n  submit: false\r\n---\r\nbody\r\n"
     )]
     #[case::trailing_comment(
         indoc! {"
