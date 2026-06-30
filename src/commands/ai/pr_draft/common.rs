@@ -258,9 +258,11 @@ impl DraftFile {
         if new_content == content {
             // Frontmatter says `submit: true` but the regex did not match;
             // bail rather than silently leave the file inconsistent.
-            return Err(PrDraftError::CommandFailed(
-                "Failed to reset steps.submit in frontmatter".into(),
-            )
+            return Err(PrDraftError::CommandFailed(format!(
+                "Failed to reset steps.submit in frontmatter at {}. \
+                 Please open the file and set `steps.submit: false` manually.",
+                self.path.display()
+            ))
             .into());
         }
         fs::write(&self.path, &new_content)?;
@@ -277,9 +279,10 @@ fn reset_steps_submit_in_content(content: &str) -> String {
         return content.to_string();
     };
 
-    // (?i) covers True/TRUE; the trailing group keeps any inline comment and
-    // optional CR so we don't truncate them when rewriting.
-    let submit_re = regex!(r"(?im)^(\s+submit:[ \t]*)(?:true|yes|on)([ \t]*(?:#[^\r\n]*)?\r?)$");
+    // Key name stays case-sensitive (`submit:` only) since serde does too;
+    // values use `(?i:...)` so True/TRUE/Yes/On still match. The trailing
+    // group keeps any inline comment and optional CR intact.
+    let submit_re = regex!(r"(?m)^(\s+submit:[ \t]*)(?i:true|yes|on)([ \t]*(?:#[^\r\n]*)?\r?)$");
     let new_fm = submit_re.replace_all(m.as_str(), "${1}false${2}");
 
     let mut result = String::with_capacity(content.len());
@@ -472,7 +475,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::private_submit_true(
+    #[case::submit_only(
         indoc! {"
             ---
             title: Test
@@ -490,7 +493,7 @@ mod tests {
             body
         "}
     )]
-    #[case::public_submit_true(
+    #[case::submit_with_sibling_step(
         indoc! {"
             ---
             title: Test
