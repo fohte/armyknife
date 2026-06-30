@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.221](https://github.com/fohte/armyknife/compare/v0.1.220...v0.1.221) (2026-06-30)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** stop opening the browser on submit ([#694](https://github.com/fohte/armyknife/issues/694)) ([30a119a](https://github.com/fohte/armyknife/commit/30a119aae8cba60c367db93acb42d8a55c89825f))
+
 ## [0.1.220](https://github.com/fohte/armyknife/compare/v0.1.219...v0.1.220) (2026-06-24)
 
 
