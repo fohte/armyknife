@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.222](https://github.com/fohte/armyknife/compare/v0.1.221...v0.1.222) (2026-06-30)
+
+
+### Bug Fixes
+
+* **ai/pr-draft, gh/issue-agent:** reset approval flags to false when entering review ([#696](https://github.com/fohte/armyknife/issues/696)) ([7a4bbc2](https://github.com/fohte/armyknife/commit/7a4bbc2ac81f09d7bdfe5825486607f117d8b546))
+
 ## [0.1.221](https://github.com/fohte/armyknife/compare/v0.1.220...v0.1.221) (2026-06-30)
 
 
