@@ -18,6 +18,7 @@ use crate::shared::human_in_the_loop::{
     Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
     start_review,
 };
+use crate::shared::yaml_frontmatter;
 
 #[derive(Args, Clone, PartialEq, Eq, Debug)]
 pub struct ReviewArgs {
@@ -154,6 +155,46 @@ fn strip_temporary_frontmatter(path: &Path) -> HilResult<()> {
     Ok(())
 }
 
+/// Rewrite the `submit` field in the file's YAML frontmatter to `false` if
+/// it is currently truthy. No-op when there is no frontmatter or the field
+/// is already falsy. Operates on the file content directly so the editor
+/// sees the reset value on open.
+fn reset_submit_to_false(path: &Path) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(path)?;
+    let new_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
+
+    if new_content == content {
+        // Match pr-draft's safety net: if serde would treat `submit` as
+        // truthy (e.g. quoted `"true"`, `!!bool true`) but the regex did
+        // not match, bail rather than silently let the editor open with
+        // an auto-approve still pending.
+        if frontmatter_submit_is_truthy(&content) {
+            anyhow::bail!(
+                "Failed to reset submit in frontmatter at {}. Please set `submit: false` manually.",
+                path.display()
+            );
+        }
+        return Ok(());
+    }
+
+    std::fs::write(path, &new_content)?;
+    eprintln!("Reset submit to false before opening editor.");
+    Ok(())
+}
+
+/// Return whether serde would parse `submit` in the YAML frontmatter as
+/// truthy. Mirrors the parse layer that drives approval, so the regex-based
+/// rewriter can detect cases where the two disagree.
+fn frontmatter_submit_is_truthy(content: &str) -> bool {
+    let Some((_, yaml, _)) = yaml_frontmatter::split_frontmatter(content) else {
+        return false;
+    };
+    serde_yaml::from_str::<serde_yaml::Value>(yaml)
+        .ok()
+        .and_then(|v| v.get("submit").and_then(|s| s.as_bool()))
+        .unwrap_or(false)
+}
+
 pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let path = args
         .path
@@ -165,6 +206,13 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     if !has_yaml_frontmatter(&content) {
         prepend_temporary_frontmatter(&path)?;
     }
+
+    // Approval is signaled by the user flipping `submit: false` -> `true`
+    // inside the editor. If the file arrives with `submit: true` already
+    // (e.g. an upstream agent edited issue.md), the review handler would
+    // auto-approve on close without any explicit user gesture. Force it
+    // back to `false` to keep the flip meaningful.
+    reset_submit_to_false(&path)?;
 
     let config = load_config()?;
     let file_name = path
@@ -345,5 +393,62 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, expected);
+    }
+
+    #[rstest]
+    fn test_reset_submit_to_false_writes_back_when_submit_true() {
+        // Verifies the wrapper's own contract: when reset_bool_fields
+        // returns a different string, the helper persists it to disk.
+        // The string-transform behaviour itself is covered in
+        // shared::yaml_frontmatter::tests.
+        let input = indoc! {"
+            ---
+            title: Foo
+            submit: true
+            readonly:
+              number: 1
+            ---
+            Body
+        "};
+        let expected = indoc! {"
+            ---
+            title: Foo
+            submit: false
+            readonly:
+              number: 1
+            ---
+            Body
+        "};
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("file.md");
+        std::fs::write(&path, input).unwrap();
+
+        reset_submit_to_false(&path).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn test_reset_submit_to_false_bails_when_quoted_true() {
+        // Wrapper-specific safety net: serde treats `submit: "true"` as a
+        // string (not bool), but our regex deliberately does not. If a
+        // future code path ever flipped serde's behaviour, the helper
+        // should error rather than silently let the editor open with the
+        // approval still effectively set.
+        let input = indoc! {r#"
+            ---
+            submit: "true"
+            ---
+            Body
+        "#};
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("file.md");
+        std::fs::write(&path, input).unwrap();
+
+        // serde reads `"true"` as a string, so the safety net does not
+        // trip; the helper is a no-op and leaves the file alone.
+        reset_submit_to_false(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
     }
 }

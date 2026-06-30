@@ -15,3 +15,4 @@ pub mod table;
 #[cfg(test)]
 pub mod testing;
 pub mod update;
+pub mod yaml_frontmatter;

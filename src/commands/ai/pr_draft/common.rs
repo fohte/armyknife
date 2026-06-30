@@ -1,5 +1,5 @@
 use indoc::formatdoc;
-use lazy_regex::{regex, regex_captures, regex_is_match};
+use lazy_regex::regex_is_match;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read};
@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
+use crate::shared::yaml_frontmatter;
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -244,63 +245,38 @@ impl DraftFile {
         Ok(())
     }
 
-    /// If the on-disk draft has `steps.submit: true`, rewrite it to `false`
+    /// If the on-disk draft has any approval gesture flag (`steps.submit` or
+    /// `steps.ready-for-translation`) set to `true`, rewrite it to `false`
     /// and refresh the in-memory state. Approval must come from the user
-    /// flipping `submit` to `true` inside the editor, so any pre-existing
-    /// `true` (e.g. left over from a previous draft generation) would
-    /// short-circuit that approval gesture.
-    pub fn reset_steps_submit(&mut self) -> Result<bool> {
-        if !self.frontmatter.steps.submit {
+    /// flipping the flag inside the editor, so any pre-existing `true` (e.g.
+    /// left over from a previous draft generation) would short-circuit that
+    /// approval gesture.
+    pub fn reset_approval_flags(&mut self) -> Result<bool> {
+        if !self.frontmatter.steps.submit && !self.frontmatter.steps.ready_for_translation {
             return Ok(false);
         }
         let content = fs::read_to_string(&self.path)?;
-        let new_content = reset_steps_submit_in_content(&content);
+        let new_content =
+            yaml_frontmatter::reset_bool_fields(&content, &["submit", "ready-for-translation"]);
         if new_content == content {
-            // Frontmatter says `submit: true` but the regex did not match;
-            // bail rather than silently leave the file inconsistent.
+            // Frontmatter says true but the regex did not match; bail rather
+            // than silently leave the file inconsistent.
             return Err(PrDraftError::CommandFailed(format!(
-                "Failed to reset steps.submit in frontmatter at {}. \
-                 Please open the file and set `steps.submit: false` manually.",
+                "Failed to reset steps.submit / steps.ready-for-translation in frontmatter at {}. \
+                 Please open the file and set them to `false` manually.",
                 self.path.display()
             ))
             .into());
         }
         fs::write(&self.path, &new_content)?;
         self.frontmatter.steps.submit = false;
+        self.frontmatter.steps.ready_for_translation = false;
         Ok(true)
     }
 }
 
-/// Split content into `(frontmatter_block, yaml_body, body_offset)`.
-/// `body_offset` is the byte index where the post-frontmatter body starts in
-/// the original `content`. Returns `None` if no leading `---` block is found.
-/// Tolerates both LF and CRLF line endings on the delimiters.
-fn split_frontmatter(content: &str) -> Option<(&str, &str, usize)> {
-    let (whole, yaml) = regex_captures!(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?", content)?;
-    Some((whole, yaml, whole.len()))
-}
-
-/// Replace `submit: true` with `submit: false` inside the frontmatter block
-/// only. Content outside the leading `---` region is untouched.
-fn reset_steps_submit_in_content(content: &str) -> String {
-    let Some((fm_block, _yaml, body_offset)) = split_frontmatter(content) else {
-        return content.to_string();
-    };
-
-    // Key name stays case-sensitive (`submit:` only) since serde does too;
-    // values use `(?i:...)` so True/TRUE/Yes/On still match. The trailing
-    // group keeps any inline comment and optional CR intact.
-    let submit_re = regex!(r"(?m)^(\s+submit:[ \t]*)(?i:true|yes|on)([ \t]*(?:#[^\r\n]*)?\r?)$");
-    let new_fm = submit_re.replace_all(fm_block, "${1}false${2}");
-
-    let mut result = String::with_capacity(content.len());
-    result.push_str(&new_fm);
-    result.push_str(&content[body_offset..]);
-    result
-}
-
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
-    if let Some((_whole, yaml_str, body_offset)) = split_frontmatter(content) {
+    if let Some((_whole, yaml_str, body_offset)) = yaml_frontmatter::split_frontmatter(content) {
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
         let body = content[body_offset..].to_string();
         Ok((frontmatter, body))
@@ -483,129 +459,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::submit_only(
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: true
-            ---
-            body
-        "},
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: false
-            ---
-            body
-        "}
-    )]
-    #[case::submit_with_sibling_step(
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              ready-for-translation: true
-              submit: true
-            ---
-            body
-        "},
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              ready-for-translation: true
-              submit: false
-            ---
-            body
-        "}
-    )]
-    #[case::already_false(
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: false
-            ---
-            body
-        "},
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: false
-            ---
-            body
-        "}
-    )]
-    #[case::no_frontmatter("body only\n", "body only\n")]
-    #[case::body_mentions_submit(
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: true
-            ---
-            Body mentions submit: true on its own line
-              submit: true
-        "},
-        indoc! {"
-            ---
-            title: Test
-            steps:
-              submit: false
-            ---
-            Body mentions submit: true on its own line
-              submit: true
-        "}
-    )]
-    #[case::uppercase_true(
-        indoc! {"
-            ---
-            title: T
-            steps:
-              submit: True
-            ---
-            body
-        "},
-        indoc! {"
-            ---
-            title: T
-            steps:
-              submit: false
-            ---
-            body
-        "}
-    )]
-    #[case::crlf(
-        "---\r\ntitle: T\r\nsteps:\r\n  submit: true\r\n---\r\nbody\r\n",
-        "---\r\ntitle: T\r\nsteps:\r\n  submit: false\r\n---\r\nbody\r\n"
-    )]
-    #[case::trailing_comment(
-        indoc! {"
-            ---
-            title: T
-            steps:
-              submit: true  # approved
-            ---
-            body
-        "},
-        indoc! {"
-            ---
-            title: T
-            steps:
-              submit: false  # approved
-            ---
-            body
-        "}
-    )]
-    fn test_reset_steps_submit_in_content(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(reset_steps_submit_in_content(input), expected);
-    }
-
-    #[rstest]
-    #[case::resets_when_true(
+    #[case::resets_submit_when_true(
         indoc! {"
             ---
             title: T
@@ -624,7 +478,28 @@ mod tests {
             body
         "}
     )]
-    #[case::noop_when_false(
+    #[case::resets_ready_for_translation_when_true(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              ready-for-translation: true
+              submit: false
+            ---
+            body
+        "},
+        true,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              ready-for-translation: false
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::noop_when_both_false(
         indoc! {"
             ---
             title: T
@@ -643,7 +518,7 @@ mod tests {
             body
         "}
     )]
-    fn test_draft_file_reset_steps_submit(
+    fn test_draft_file_reset_approval_flags(
         #[case] initial: &str,
         #[case] expected_changed: bool,
         #[case] expected_content: &str,
@@ -653,15 +528,16 @@ mod tests {
         fs::write(&path, initial).expect("write initial");
 
         let mut draft = DraftFile::from_path(path.clone()).expect("parse draft");
-        let changed = draft.reset_steps_submit().expect("reset");
+        let changed = draft.reset_approval_flags().expect("reset");
 
         assert_eq!(
             (
                 changed,
                 draft.frontmatter.steps.submit,
+                draft.frontmatter.steps.ready_for_translation,
                 fs::read_to_string(&path).expect("read back"),
             ),
-            (expected_changed, false, expected_content.to_string()),
+            (expected_changed, false, false, expected_content.to_string(),),
         );
     }
 }

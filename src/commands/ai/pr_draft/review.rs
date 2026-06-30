@@ -131,12 +131,15 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
         run_hook,
     )?;
 
-    // Approval is signaled by the user flipping `submit: false` -> `true`
-    // inside the editor. If the draft already has `submit: true` on disk
-    // (e.g. an upstream generator embedded it), force it back to `false`
-    // before the editor opens so the flip remains a meaningful gesture.
-    if before.reset_steps_submit()? {
-        eprintln!("Reset steps.submit to false before opening editor.");
+    // Approval is signaled by the user flipping `steps.submit` (or
+    // `steps.ready-for-translation`) to `true` inside the editor. If those
+    // flags already arrive as `true` on disk (e.g. an upstream generator
+    // embedded them), force them back to `false` so the flip remains a
+    // meaningful gesture.
+    if before.reset_approval_flags()? {
+        eprintln!(
+            "Reset steps.submit / steps.ready-for-translation to false before opening editor."
+        );
     }
 
     use crate::shared::human_in_the_loop::exit_code;
