@@ -68,9 +68,6 @@ pub trait PrClient: Send + Sync {
         repo: &str,
         branch: &str,
     ) -> Result<Option<PrInfo>>;
-
-    /// Open a URL in the default browser.
-    fn open_in_browser(&self, url: &str);
 }
 
 /// REST API response for PR create/update/list.
@@ -155,14 +152,6 @@ impl PrClient for GitHubClient {
             state,
             url,
         }))
-    }
-
-    fn open_in_browser(&self, url: &str) {
-        // Skip in test mode to prevent browser opening during tests
-        if cfg!(test) {
-            return;
-        }
-        let _ = open::that(url);
     }
 }
 
