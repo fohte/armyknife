@@ -1,5 +1,5 @@
 use indoc::formatdoc;
-use lazy_regex::{regex_captures, regex_is_match};
+use lazy_regex::{regex, regex_captures, regex_is_match};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read};
@@ -243,6 +243,49 @@ impl DraftFile {
         self.remove_approval()?;
         Ok(())
     }
+
+    /// If the on-disk draft has `steps.submit: true`, rewrite it to `false`
+    /// and refresh the in-memory state. Approval must come from the user
+    /// flipping `submit` to `true` inside the editor, so any pre-existing
+    /// `true` (e.g. left over from a previous draft generation) would
+    /// short-circuit that approval gesture.
+    pub fn reset_steps_submit(&mut self) -> Result<bool> {
+        if !self.frontmatter.steps.submit {
+            return Ok(false);
+        }
+        let content = fs::read_to_string(&self.path)?;
+        let new_content = reset_steps_submit_in_content(&content);
+        if new_content == content {
+            // Frontmatter says `submit: true` but the regex did not match;
+            // bail rather than silently leave the file inconsistent.
+            return Err(PrDraftError::CommandFailed(
+                "Failed to reset steps.submit in frontmatter".into(),
+            )
+            .into());
+        }
+        fs::write(&self.path, &new_content)?;
+        self.frontmatter.steps.submit = false;
+        Ok(true)
+    }
+}
+
+/// Replace `submit: true` with `submit: false` inside the frontmatter block
+/// only. Content outside the leading `---\n...\n---\n` region is untouched.
+fn reset_steps_submit_in_content(content: &str) -> String {
+    let fm_re = regex!(r"(?s)\A(---\n.*?\n---\n?)");
+    let Some(m) = fm_re.find(content) else {
+        return content.to_string();
+    };
+
+    // (?i) covers True/TRUE; the trailing group keeps any inline comment and
+    // optional CR so we don't truncate them when rewriting.
+    let submit_re = regex!(r"(?im)^(\s+submit:[ \t]*)(?:true|yes|on)([ \t]*(?:#[^\r\n]*)?\r?)$");
+    let new_fm = submit_re.replace_all(m.as_str(), "${1}false${2}");
+
+    let mut result = String::with_capacity(content.len());
+    result.push_str(&new_fm);
+    result.push_str(&content[m.end()..]);
+    result
 }
 
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
@@ -426,5 +469,184 @@ mod tests {
         assert!(parsed.is_ok(), "Failed to parse: {result}");
         let (frontmatter, _) = parsed.unwrap();
         assert_eq!(frontmatter.title, "Title with \"quotes\" and\nnewline");
+    }
+
+    #[rstest]
+    #[case::private_submit_true(
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: true
+            ---
+            body
+        "},
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::public_submit_true(
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              ready-for-translation: true
+              submit: true
+            ---
+            body
+        "},
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              ready-for-translation: true
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::already_false(
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: false
+            ---
+            body
+        "},
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::no_frontmatter("body only\n", "body only\n")]
+    #[case::body_mentions_submit(
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: true
+            ---
+            Body mentions submit: true on its own line
+              submit: true
+        "},
+        indoc! {"
+            ---
+            title: Test
+            steps:
+              submit: false
+            ---
+            Body mentions submit: true on its own line
+              submit: true
+        "}
+    )]
+    #[case::uppercase_true(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: True
+            ---
+            body
+        "},
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::trailing_comment(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: true  # approved
+            ---
+            body
+        "},
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false  # approved
+            ---
+            body
+        "}
+    )]
+    fn test_reset_steps_submit_in_content(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(reset_steps_submit_in_content(input), expected);
+    }
+
+    #[rstest]
+    #[case::resets_when_true(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: true
+            ---
+            body
+        "},
+        true,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::noop_when_false(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "},
+        false,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    fn test_draft_file_reset_steps_submit(
+        #[case] initial: &str,
+        #[case] expected_changed: bool,
+        #[case] expected_content: &str,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("draft.md");
+        fs::write(&path, initial).expect("write initial");
+
+        let mut draft = DraftFile::from_path(path.clone()).expect("parse draft");
+        let changed = draft.reset_steps_submit().expect("reset");
+
+        assert_eq!(
+            (
+                changed,
+                draft.frontmatter.steps.submit,
+                fs::read_to_string(&path).expect("read back"),
+            ),
+            (expected_changed, false, expected_content.to_string()),
+        );
     }
 }
