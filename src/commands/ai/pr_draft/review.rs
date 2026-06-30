@@ -111,7 +111,7 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
     // Read the draft once and reuse it for both the pre-review hook (which
     // needs title + body) and the post-review steps comparison (which only
     // needs frontmatter).
-    let before = DraftFile::from_path(draft_path.clone())?;
+    let mut before = DraftFile::from_path(draft_path.clone())?;
 
     // Fire pre-pr-review before opening the editor so user-defined lints
     // surface here (where the user is about to edit the file) rather than
@@ -130,6 +130,17 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
         &context,
         run_hook,
     )?;
+
+    // Approval is signaled by the user flipping `steps.submit` (or
+    // `steps.ready-for-translation`) to `true` inside the editor. If those
+    // flags already arrive as `true` on disk (e.g. an upstream generator
+    // embedded them), force them back to `false` so the flip remains a
+    // meaningful gesture.
+    if before.reset_approval_flags()? {
+        eprintln!(
+            "Reset steps.submit / steps.ready-for-translation to false before opening editor."
+        );
+    }
 
     use crate::shared::human_in_the_loop::exit_code;
 

@@ -1,5 +1,5 @@
 use indoc::formatdoc;
-use lazy_regex::{regex_captures, regex_is_match};
+use lazy_regex::regex_is_match;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read};
@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
+use crate::shared::yaml_frontmatter;
 
 #[derive(Error, Debug)]
 pub enum PrDraftError {
@@ -243,12 +244,41 @@ impl DraftFile {
         self.remove_approval()?;
         Ok(())
     }
+
+    /// If the on-disk draft has any approval gesture flag (`steps.submit` or
+    /// `steps.ready-for-translation`) set to `true`, rewrite it to `false`
+    /// and refresh the in-memory state. Approval must come from the user
+    /// flipping the flag inside the editor, so any pre-existing `true` (e.g.
+    /// left over from a previous draft generation) would short-circuit that
+    /// approval gesture.
+    pub fn reset_approval_flags(&mut self) -> Result<bool> {
+        if !self.frontmatter.steps.submit && !self.frontmatter.steps.ready_for_translation {
+            return Ok(false);
+        }
+        let content = fs::read_to_string(&self.path)?;
+        let new_content =
+            yaml_frontmatter::reset_bool_fields(&content, &["submit", "ready-for-translation"]);
+        if new_content == content {
+            // Frontmatter says true but the regex did not match; bail rather
+            // than silently leave the file inconsistent.
+            return Err(PrDraftError::CommandFailed(format!(
+                "Failed to reset steps.submit / steps.ready-for-translation in frontmatter at {}. \
+                 Please open the file and set them to `false` manually.",
+                self.path.display()
+            ))
+            .into());
+        }
+        fs::write(&self.path, &new_content)?;
+        self.frontmatter.steps.submit = false;
+        self.frontmatter.steps.ready_for_translation = false;
+        Ok(true)
+    }
 }
 
 fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
-    if let Some((whole, yaml_str)) = regex_captures!(r"^---\n([\s\S]*?)\n---\n?", content) {
+    if let Some((_whole, yaml_str, body_offset)) = yaml_frontmatter::split_frontmatter(content) {
         let frontmatter: Frontmatter = serde_yaml::from_str(yaml_str)?;
-        let body = content[whole.len()..].to_string();
+        let body = content[body_offset..].to_string();
         Ok((frontmatter, body))
     } else {
         Ok((
@@ -426,5 +456,88 @@ mod tests {
         assert!(parsed.is_ok(), "Failed to parse: {result}");
         let (frontmatter, _) = parsed.unwrap();
         assert_eq!(frontmatter.title, "Title with \"quotes\" and\nnewline");
+    }
+
+    #[rstest]
+    #[case::resets_submit_when_true(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: true
+            ---
+            body
+        "},
+        true,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::resets_ready_for_translation_when_true(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              ready-for-translation: true
+              submit: false
+            ---
+            body
+        "},
+        true,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              ready-for-translation: false
+              submit: false
+            ---
+            body
+        "}
+    )]
+    #[case::noop_when_both_false(
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "},
+        false,
+        indoc! {"
+            ---
+            title: T
+            steps:
+              submit: false
+            ---
+            body
+        "}
+    )]
+    fn test_draft_file_reset_approval_flags(
+        #[case] initial: &str,
+        #[case] expected_changed: bool,
+        #[case] expected_content: &str,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("draft.md");
+        fs::write(&path, initial).expect("write initial");
+
+        let mut draft = DraftFile::from_path(path.clone()).expect("parse draft");
+        let changed = draft.reset_approval_flags().expect("reset");
+
+        assert_eq!(
+            (
+                changed,
+                draft.frontmatter.steps.submit,
+                draft.frontmatter.steps.ready_for_translation,
+                fs::read_to_string(&path).expect("read back"),
+            ),
+            (expected_changed, false, false, expected_content.to_string(),),
+        );
     }
 }
