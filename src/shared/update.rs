@@ -94,6 +94,9 @@ fn env_var(name: &str) -> Option<String> {
 }
 
 fn gh_auth_token() -> Option<String> {
+    if !command::is_command_available("gh") {
+        return None;
+    }
     let output = command::new("gh").args(["auth", "token"]).output().ok()?;
     if !output.status.success() {
         return None;
