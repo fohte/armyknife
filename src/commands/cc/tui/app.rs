@@ -1048,12 +1048,28 @@ fn is_session_stale(session: &Session) -> bool {
         .is_some_and(|info| !tmux::is_pane_alive(&info.pane_id))
 }
 
+/// Groups sessions by `cwd` and loads `sessions-index.json` once per project.
+/// Returns `cwd` → (`sessionId` → `summary`).
+fn load_summaries_by_cwd(sessions: &[Session]) -> HashMap<PathBuf, HashMap<String, String>> {
+    let mut by_cwd: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
+    for session in sessions {
+        if by_cwd.contains_key(&session.cwd) {
+            continue;
+        }
+        let summaries = claude_sessions::sessions_index_summaries(&session.cwd);
+        by_cwd.insert(session.cwd.clone(), summaries);
+    }
+    by_cwd
+}
+
 /// Builds the searchable text cache for all sessions.
 fn build_searchable_text_cache(sessions: &[Session]) -> HashMap<String, (String, DateTime<Utc>)> {
+    let summaries_by_cwd = load_summaries_by_cwd(sessions);
     sessions
         .iter()
         .map(|session| {
-            let searchable_text = build_searchable_text(session);
+            let searchable_text =
+                build_searchable_text_with_summaries(session, summaries_by_cwd.get(&session.cwd));
             (
                 session.session_id.clone(),
                 (searchable_text, session.updated_at),
@@ -1064,25 +1080,36 @@ fn build_searchable_text_cache(sessions: &[Session]) -> HashMap<String, (String,
 
 /// Builds the title cache for all sessions.
 fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
+    let summaries_by_cwd = load_summaries_by_cwd(sessions);
     sessions
         .iter()
         .map(|session| {
-            let title = get_title_display_name(session);
+            let title =
+                get_title_display_name_with_summaries(session, summaries_by_cwd.get(&session.cwd));
             (session.session_id.clone(), title)
         })
         .collect()
 }
 
 /// Gets the title display name for a session.
-/// Priority: label (armyknife) > firstPrompt (Claude Code) > cwd basename.
+/// Priority: label (armyknife) > sessions-index summary > .jsonl first user prompt > cwd basename.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
+    get_title_display_name_with_summaries(session, None)
+}
+
+fn get_title_display_name_with_summaries(
+    session: &Session,
+    summaries: Option<&HashMap<String, String>>,
+) -> String {
     // Prefer armyknife's own label (set via env var or auto-generated)
     if let Some(ref label) = session.label {
         return claude_sessions::normalize_title(label);
     }
 
-    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
+    if let Some(title) =
+        claude_sessions::get_session_title_with_index(&session.cwd, &session.session_id, summaries)
+    {
         return title;
     }
 
@@ -1140,6 +1167,13 @@ fn session_matches(session: &Session, query: &str) -> bool {
 
 /// Builds a searchable text string from session fields.
 fn build_searchable_text(session: &Session) -> String {
+    build_searchable_text_with_summaries(session, None)
+}
+
+fn build_searchable_text_with_summaries(
+    session: &Session,
+    summaries: Option<&HashMap<String, String>>,
+) -> String {
     let mut parts = Vec::new();
 
     // tmux session name and window name
@@ -1152,7 +1186,9 @@ fn build_searchable_text(session: &Session) -> String {
     parts.push(session.cwd.display().to_string());
 
     // Claude Code session title
-    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
+    if let Some(title) =
+        claude_sessions::get_session_title_with_index(&session.cwd, &session.session_id, summaries)
+    {
         parts.push(title);
     }
 
