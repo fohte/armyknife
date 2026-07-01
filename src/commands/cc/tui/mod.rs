@@ -137,10 +137,17 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             let sessions = app.sessions.clone();
             event_handler.start_clean_pr_fetch(rows, sessions);
         }
-        if let Some(path) = effects.preview_session_path
-            && let Err(e) = preview_session(terminal, &path)
-        {
-            app.set_error(format!("Failed to preview session: {e}"));
+        if let Some(path) = effects.preview_session_path {
+            match preview_session(terminal, &path) {
+                Ok(()) => {}
+                Err(PreviewError::Viewer(e)) => {
+                    app.set_error(format!("Failed to preview session: {e}"));
+                }
+                // A terminal that will not restore is not something we can
+                // paper over — bail out so `ratatui::restore()` runs and
+                // the shell gets a chance to clean up.
+                Err(PreviewError::Fatal(e)) => return Err(e),
+            }
         }
         if let Some(paths) = effects.spawn_detached_clean {
             match clean_progress::spawn_detached_clean(&paths) {
@@ -214,7 +221,10 @@ fn focus_selected_session(app: &mut App) {
 }
 
 /// Preview a session's JSONL with `claude-history`.
-fn preview_session(terminal: &mut DefaultTerminal, jsonl_path: &Path) -> Result<()> {
+fn preview_session(
+    terminal: &mut DefaultTerminal,
+    jsonl_path: &Path,
+) -> std::result::Result<(), PreviewError> {
     let suspend_err = suspend_terminal().err();
     // Even if suspend partially failed (raw mode disabled but alt screen
     // still active), we must still try to restore — the alternative is
@@ -228,13 +238,29 @@ fn preview_session(terminal: &mut DefaultTerminal, jsonl_path: &Path) -> Result<
     combine_preview_result(suspend_err, status, restore_err)
 }
 
-/// Combine the three possible failure sources of `preview_session` into a
-/// single `Result`.
+/// Categorized failure from `preview_session`. `Fatal` means the terminal
+/// itself is in a bad state (suspend or restore failed) — the caller must
+/// bail so `ratatui::restore()` runs. `Viewer` means only the child failed,
+/// so the TUI can keep going.
+#[derive(Debug)]
+enum PreviewError {
+    Fatal(anyhow::Error),
+    Viewer(anyhow::Error),
+}
+
+impl std::fmt::Display for PreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreviewError::Fatal(e) | PreviewError::Viewer(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
 fn combine_preview_result(
     suspend_err: Option<io::Error>,
     status: Option<io::Result<std::process::ExitStatus>>,
     restore_err: Option<io::Error>,
-) -> Result<()> {
+) -> std::result::Result<(), PreviewError> {
     // A non-zero exit is a viewer failure the user should see, not just a
     // spawn failure — collapse both into the same "child error" slot.
     let child_err = status.and_then(|r| match r {
@@ -246,19 +272,25 @@ fn combine_preview_result(
     });
     match (suspend_err, child_err, restore_err) {
         (None, None, None) => Ok(()),
-        (Some(e), _, None) => Err(anyhow::Error::from(e).context("failed to leave alt screen")),
-        (Some(se), _, Some(re)) => {
-            Err(anyhow::Error::from(re).context(format!("failed to leave alt screen: {se}")))
-        }
-        (None, None, Some(re)) => {
-            Err(anyhow::Error::from(re).context("failed to restore terminal"))
-        }
-        (None, Some(e), None) => {
-            Err(anyhow::Error::from(e).context("failed to run claude-history"))
-        }
-        (None, Some(ce), Some(re)) => {
-            Err(anyhow::Error::from(re).context(format!("failed to run claude-history: {ce}")))
-        }
+        (Some(e), _, None) => Err(PreviewError::Fatal(
+            anyhow::Error::from(e).context("failed to leave alt screen"),
+        )),
+        // Restore is the state that governs the next frame, so its error
+        // surfaces first with the suspend error folded in.
+        (Some(se), _, Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
+            format!("failed to restore terminal (suspend also failed: {se})"),
+        ))),
+        (None, None, Some(re)) => Err(PreviewError::Fatal(
+            anyhow::Error::from(re).context("failed to restore terminal"),
+        )),
+        (None, Some(e), None) => Err(PreviewError::Viewer(
+            anyhow::Error::from(e).context("failed to run claude-history"),
+        )),
+        // Restore failure surfaces first — a broken terminal is more urgent
+        // than a missing viewer — with the child error folded in.
+        (None, Some(ce), Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
+            format!("failed to restore terminal (child also failed: {ce})"),
+        ))),
     }
 }
 
@@ -963,78 +995,89 @@ mod tests {
     }
 
     fn exit_status(raw: i32) -> io::Result<std::process::ExitStatus> {
-        // Build a real ExitStatus without spawning a process.
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            Ok(std::process::ExitStatus::from_raw(raw))
-        }
-        #[cfg(not(unix))]
-        {
-            use std::os::windows::process::ExitStatusExt;
-            Ok(std::process::ExitStatus::from_raw(raw as u32))
+        // The repository is Unix-only (tmux + Unix APIs throughout), so no
+        // Windows path.
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::ExitStatus::from_raw(raw))
+    }
+
+    /// Categorized outcome for whole-value equality on `combine_preview_result`.
+    /// The tag identifies whether the caller should treat the failure as fatal
+    /// (terminal broken) or viewer-only.
+    #[derive(Debug, PartialEq, Eq)]
+    enum ExpectedOutcome {
+        Ok,
+        Fatal(String),
+        Viewer(String),
+    }
+
+    fn categorize(res: std::result::Result<(), PreviewError>) -> ExpectedOutcome {
+        match res {
+            Ok(()) => ExpectedOutcome::Ok,
+            Err(PreviewError::Fatal(e)) => ExpectedOutcome::Fatal(format!("{e:#}")),
+            Err(PreviewError::Viewer(e)) => ExpectedOutcome::Viewer(format!("{e:#}")),
         }
     }
 
-    /// Normalize an anyhow chain to `Some("outermost: next: ...")` on Err or
-    /// `None` on Ok. Enables asserting the full failure surface with a single
-    /// equality — the chain order encodes which failure took precedence and
-    /// which was folded in as extra context.
-    fn chain(res: Result<()>) -> Option<String> {
-        res.err().map(|e| format!("{e:#}"))
+    fn fatal(s: &str) -> ExpectedOutcome {
+        ExpectedOutcome::Fatal(s.to_string())
+    }
+
+    fn viewer(s: &str) -> ExpectedOutcome {
+        ExpectedOutcome::Viewer(s.to_string())
     }
 
     #[rstest]
-    #[case::all_ok(None, Some(exit_ok()), None, None)]
-    #[case::child_error(
+    #[case::all_ok(None, Some(exit_ok()), None, ExpectedOutcome::Ok)]
+    #[case::child_spawn_error(
         None,
         Some(Err(io_err("boom"))),
         None,
-        Some("failed to run claude-history: boom".to_string()),
+        viewer("failed to run claude-history: boom")
     )]
     #[case::child_nonzero_exit(
         None,
         Some(exit_nonzero()),
         None,
-        Some("failed to run claude-history: claude-history exited with exit status: 1".to_string()),
+        viewer("failed to run claude-history: claude-history exited with exit status: 1")
     )]
     #[case::restore_error(
         None,
         Some(exit_ok()),
         Some(io_err("bad")),
-        Some("failed to restore terminal: bad".to_string()),
+        fatal("failed to restore terminal: bad")
     )]
-    // When both child and restore fail the restore error must surface first —
+    // When both child and restore fail the restore error surfaces first —
     // a broken terminal is more urgent than a missing viewer — with the
     // child error folded in as context.
     #[case::child_and_restore_error(
         None,
         Some(Err(io_err("no bin"))),
         Some(io_err("no tty")),
-        Some("failed to run claude-history: no bin: no tty".to_string()),
+        fatal("failed to restore terminal (child also failed: no bin): no tty")
     )]
     // If suspend fails, callers pass status=None (no spawn happened) but
-    // restore is still attempted; the suspend error is what surfaces.
+    // restore is still attempted; the suspend error surfaces as fatal.
     #[case::suspend_error_only(
         Some(io_err("suspend")),
         None,
         None,
-        Some("failed to leave alt screen: suspend".to_string()),
+        fatal("failed to leave alt screen: suspend")
     )]
     #[case::suspend_and_restore_error(
         Some(io_err("suspend")),
         None,
         Some(io_err("no tty")),
-        Some("failed to leave alt screen: suspend: no tty".to_string()),
+        fatal("failed to restore terminal (suspend also failed: suspend): no tty")
     )]
     fn test_combine_preview_result(
         #[case] suspend_err: Option<io::Error>,
         #[case] status: Option<io::Result<std::process::ExitStatus>>,
         #[case] restore_err: Option<io::Error>,
-        #[case] expected: Option<String>,
+        #[case] expected: ExpectedOutcome,
     ) {
         assert_eq!(
-            chain(combine_preview_result(suspend_err, status, restore_err)),
+            categorize(combine_preview_result(suspend_err, status, restore_err)),
             expected,
         );
     }
