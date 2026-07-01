@@ -9,9 +9,15 @@ mod worktree_session_children;
 mod worktree_view;
 
 use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode, View};
@@ -19,6 +25,7 @@ use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChange
 use self::worktree_view::WorktreeMode;
 use crate::commands::cc::types::SessionStatus;
 use crate::infra::tmux;
+use crate::shared::command;
 
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
@@ -31,13 +38,16 @@ pub fn run() -> Result<()> {
 /// Side effects requested by key handlers that need access to the event
 /// handler (to spawn background work). Returning these from the pure
 /// handlers keeps them testable without dragging in real async / IO.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct KeyEffects {
     /// User pressed `c`: kick off the PR fetch for the clean view.
     request_clean_pr_fetch: bool,
     /// User confirmed `y` in the clean view: spawn the detached child
     /// for these paths and start tailing its log.
-    spawn_detached_clean: Option<Vec<std::path::PathBuf>>,
+    spawn_detached_clean: Option<Vec<PathBuf>>,
+    /// User pressed `p`: open the selected session's JSONL in
+    /// `claude-history` after suspending the TUI.
+    preview_session_path: Option<PathBuf>,
 }
 
 impl KeyEffects {
@@ -47,6 +57,9 @@ impl KeyEffects {
         }
         if other.spawn_detached_clean.is_some() {
             self.spawn_detached_clean = other.spawn_detached_clean;
+        }
+        if other.preview_session_path.is_some() {
+            self.preview_session_path = other.preview_session_path;
         }
     }
 }
@@ -124,6 +137,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             let sessions = app.sessions.clone();
             event_handler.start_clean_pr_fetch(rows, sessions);
         }
+        if let Some(path) = effects.preview_session_path
+            && let Err(e) = preview_session(terminal, &path)
+        {
+            app.set_error(format!("Failed to preview session: {e}"));
+        }
         if let Some(paths) = effects.spawn_detached_clean {
             match clean_progress::spawn_detached_clean(&paths) {
                 Ok(run_id) => {
@@ -193,6 +211,61 @@ fn focus_selected_session(app: &mut App) {
     {
         app.set_error(format!("Failed to focus tmux pane: {e}"));
     }
+}
+
+/// Preview a session's JSONL with `claude-history`.
+fn preview_session(terminal: &mut DefaultTerminal, jsonl_path: &Path) -> Result<()> {
+    let suspend_err = suspend_terminal().err();
+    // Even if suspend partially failed (raw mode disabled but alt screen
+    // still active), we must still try to restore — the alternative is
+    // leaving the TUI in a broken state.
+    let status = if suspend_err.is_none() {
+        Some(command::new("claude-history").arg(jsonl_path).status())
+    } else {
+        None
+    };
+    let restore_err = resume_terminal(terminal).err();
+    combine_preview_result(suspend_err, status, restore_err)
+}
+
+/// Combine the three possible failure sources of `preview_session` into a
+/// single `Result`. Split out for direct unit testing since the caller is
+/// tangled with real terminal I/O.
+fn combine_preview_result(
+    suspend_err: Option<io::Error>,
+    status: Option<io::Result<std::process::ExitStatus>>,
+    restore_err: Option<io::Error>,
+) -> Result<()> {
+    let child_err = status.and_then(|r| r.err());
+    match (suspend_err, child_err, restore_err) {
+        (None, None, None) => Ok(()),
+        (Some(e), _, None) => Err(anyhow::Error::from(e).context("failed to leave alt screen")),
+        (Some(se), _, Some(re)) => {
+            Err(anyhow::Error::from(re).context(format!("failed to leave alt screen: {se}")))
+        }
+        (None, None, Some(re)) => {
+            Err(anyhow::Error::from(re).context("failed to restore terminal"))
+        }
+        (None, Some(e), None) => {
+            Err(anyhow::Error::from(e).context("failed to run claude-history"))
+        }
+        (None, Some(ce), Some(re)) => {
+            Err(anyhow::Error::from(re).context(format!("failed to run claude-history: {ce}")))
+        }
+    }
+}
+
+fn suspend_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut DefaultTerminal) -> io::Result<()> {
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+    Ok(())
 }
 
 const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
@@ -451,6 +524,21 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         let seeded = app.enter_clean_view();
         return KeyEffects {
             request_clean_pr_fetch: seeded,
+            ..Default::default()
+        };
+    }
+    // `p` previews the selected session's JSONL. No-op with no selection
+    // or a session that has never emitted a transcript (JSONL is what
+    // the viewer reads — nothing to open without it).
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Char('p'), KeyModifiers::NONE) = (key.code, key.modifiers)
+    {
+        app.clear_error();
+        let path = app
+            .selected_session()
+            .and_then(|s| s.transcript_path.clone());
+        return KeyEffects {
+            preview_session_path: path,
             ..Default::default()
         };
     }
@@ -801,6 +889,132 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Esc));
         assert!(app.should_quit);
+    }
+
+    // =========================================================================
+    // Preview key binding tests
+    // =========================================================================
+
+    #[rstest]
+    #[case::with_transcript(
+        1,
+        Some(PathBuf::from("/tmp/session-0.jsonl")),
+        key(KeyCode::Char('p')),
+        KeyEffects {
+            preview_session_path: Some(PathBuf::from("/tmp/session-0.jsonl")),
+            ..Default::default()
+        },
+    )]
+    #[case::no_transcript(1, None, key(KeyCode::Char('p')), KeyEffects::default())]
+    #[case::no_selection(0, None, key(KeyCode::Char('p')), KeyEffects::default())]
+    // Ctrl+p still toggles the Paused filter — plain `p` must not shadow it.
+    #[case::ctrl_p_filter(
+        1,
+        Some(PathBuf::from("/tmp/x.jsonl")),
+        key_ctrl('p'),
+        KeyEffects::default()
+    )]
+    fn test_preview_key_effects(
+        #[case] session_count: usize,
+        #[case] transcript_path: Option<PathBuf>,
+        #[case] key: KeyEvent,
+        #[case] expected: KeyEffects,
+    ) {
+        let mut app = create_test_app_with_sessions(session_count);
+        if let Some(path) = transcript_path
+            && !app.sessions.is_empty()
+        {
+            app.sessions[0].transcript_path = Some(path);
+        }
+        assert_eq!(handle_key_event(&mut app, key), expected);
+    }
+
+    #[test]
+    fn test_ctrl_p_toggles_paused_filter_even_with_p_binding() {
+        // Regression guard: plain `p` intercepts before the Ctrl+p filter
+        // path, so verify Ctrl+p still reaches it end-to-end.
+        let mut app = create_test_app_with_sessions(1);
+        handle_key_event(&mut app, key_ctrl('p'));
+        assert_eq!(app.status_filter, Some(SessionStatus::Paused));
+    }
+
+    // =========================================================================
+    // combine_preview_result tests
+    // =========================================================================
+
+    fn io_err(msg: &str) -> io::Error {
+        io::Error::other(msg)
+    }
+
+    fn exit_ok() -> io::Result<std::process::ExitStatus> {
+        // Build a real ExitStatus without spawning a process.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            Ok(std::process::ExitStatus::from_raw(0))
+        }
+        #[cfg(not(unix))]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            Ok(std::process::ExitStatus::from_raw(0))
+        }
+    }
+
+    /// Normalize an anyhow chain to `Some("outermost: next: ...")` on Err or
+    /// `None` on Ok. Enables asserting the full failure surface with a single
+    /// equality — the chain order encodes which failure took precedence and
+    /// which was folded in as extra context.
+    fn chain(res: Result<()>) -> Option<String> {
+        res.err().map(|e| format!("{e:#}"))
+    }
+
+    #[rstest]
+    #[case::all_ok(None, Some(exit_ok()), None, None)]
+    #[case::child_error(
+        None,
+        Some(Err(io_err("boom"))),
+        None,
+        Some("failed to run claude-history: boom".to_string()),
+    )]
+    #[case::restore_error(
+        None,
+        Some(exit_ok()),
+        Some(io_err("bad")),
+        Some("failed to restore terminal: bad".to_string()),
+    )]
+    // When both child and restore fail the restore error must surface first —
+    // a broken terminal is more urgent than a missing viewer — with the
+    // child error folded in as context.
+    #[case::child_and_restore_error(
+        None,
+        Some(Err(io_err("no bin"))),
+        Some(io_err("no tty")),
+        Some("failed to run claude-history: no bin: no tty".to_string()),
+    )]
+    // If suspend fails, callers pass status=None (no spawn happened) but
+    // restore is still attempted; the suspend error is what surfaces.
+    #[case::suspend_error_only(
+        Some(io_err("suspend")),
+        None,
+        None,
+        Some("failed to leave alt screen: suspend".to_string()),
+    )]
+    #[case::suspend_and_restore_error(
+        Some(io_err("suspend")),
+        None,
+        Some(io_err("no tty")),
+        Some("failed to leave alt screen: suspend: no tty".to_string()),
+    )]
+    fn test_combine_preview_result(
+        #[case] suspend_err: Option<io::Error>,
+        #[case] status: Option<io::Result<std::process::ExitStatus>>,
+        #[case] restore_err: Option<io::Error>,
+        #[case] expected: Option<String>,
+    ) {
+        assert_eq!(
+            chain(combine_preview_result(suspend_err, status, restore_err)),
+            expected,
+        );
     }
 
     // =========================================================================

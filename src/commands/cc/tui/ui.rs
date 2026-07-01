@@ -724,20 +724,22 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(": focus  "),
                 Span::styled("r", bold),
                 Span::raw(": resume  "),
+                Span::styled("p", bold),
+                Span::raw(": preview  "),
                 Span::styled("d", bold),
                 Span::raw(": delete  "),
                 Span::styled("1-9", bold),
                 Span::raw(": quick  "),
                 Span::styled("/", bold),
-                Span::raw(": search  "),
-                Span::styled("q", bold),
-                Span::raw(": quit"),
+                Span::raw(": search"),
             ]),
             Line::from(vec![
                 Span::styled("  C-r/w/s/p", bold),
                 Span::raw(": filter  "),
                 Span::styled("Tab", bold),
-                Span::raw(": worktree view"),
+                Span::raw(": worktree view  "),
+                Span::styled("q", bold),
+                Span::raw(": quit"),
             ]),
         ],
     };
@@ -1594,8 +1596,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1614,8 +1616,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1646,8 +1648,8 @@ mod tests {
                ▎ I've updated the code as requested.
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1677,8 +1679,8 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1705,8 +1707,8 @@ mod tests {
                ▎
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1757,8 +1759,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1815,8 +1817,8 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  d: delete  1-9: quick  /: search  q: quit
-              C-r/w/s/p: filter  Tab: worktree view"};
+              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
+              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
 
         assert_eq!(output, expected);
     }
