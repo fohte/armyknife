@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.223](https://github.com/fohte/armyknife/compare/v0.1.222...v0.1.223) (2026-07-01)
+
+
+### Bug Fixes
+
+* **cc:** use sessions-index summary for a cc watch and a cc list titles ([#698](https://github.com/fohte/armyknife/issues/698)) ([9d50af6](https://github.com/fohte/armyknife/commit/9d50af6e160c1cbd3ffb1fc23d659c596222bdd1))
+
 ## [0.1.222](https://github.com/fohte/armyknife/compare/v0.1.221...v0.1.222) (2026-06-30)
 
 
