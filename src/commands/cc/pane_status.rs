@@ -14,9 +14,7 @@ use crate::infra::tmux;
 /// content is irrelevant.
 const PAUSED_FLAG_FILE_PREFIX: &str = "armyknife-cc-paused-";
 
-/// Value printed by `a cc pane-has-paused` (and previously written to the
-/// removed `@armyknife-cc-pane-has-paused` tmux option) when the pane's
-/// session is Paused.
+/// Value printed by `a cc pane-has-paused` when the pane's session is Paused.
 const PAUSED_FLAG_VALUE: &str = "1";
 
 #[derive(Args, Clone, PartialEq, Eq)]
