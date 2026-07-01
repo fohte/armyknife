@@ -229,14 +229,21 @@ fn preview_session(terminal: &mut DefaultTerminal, jsonl_path: &Path) -> Result<
 }
 
 /// Combine the three possible failure sources of `preview_session` into a
-/// single `Result`. Split out for direct unit testing since the caller is
-/// tangled with real terminal I/O.
+/// single `Result`.
 fn combine_preview_result(
     suspend_err: Option<io::Error>,
     status: Option<io::Result<std::process::ExitStatus>>,
     restore_err: Option<io::Error>,
 ) -> Result<()> {
-    let child_err = status.and_then(|r| r.err());
+    // A non-zero exit is a viewer failure the user should see, not just a
+    // spawn failure — collapse both into the same "child error" slot.
+    let child_err = status.and_then(|r| match r {
+        Ok(st) if !st.success() => {
+            Some(io::Error::other(format!("claude-history exited with {st}")))
+        }
+        Ok(_) => None,
+        Err(e) => Some(e),
+    });
     match (suspend_err, child_err, restore_err) {
         (None, None, None) => Ok(()),
         (Some(e), _, None) => Err(anyhow::Error::from(e).context("failed to leave alt screen")),
@@ -947,16 +954,25 @@ mod tests {
     }
 
     fn exit_ok() -> io::Result<std::process::ExitStatus> {
+        exit_status(0)
+    }
+
+    fn exit_nonzero() -> io::Result<std::process::ExitStatus> {
+        // On unix, from_raw takes a wait(2) status; 1 << 8 == exit code 1.
+        exit_status(1 << 8)
+    }
+
+    fn exit_status(raw: i32) -> io::Result<std::process::ExitStatus> {
         // Build a real ExitStatus without spawning a process.
         #[cfg(unix)]
         {
             use std::os::unix::process::ExitStatusExt;
-            Ok(std::process::ExitStatus::from_raw(0))
+            Ok(std::process::ExitStatus::from_raw(raw))
         }
         #[cfg(not(unix))]
         {
             use std::os::windows::process::ExitStatusExt;
-            Ok(std::process::ExitStatus::from_raw(0))
+            Ok(std::process::ExitStatus::from_raw(raw as u32))
         }
     }
 
@@ -975,6 +991,12 @@ mod tests {
         Some(Err(io_err("boom"))),
         None,
         Some("failed to run claude-history: boom".to_string()),
+    )]
+    #[case::child_nonzero_exit(
+        None,
+        Some(exit_nonzero()),
+        None,
+        Some("failed to run claude-history: claude-history exited with exit status: 1".to_string()),
     )]
     #[case::restore_error(
         None,
