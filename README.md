@@ -109,6 +109,15 @@ Update to the latest version.
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
+Version checks and release downloads hit the GitHub REST API, which limits anonymous requests to 60 per hour per IP. To authenticate and raise that limit, `a update` picks the first non-empty token from the following sources:
+
+1. `ARMYKNIFE_GITHUB_TOKEN` environment variable
+2. `GITHUB_TOKEN` environment variable
+3. `GH_TOKEN` environment variable
+4. `gh auth token` output (when `gh` is installed and signed in)
+
+When none is available the request falls back to anonymous access.
+
 ### `a name-branch <description>`
 
 Generate a branch name from a description using AI.
