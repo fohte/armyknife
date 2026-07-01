@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.225](https://github.com/fohte/armyknife/compare/v0.1.224...v0.1.225) (2026-07-01)
+
+
+### Performance Improvements
+
+* **cc:** materialize pause flag as a marker file to skip tmux client on prompts ([#702](https://github.com/fohte/armyknife/issues/702)) ([f0b1ae7](https://github.com/fohte/armyknife/commit/f0b1ae779747200beb15818e0933c6f13b61233a))
+
 ## [0.1.224](https://github.com/fohte/armyknife/compare/v0.1.223...v0.1.224) (2026-07-01)
 
 
