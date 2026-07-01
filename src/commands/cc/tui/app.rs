@@ -687,28 +687,35 @@ impl App {
 
         // Re-verify siblings at delete time: between request_delete and here
         // the user may have sat on the confirm prompt while a new session was
-        // created inside the same worktree. Only clean up if the worktree is
-        // still empty of sessions.
-        if let Some(worktree_root) = worktree_cleanup
+        // created inside the same worktree.
+        let cleanup_result = if let Some(worktree_root) = worktree_cleanup
             && !self.has_session_in_worktree(&worktree_root)
         {
             use crate::shared::cleanup;
-            let result = cleanup::cleanup_worktree_resources(&worktree_root)?;
-            if let Some(ref wt_root) = result.worktree_root {
-                let to_remove: Vec<String> = self
-                    .sessions
-                    .iter()
-                    .filter(|s| s.cwd.starts_with(wt_root))
-                    .map(|s| s.session_id.clone())
-                    .collect();
-                for id in &to_remove {
-                    self.remove_session(id);
-                }
+            cleanup::cleanup_worktree_resources(&worktree_root)
+        } else {
+            Ok(Default::default())
+        };
+
+        if let Ok(ref result) = cleanup_result
+            && let Some(ref wt_root) = result.worktree_root
+        {
+            let to_remove: Vec<String> = self
+                .sessions
+                .iter()
+                .filter(|s| s.cwd.starts_with(wt_root))
+                .map(|s| s.session_id.clone())
+                .collect();
+            for id in &to_remove {
+                self.remove_session(id);
             }
         }
 
+        // Always refresh, even if cleanup below failed: the session itself is
+        // already gone from disk and memory, so list_state must not point at
+        // the stale index.
         self.refresh_after_mutation(current_selection);
-        Ok(())
+        cleanup_result.map(|_| ())
     }
 
     fn has_session_in_worktree(&self, worktree_root: &Path) -> bool {
