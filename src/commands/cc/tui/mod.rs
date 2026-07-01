@@ -9,9 +9,15 @@ mod worktree_session_children;
 mod worktree_view;
 
 use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode, View};
@@ -19,6 +25,7 @@ use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChange
 use self::worktree_view::WorktreeMode;
 use crate::commands::cc::types::SessionStatus;
 use crate::infra::tmux;
+use crate::shared::command;
 
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
@@ -31,13 +38,16 @@ pub fn run() -> Result<()> {
 /// Side effects requested by key handlers that need access to the event
 /// handler (to spawn background work). Returning these from the pure
 /// handlers keeps them testable without dragging in real async / IO.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct KeyEffects {
     /// User pressed `c`: kick off the PR fetch for the clean view.
     request_clean_pr_fetch: bool,
     /// User confirmed `y` in the clean view: spawn the detached child
     /// for these paths and start tailing its log.
-    spawn_detached_clean: Option<Vec<std::path::PathBuf>>,
+    spawn_detached_clean: Option<Vec<PathBuf>>,
+    /// User pressed `p`: open the selected session's JSONL in
+    /// `claude-history` after suspending the TUI.
+    preview_session_path: Option<PathBuf>,
 }
 
 impl KeyEffects {
@@ -47,6 +57,9 @@ impl KeyEffects {
         }
         if other.spawn_detached_clean.is_some() {
             self.spawn_detached_clean = other.spawn_detached_clean;
+        }
+        if other.preview_session_path.is_some() {
+            self.preview_session_path = other.preview_session_path;
         }
     }
 }
@@ -124,6 +137,18 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             let sessions = app.sessions.clone();
             event_handler.start_clean_pr_fetch(rows, sessions);
         }
+        if let Some(path) = effects.preview_session_path {
+            match preview_session(terminal, &path) {
+                Ok(()) => {}
+                Err(PreviewError::Viewer(e)) => {
+                    app.set_error(format!("Failed to preview session: {e}"));
+                }
+                // A terminal that will not restore is not something we can
+                // paper over — bail out so `ratatui::restore()` runs and
+                // the shell gets a chance to clean up.
+                Err(PreviewError::Fatal(e)) => return Err(e),
+            }
+        }
         if let Some(paths) = effects.spawn_detached_clean {
             match clean_progress::spawn_detached_clean(&paths) {
                 Ok(run_id) => {
@@ -193,6 +218,93 @@ fn focus_selected_session(app: &mut App) {
     {
         app.set_error(format!("Failed to focus tmux pane: {e}"));
     }
+}
+
+/// Preview a session's JSONL with `claude-history`.
+fn preview_session(
+    terminal: &mut DefaultTerminal,
+    jsonl_path: &Path,
+) -> std::result::Result<(), PreviewError> {
+    let suspend_err = suspend_terminal().err();
+    // Even if suspend partially failed (raw mode disabled but alt screen
+    // still active), we must still try to restore — the alternative is
+    // leaving the TUI in a broken state.
+    let status = if suspend_err.is_none() {
+        Some(command::new("claude-history").arg(jsonl_path).status())
+    } else {
+        None
+    };
+    let restore_err = resume_terminal(terminal).err();
+    combine_preview_result(suspend_err, status, restore_err)
+}
+
+/// Categorized failure from `preview_session`. `Fatal` means the terminal
+/// itself is in a bad state (suspend or restore failed) — the caller must
+/// bail so `ratatui::restore()` runs. `Viewer` means only the child failed,
+/// so the TUI can keep going.
+#[derive(Debug)]
+enum PreviewError {
+    Fatal(anyhow::Error),
+    Viewer(anyhow::Error),
+}
+
+impl std::fmt::Display for PreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreviewError::Fatal(e) | PreviewError::Viewer(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+fn combine_preview_result(
+    suspend_err: Option<io::Error>,
+    status: Option<io::Result<std::process::ExitStatus>>,
+    restore_err: Option<io::Error>,
+) -> std::result::Result<(), PreviewError> {
+    // A non-zero exit is a viewer failure the user should see, not just a
+    // spawn failure — collapse both into the same "child error" slot.
+    let child_err = status.and_then(|r| match r {
+        Ok(st) if !st.success() => {
+            Some(io::Error::other(format!("claude-history exited with {st}")))
+        }
+        Ok(_) => None,
+        Err(e) => Some(e),
+    });
+    match (suspend_err, child_err, restore_err) {
+        (None, None, None) => Ok(()),
+        (Some(e), _, None) => Err(PreviewError::Fatal(
+            anyhow::Error::from(e).context("failed to leave alt screen"),
+        )),
+        // Restore is the state that governs the next frame, so its error
+        // surfaces first with the suspend error folded in.
+        (Some(se), _, Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
+            format!("failed to restore terminal (suspend also failed: {se})"),
+        ))),
+        (None, None, Some(re)) => Err(PreviewError::Fatal(
+            anyhow::Error::from(re).context("failed to restore terminal"),
+        )),
+        (None, Some(e), None) => Err(PreviewError::Viewer(
+            anyhow::Error::from(e).context("failed to run claude-history"),
+        )),
+        // Restore failure surfaces first — a broken terminal is more urgent
+        // than a missing viewer — with the child error folded in.
+        (None, Some(ce), Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
+            format!("failed to restore terminal (child also failed: {ce})"),
+        ))),
+    }
+}
+
+fn suspend_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut DefaultTerminal) -> io::Result<()> {
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+    Ok(())
 }
 
 const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
@@ -451,6 +563,21 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         let seeded = app.enter_clean_view();
         return KeyEffects {
             request_clean_pr_fetch: seeded,
+            ..Default::default()
+        };
+    }
+    // `p` previews the selected session's JSONL. No-op with no selection
+    // or a session that has never emitted a transcript (JSONL is what
+    // the viewer reads — nothing to open without it).
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Char('p'), KeyModifiers::NONE) = (key.code, key.modifiers)
+    {
+        app.clear_error();
+        let path = app
+            .selected_session()
+            .and_then(|s| s.transcript_path.clone());
+        return KeyEffects {
+            preview_session_path: path,
             ..Default::default()
         };
     }
@@ -801,6 +928,158 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Esc));
         assert!(app.should_quit);
+    }
+
+    // =========================================================================
+    // Preview key binding tests
+    // =========================================================================
+
+    #[rstest]
+    #[case::with_transcript(
+        1,
+        Some(PathBuf::from("/tmp/session-0.jsonl")),
+        key(KeyCode::Char('p')),
+        KeyEffects {
+            preview_session_path: Some(PathBuf::from("/tmp/session-0.jsonl")),
+            ..Default::default()
+        },
+    )]
+    #[case::no_transcript(1, None, key(KeyCode::Char('p')), KeyEffects::default())]
+    #[case::no_selection(0, None, key(KeyCode::Char('p')), KeyEffects::default())]
+    // Ctrl+p still toggles the Paused filter — plain `p` must not shadow it.
+    #[case::ctrl_p_filter(
+        1,
+        Some(PathBuf::from("/tmp/x.jsonl")),
+        key_ctrl('p'),
+        KeyEffects::default()
+    )]
+    fn test_preview_key_effects(
+        #[case] session_count: usize,
+        #[case] transcript_path: Option<PathBuf>,
+        #[case] key: KeyEvent,
+        #[case] expected: KeyEffects,
+    ) {
+        let mut app = create_test_app_with_sessions(session_count);
+        if let Some(path) = transcript_path
+            && !app.sessions.is_empty()
+        {
+            app.sessions[0].transcript_path = Some(path);
+        }
+        assert_eq!(handle_key_event(&mut app, key), expected);
+    }
+
+    #[test]
+    fn test_ctrl_p_toggles_paused_filter_even_with_p_binding() {
+        // Regression guard: plain `p` intercepts before the Ctrl+p filter
+        // path, so verify Ctrl+p still reaches it end-to-end.
+        let mut app = create_test_app_with_sessions(1);
+        handle_key_event(&mut app, key_ctrl('p'));
+        assert_eq!(app.status_filter, Some(SessionStatus::Paused));
+    }
+
+    // =========================================================================
+    // combine_preview_result tests
+    // =========================================================================
+
+    fn io_err(msg: &str) -> io::Error {
+        io::Error::other(msg)
+    }
+
+    fn exit_ok() -> io::Result<std::process::ExitStatus> {
+        exit_status(0)
+    }
+
+    fn exit_nonzero() -> io::Result<std::process::ExitStatus> {
+        // On unix, from_raw takes a wait(2) status; 1 << 8 == exit code 1.
+        exit_status(1 << 8)
+    }
+
+    fn exit_status(raw: i32) -> io::Result<std::process::ExitStatus> {
+        // The repository is Unix-only (tmux + Unix APIs throughout), so no
+        // Windows path.
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::ExitStatus::from_raw(raw))
+    }
+
+    /// Categorized outcome for whole-value equality on `combine_preview_result`.
+    /// The tag identifies whether the caller should treat the failure as fatal
+    /// (terminal broken) or viewer-only.
+    #[derive(Debug, PartialEq, Eq)]
+    enum ExpectedOutcome {
+        Ok,
+        Fatal(String),
+        Viewer(String),
+    }
+
+    fn categorize(res: std::result::Result<(), PreviewError>) -> ExpectedOutcome {
+        match res {
+            Ok(()) => ExpectedOutcome::Ok,
+            Err(PreviewError::Fatal(e)) => ExpectedOutcome::Fatal(format!("{e:#}")),
+            Err(PreviewError::Viewer(e)) => ExpectedOutcome::Viewer(format!("{e:#}")),
+        }
+    }
+
+    fn fatal(s: &str) -> ExpectedOutcome {
+        ExpectedOutcome::Fatal(s.to_string())
+    }
+
+    fn viewer(s: &str) -> ExpectedOutcome {
+        ExpectedOutcome::Viewer(s.to_string())
+    }
+
+    #[rstest]
+    #[case::all_ok(None, Some(exit_ok()), None, ExpectedOutcome::Ok)]
+    #[case::child_spawn_error(
+        None,
+        Some(Err(io_err("boom"))),
+        None,
+        viewer("failed to run claude-history: boom")
+    )]
+    #[case::child_nonzero_exit(
+        None,
+        Some(exit_nonzero()),
+        None,
+        viewer("failed to run claude-history: claude-history exited with exit status: 1")
+    )]
+    #[case::restore_error(
+        None,
+        Some(exit_ok()),
+        Some(io_err("bad")),
+        fatal("failed to restore terminal: bad")
+    )]
+    // When both child and restore fail the restore error surfaces first —
+    // a broken terminal is more urgent than a missing viewer — with the
+    // child error folded in as context.
+    #[case::child_and_restore_error(
+        None,
+        Some(Err(io_err("no bin"))),
+        Some(io_err("no tty")),
+        fatal("failed to restore terminal (child also failed: no bin): no tty")
+    )]
+    // If suspend fails, callers pass status=None (no spawn happened) but
+    // restore is still attempted; the suspend error surfaces as fatal.
+    #[case::suspend_error_only(
+        Some(io_err("suspend")),
+        None,
+        None,
+        fatal("failed to leave alt screen: suspend")
+    )]
+    #[case::suspend_and_restore_error(
+        Some(io_err("suspend")),
+        None,
+        Some(io_err("no tty")),
+        fatal("failed to restore terminal (suspend also failed: suspend): no tty")
+    )]
+    fn test_combine_preview_result(
+        #[case] suspend_err: Option<io::Error>,
+        #[case] status: Option<io::Result<std::process::ExitStatus>>,
+        #[case] restore_err: Option<io::Error>,
+        #[case] expected: ExpectedOutcome,
+    ) {
+        assert_eq!(
+            categorize(combine_preview_result(suspend_err, status, restore_err)),
+            expected,
+        );
     }
 
     // =========================================================================
