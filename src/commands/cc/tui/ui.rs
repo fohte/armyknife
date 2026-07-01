@@ -645,12 +645,22 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let help_lines: Vec<Line> = match &app.mode {
-        AppMode::Confirm { is_alive, .. } => {
-            let prompt = if *is_alive {
-                "Stop and delete session?"
+        AppMode::Confirm {
+            is_alive,
+            worktree_cleanup,
+            ..
+        } => {
+            let base = if *is_alive {
+                "Stop and delete session"
             } else {
-                "Delete session?"
+                "Delete session"
             };
+            let suffix = if worktree_cleanup.is_some() {
+                " (last in worktree; also deletes worktree, branch, tmux windows)"
+            } else {
+                ""
+            };
+            let prompt = format!("{base}{suffix}?");
             let warn_style = Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
@@ -661,24 +671,6 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
                     Span::raw(": yes  "),
                     Span::styled("n/Esc", bold),
                     Span::raw(": cancel"),
-                ]),
-                Line::from(""),
-            ]
-        }
-        AppMode::ConfirmWorktreeCleanup { .. } => {
-            let warn_style = Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD);
-            vec![
-                Line::from(vec![
-                    Span::styled(
-                        "  Last session in this worktree. Also delete worktree, branch, and tmux windows? ",
-                        warn_style,
-                    ),
-                    Span::styled("y", bold),
-                    Span::raw(": yes  "),
-                    Span::styled("n/Esc", bold),
-                    Span::raw(": keep"),
                 ]),
                 Line::from(""),
             ]
