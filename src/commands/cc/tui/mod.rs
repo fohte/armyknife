@@ -406,21 +406,6 @@ fn handle_confirm_key_event(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles key events in ConfirmWorktreeCleanup mode.
-fn handle_confirm_worktree_cleanup_key_event(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('y') => {
-            if let Err(e) = app.confirm_worktree_cleanup() {
-                app.set_error(format!("Failed to clean up worktree: {e}"));
-            }
-        }
-        KeyCode::Char('n') | KeyCode::Esc => {
-            app.cancel_confirm();
-        }
-        _ => {}
-    }
-}
-
 /// Handles key events based on the current view and sub-mode.
 fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     // One-shot banners: any key press dismisses them so they do not
@@ -459,9 +444,6 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         AppMode::Normal => handle_normal_key_event(app, key),
         AppMode::Search => handle_search_key_event(app, key),
         AppMode::Confirm { .. } => handle_confirm_key_event(app, key),
-        AppMode::ConfirmWorktreeCleanup { .. } => {
-            handle_confirm_worktree_cleanup_key_event(app, key);
-        }
     }
     KeyEffects::default()
 }
@@ -1148,34 +1130,56 @@ mod tests {
     }
 
     #[rstest]
-    fn test_confirm_delete_last_session_in_worktree_prompts_cleanup(
+    fn test_request_delete_last_session_in_worktree_records_cleanup(
         worktree_feat: (TestRepo, PathBuf),
     ) {
-        // Only session in the worktree. After deletion, user should be asked
-        // whether to also remove the worktree itself.
+        // Only session in the worktree. Confirm mode should carry the
+        // worktree root so a single `y` deletes both.
         let (repo, wt_path) = worktree_feat;
         let s1 = session_with_cwd("s1", wt_path);
         let mut app = App::with_sessions(vec![s1]);
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
-        handle_key_event(&mut app, key(KeyCode::Char('y')));
 
         match &app.mode {
-            AppMode::ConfirmWorktreeCleanup { worktree_root } => {
+            AppMode::Confirm {
+                worktree_cleanup: Some(worktree_root),
+                ..
+            } => {
                 assert!(
                     worktree_root.starts_with(repo.path()),
                     "worktree_root should be inside the main repo path"
                 );
             }
-            other => panic!("expected ConfirmWorktreeCleanup, got {other:?}"),
+            other => panic!("expected Confirm with worktree_cleanup=Some, got {other:?}"),
         }
+    }
+
+    #[rstest]
+    fn test_confirm_delete_last_session_in_worktree_removes_worktree(
+        worktree_feat: (TestRepo, PathBuf),
+    ) {
+        // Only session in the worktree. A single `y` must delete the
+        // session AND clean up the worktree in one step.
+        let (_repo, wt_path) = worktree_feat;
+        let s1 = session_with_cwd("s1", wt_path.clone());
+        let mut app = App::with_sessions(vec![s1]);
+
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        handle_key_event(&mut app, key(KeyCode::Char('y')));
+
+        assert_eq!(app.mode, AppMode::Normal);
         assert!(app.sessions.is_empty());
+        assert!(
+            !wt_path.exists(),
+            "worktree directory should be removed after single confirmation"
+        );
     }
 
     #[rstest]
     #[case::n_key(KeyCode::Char('n'))]
     #[case::esc_key(KeyCode::Esc)]
-    fn test_confirm_worktree_cleanup_cancel_keeps_worktree(
+    fn test_confirm_delete_cancel_keeps_session_and_worktree(
         worktree_feat: (TestRepo, PathBuf),
         #[case] cancel_key: KeyCode,
     ) {
@@ -1184,16 +1188,20 @@ mod tests {
         let mut app = App::with_sessions(vec![s1]);
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
-        handle_key_event(&mut app, key(KeyCode::Char('y')));
-        assert!(matches!(app.mode, AppMode::ConfirmWorktreeCleanup { .. }));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirm {
+                worktree_cleanup: Some(_),
+                ..
+            }
+        ));
 
         handle_key_event(&mut app, key(cancel_key));
         assert_eq!(app.mode, AppMode::Normal);
-
-        // Worktree directory must still exist on disk.
+        assert_eq!(app.sessions.len(), 1);
         assert!(
             wt_path.exists(),
-            "worktree directory should remain when cleanup is declined"
+            "worktree directory should remain when confirmation is declined"
         );
     }
 
