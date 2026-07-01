@@ -9,9 +9,11 @@ use super::types::{SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 /// Filename prefix for the per-pane paused-flag file. The full path is
-/// `<flag_dir>/<PAUSED_FLAG_FILE_PREFIX><pane_id>` (e.g.
-/// `/tmp/armyknife-cc-paused-%17`). Existence encodes the flag; the file's
-/// content is irrelevant.
+/// `<flag_dir>/<PAUSED_FLAG_FILE_PREFIX><user>-<pane_id>` (e.g.
+/// `/tmp/armyknife-cc-paused-fohte-%17`). The `<user>` segment prevents
+/// collisions on multi-user hosts where `TMPDIR` falls back to a shared
+/// `/tmp` (tmux pane IDs are sequential and clash across users otherwise).
+/// Existence encodes the flag; the file's content is irrelevant.
 const PAUSED_FLAG_FILE_PREFIX: &str = "armyknife-cc-paused-";
 
 /// Value printed by `a cc pane-has-paused` when the pane's session is Paused.
@@ -40,8 +42,8 @@ pub fn run(args: &HasPausedArgs) -> Result<()> {
 
 /// Recomputes the pane's paused flag and materializes it as a marker file
 /// under the process temp dir. Existence of
-/// `<flag_dir>/armyknife-cc-paused-<pane_id>` means the pane's session is
-/// `Paused`; absence means anything else.
+/// `<flag_dir>/armyknife-cc-paused-<user>-<pane_id>` means the pane's
+/// session is `Paused`; absence means anything else.
 ///
 /// Uses a file rather than a tmux user option so prompt renderers can check
 /// the state with `test -e` without spawning a tmux client on every prompt.
@@ -54,7 +56,13 @@ pub fn sync_paused_flag(
     status: Option<SessionStatus>,
     sessions_dir: &Path,
 ) -> Result<()> {
-    sync_paused_flag_in(pane_id, status, sessions_dir, &std::env::temp_dir())
+    sync_paused_flag_in(
+        pane_id,
+        status,
+        sessions_dir,
+        &std::env::temp_dir(),
+        &current_user(),
+    )
 }
 
 fn sync_paused_flag_in(
@@ -62,12 +70,13 @@ fn sync_paused_flag_in(
     status: Option<SessionStatus>,
     sessions_dir: &Path,
     flag_dir: &Path,
+    user: &str,
 ) -> Result<()> {
     let is_paused = match status {
         Some(s) => paused_flag(s).is_some(),
         None => render_for_pane(pane_id, sessions_dir)?.is_some(),
     };
-    let path = paused_flag_path(flag_dir, pane_id);
+    let path = paused_flag_path(flag_dir, user, pane_id);
     if is_paused {
         // `File::create` is idempotent w.r.t. existence: concurrent hook
         // deliveries for the same pane converge on the same terminal state
@@ -84,8 +93,12 @@ fn sync_paused_flag_in(
     Ok(())
 }
 
-fn paused_flag_path(flag_dir: &Path, pane_id: &str) -> PathBuf {
-    flag_dir.join(format!("{PAUSED_FLAG_FILE_PREFIX}{pane_id}"))
+fn paused_flag_path(flag_dir: &Path, user: &str, pane_id: &str) -> PathBuf {
+    flag_dir.join(format!("{PAUSED_FLAG_FILE_PREFIX}{user}-{pane_id}"))
+}
+
+fn current_user() -> String {
+    std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
 }
 
 /// Loads the pane's bound session (via its `@armyknife-last-claude-code-session-id`
@@ -123,6 +136,8 @@ mod tests {
     use rstest::rstest;
     use tempfile::TempDir;
 
+    const TEST_USER: &str = "tester";
+
     #[rstest]
     #[case::running(SessionStatus::Running, None)]
     #[case::waiting(SessionStatus::WaitingInput, None)]
@@ -137,8 +152,8 @@ mod tests {
     fn paused_flag_path_shape() {
         let dir = Path::new("/tmp");
         assert_eq!(
-            paused_flag_path(dir, "%17"),
-            PathBuf::from("/tmp/armyknife-cc-paused-%17"),
+            paused_flag_path(dir, "fohte", "%17"),
+            PathBuf::from("/tmp/armyknife-cc-paused-fohte-%17"),
         );
     }
 
@@ -156,10 +171,17 @@ mod tests {
         let sessions_dir = TempDir::new().unwrap();
         let pane_id = "%42";
 
-        sync_paused_flag_in(pane_id, Some(status), sessions_dir.path(), flag_dir.path()).unwrap();
+        sync_paused_flag_in(
+            pane_id,
+            Some(status),
+            sessions_dir.path(),
+            flag_dir.path(),
+            TEST_USER,
+        )
+        .unwrap();
 
         assert_eq!(
-            paused_flag_path(flag_dir.path(), pane_id).exists(),
+            paused_flag_path(flag_dir.path(), TEST_USER, pane_id).exists(),
             should_exist_after,
         );
     }
@@ -169,7 +191,7 @@ mod tests {
         let flag_dir = TempDir::new().unwrap();
         let sessions_dir = TempDir::new().unwrap();
         let pane_id = "%7";
-        let path = paused_flag_path(flag_dir.path(), pane_id);
+        let path = paused_flag_path(flag_dir.path(), TEST_USER, pane_id);
         std::fs::write(&path, b"stale").unwrap();
 
         sync_paused_flag_in(
@@ -177,6 +199,7 @@ mod tests {
             Some(SessionStatus::Running),
             sessions_dir.path(),
             flag_dir.path(),
+            TEST_USER,
         )
         .unwrap();
 
@@ -195,10 +218,11 @@ mod tests {
                 Some(SessionStatus::Paused),
                 sessions_dir.path(),
                 flag_dir.path(),
+                TEST_USER,
             )
             .unwrap();
         }
 
-        assert!(paused_flag_path(flag_dir.path(), pane_id).exists());
+        assert!(paused_flag_path(flag_dir.path(), TEST_USER, pane_id).exists());
     }
 }
