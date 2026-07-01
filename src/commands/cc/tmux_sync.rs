@@ -1,9 +1,10 @@
-//! Trait abstraction over the "push the latest Claude Code status into tmux
-//! pane / window user options" side effect, so that hook-driven and
-//! sweep-driven paths share a single implementation and tests can verify the
-//! call without touching a real tmux server.
+//! Trait abstraction over the "push the latest Claude Code status into the
+//! per-pane paused-flag file and the window's tmux user option" side effect,
+//! so that hook-driven and sweep-driven paths share a single implementation
+//! and tests can verify the call without touching a real tmux server or the
+//! process temp dir.
 //!
-//! See `pane_status::sync_pane_option` / `window_status::sync_window_option`
+//! See `pane_status::sync_paused_flag` / `window_status::sync_window_option`
 //! for what the production implementation actually writes.
 
 use std::path::Path;
@@ -14,8 +15,8 @@ use super::window_status;
 use crate::infra::tmux;
 
 /// Pushes the aggregated window status for the window containing `pane_id`
-/// and the pane's own prompt-indicator status into their respective tmux user
-/// options.
+/// into its window-scoped tmux user option and materializes the pane's
+/// paused-flag file.
 pub(crate) trait TmuxStatusSyncer {
     fn sync(&self, pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path);
 }
@@ -24,7 +25,7 @@ pub(crate) trait TmuxStatusSyncer {
 ///
 /// No-op when there is no pane (session ran outside tmux). The pane-level
 /// write does not depend on resolving a window, so it still runs when the
-/// window lookup fails. Errors are ignored: both options are best-effort.
+/// window lookup fails. Errors are ignored: both writes are best-effort.
 ///
 /// Only the window the pane *currently* belongs to is recomputed. Moving a
 /// pane across windows (`move-pane` / `break-pane`) leaves the source
@@ -37,7 +38,7 @@ impl TmuxStatusSyncer for LiveTmuxStatusSyncer {
         let Some(pane_id) = pane_id else {
             return;
         };
-        let _ = pane_status::sync_pane_option(pane_id, status, sessions_dir);
+        let _ = pane_status::sync_paused_flag(pane_id, status, sessions_dir);
         let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
             return;
         };
