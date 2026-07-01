@@ -5,6 +5,7 @@
 
 use lazy_regex::regex_replace_all;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -140,8 +141,94 @@ pub fn normalize_title(s: &str) -> String {
     stripped.trim().replace('\n', " ").replace('\r', "")
 }
 
-/// Retrieves the session title by reading the first user prompt from the .jsonl file.
+/// `sessions-index.json` shape written by Claude Code.
+///
+/// Only `entries[].sessionId` and `entries[].summary` are read; every other
+/// field is ignored via `#[serde(default)]` on the top-level `entries`.
+#[derive(Debug, Deserialize)]
+struct SessionsIndex {
+    #[serde(default)]
+    entries: Vec<SessionsIndexEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionsIndexEntry {
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    summary: Option<String>,
+}
+
+/// Loads Claude Code's `sessions-index.json` for a project and returns a map
+/// from `sessionId` to `summary`.
+///
+/// Only entries whose `summary` is present and non-empty (after trim) are
+/// included. Any I/O or parse error (missing file, malformed JSON, etc.)
+/// yields an empty map -- callers fall through to the next title source.
+pub fn sessions_index_summaries(project_path: &Path) -> HashMap<String, String> {
+    let Some(home) = crate::shared::dirs::home_dir() else {
+        return HashMap::new();
+    };
+    sessions_index_summaries_in_home(&home, project_path)
+}
+
+fn sessions_index_summaries_in_home(home: &Path, project_path: &Path) -> HashMap<String, String> {
+    let encoded = encode_project_path(project_path);
+    let path = home
+        .join(".claude")
+        .join("projects")
+        .join(&encoded)
+        .join("sessions-index.json");
+
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    let Ok(index) = serde_json::from_str::<SessionsIndex>(&contents) else {
+        return HashMap::new();
+    };
+
+    index
+        .entries
+        .into_iter()
+        .filter_map(|e| {
+            let sid = e.session_id?;
+            let summary = e.summary?;
+            if summary.trim().is_empty() {
+                None
+            } else {
+                Some((sid, summary))
+            }
+        })
+        .collect()
+}
+
+/// Retrieves the session title.
+///
+/// Priority: `sessions-index.json` `summary` > first user prompt in `.jsonl`.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
+    get_session_title_with_index(project_path, session_id, None)
+}
+
+/// Variant of [`get_session_title`] that accepts a pre-loaded
+/// `sessionId` → `summary` map. When `index` is `Some`, no file I/O is
+/// performed; when `None`, `sessions-index.json` is read inline.
+pub fn get_session_title_with_index(
+    project_path: &Path,
+    session_id: &str,
+    index: Option<&HashMap<String, String>>,
+) -> Option<String> {
+    let summary = match index {
+        Some(map) => map.get(session_id).cloned(),
+        None => sessions_index_summaries(project_path)
+            .get(session_id)
+            .cloned(),
+    };
+    if let Some(summary) = summary {
+        let normalized = normalize_title(&summary);
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
     get_title_from_jsonl(project_path, session_id)
 }
 
@@ -708,6 +795,139 @@ mod tests {
         let path = Path::new("/nonexistent/path/that/does/not/exist");
         let result = get_session_title(path, "test-session-id");
         assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Tests for sessions-index.json summary lookup
+    // =========================================================================
+
+    /// Writes a sessions-index.json into the mock home directory.
+    fn write_sessions_index(home_dir: &Path, project_path: &str, contents: &str) {
+        let encoded = encode_project_path(Path::new(project_path));
+        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let mut file = File::create(project_dir.join("sessions-index.json")).unwrap();
+        file.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[rstest]
+    #[case::summary_present(
+        indoc! {r#"
+            {
+              "version": 1,
+              "entries": [
+                {"sessionId": "sess-1", "summary": "First session summary"},
+                {"sessionId": "sess-2", "summary": "Second session summary"}
+              ]
+            }
+        "#},
+        HashMap::from([
+            ("sess-1".to_string(), "First session summary".to_string()),
+            ("sess-2".to_string(), "Second session summary".to_string()),
+        ])
+    )]
+    #[case::summary_empty_string(
+        indoc! {r#"
+            {"entries": [{"sessionId": "sess-1", "summary": ""}]}
+        "#},
+        HashMap::new()
+    )]
+    #[case::summary_whitespace_only(
+        indoc! {r#"
+            {"entries": [{"sessionId": "sess-1", "summary": "   \n  "}]}
+        "#},
+        HashMap::new()
+    )]
+    #[case::summary_null(
+        indoc! {r#"
+            {"entries": [{"sessionId": "sess-1", "summary": null}]}
+        "#},
+        HashMap::new()
+    )]
+    #[case::mixed_present_and_empty(
+        indoc! {r#"
+            {"entries": [
+                {"sessionId": "sess-1", "summary": "kept"},
+                {"sessionId": "sess-2", "summary": ""},
+                {"sessionId": "sess-3", "summary": null}
+            ]}
+        "#},
+        HashMap::from([("sess-1".to_string(), "kept".to_string())])
+    )]
+    #[case::empty_entries_array(r#"{"entries": []}"#, HashMap::new())]
+    fn test_sessions_index_summaries_lookup(
+        #[case] file_contents: &str,
+        #[case] expected: HashMap<String, String>,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+        let project_path = "/test/project";
+        write_sessions_index(home_dir, project_path, file_contents);
+
+        assert_eq!(
+            sessions_index_summaries_in_home(home_dir, Path::new(project_path)),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::missing_file("does not exist -- file not written")]
+    #[case::malformed_json("{ not valid json ...")]
+    #[case::missing_entries_key(r#"{"version": 1}"#)]
+    #[case::entries_wrong_type(r#"{"entries": "not an array"}"#)]
+    fn test_sessions_index_summaries_returns_empty_on_error(#[case] file_contents: &str) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+        let project_path = "/test/project";
+
+        // The "missing_file" case is signaled by never writing the file.
+        if !file_contents.starts_with("does not exist") {
+            write_sessions_index(home_dir, project_path, file_contents);
+        }
+
+        let map = sessions_index_summaries_in_home(home_dir, Path::new(project_path));
+        assert_eq!(map, HashMap::new());
+    }
+
+    #[test]
+    fn test_get_session_title_with_index_uses_summary_when_present() {
+        // No real .jsonl exists at this path; the summary should win regardless.
+        let project_path = Path::new("/does/not/exist/anywhere");
+        let mut summaries = HashMap::new();
+        summaries.insert("sess-1".to_string(), "Great summary".to_string());
+
+        assert_eq!(
+            get_session_title_with_index(project_path, "sess-1", Some(&summaries)),
+            Some("Great summary".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_get_session_title_with_index_normalizes_ansi_and_newlines() {
+        let project_path = Path::new("/does/not/exist/anywhere");
+        let mut summaries = HashMap::new();
+        summaries.insert(
+            "sess-1".to_string(),
+            "\x1b[31mline one\nline two\x1b[0m".to_string(),
+        );
+
+        assert_eq!(
+            get_session_title_with_index(project_path, "sess-1", Some(&summaries)),
+            Some("line one line two".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_get_session_title_with_index_empty_summary_falls_through() {
+        // Empty index means summary lookup misses; caller must fall through to
+        // .jsonl. With a bogus project path the .jsonl read also returns None,
+        // proving no panic and no short-circuit on empty maps.
+        let project_path = Path::new("/does/not/exist/anywhere");
+        let empty: HashMap<String, String> = HashMap::new();
+        assert_eq!(
+            get_session_title_with_index(project_path, "sess-1", Some(&empty)),
+            None,
+        );
     }
 
     #[rstest]
