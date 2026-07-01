@@ -143,8 +143,9 @@ pub fn normalize_title(s: &str) -> String {
 
 /// `sessions-index.json` shape written by Claude Code.
 ///
-/// Only `entries[].sessionId` and `entries[].summary` are read; every other
-/// field is ignored via `#[serde(default)]` on the top-level `entries`.
+/// `#[serde(default)]` on `entries` lets the top-level key be absent
+/// without a parse error. Unknown fields (e.g. `version`) are dropped by
+/// serde's default behavior.
 #[derive(Debug, Deserialize)]
 struct SessionsIndex {
     #[serde(default)]
