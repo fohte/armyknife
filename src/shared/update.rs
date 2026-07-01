@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::shared::cache;
+use crate::shared::command;
 
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
@@ -86,6 +87,45 @@ where
     }
 }
 
+const TOKEN_ENV_VARS: &[&str] = &["ARMYKNIFE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
+
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+fn gh_auth_token() -> Option<String> {
+    if !command::is_command_available("gh") {
+        return None;
+    }
+    let output = command::new("gh").args(["auth", "token"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn resolve_github_token_with<E, G>(env_lookup: E, gh_fallback: G) -> Option<String>
+where
+    E: Fn(&str) -> Option<String>,
+    G: FnOnce() -> Option<String>,
+{
+    for name in TOKEN_ENV_VARS {
+        if let Some(value) = env_lookup(name).and_then(|v| non_empty_trimmed(&v)) {
+            return Some(value);
+        }
+    }
+    gh_fallback().and_then(|v| non_empty_trimmed(&v))
+}
+
+fn resolve_github_token() -> Option<String> {
+    resolve_github_token_with(env_var, gh_auth_token)
+}
+
 fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
     let mut builder = self_update::backends::github::Update::configure();
     builder
@@ -93,6 +133,9 @@ fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
         .current_version(cargo_crate_version!());
+    if let Some(token) = resolve_github_token() {
+        builder.auth_token(&token);
+    }
     builder
 }
 
@@ -152,6 +195,60 @@ mod tests {
         }
 
         assert_eq!(should_check_for_update_with_path(&path, NOW), expected);
+    }
+
+    #[rstest]
+    #[case::armyknife_wins_over_others(
+        &[("ARMYKNIFE_GITHUB_TOKEN", "ak"), ("GITHUB_TOKEN", "gt"), ("GH_TOKEN", "ght")],
+        Some("from-gh-cli"),
+        Some("ak"),
+    )]
+    #[case::github_token_when_armyknife_absent(
+        &[("GITHUB_TOKEN", "gt"), ("GH_TOKEN", "ght")],
+        Some("from-gh-cli"),
+        Some("gt"),
+    )]
+    #[case::gh_token_when_others_absent(
+        &[("GH_TOKEN", "ght")],
+        Some("from-gh-cli"),
+        Some("ght"),
+    )]
+    #[case::empty_env_skipped_falls_back_to_gh(
+        &[("ARMYKNIFE_GITHUB_TOKEN", ""), ("GITHUB_TOKEN", "   ")],
+        Some("from-gh-cli"),
+        Some("from-gh-cli"),
+    )]
+    #[case::gh_output_trimmed(
+        &[],
+        Some("  trimmed\n"),
+        Some("trimmed"),
+    )]
+    #[case::gh_empty_returns_none(
+        &[],
+        Some("  \n"),
+        None,
+    )]
+    #[case::gh_unavailable_returns_none(
+        &[],
+        None,
+        None,
+    )]
+    fn resolve_github_token_cases(
+        #[case] env: &[(&str, &str)],
+        #[case] gh_output: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let env_map: std::collections::HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+
+        let result = resolve_github_token_with(
+            |name| env_map.get(name).cloned(),
+            || gh_output.map(String::from),
+        );
+
+        assert_eq!(result, expected.map(String::from));
     }
 
     #[test]
