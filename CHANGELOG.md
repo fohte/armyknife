@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.224](https://github.com/fohte/armyknife/compare/v0.1.223...v0.1.224) (2026-07-01)
+
+
+### Features
+
+* **cc:** preview the selected session with claude-history from the watch TUI ([#701](https://github.com/fohte/armyknife/issues/701)) ([9519254](https://github.com/fohte/armyknife/commit/9519254494c7d0479df682dea0df6f0c6d54d159))
+
 ## [0.1.223](https://github.com/fohte/armyknife/compare/v0.1.222...v0.1.223) (2026-07-01)
 
 
