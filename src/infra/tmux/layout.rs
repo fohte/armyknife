@@ -323,7 +323,7 @@ fn execute_background_layout(
     window_name: &str,
 ) -> super::Result<()> {
     let new_window_idx = find_new_window_index(commands).ok_or_else(|| {
-        super::TmuxError::command_failed(&[], "new-window command not found in layout", None)
+        super::TmuxError::Internal("new-window command not found in layout".to_string())
     })?;
 
     let setup = &commands[..=new_window_idx];
@@ -894,12 +894,9 @@ mod tests {
 
     #[test]
     fn build_layout_commands_background_with_env_vars_places_new_window_at_expected_index() {
-        // Documents that build_layout_commands emits exactly one
-        // set-environment command per env_var before new-window, in the
-        // background + env_vars combination that `a wm new --agent` exercises
-        // in production. execute_background_layout finds new-window
-        // dynamically rather than relying on this as a fixed index, but
-        // pinning the ordering here still guards against silently breaking it.
+        // Documents that build_layout_commands emits exactly one set-environment
+        // command per env_var before new-window, in the background + env_vars
+        // combination that `a wm new --agent` exercises in production.
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
             focus: true,
@@ -1003,6 +1000,18 @@ mod tests {
         #[case] expected: Option<usize>,
     ) {
         assert_eq!(find_new_window_index(&commands), expected);
+    }
+
+    #[test]
+    fn execute_background_layout_errors_when_new_window_missing() {
+        let commands = vec![cmd(&["select-pane", "-t", "1"])];
+
+        let result = execute_background_layout(&commands, "sess", "win");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "new-window command not found in layout"
+        );
     }
 
     #[test]
