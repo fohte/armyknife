@@ -24,6 +24,12 @@ struct PaneEntry {
     focus: bool,
 }
 
+/// The pane-targeting prefix used to address panes in a background-created
+/// window before its real window ID is known (see `execute_background_layout`).
+fn background_pane_prefix(session: &str, window_name: &str) -> String {
+    format!("{session}:={window_name}.")
+}
+
 /// Build tmux command sequence from a LayoutNode tree.
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
@@ -77,7 +83,7 @@ pub fn build_layout_commands(
     commands.push(TmuxCommand::new(&new_window_args));
 
     let pane_prefix = if background {
-        format!("{session}:={window_name}.")
+        background_pane_prefix(session, window_name)
     } else {
         String::new()
     };
@@ -326,7 +332,7 @@ fn execute_background_layout(
     setup_args.extend(["-P", "-F", "#{window_id}"]);
     let window_id = super::run_tmux_output(&setup_args)?;
 
-    let old_prefix = format!("{session}:={window_name}.");
+    let old_prefix = background_pane_prefix(session, window_name);
     let new_prefix = format!("{window_id}.");
     execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))
 }
@@ -879,6 +885,23 @@ mod tests {
     }
 
     #[test]
+    fn build_layout_commands_background_with_env_vars_places_new_window_at_expected_index() {
+        // execute_background_layout hardcodes new_window_idx = env_vars.len()
+        // instead of searching for the new-window command; this pins the
+        // invariant it relies on for the background + env_vars combination
+        // that `a wm new --agent` actually exercises in production.
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+        let env_vars = [("KEY1", "v1"), ("KEY2", "v2")];
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, true);
+
+        assert_eq!(commands[env_vars.len()].args[0], "new-window");
+    }
+
+    #[test]
     fn build_layout_commands_foreground_keeps_unqualified_targets() {
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
@@ -904,9 +927,9 @@ mod tests {
     // window-ID-based one, used once new-window's real ID is known
     // =========================================================================
 
-    #[test]
-    fn rewrite_pane_targets_swaps_matching_prefix() {
-        let commands = vec![
+    #[rstest]
+    #[case::swaps_matching_prefix(
+        vec![
             cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.1"]),
             cmd(&[
                 "send-keys",
@@ -918,28 +941,32 @@ mod tests {
             ]),
             cmd(&["send-keys", "-t", "sess:=copier-update-v0.8.13.1", "C-m"]),
             cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.2"]),
-        ];
-
-        let rewritten = rewrite_pane_targets(&commands, "sess:=copier-update-v0.8.13.", "@42.");
-
+        ],
+        "sess:=copier-update-v0.8.13.",
+        "@42.",
+        vec![
+            cmd(&["select-pane", "-t", "@42.1"]),
+            cmd(&["send-keys", "-t", "@42.1", "-l", "--", "claude"]),
+            cmd(&["send-keys", "-t", "@42.1", "C-m"]),
+            cmd(&["select-pane", "-t", "@42.2"]),
+        ]
+    )]
+    #[case::leaves_non_matching_args_untouched(
+        vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])],
+        "sess:=dev.",
+        "@42.",
+        vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])]
+    )]
+    fn rewrite_pane_targets_cases(
+        #[case] commands: Vec<TmuxCommand>,
+        #[case] old_prefix: &str,
+        #[case] new_prefix: &str,
+        #[case] expected: Vec<TmuxCommand>,
+    ) {
         assert_eq!(
-            rewritten,
-            vec![
-                cmd(&["select-pane", "-t", "@42.1"]),
-                cmd(&["send-keys", "-t", "@42.1", "-l", "--", "claude"]),
-                cmd(&["send-keys", "-t", "@42.1", "C-m"]),
-                cmd(&["select-pane", "-t", "@42.2"]),
-            ]
+            rewrite_pane_targets(&commands, old_prefix, new_prefix),
+            expected
         );
-    }
-
-    #[test]
-    fn rewrite_pane_targets_leaves_non_matching_args_untouched() {
-        let commands = vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])];
-
-        let rewritten = rewrite_pane_targets(&commands, "sess:=dev.", "@42.");
-
-        assert_eq!(rewritten, commands);
     }
 
     #[test]
