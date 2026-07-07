@@ -282,9 +282,7 @@ pub fn build_layout(
     );
 
     if background {
-        // build_layout_commands emits exactly one set-environment command per
-        // env_var before new-window, so its index is known without searching.
-        execute_background_layout(&commands, env_vars.len(), session, window_name)?;
+        execute_background_layout(&commands, session, window_name)?;
     } else {
         execute_commands(&commands)?;
     }
@@ -321,10 +319,13 @@ fn flatten_commands(commands: &[TmuxCommand]) -> Vec<&str> {
 /// ambiguity entirely.
 fn execute_background_layout(
     commands: &[TmuxCommand],
-    new_window_idx: usize,
     session: &str,
     window_name: &str,
 ) -> super::Result<()> {
+    let new_window_idx = find_new_window_index(commands).ok_or_else(|| {
+        super::TmuxError::command_failed(&[], "new-window command not found in layout", None)
+    })?;
+
     let setup = &commands[..=new_window_idx];
     let rest = &commands[new_window_idx + 1..];
 
@@ -335,6 +336,13 @@ fn execute_background_layout(
     let old_prefix = background_pane_prefix(session, window_name);
     let new_prefix = format!("{window_id}.");
     execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))
+}
+
+/// Finds the index of the `new-window` command in a layout's command list.
+fn find_new_window_index(commands: &[TmuxCommand]) -> Option<usize> {
+    commands
+        .iter()
+        .position(|cmd| cmd.args.first().map(String::as_str) == Some("new-window"))
 }
 
 /// Rewrites pane-targeting command args from `{old_prefix}{pane}` to
@@ -886,10 +894,12 @@ mod tests {
 
     #[test]
     fn build_layout_commands_background_with_env_vars_places_new_window_at_expected_index() {
-        // execute_background_layout hardcodes new_window_idx = env_vars.len()
-        // instead of searching for the new-window command; this pins the
-        // invariant it relies on for the background + env_vars combination
-        // that `a wm new --agent` actually exercises in production.
+        // Documents that build_layout_commands emits exactly one
+        // set-environment command per env_var before new-window, in the
+        // background + env_vars combination that `a wm new --agent` exercises
+        // in production. execute_background_layout finds new-window
+        // dynamically rather than relying on this as a fixed index, but
+        // pinning the ordering here still guards against silently breaking it.
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
             focus: true,
@@ -967,6 +977,32 @@ mod tests {
             rewrite_pane_targets(&commands, old_prefix, new_prefix),
             expected
         );
+    }
+
+    // =========================================================================
+    // find_new_window_index: locates new-window regardless of what precedes it
+    // =========================================================================
+
+    #[rstest]
+    #[case::after_set_environment_commands(
+        vec![
+            cmd(&["set-environment", "-t", "sess", "KEY", "v"]),
+            cmd(&["new-window", "-d", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+            cmd(&["select-pane", "-t", "sess:=dev.1"]),
+        ],
+        Some(1)
+    )]
+    #[case::as_first_command(
+        vec![cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])],
+        Some(0)
+    )]
+    #[case::absent(vec![cmd(&["select-pane", "-t", "1"])], None)]
+    #[case::empty(vec![], None)]
+    fn find_new_window_index_cases(
+        #[case] commands: Vec<TmuxCommand>,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(find_new_window_index(&commands), expected);
     }
 
     #[test]
