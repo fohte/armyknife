@@ -29,7 +29,7 @@ path = "src/main.rs"
 schema-gen = ["dep:schemars"]
 
 [dependencies]
-anyhow = "=1.0.102"
+anyhow = "=1.0.103"
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.1", features = ["derive"] }
 clap_complete = "=4.6.5"
