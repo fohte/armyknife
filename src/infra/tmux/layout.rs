@@ -274,8 +274,83 @@ pub fn build_layout(
         env_vars,
         background,
     );
-    execute_commands(&commands)?;
+
+    if background {
+        // build_layout_commands emits exactly one set-environment command per
+        // env_var before new-window, so its index is known without searching.
+        execute_background_layout(&commands, env_vars.len(), session, window_name)?;
+    } else {
+        execute_commands(&commands)?;
+    }
+
     Ok(())
+}
+
+/// Flattens a sequence of `TmuxCommand` into a single arg list joined by `;`,
+/// the wire format tmux uses to chain multiple commands in one invocation.
+fn flatten_commands(commands: &[TmuxCommand]) -> Vec<&str> {
+    let mut args: Vec<&str> = Vec::new();
+    for (i, cmd) in commands.iter().enumerate() {
+        if i > 0 {
+            args.push(";");
+        }
+        for arg in &cmd.args {
+            args.push(arg);
+        }
+    }
+    args
+}
+
+/// Executes a background-mode layout: runs `new-window` (plus any preceding
+/// `set-environment` commands) on its own so the real window ID can be
+/// captured via `-P -F "#{window_id}"`, then rewrites the remaining commands'
+/// `{session}:={window_name}.` pane targets to `{window_id}.` before running
+/// them.
+///
+/// This indirection exists because tmux's target parser splits on `.` to
+/// separate window from pane, so a session-qualified target is ambiguous when
+/// the window name itself contains a `.` (e.g. a branch name like
+/// `copier-update/v0.8.13` becomes window name `copier-update-v0.8.13`).
+/// Window IDs (e.g. `@42`) never contain `.`, so targeting by ID sidesteps the
+/// ambiguity entirely.
+fn execute_background_layout(
+    commands: &[TmuxCommand],
+    new_window_idx: usize,
+    session: &str,
+    window_name: &str,
+) -> super::Result<()> {
+    let setup = &commands[..=new_window_idx];
+    let rest = &commands[new_window_idx + 1..];
+
+    let mut setup_args = flatten_commands(setup);
+    setup_args.extend(["-P", "-F", "#{window_id}"]);
+    let window_id = super::run_tmux_output(&setup_args)?;
+
+    let old_prefix = format!("{session}:={window_name}.");
+    let new_prefix = format!("{window_id}.");
+    execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))
+}
+
+/// Rewrites pane-targeting command args from `{old_prefix}{pane}` to
+/// `{new_prefix}{pane}`.
+fn rewrite_pane_targets(
+    commands: &[TmuxCommand],
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Vec<TmuxCommand> {
+    commands
+        .iter()
+        .map(|cmd| TmuxCommand {
+            args: cmd
+                .args
+                .iter()
+                .map(|arg| match arg.strip_prefix(old_prefix) {
+                    Some(rest) => format!("{new_prefix}{rest}"),
+                    None => arg.clone(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Write prompt to a temp file that persists until the shell command reads it.
@@ -300,16 +375,7 @@ fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
 
 /// Execute a sequence of TmuxCommand by chaining them with ";".
 fn execute_commands(commands: &[TmuxCommand]) -> super::Result<()> {
-    let mut args: Vec<&str> = Vec::new();
-    for (i, cmd) in commands.iter().enumerate() {
-        if i > 0 {
-            args.push(";");
-        }
-        for arg in &cmd.args {
-            args.push(arg);
-        }
-    }
-    super::run_tmux(&args)
+    super::run_tmux(&flatten_commands(commands))
 }
 
 #[cfg(test)]
@@ -831,6 +897,49 @@ mod tests {
         for c in &commands {
             assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
         }
+    }
+
+    // =========================================================================
+    // rewrite_pane_targets: swaps the session:=window_name. prefix for a
+    // window-ID-based one, used once new-window's real ID is known
+    // =========================================================================
+
+    #[test]
+    fn rewrite_pane_targets_swaps_matching_prefix() {
+        let commands = vec![
+            cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.1"]),
+            cmd(&[
+                "send-keys",
+                "-t",
+                "sess:=copier-update-v0.8.13.1",
+                "-l",
+                "--",
+                "claude",
+            ]),
+            cmd(&["send-keys", "-t", "sess:=copier-update-v0.8.13.1", "C-m"]),
+            cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.2"]),
+        ];
+
+        let rewritten = rewrite_pane_targets(&commands, "sess:=copier-update-v0.8.13.", "@42.");
+
+        assert_eq!(
+            rewritten,
+            vec![
+                cmd(&["select-pane", "-t", "@42.1"]),
+                cmd(&["send-keys", "-t", "@42.1", "-l", "--", "claude"]),
+                cmd(&["send-keys", "-t", "@42.1", "C-m"]),
+                cmd(&["select-pane", "-t", "@42.2"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrite_pane_targets_leaves_non_matching_args_untouched() {
+        let commands = vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])];
+
+        let rewritten = rewrite_pane_targets(&commands, "sess:=dev.", "@42.");
+
+        assert_eq!(rewritten, commands);
     }
 
     #[test]
