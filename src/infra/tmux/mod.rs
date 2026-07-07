@@ -18,6 +18,12 @@ pub enum TmuxError {
 
     #[error("Not running inside tmux")]
     NotInTmux,
+
+    /// A precondition on a command sequence built in this crate was
+    /// violated, without ever invoking tmux (unlike `CommandFailed`, which
+    /// reports a tmux invocation that itself failed).
+    #[error("{0}")]
+    Internal(String),
 }
 
 #[derive(Debug)]

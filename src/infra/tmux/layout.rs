@@ -24,6 +24,12 @@ struct PaneEntry {
     focus: bool,
 }
 
+/// The pane-targeting prefix used to address panes in a background-created
+/// window before its real window ID is known (see `execute_background_layout`).
+fn background_pane_prefix(session: &str, window_name: &str) -> String {
+    format!("{session}:={window_name}.")
+}
+
 /// Build tmux command sequence from a LayoutNode tree.
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
@@ -77,7 +83,7 @@ pub fn build_layout_commands(
     commands.push(TmuxCommand::new(&new_window_args));
 
     let pane_prefix = if background {
-        format!("{session}:={window_name}.")
+        background_pane_prefix(session, window_name)
     } else {
         String::new()
     };
@@ -274,8 +280,91 @@ pub fn build_layout(
         env_vars,
         background,
     );
-    execute_commands(&commands)?;
+
+    if background {
+        execute_background_layout(&commands, session, window_name)?;
+    } else {
+        execute_commands(&commands)?;
+    }
+
     Ok(())
+}
+
+/// Flattens a sequence of `TmuxCommand` into a single arg list joined by `;`,
+/// the wire format tmux uses to chain multiple commands in one invocation.
+fn flatten_commands(commands: &[TmuxCommand]) -> Vec<&str> {
+    let mut args: Vec<&str> = Vec::new();
+    for (i, cmd) in commands.iter().enumerate() {
+        if i > 0 {
+            args.push(";");
+        }
+        for arg in &cmd.args {
+            args.push(arg);
+        }
+    }
+    args
+}
+
+/// Executes a background-mode layout: runs `new-window` (plus any preceding
+/// `set-environment` commands) on its own so the real window ID can be
+/// captured via `-P -F "#{window_id}"`, then rewrites the remaining commands'
+/// `{session}:={window_name}.` pane targets to `{window_id}.` before running
+/// them.
+///
+/// This indirection exists because tmux's target parser splits on `.` to
+/// separate window from pane, so a session-qualified target is ambiguous when
+/// the window name itself contains a `.` (e.g. a branch name like
+/// `copier-update/v0.8.13` becomes window name `copier-update-v0.8.13`).
+/// Window IDs (e.g. `@42`) never contain `.`, so targeting by ID sidesteps the
+/// ambiguity entirely.
+fn execute_background_layout(
+    commands: &[TmuxCommand],
+    session: &str,
+    window_name: &str,
+) -> super::Result<()> {
+    let new_window_idx = find_new_window_index(commands).ok_or_else(|| {
+        super::TmuxError::Internal("new-window command not found in layout".to_string())
+    })?;
+
+    let setup = &commands[..=new_window_idx];
+    let rest = &commands[new_window_idx + 1..];
+
+    let mut setup_args = flatten_commands(setup);
+    setup_args.extend(["-P", "-F", "#{window_id}"]);
+    let window_id = super::run_tmux_output(&setup_args)?;
+
+    let old_prefix = background_pane_prefix(session, window_name);
+    let new_prefix = format!("{window_id}.");
+    execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))
+}
+
+/// Finds the index of the `new-window` command in a layout's command list.
+fn find_new_window_index(commands: &[TmuxCommand]) -> Option<usize> {
+    commands
+        .iter()
+        .position(|cmd| cmd.args.first().map(String::as_str) == Some("new-window"))
+}
+
+/// Rewrites pane-targeting command args from `{old_prefix}{pane}` to
+/// `{new_prefix}{pane}`.
+fn rewrite_pane_targets(
+    commands: &[TmuxCommand],
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Vec<TmuxCommand> {
+    commands
+        .iter()
+        .map(|cmd| TmuxCommand {
+            args: cmd
+                .args
+                .iter()
+                .map(|arg| match arg.strip_prefix(old_prefix) {
+                    Some(rest) => format!("{new_prefix}{rest}"),
+                    None => arg.clone(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Write prompt to a temp file that persists until the shell command reads it.
@@ -300,16 +389,7 @@ fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
 
 /// Execute a sequence of TmuxCommand by chaining them with ";".
 fn execute_commands(commands: &[TmuxCommand]) -> super::Result<()> {
-    let mut args: Vec<&str> = Vec::new();
-    for (i, cmd) in commands.iter().enumerate() {
-        if i > 0 {
-            args.push(";");
-        }
-        for arg in &cmd.args {
-            args.push(arg);
-        }
-    }
-    super::run_tmux(&args)
+    super::run_tmux(&flatten_commands(commands))
 }
 
 #[cfg(test)]
@@ -813,6 +893,22 @@ mod tests {
     }
 
     #[test]
+    fn build_layout_commands_background_with_env_vars_places_new_window_at_expected_index() {
+        // Documents that build_layout_commands emits exactly one set-environment
+        // command per env_var before new-window, in the background + env_vars
+        // combination that `a wm new --agent` exercises in production.
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+        let env_vars = [("KEY1", "v1"), ("KEY2", "v2")];
+
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, true);
+
+        assert_eq!(commands[env_vars.len()].args[0], "new-window");
+    }
+
+    #[test]
     fn build_layout_commands_foreground_keeps_unqualified_targets() {
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
@@ -831,6 +927,91 @@ mod tests {
         for c in &commands {
             assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
         }
+    }
+
+    // =========================================================================
+    // rewrite_pane_targets: swaps the session:=window_name. prefix for a
+    // window-ID-based one, used once new-window's real ID is known
+    // =========================================================================
+
+    #[rstest]
+    #[case::swaps_matching_prefix(
+        vec![
+            cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.1"]),
+            cmd(&[
+                "send-keys",
+                "-t",
+                "sess:=copier-update-v0.8.13.1",
+                "-l",
+                "--",
+                "claude",
+            ]),
+            cmd(&["send-keys", "-t", "sess:=copier-update-v0.8.13.1", "C-m"]),
+            cmd(&["select-pane", "-t", "sess:=copier-update-v0.8.13.2"]),
+        ],
+        "sess:=copier-update-v0.8.13.",
+        "@42.",
+        vec![
+            cmd(&["select-pane", "-t", "@42.1"]),
+            cmd(&["send-keys", "-t", "@42.1", "-l", "--", "claude"]),
+            cmd(&["send-keys", "-t", "@42.1", "C-m"]),
+            cmd(&["select-pane", "-t", "@42.2"]),
+        ]
+    )]
+    #[case::leaves_non_matching_args_untouched(
+        vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])],
+        "sess:=dev.",
+        "@42.",
+        vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])]
+    )]
+    fn rewrite_pane_targets_cases(
+        #[case] commands: Vec<TmuxCommand>,
+        #[case] old_prefix: &str,
+        #[case] new_prefix: &str,
+        #[case] expected: Vec<TmuxCommand>,
+    ) {
+        assert_eq!(
+            rewrite_pane_targets(&commands, old_prefix, new_prefix),
+            expected
+        );
+    }
+
+    // =========================================================================
+    // find_new_window_index: locates new-window regardless of what precedes it
+    // =========================================================================
+
+    #[rstest]
+    #[case::after_set_environment_commands(
+        vec![
+            cmd(&["set-environment", "-t", "sess", "KEY", "v"]),
+            cmd(&["new-window", "-d", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+            cmd(&["select-pane", "-t", "sess:=dev.1"]),
+        ],
+        Some(1)
+    )]
+    #[case::as_first_command(
+        vec![cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])],
+        Some(0)
+    )]
+    #[case::absent(vec![cmd(&["select-pane", "-t", "1"])], None)]
+    #[case::empty(vec![], None)]
+    fn find_new_window_index_cases(
+        #[case] commands: Vec<TmuxCommand>,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(find_new_window_index(&commands), expected);
+    }
+
+    #[test]
+    fn execute_background_layout_errors_when_new_window_missing() {
+        let commands = vec![cmd(&["select-pane", "-t", "1"])];
+
+        let result = execute_background_layout(&commands, "sess", "win");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "new-window command not found in layout"
+        );
     }
 
     #[test]
