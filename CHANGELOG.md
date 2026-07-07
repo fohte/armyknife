@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.229](https://github.com/fohte/armyknife/compare/v0.1.228...v0.1.229) (2026-07-07)
+
+
+### Bug Fixes
+
+* **wm:** resolve tmux pane targeting failure for dotted branch names ([#720](https://github.com/fohte/armyknife/issues/720)) ([155bda8](https://github.com/fohte/armyknife/commit/155bda8ac19fb3af600bfb3cd166d7692350f3b7))
+
 ## [0.1.228](https://github.com/fohte/armyknife/compare/v0.1.227...v0.1.228) (2026-07-07)
 
 
