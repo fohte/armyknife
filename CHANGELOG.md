@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.228](https://github.com/fohte/armyknife/compare/v0.1.227...v0.1.228) (2026-07-07)
+
+
+### Dependencies
+
+* update rust crate ratatui to v0.30.2 ([#711](https://github.com/fohte/armyknife/issues/711)) ([7834026](https://github.com/fohte/armyknife/commit/783402677f16a53d074abb23ec4b23c111e746d2))
+* update rust crate uuid to v1.23.4 ([#713](https://github.com/fohte/armyknife/issues/713)) ([5109e42](https://github.com/fohte/armyknife/commit/5109e422f70d36fd4f0d623d9aa1cd1d0439c9eb))
+
 ## [0.1.227](https://github.com/fohte/armyknife/compare/v0.1.226...v0.1.227) (2026-07-07)
 
 
