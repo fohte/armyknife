@@ -16,6 +16,7 @@ use clap::{Args, Subcommand};
 use super::types::TMUX_SESSION_OPTION;
 use crate::infra::tmux;
 use crate::shared::cache;
+use crate::shared::log::short_run_id;
 
 /// Directory name for storing resurrect state files.
 const RESURRECT_STATE_DIR: &str = "resurrect";
@@ -132,13 +133,23 @@ fn read_state_file(state_file: &PathBuf) -> Result<HashMap<String, String>> {
 /// This format uses pane position (session:window.pane) rather than pane_id
 /// because pane_id changes after tmux-resurrect restore.
 fn run_save(_args: &SaveArgs) -> Result<()> {
+    let run_id = short_run_id();
+    let span = tracing::info_span!("cc.resurrect.save", run_id = %run_id);
+    let _entered = span.enter();
+
     let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION);
     let state_file = state_file_path()?;
+
+    tracing::info!(event = "cc.resurrect.save.start", pane_count = panes.len());
 
     // Preserve the existing state file when no panes carry a session ID.
     // The tmux server may simply have just restarted and not yet been restored,
     // and the state file is consumed by tmux-resurrect's post-restore hook.
     if panes.is_empty() {
+        tracing::info!(
+            event = "cc.resurrect.save.skip",
+            reason = "no panes with session option"
+        );
         return Ok(());
     }
 
@@ -157,6 +168,11 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
         })
         .collect();
 
+    tracing::info!(
+        event = "cc.resurrect.save.summary",
+        saved = pane_sessions.len()
+    );
+
     write_state_file(&state_file, &pane_sessions)
 }
 
@@ -172,21 +188,40 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 /// parser in `restore_all_pane_processes`, and process restoration runs before our
 /// post-restore hook, so the option would not yet be set anyway.
 fn run_restore(_args: &RestoreArgs) -> Result<()> {
+    let run_id = short_run_id();
+    let span = tracing::info_span!("cc.resurrect.restore", run_id = %run_id);
+    let _entered = span.enter();
+
     let state_file = state_file_path()?;
 
     if !state_file.exists() {
         // No state file means nothing to restore
+        tracing::info!(
+            event = "cc.resurrect.restore.skip",
+            reason = "no state file"
+        );
         return Ok(());
     }
 
     let pane_sessions = read_state_file(&state_file)?;
 
+    tracing::info!(
+        event = "cc.resurrect.restore.start",
+        pane_count = pane_sessions.len(),
+    );
+
     if pane_sessions.is_empty() {
+        tracing::info!(
+            event = "cc.resurrect.restore.skip",
+            reason = "empty state file"
+        );
         return Ok(());
     }
 
     let mut restore_count = 0;
     for (pane_position, session_id) in &pane_sessions {
+        tracing::info!(event = "cc.resurrect.restore.pane_start", pane_position = %pane_position);
+
         if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position)
             && let Some(pane_id) =
                 tmux::find_pane_id_by_position(session_name, window_index, pane_index)
@@ -202,8 +237,17 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             let command = format!("a cc resume {}", quoted_id);
             let _ = tmux::send_command_to_pane(&pane_id, &command);
             restore_count += 1;
+            tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
+        } else {
+            tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
         }
     }
+
+    tracing::info!(
+        event = "cc.resurrect.restore.summary",
+        restored = restore_count,
+        total = pane_sessions.len(),
+    );
 
     // Clean up state file after successful restore
     if restore_count > 0 {

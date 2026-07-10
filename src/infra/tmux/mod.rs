@@ -3,7 +3,11 @@
 pub mod layout;
 
 use std::fmt;
+use std::io;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use indoc::writedoc;
 use thiserror::Error;
@@ -75,12 +79,59 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 // Internal helpers for command execution
 // ============================================================================
 
+/// Upper bound on how long a single `tmux` invocation may run.
+///
+/// `armyknife` itself can be invoked as a tmux `run-shell` job (e.g. from a
+/// tmux-resurrect hook). If such a job then shells out back into `tmux`, the
+/// new client can deadlock waiting for a server that is itself blocked
+/// processing that same job queue. Bounding the wait turns that deadlock into
+/// a fast, reported error instead of a hang with no upper bound.
+const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Upper bound on how long we sleep between exit checks.
+const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Starting sleep between exit checks, doubled after each check up to `MAX_POLL_INTERVAL`.
+const INITIAL_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// Runs `command` to completion, killing it if it does not exit within `timeout`.
+fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
+    // stdin is closed (not inherited) to match `Command::output`'s behavior, which
+    // this replaces.
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let deadline = Instant::now() + timeout;
+    let mut poll_interval = INITIAL_POLL_INTERVAL;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= deadline {
+            // `Child::kill` is a no-op if the child was already reaped by a prior
+            // `try_wait`/`wait` call, so this never targets a pid the OS has since
+            // recycled for an unrelated process.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("command timed out after {timeout:?}"),
+            ));
+        }
+        thread::sleep(poll_interval);
+        poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
+    }
+}
+
 /// Run a tmux command and return stdout on success.
 fn run_tmux_output(args: &[&str]) -> Result<String> {
-    let output = ExternalTool::Tmux
-        .command()
-        .args(args)
-        .output()
+    let mut command = ExternalTool::Tmux.command();
+    command.args(args);
+
+    let output = run_with_timeout(command, TMUX_COMMAND_TIMEOUT)
         .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
 
     if output.status.success() {
@@ -480,7 +531,13 @@ pub fn list_all_panes_with_option(option: &str) -> Vec<PaneInfoWithOption> {
 
     let output = match run_tmux_output(&["list-panes", "-a", "-F", &format]) {
         Ok(output) => output,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            // Callers treat an empty Vec as "no panes carry this option", which is
+            // indistinguishable from a failed tmux invocation (e.g. a timeout) unless
+            // the real cause is logged here.
+            tracing::warn!("tmux list-panes failed: {e}");
+            return Vec::new();
+        }
     };
 
     output
@@ -641,6 +698,43 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    // These two tests spawn a real `sh` process rather than mocking the spawn/kill
+    // boundary. `run_with_timeout` wraps that exact boundary (spawn a `Command`, kill
+    // it if it overruns), so there is no logic to exercise without a real process on
+    // the other end; `sh` is a POSIX-guaranteed shell primitive, not an optional
+    // external tool like tmux/git/ps that may be absent or blocked in a sandbox.
+
+    #[test]
+    fn run_with_timeout_returns_output_when_command_finishes_in_time() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf ok"]);
+
+        let output =
+            run_with_timeout(command, Duration::from_secs(5)).expect("command should not time out");
+
+        assert_eq!(
+            (output.status.success(), output.stdout, output.stderr),
+            (true, b"ok".to_vec(), Vec::new()),
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_kills_and_errors_when_command_exceeds_timeout() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+
+        let start = Instant::now();
+        let result = run_with_timeout(command, Duration::from_millis(100));
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err("command should time out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected the timeout to cut the 5s sleep short, took {elapsed:?}"
+        );
+    }
 
     #[rstest]
     #[case("/Users/fohte/ghq/github.com/fohte/armyknife", "fohte/armyknife")]
