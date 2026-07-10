@@ -3,7 +3,14 @@
 pub mod layout;
 
 use std::fmt;
+use std::io;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use indoc::writedoc;
 use thiserror::Error;
@@ -75,12 +82,64 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 // Internal helpers for command execution
 // ============================================================================
 
+/// Upper bound on how long a single `tmux` invocation may run.
+///
+/// `armyknife` itself can be invoked as a tmux `run-shell` job (e.g. from a
+/// tmux-resurrect hook). If such a job then shells out back into `tmux`, the
+/// new client can deadlock waiting for a server that is itself blocked
+/// processing that same job queue. Bounding the wait turns that deadlock into
+/// a fast, reported error instead of a hang with no upper bound.
+const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs `command` to completion, killing it if it does not exit within `timeout`.
+fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pid = child.id();
+
+    // The watchdog blocks on `recv_timeout` so it wakes up immediately once
+    // `done_tx` is signaled below, rather than always sleeping the full
+    // `timeout` even when the child exits promptly. `timed_out` records
+    // whether it fired so the caller can report a timeout even if the kill
+    // races with the child exiting on its own.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let watchdog_timed_out = Arc::clone(&timed_out);
+    let watchdog = thread::spawn(move || {
+        if done_rx.recv_timeout(timeout).is_err() {
+            watchdog_timed_out.store(true, Ordering::SeqCst);
+            // SAFETY: `kill(2)` takes a pid and a signal number and shares no
+            // memory with the process; it is always safe to call regardless
+            // of arguments (errors surface via errno, which we ignore here
+            // since the child may have already exited on its own).
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    });
+
+    let result = child.wait_with_output();
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+
+    if timed_out.load(Ordering::SeqCst) {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("command timed out after {timeout:?}"),
+        ));
+    }
+
+    result
+}
+
 /// Run a tmux command and return stdout on success.
 fn run_tmux_output(args: &[&str]) -> Result<String> {
-    let output = ExternalTool::Tmux
-        .command()
-        .args(args)
-        .output()
+    let mut command = ExternalTool::Tmux.command();
+    command.args(args);
+
+    let output = run_with_timeout(command, TMUX_COMMAND_TIMEOUT)
         .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
 
     if output.status.success() {
@@ -639,8 +698,39 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
     use rstest::rstest;
+
+    #[test]
+    fn run_with_timeout_returns_output_when_command_finishes_in_time() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf ok"]);
+
+        let output =
+            run_with_timeout(command, Duration::from_secs(5)).expect("command should not time out");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "ok");
+    }
+
+    #[test]
+    fn run_with_timeout_kills_and_errors_when_command_exceeds_timeout() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+
+        let start = Instant::now();
+        let result = run_with_timeout(command, Duration::from_millis(100));
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err("command should time out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected the timeout to cut the 5s sleep short, took {elapsed:?}"
+        );
+    }
 
     #[rstest]
     #[case("/Users/fohte/ghq/github.com/fohte/armyknife", "fohte/armyknife")]
