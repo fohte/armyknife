@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use super::pane;
 use super::types::TMUX_SESSION_OPTION;
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
@@ -23,11 +24,6 @@ const RESURRECT_STATE_DIR: &str = "resurrect";
 
 /// File name for the resurrect state file.
 const RESURRECT_STATE_FILE: &str = "pane_sessions.txt";
-
-/// Bound for the descendant walk that resolves whether a `claude` process
-/// is already running in a pane. Same value auto_compact/sweep use; a shell
-/// hosting claude has at most a handful of children.
-const MAX_DESCENDANT_NODES: usize = 64;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ResurrectCommands {
@@ -206,7 +202,8 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         {
             // send-keys is best-effort: the option is already restored, so a failure
             // here just means the user has to run `a cc resume` manually.
-            let pane_has_claude = pane_has_live_claude_process(&pane_id, snapshot.as_ref());
+            let pane_has_claude =
+                pane::process::pane_has_live_claude_process(&pane_id, snapshot.as_ref());
             if let Some(command) = resume_command_for(session_id, pane_has_claude) {
                 let _ = tmux::send_command_to_pane(&pane_id, &command);
             }
@@ -226,12 +223,12 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 /// `None` when the pane must not be touched.
 ///
 /// `pane_has_claude` reflects whether the pane's process tree already has a
-/// live `claude` process (see `pane_has_live_claude_process`). A pane
-/// carries `TMUX_SESSION_OPTION` for as long as a session ever ran there --
-/// including one that is still active with a live process reading the
-/// pane's input -- so restoring the option is always safe, but typing text
-/// into that pane is not: it would land in the middle of whatever the user
-/// or Claude Code is doing.
+/// live `claude` process (see `pane::process::pane_has_live_claude_process`).
+/// A pane carries `TMUX_SESSION_OPTION` for as long as a session ever ran
+/// there -- including one that is still active with a live process reading
+/// the pane's input -- so restoring the option is always safe, but typing
+/// text into that pane is not: it would land in the middle of whatever the
+/// user or Claude Code is doing.
 fn resume_command_for(session_id: &str, pane_has_claude: bool) -> Option<String> {
     if pane_has_claude {
         return None;
@@ -242,26 +239,6 @@ fn resume_command_for(session_id: &str, pane_has_claude: bool) -> Option<String>
         .map(|cow| cow.into_owned())
         .unwrap_or_else(|_| session_id.to_string());
     Some(format!("a cc resume {quoted_id}"))
-}
-
-/// Returns whether `pane_id`'s process tree -- the pane's own process or any
-/// descendant -- currently has a running `claude` process. Used to decide
-/// whether it is safe to type a resume command into the pane.
-///
-/// Fails closed: an unresolvable pane pid or an unavailable `snapshot` (e.g.
-/// `ps` failed) is treated as "has claude", not "no claude", since the risk
-/// this guards against is retyping into a live conversation, not skipping a
-/// resume that turns out to be safe.
-fn pane_has_live_claude_process(pane_id: &str, snapshot: Option<&ProcessSnapshot>) -> bool {
-    let Some(pane_pid) = tmux::get_pane_pid(pane_id) else {
-        return true;
-    };
-    let Some(snapshot) = snapshot else {
-        return true;
-    };
-    snapshot
-        .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
-        .is_some()
 }
 
 #[cfg(test)]
