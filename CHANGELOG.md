@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.234](https://github.com/fohte/armyknife/compare/v0.1.233...v0.1.234) (2026-07-10)
+
+
+### Bug Fixes
+
+* **cc:** stop resurrect restore from retyping resume into active sessions ([#730](https://github.com/fohte/armyknife/issues/730)) ([74bd3a4](https://github.com/fohte/armyknife/commit/74bd3a40e23a067cd38a3ccd0b2baf4212ad23b0))
+
 ## [0.1.233](https://github.com/fohte/armyknife/compare/v0.1.232...v0.1.233) (2026-07-10)
 
 
