@@ -88,8 +88,10 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 /// a fast, reported error instead of a hang with no upper bound.
 const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How often to poll the child for exit while waiting for `timeout` to elapse.
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Upper bound on how long we sleep between exit checks. Most `tmux` invocations
+/// finish in a few milliseconds, so polling starts well below this and backs off
+/// only for the rare command that runs long.
+const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Runs `command` to completion, killing it if it does not exit within `timeout`.
 fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
@@ -102,6 +104,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
         .spawn()?;
 
     let deadline = Instant::now() + timeout;
+    let mut poll_interval = Duration::from_millis(1);
     loop {
         if child.try_wait()?.is_some() {
             return child.wait_with_output();
@@ -117,7 +120,8 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
                 format!("command timed out after {timeout:?}"),
             ));
         }
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(poll_interval);
+        poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
     }
 }
 
