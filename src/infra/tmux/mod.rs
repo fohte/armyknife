@@ -6,11 +6,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use indoc::writedoc;
 use thiserror::Error;
@@ -91,47 +88,37 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 /// a fast, reported error instead of a hang with no upper bound.
 const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often to poll the child for exit while waiting for `timeout` to elapse.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 /// Runs `command` to completion, killing it if it does not exit within `timeout`.
 fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
-    let child = command
+    // stdin is closed (not inherited) to match `Command::output`'s behavior, which
+    // this replaces.
+    let mut child = command
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pid = child.id();
 
-    // The watchdog blocks on `recv_timeout` so it wakes up immediately once
-    // `done_tx` is signaled below, rather than always sleeping the full
-    // `timeout` even when the child exits promptly. `timed_out` records
-    // whether it fired so the caller can report a timeout even if the kill
-    // races with the child exiting on its own.
-    let (done_tx, done_rx) = mpsc::channel::<()>();
-    let timed_out = Arc::new(AtomicBool::new(false));
-    let watchdog_timed_out = Arc::clone(&timed_out);
-    let watchdog = thread::spawn(move || {
-        if done_rx.recv_timeout(timeout).is_err() {
-            watchdog_timed_out.store(true, Ordering::SeqCst);
-            // SAFETY: `kill(2)` takes a pid and a signal number and shares no
-            // memory with the process; it is always safe to call regardless
-            // of arguments (errors surface via errno, which we ignore here
-            // since the child may have already exited on its own).
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-            }
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
         }
-    });
-
-    let result = child.wait_with_output();
-    let _ = done_tx.send(());
-    let _ = watchdog.join();
-
-    if timed_out.load(Ordering::SeqCst) {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("command timed out after {timeout:?}"),
-        ));
+        if Instant::now() >= deadline {
+            // `Child::kill` is a no-op if the child was already reaped by a prior
+            // `try_wait`/`wait` call, so this never targets a pid the OS has since
+            // recycled for an unrelated process.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("command timed out after {timeout:?}"),
+            ));
+        }
+        thread::sleep(POLL_INTERVAL);
     }
-
-    result
 }
 
 /// Run a tmux command and return stdout on success.
@@ -539,7 +526,13 @@ pub fn list_all_panes_with_option(option: &str) -> Vec<PaneInfoWithOption> {
 
     let output = match run_tmux_output(&["list-panes", "-a", "-F", &format]) {
         Ok(output) => output,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            // Callers treat an empty Vec as "no panes carry this option", which is
+            // indistinguishable from a failed tmux invocation (e.g. a timeout) unless
+            // the real cause is logged here.
+            tracing::warn!("tmux list-panes failed: {e}");
+            return Vec::new();
+        }
     };
 
     output
@@ -698,10 +691,14 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
     use super::*;
     use rstest::rstest;
+
+    // These two tests spawn a real `sh` process rather than mocking the spawn/kill
+    // boundary. `run_with_timeout` wraps that exact boundary (spawn a `Command`, kill
+    // it if it overruns), so there is no logic to exercise without a real process on
+    // the other end; `sh` is a POSIX-guaranteed shell primitive, not an optional
+    // external tool like tmux/git/ps that may be absent or blocked in a sandbox.
 
     #[test]
     fn run_with_timeout_returns_output_when_command_finishes_in_time() {
@@ -711,8 +708,10 @@ mod tests {
         let output =
             run_with_timeout(command, Duration::from_secs(5)).expect("command should not time out");
 
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "ok");
+        assert_eq!(
+            (output.status.success(), output.stdout, output.stderr),
+            (true, b"ok".to_vec(), Vec::new()),
+        );
     }
 
     #[test]
