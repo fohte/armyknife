@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.233](https://github.com/fohte/armyknife/compare/v0.1.232...v0.1.233) (2026-07-10)
+
+
+### Bug Fixes
+
+* **cc:** prevent resurrect from hanging indefinitely ([#729](https://github.com/fohte/armyknife/issues/729)) ([929ae6f](https://github.com/fohte/armyknife/commit/929ae6f59159e17e249ddd846d9056d6777ee17d))
+
 ## [0.1.232](https://github.com/fohte/armyknife/compare/v0.1.231...v0.1.232) (2026-07-08)
 
 
