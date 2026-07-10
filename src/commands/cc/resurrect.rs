@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use super::pane;
 use super::types::TMUX_SESSION_OPTION;
+use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::log::short_run_id;
@@ -179,7 +181,8 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 /// Restores pane session IDs from the state file.
 ///
 /// Reads the state file and, for each pane that still exists, sets the user option
-/// and types `a cc resume <session-id>` into the pane to re-launch Claude Code.
+/// and types `a cc resume <session-id>` into the pane to re-launch Claude Code,
+/// unless the pane already has a live `claude` process (see `resume_command_for`).
 /// The session ID is passed as an argument (instead of relying on the pane option)
 /// so the resumed process is not racing against tmux to observe the just-set option.
 ///
@@ -218,6 +221,11 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Captured once and shared across every pane below: `ProcessSnapshot::capture`
+    // forks `ps -A` to read the whole system process table, so re-capturing it
+    // per pane would fork once per restored pane instead of once per restore.
+    let snapshot = ProcessSnapshot::capture();
+
     let mut restore_count = 0;
     for (pane_position, session_id) in &pane_sessions {
         tracing::info!(event = "cc.resurrect.restore.pane_start", pane_position = %pane_position);
@@ -229,13 +237,11 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         {
             // send-keys is best-effort: the option is already restored, so a failure
             // here just means the user has to run `a cc resume` manually.
-            // session_id is quoted because `send-keys` types into an interactive shell
-            // where metacharacters (spaces, `;`, backticks) would otherwise be parsed.
-            let quoted_id = shlex::try_quote(session_id)
-                .map(|cow| cow.into_owned())
-                .unwrap_or_else(|_| session_id.clone());
-            let command = format!("a cc resume {}", quoted_id);
-            let _ = tmux::send_command_to_pane(&pane_id, &command);
+            let pane_has_claude =
+                pane::process::pane_has_live_claude_process(&pane_id, snapshot.as_ref());
+            if let Some(command) = resume_command_for(session_id, pane_has_claude) {
+                let _ = tmux::send_command_to_pane(&pane_id, &command);
+            }
             restore_count += 1;
             tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
         } else {
@@ -255,6 +261,28 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Builds the `a cc resume <session_id>` command to type into a pane, or
+/// `None` when the pane must not be touched.
+///
+/// `pane_has_claude` reflects whether the pane's process tree already has a
+/// live `claude` process (see `pane::process::pane_has_live_claude_process`).
+/// A pane carries `TMUX_SESSION_OPTION` for as long as a session ever ran
+/// there -- including one that is still active with a live process reading
+/// the pane's input -- so restoring the option is always safe, but typing
+/// text into that pane is not: it would land in the middle of whatever the
+/// user or Claude Code is doing.
+fn resume_command_for(session_id: &str, pane_has_claude: bool) -> Option<String> {
+    if pane_has_claude {
+        return None;
+    }
+    // Quoted because `send-keys` types into an interactive shell where
+    // metacharacters (spaces, `;`, backticks) would otherwise be parsed.
+    let quoted_id = shlex::try_quote(session_id)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_else(|_| session_id.to_string());
+    Some(format!("a cc resume {quoted_id}"))
 }
 
 #[cfg(test)]
@@ -390,5 +418,27 @@ mod tests {
         let sessions = read_state_file(&state_file).expect("should read state file");
 
         assert!(sessions.is_empty());
+    }
+
+    mod resume_command_for_tests {
+        use super::*;
+
+        // A pane whose process tree already has a live claude process must
+        // never be typed into; the resume command would land mid-conversation.
+        #[rstest]
+        #[case::pane_has_claude("abc-123", true, None)]
+        #[case::pane_is_free("abc-123", false, Some("a cc resume abc-123".to_string()))]
+        #[case::quotes_metacharacters(
+            "id; rm -rf /",
+            false,
+            Some("a cc resume 'id; rm -rf /'".to_string())
+        )]
+        fn resume_command_for_cases(
+            #[case] session_id: &str,
+            #[case] pane_has_claude: bool,
+            #[case] expected: Option<String>,
+        ) {
+            assert_eq!(resume_command_for(session_id, pane_has_claude), expected);
+        }
     }
 }

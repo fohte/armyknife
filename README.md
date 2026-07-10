@@ -378,7 +378,7 @@ The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID
 
 #### tmux-resurrect integration
 
-Pane user options are not preserved by tmux-resurrect, so `a cc resurrect` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt` during save and re-applies them during restore. On restore the hook also types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart.
+Pane user options are not preserved by tmux-resurrect, so `a cc resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a cc resurrect restore` re-applies them and types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.
 
 Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
 

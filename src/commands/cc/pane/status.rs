@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::Args;
 
-use super::store;
-use super::types::{SessionStatus, TMUX_SESSION_OPTION};
+use crate::commands::cc::store;
+use crate::commands::cc::types::{SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 /// Filename prefix for the per-pane paused-flag file. The full path is
@@ -109,10 +109,15 @@ fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<Option<&'static
     let Some(session_id) = tmux::get_pane_option(pane_id, TMUX_SESSION_OPTION) else {
         return Ok(None);
     };
-    let Some(session) = store::load_session_from(sessions_dir, &session_id)? else {
-        return Ok(None);
-    };
-    Ok(paused_flag(session.status))
+    Ok(is_session_paused(sessions_dir, &session_id)?.then_some(PAUSED_FLAG_VALUE))
+}
+
+/// Returns whether the session identified by `session_id` under `sessions_dir`
+/// is currently `Paused`. A missing or corrupted session file is treated as
+/// not paused, since both mean there is no resumable conversation to guard.
+fn is_session_paused(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    let session = store::load_session_from(sessions_dir, session_id)?;
+    Ok(session.is_some_and(|s| s.status == SessionStatus::Paused))
 }
 
 /// Returns `Some("1")` only for `Paused` sessions: those panes are back at
@@ -133,10 +138,31 @@ fn paused_flag(status: SessionStatus) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::cc::types::Session;
+    use chrono::Utc;
     use rstest::rstest;
     use tempfile::TempDir;
 
     const TEST_USER: &str = "tester";
+
+    fn test_session(id: &str, status: SessionStatus) -> Session {
+        Session {
+            session_id: id.to_string(),
+            cwd: PathBuf::from("/tmp/test"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: std::collections::BTreeSet::new(),
+            read_at: None,
+        }
+    }
 
     #[rstest]
     #[case::running(SessionStatus::Running, None)]
@@ -146,6 +172,32 @@ mod tests {
     #[case::ended(SessionStatus::Ended, None)]
     fn test_paused_flag(#[case] status: SessionStatus, #[case] expected: Option<&str>) {
         assert_eq!(paused_flag(status), expected);
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, false)]
+    #[case::waiting(SessionStatus::WaitingInput, false)]
+    #[case::stopped(SessionStatus::Stopped, false)]
+    #[case::paused(SessionStatus::Paused, true)]
+    #[case::ended(SessionStatus::Ended, false)]
+    fn is_session_paused_matches_status(#[case] status: SessionStatus, #[case] expected: bool) {
+        let sessions_dir = TempDir::new().expect("temp dir");
+        let session = test_session("sess-1", status);
+        store::save_session_to(sessions_dir.path(), &session).expect("save session");
+
+        assert_eq!(
+            is_session_paused(sessions_dir.path(), "sess-1").expect("should not error"),
+            expected,
+        );
+    }
+
+    #[test]
+    fn is_session_paused_false_for_missing_session() {
+        let sessions_dir = TempDir::new().expect("temp dir");
+
+        assert!(
+            !is_session_paused(sessions_dir.path(), "no-such-session").expect("should not error")
+        );
     }
 
     #[test]

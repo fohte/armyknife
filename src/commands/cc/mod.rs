@@ -8,8 +8,7 @@ mod focus;
 mod hook;
 mod list;
 mod mark_read;
-pub(crate) mod pane_input;
-mod pane_status;
+pub(crate) mod pane;
 mod resume;
 mod resurrect;
 mod signal;
@@ -29,7 +28,7 @@ pub use focus::FocusArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
-pub use pane_status::HasPausedArgs;
+pub use pane::status::HasPausedArgs;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
@@ -97,7 +96,7 @@ impl CcCommands {
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
-            Self::PaneHasPaused(args) => pane_status::run(args)?,
+            Self::PaneHasPaused(args) => pane::status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args)?,
         }
         Ok(())

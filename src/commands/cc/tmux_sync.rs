@@ -4,12 +4,12 @@
 //! and tests can verify the call without touching a real tmux server or the
 //! process temp dir.
 //!
-//! See `pane_status::sync_paused_flag` / `window_status::sync_window_option`
+//! See `pane::status::sync_paused_flag` / `window_status::sync_window_option`
 //! for what the production implementation actually writes.
 
 use std::path::Path;
 
-use super::pane_status;
+use super::pane;
 use super::types::SessionStatus;
 use super::window_status;
 use crate::infra::tmux;
@@ -38,7 +38,7 @@ impl TmuxStatusSyncer for LiveTmuxStatusSyncer {
         let Some(pane_id) = pane_id else {
             return;
         };
-        let _ = pane_status::sync_paused_flag(pane_id, status, sessions_dir);
+        let _ = pane::status::sync_paused_flag(pane_id, status, sessions_dir);
         let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
             return;
         };
