@@ -5,8 +5,8 @@ use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 
 /// Bound for the descendant walk that resolves whether a `claude` process
-/// is already running in a pane. A shell hosting claude has at most a
-/// handful of children.
+/// is already running in a pane. Same value `auto_compact::schedule` and
+/// `sweep` use; a shell hosting claude has at most a handful of children.
 const MAX_DESCENDANT_NODES: usize = 64;
 
 /// Returns whether `pane_id`'s process tree -- the pane's own process or any
