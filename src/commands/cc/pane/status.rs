@@ -115,12 +115,7 @@ fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<Option<&'static
 /// Returns whether the session identified by `session_id` under `sessions_dir`
 /// is currently `Paused`. A missing or corrupted session file is treated as
 /// not paused, since both mean there is no resumable conversation to guard.
-///
-/// Shared by `render_for_pane` above and by `resurrect::run_save`, which
-/// must record only sessions a restore can safely retype `a cc resume`
-/// into -- an active session's pane already has a live Claude Code process
-/// reading its input.
-pub(crate) fn is_session_paused(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+fn is_session_paused(sessions_dir: &Path, session_id: &str) -> Result<bool> {
     let session = store::load_session_from(sessions_dir, session_id)?;
     Ok(session.is_some_and(|s| s.status == SessionStatus::Paused))
 }
