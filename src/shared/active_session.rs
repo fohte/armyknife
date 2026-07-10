@@ -16,7 +16,7 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 
 use crate::commands::cc::auto_pause::{PauseDecision, decide_pause_with_effective};
-use crate::commands::cc::pane_input;
+use crate::commands::cc::pane;
 use crate::commands::cc::types::{Session, SessionStatus};
 use crate::infra::tmux;
 
@@ -54,7 +54,7 @@ pub struct TmuxActivityProbe;
 impl ActivityProbe for TmuxActivityProbe {
     fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let live = pane_input::get_pane_input_text(pane_id)?;
+        let live = pane::input::get_pane_input_text(pane_id)?;
         let live_hash = hash_input_text(&live);
         let prior = tmux::get_pane_option(pane_id, PANE_ACTIVITY_OPTION)
             .as_deref()

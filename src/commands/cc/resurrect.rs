@@ -8,11 +8,13 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use super::pane;
+use super::store;
 use super::types::TMUX_SESSION_OPTION;
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -142,22 +144,35 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Convert panes to the format expected by write_state_file
-    let pane_sessions: Vec<_> = panes
-        .into_iter()
-        .filter_map(|pane| {
-            pane.option_value.map(|session_id| {
-                (
-                    pane.session_name,
-                    pane.window_index,
-                    pane.pane_index,
-                    session_id,
-                )
-            })
-        })
-        .collect();
+    let sessions_dir = store::sessions_dir()?;
+    let pane_sessions = paused_pane_sessions(panes, &sessions_dir);
 
     write_state_file(&state_file, &pane_sessions)
+}
+
+/// Narrows `panes` down to the ones whose bound session is currently
+/// `Paused`, in the format `write_state_file` expects.
+///
+/// A pane carries `TMUX_SESSION_OPTION` for as long as a session ever ran
+/// there, including one that is still `Running` with a live Claude Code
+/// process reading the pane's input. Saving such a pane would make the next
+/// `run_restore` type `a cc resume <id>` straight into that live input box.
+/// Restricting to `Paused` -- the only status where the pane is back at a
+/// shell prompt with a resumable conversation -- means restore never
+/// resends a resume command for a pane that already has one running.
+fn paused_pane_sessions(
+    panes: Vec<tmux::PaneInfoWithOption>,
+    sessions_dir: &Path,
+) -> Vec<(String, u32, u32, String)> {
+    panes
+        .into_iter()
+        .filter_map(|p| {
+            let session_id = p.option_value?;
+            let is_paused =
+                pane::status::is_session_paused(sessions_dir, &session_id).unwrap_or(false);
+            is_paused.then_some((p.session_name, p.window_index, p.pane_index, session_id))
+        })
+        .collect()
 }
 
 /// Restores pane session IDs from the state file.
@@ -346,5 +361,123 @@ mod tests {
         let sessions = read_state_file(&state_file).expect("should read state file");
 
         assert!(sessions.is_empty());
+    }
+
+    mod paused_pane_sessions_tests {
+        use super::*;
+        use crate::commands::cc::types::{Session, SessionStatus};
+        use chrono::Utc;
+
+        fn test_session(id: &str, status: SessionStatus) -> Session {
+            Session {
+                session_id: id.to_string(),
+                cwd: PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: std::collections::BTreeSet::new(),
+                read_at: None,
+            }
+        }
+
+        fn pane_with_option(
+            session_name: &str,
+            window_index: u32,
+            pane_index: u32,
+            session_id: &str,
+        ) -> tmux::PaneInfoWithOption {
+            tmux::PaneInfoWithOption {
+                session_name: session_name.to_string(),
+                window_index,
+                pane_index,
+                pane_id: format!("%{pane_index}"),
+                option_value: Some(session_id.to_string()),
+            }
+        }
+
+        #[rstest]
+        #[case::running(SessionStatus::Running, false)]
+        #[case::waiting(SessionStatus::WaitingInput, false)]
+        #[case::stopped(SessionStatus::Stopped, false)]
+        #[case::paused(SessionStatus::Paused, true)]
+        #[case::ended(SessionStatus::Ended, false)]
+        fn keeps_only_paused_sessions(#[case] status: SessionStatus, #[case] should_keep: bool) {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            store::save_session_to(sessions_dir.path(), &test_session("sess-1", status))
+                .expect("save session");
+
+            let panes = vec![pane_with_option("main", 0, 0, "sess-1")];
+
+            let expected = if should_keep {
+                vec![("main".to_string(), 0, 0, "sess-1".to_string())]
+            } else {
+                vec![]
+            };
+            assert_eq!(paused_pane_sessions(panes, sessions_dir.path()), expected);
+        }
+
+        // Regression test for the bug this function fixes: a pane that
+        // already has an active (Running) Claude Code process must never
+        // be saved, or the next restore would type `a cc resume <id>` into
+        // its live input box on top of whatever the user is doing.
+        #[test]
+        fn excludes_active_sessions_from_a_mixed_set() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            store::save_session_to(
+                sessions_dir.path(),
+                &test_session("active-id", SessionStatus::Running),
+            )
+            .expect("save session");
+            store::save_session_to(
+                sessions_dir.path(),
+                &test_session("paused-id", SessionStatus::Paused),
+            )
+            .expect("save session");
+
+            let panes = vec![
+                pane_with_option("main", 0, 0, "active-id"),
+                pane_with_option("main", 0, 1, "paused-id"),
+            ];
+
+            assert_eq!(
+                paused_pane_sessions(panes, sessions_dir.path()),
+                vec![("main".to_string(), 0, 1, "paused-id".to_string())],
+            );
+        }
+
+        #[test]
+        fn excludes_panes_whose_session_file_is_missing() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            let panes = vec![pane_with_option("main", 0, 0, "ghost-id")];
+
+            assert_eq!(
+                paused_pane_sessions(panes, sessions_dir.path()),
+                Vec::<(String, u32, u32, String)>::new(),
+            );
+        }
+
+        #[test]
+        fn excludes_panes_without_a_session_option_value() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            let panes = vec![tmux::PaneInfoWithOption {
+                session_name: "main".to_string(),
+                window_index: 0,
+                pane_index: 0,
+                pane_id: "%0".to_string(),
+                option_value: None,
+            }];
+
+            assert_eq!(
+                paused_pane_sessions(panes, sessions_dir.path()),
+                Vec::<(String, u32, u32, String)>::new(),
+            );
+        }
     }
 }
