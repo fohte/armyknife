@@ -169,7 +169,8 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 /// Restores pane session IDs from the state file.
 ///
 /// Reads the state file and, for each pane that still exists, sets the user option
-/// and types `a cc resume <session-id>` into the pane to re-launch Claude Code.
+/// and types `a cc resume <session-id>` into the pane to re-launch Claude Code,
+/// unless the pane already has a live `claude` process (see `resume_command_for`).
 /// The session ID is passed as an argument (instead of relying on the pane option)
 /// so the resumed process is not racing against tmux to observe the just-set option.
 ///
@@ -191,6 +192,11 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Captured once and shared across every pane below: `ProcessSnapshot::capture`
+    // forks `ps -A` to read the whole system process table, so re-capturing it
+    // per pane would fork once per restored pane instead of once per restore.
+    let snapshot = ProcessSnapshot::capture();
+
     let mut restore_count = 0;
     for (pane_position, session_id) in &pane_sessions {
         if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position)
@@ -200,9 +206,8 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         {
             // send-keys is best-effort: the option is already restored, so a failure
             // here just means the user has to run `a cc resume` manually.
-            if let Some(command) =
-                resume_command_for(session_id, pane_has_live_claude_process(&pane_id))
-            {
+            let pane_has_claude = pane_has_live_claude_process(&pane_id, snapshot.as_ref());
+            if let Some(command) = resume_command_for(session_id, pane_has_claude) {
                 let _ = tmux::send_command_to_pane(&pane_id, &command);
             }
             restore_count += 1;
@@ -226,8 +231,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 /// including one that is still active with a live process reading the
 /// pane's input -- so restoring the option is always safe, but typing text
 /// into that pane is not: it would land in the middle of whatever the user
-/// or Claude Code is doing. Kept separate from the tmux calls in
-/// `run_restore` so this decision is unit-testable without tmux or `ps`.
+/// or Claude Code is doing.
 fn resume_command_for(session_id: &str, pane_has_claude: bool) -> Option<String> {
     if pane_has_claude {
         return None;
@@ -243,12 +247,17 @@ fn resume_command_for(session_id: &str, pane_has_claude: bool) -> Option<String>
 /// Returns whether `pane_id`'s process tree -- the pane's own process or any
 /// descendant -- currently has a running `claude` process. Used to decide
 /// whether it is safe to type a resume command into the pane.
-fn pane_has_live_claude_process(pane_id: &str) -> bool {
+///
+/// Fails closed: an unresolvable pane pid or an unavailable `snapshot` (e.g.
+/// `ps` failed) is treated as "has claude", not "no claude", since the risk
+/// this guards against is retyping into a live conversation, not skipping a
+/// resume that turns out to be safe.
+fn pane_has_live_claude_process(pane_id: &str, snapshot: Option<&ProcessSnapshot>) -> bool {
     let Some(pane_pid) = tmux::get_pane_pid(pane_id) else {
-        return false;
+        return true;
     };
-    let Some(snapshot) = ProcessSnapshot::capture() else {
-        return false;
+    let Some(snapshot) = snapshot else {
+        return true;
     };
     snapshot
         .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
@@ -393,29 +402,22 @@ mod tests {
     mod resume_command_for_tests {
         use super::*;
 
-        // Regression test for the bug this function fixes: a pane that
-        // already has an active Claude Code process must never be typed
-        // into, or the resume command would land in the middle of a live
-        // conversation.
-        #[test]
-        fn returns_none_when_pane_already_has_claude() {
-            assert_eq!(resume_command_for("abc-123", true), None);
-        }
-
-        #[test]
-        fn builds_resume_command_when_pane_is_free() {
-            assert_eq!(
-                resume_command_for("abc-123", false),
-                Some("a cc resume abc-123".to_string())
-            );
-        }
-
-        #[test]
-        fn quotes_session_ids_with_shell_metacharacters() {
-            assert_eq!(
-                resume_command_for("id; rm -rf /", false),
-                Some("a cc resume 'id; rm -rf /'".to_string())
-            );
+        // A pane whose process tree already has a live claude process must
+        // never be typed into; the resume command would land mid-conversation.
+        #[rstest]
+        #[case::pane_has_claude("abc-123", true, None)]
+        #[case::pane_is_free("abc-123", false, Some("a cc resume abc-123".to_string()))]
+        #[case::quotes_metacharacters(
+            "id; rm -rf /",
+            false,
+            Some("a cc resume 'id; rm -rf /'".to_string())
+        )]
+        fn resume_command_for_cases(
+            #[case] session_id: &str,
+            #[case] pane_has_claude: bool,
+            #[case] expected: Option<String>,
+        ) {
+            assert_eq!(resume_command_for(session_id, pane_has_claude), expected);
         }
     }
 }
