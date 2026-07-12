@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.235](https://github.com/fohte/armyknife/compare/v0.1.234...v0.1.235) (2026-07-12)
+
+
+### Features
+
+* **wm:** support `pre-worktree-delete` hook ([#737](https://github.com/fohte/armyknife/issues/737)) ([67ac6b0](https://github.com/fohte/armyknife/commit/67ac6b06002d3073410734a493fc56b2e20651fd))
+
 ## [0.1.234](https://github.com/fohte/armyknife/compare/v0.1.233...v0.1.234) (2026-07-10)
 
 
