@@ -46,12 +46,12 @@ Use this to clean up processes tied to the worktree's lifecycle (e.g. a daemon s
 
 Pass `--skip-hooks` to `a wm delete` to skip this hook entirely.
 
-Example: stop a `crit` review daemon running against the worktree.
+Example: stop any process invoked against this worktree's path (e.g. a review-tool daemon started by a `post-worktree-create` hook).
 
 ```sh
 #!/bin/sh
 # ~/.config/armyknife/hooks/pre-worktree-delete
-pkill -f "crit.*--cwd $ARMYKNIFE_WORKTREE_PATH" || true
+pkill -f "$ARMYKNIFE_WORKTREE_PATH" || true
 ```
 
 ## `pre-pr-review` and `pre-pr-submit`

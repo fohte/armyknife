@@ -38,11 +38,17 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     let main_repo = get_main_repo(&repo)?;
 
     let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
+    let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
     // Check merge status before deletion (needs worktree to still exist)
-    check_merge_status(&main_repo, &worktree_name, args.force).await?;
+    check_merge_status(branch_name.as_deref(), args.force).await?;
 
-    run_pre_delete_hook(&main_repo, &worktree_name, &worktree_path, args.skip_hooks);
+    let hook_ran = run_pre_delete_hook(
+        &main_repo,
+        branch_name.as_deref(),
+        &worktree_path,
+        args.skip_hooks,
+    );
 
     // Capture the current tmux window ID before cleanup deletes it,
     // so we can close the window we're sitting in
@@ -52,6 +58,12 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     let result = cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, worktree_abs)?;
 
     if !result.worktree_deleted {
+        if hook_ran {
+            eprintln!(
+                "note: the pre-worktree-delete hook already ran before this failure; \
+                 any process it stopped will not be restarted automatically"
+            );
+        }
         bail!("Failed to remove worktree: {worktree_path}");
     }
     println!("Worktree removed: {worktree_path}");
@@ -76,31 +88,38 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
 
 /// Runs the pre-worktree-delete hook, if configured. Best-effort: unlike
 /// post-worktree-create, a hook failure here only logs a warning and never
-/// blocks deletion, since the user's explicit intent to delete should not be
-/// blocked by a broken cleanup hook.
-fn run_pre_delete_hook(repo: &GitRepo, worktree_name: &str, worktree_path: &str, skip_hooks: bool) {
+/// blocks deletion.
+///
+/// Returns whether the hook actually ran (`false` when skipped via
+/// `--skip-hooks`), so callers can note it in later error messages.
+fn run_pre_delete_hook(
+    repo: &GitRepo,
+    branch_name: Option<&str>,
+    worktree_path: &str,
+    skip_hooks: bool,
+) -> bool {
     if skip_hooks {
         eprintln!("Skipping pre-worktree-delete hook (--skip-hooks)");
-        return;
+        return false;
     }
 
-    let branch_name = get_worktree_branch(repo, worktree_name).unwrap_or_default();
+    let branch_name = branch_name.unwrap_or_default();
     if let Err(e) = hooks::run_hook(
         "pre-worktree-delete",
         &[
             (EnvVars::worktree_path_name(), worktree_path),
-            (EnvVars::branch_name_name(), &branch_name),
+            (EnvVars::branch_name_name(), branch_name),
             (EnvVars::repo_root_name(), &repo.workdir().to_string_lossy()),
         ],
     ) {
-        eprintln!("warning: pre-worktree-delete hook failed: {e}");
+        eprintln!("Warning: pre-worktree-delete hook failed: {e}");
     }
+
+    true
 }
 
-async fn check_merge_status(repo: &GitRepo, worktree_name: &str, force: bool) -> Result<()> {
-    let branch_name = get_worktree_branch(repo, worktree_name);
-
-    if let Some(ref branch) = branch_name.as_ref().filter(|b| local_branch_exists(b)) {
+async fn check_merge_status(branch_name: Option<&str>, force: bool) -> Result<()> {
+    if let Some(branch) = branch_name.filter(|b| local_branch_exists(b)) {
         let merge_status = get_merge_status(branch).await;
         if !merge_status.should_cleanup() && !force {
             eprintln!(
@@ -201,7 +220,7 @@ mod tests {
         let marker = config_home.path().join("marker");
         install_failing_hook(config_home.path(), &marker);
 
-        temp_env::with_vars(
+        let hook_ran = temp_env::with_vars(
             [(
                 "XDG_CONFIG_HOME",
                 Some(config_home.path().to_str().unwrap()),
@@ -209,14 +228,15 @@ mod tests {
             || {
                 run_pre_delete_hook(
                     &repo,
-                    "feature",
+                    Some("feature"),
                     worktree_path.to_str().unwrap(),
                     skip_hooks,
-                );
+                )
             },
         );
 
         assert_eq!(marker.exists(), expect_invoked);
+        assert_eq!(hook_ran, expect_invoked);
     }
 
     #[test]
