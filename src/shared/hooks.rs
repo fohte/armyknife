@@ -8,6 +8,20 @@ fn hook_path(hook_name: &str) -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("armyknife").join("hooks").join(hook_name))
 }
 
+/// Resolves the hook script path only if it exists on disk.
+fn existing_hook_path(hook_name: &str) -> Option<PathBuf> {
+    let path = hook_path(hook_name)?;
+    path.exists().then_some(path)
+}
+
+/// Returns whether a hook script is configured for the given hook name,
+/// regardless of whether it is executable. Lets callers distinguish "no hook
+/// configured" from "hook ran", since `run_hook` returns `Ok(())` in both
+/// cases.
+pub fn hook_exists(hook_name: &str) -> bool {
+    existing_hook_path(hook_name).is_some()
+}
+
 /// Executes a hook script if one is configured.
 ///
 /// Follows git-style hook conventions, but treats hook failure as a hard error:
@@ -16,14 +30,9 @@ fn hook_path(hook_name: &str) -> Option<PathBuf> {
 /// - If the hook exits with non-zero status, returns Err so callers can abort the
 ///   operation (e.g., a `pre-pr-submit` hook can block submission)
 pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()> {
-    let path = match hook_path(hook_name) {
-        Some(p) => p,
-        None => return Ok(()),
-    };
-
-    if !path.exists() {
+    let Some(path) = existing_hook_path(hook_name) else {
         return Ok(());
-    }
+    };
 
     let metadata = std::fs::metadata(&path)?;
     let permissions = metadata.permissions();
@@ -155,6 +164,13 @@ mod tests {
         temp_env::with_vars([("XDG_CONFIG_HOME", Some("")), ("HOME", Some(""))], || {
             let result = run_hook("post-worktree-create", &[]);
             assert!(result.is_ok());
+        });
+    }
+
+    #[rstest]
+    fn hook_exists_returns_false_when_config_dir_unavailable() {
+        temp_env::with_vars([("XDG_CONFIG_HOME", Some("")), ("HOME", Some(""))], || {
+            assert!(!hook_exists("post-worktree-create"));
         });
     }
 }

@@ -4,7 +4,7 @@ armyknife supports git-style hooks for command lifecycle events. Place executabl
 
 A hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped.
 
-> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. All hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file.
+> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. All hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file. `pre-worktree-delete` is an exception: it runs best-effort and never blocks deletion (see below).
 
 ## `post-worktree-create`
 
@@ -30,6 +30,28 @@ Example: auto-trust worktrees for Claude Code.
 jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
   '.projects[$path].hasTrustDialogAccepted = true' \
   ~/.claude.json | sponge ~/.claude.json
+```
+
+## `pre-worktree-delete`
+
+Runs before `a wm delete` (aliases `d`, `rm`) removes the worktree directory. Unlike other hooks, failures here are best-effort: a non-zero exit or a non-executable hook only logs a warning to stderr, and the worktree is deleted anyway. Deleting a worktree is something the user explicitly asked for, so a broken cleanup hook should not block it.
+
+Use this to clean up processes tied to the worktree's lifecycle (e.g. a daemon started by a `post-worktree-create` hook) before the directory disappears out from under them.
+
+| Variable                  | Description                                                         |
+| ------------------------- | ------------------------------------------------------------------- |
+| `ARMYKNIFE_WORKTREE_PATH` | Absolute path to the worktree being deleted                         |
+| `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree (empty string if it cannot be resolved) |
+| `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository                                  |
+
+Pass `--skip-hooks` to `a wm delete` to skip this hook entirely.
+
+Example: stop any process invoked against this worktree's path (e.g. a review-tool daemon started by a `post-worktree-create` hook).
+
+```sh
+#!/bin/sh
+# ~/.config/armyknife/hooks/pre-worktree-delete
+pkill -f "$ARMYKNIFE_WORKTREE_PATH" || true
 ```
 
 ## `pre-pr-review` and `pre-pr-submit`
