@@ -8,6 +8,14 @@ fn hook_path(hook_name: &str) -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("armyknife").join("hooks").join(hook_name))
 }
 
+/// Returns whether a hook script is configured for the given hook name,
+/// regardless of whether it is executable. Lets callers distinguish "no hook
+/// configured" from "hook ran", since `run_hook` returns `Ok(())` in both
+/// cases.
+pub fn hook_exists(hook_name: &str) -> bool {
+    hook_path(hook_name).is_some_and(|p| p.exists())
+}
+
 /// Executes a hook script if one is configured.
 ///
 /// Follows git-style hook conventions, but treats hook failure as a hard error:

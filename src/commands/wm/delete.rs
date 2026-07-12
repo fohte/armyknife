@@ -91,7 +91,8 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
 /// blocks deletion.
 ///
 /// Returns whether the hook actually ran (`false` when skipped via
-/// `--skip-hooks`), so callers can note it in later error messages.
+/// `--skip-hooks` or when no hook is configured), so callers can note it in
+/// later error messages.
 fn run_pre_delete_hook(
     repo: &GitRepo,
     branch_name: Option<&str>,
@@ -100,6 +101,10 @@ fn run_pre_delete_hook(
 ) -> bool {
     if skip_hooks {
         eprintln!("Skipping pre-worktree-delete hook (--skip-hooks)");
+        return false;
+    }
+
+    if !hooks::hook_exists("pre-worktree-delete") {
         return false;
     }
 
@@ -205,10 +210,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::skip_hooks_true_never_invokes(true, false)]
-    #[case::skip_hooks_false_invokes_and_does_not_panic(false, true)]
+    #[case::skip_hooks_true_never_invokes(true, true, false)]
+    #[case::skip_hooks_false_invokes_and_does_not_panic(false, true, true)]
+    #[case::hook_not_configured_returns_false(false, false, false)]
     fn run_pre_delete_hook_respects_skip_hooks(
         #[case] skip_hooks: bool,
+        #[case] hook_installed: bool,
         #[case] expect_invoked: bool,
     ) {
         let test_repo = TestRepo::new();
@@ -218,7 +225,9 @@ mod tests {
 
         let config_home = TempDir::new().unwrap();
         let marker = config_home.path().join("marker");
-        install_failing_hook(config_home.path(), &marker);
+        if hook_installed {
+            install_failing_hook(config_home.path(), &marker);
+        }
 
         let hook_ran = temp_env::with_vars(
             [(
