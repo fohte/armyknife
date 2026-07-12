@@ -9,6 +9,8 @@ use crate::infra::git::GitRepo;
 use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::config::load_config;
+use crate::shared::env_var::EnvVars;
+use crate::shared::hooks;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DeleteArgs {
@@ -18,6 +20,10 @@ pub struct DeleteArgs {
     /// Force delete without confirmation even if the branch is neither merged nor closed
     #[arg(short, long)]
     pub force: bool,
+
+    /// Skip the pre-worktree-delete hook
+    #[arg(long)]
+    pub skip_hooks: bool,
 }
 
 pub async fn run(args: &DeleteArgs) -> Result<()> {
@@ -35,6 +41,8 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
 
     // Check merge status before deletion (needs worktree to still exist)
     check_merge_status(&main_repo, &worktree_name, args.force).await?;
+
+    run_pre_delete_hook(&main_repo, &worktree_name, &worktree_path, args.skip_hooks);
 
     // Capture the current tmux window ID before cleanup deletes it,
     // so we can close the window we're sitting in
@@ -64,6 +72,29 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Runs the pre-worktree-delete hook, if configured. Best-effort: unlike
+/// post-worktree-create, a hook failure here only logs a warning and never
+/// blocks deletion, since the user's explicit intent to delete should not be
+/// blocked by a broken cleanup hook.
+fn run_pre_delete_hook(repo: &GitRepo, worktree_name: &str, worktree_path: &str, skip_hooks: bool) {
+    if skip_hooks {
+        eprintln!("Skipping pre-worktree-delete hook (--skip-hooks)");
+        return;
+    }
+
+    let branch_name = get_worktree_branch(repo, worktree_name).unwrap_or_default();
+    if let Err(e) = hooks::run_hook(
+        "pre-worktree-delete",
+        &[
+            (EnvVars::worktree_path_name(), worktree_path),
+            (EnvVars::branch_name_name(), &branch_name),
+            (EnvVars::repo_root_name(), &repo.workdir().to_string_lossy()),
+        ],
+    ) {
+        eprintln!("warning: pre-worktree-delete hook failed: {e}");
+    }
 }
 
 async fn check_merge_status(repo: &GitRepo, worktree_name: &str, force: bool) -> Result<()> {
@@ -127,8 +158,66 @@ fn resolve_worktree_path(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use rstest::rstest;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::shared::testing::TestRepo;
+
+    /// Installs an executable `pre-worktree-delete` hook under a fresh
+    /// `XDG_CONFIG_HOME` that touches `marker` and exits non-zero, so tests
+    /// can assert both "was it invoked" and "does a failing hook still not
+    /// block the caller".
+    fn install_failing_hook(config_home: &std::path::Path, marker: &std::path::Path) {
+        let hooks_dir = config_home.join("armyknife").join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let hook_file = hooks_dir.join("pre-worktree-delete");
+        let script = indoc::formatdoc! {"
+            #!/bin/sh
+            touch {marker}
+            exit 1
+        ", marker = marker.display()};
+        std::fs::write(&hook_file, script).unwrap();
+        let mut perms = std::fs::metadata(&hook_file).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&hook_file, perms).unwrap();
+    }
+
+    #[rstest]
+    #[case::skip_hooks_true_never_invokes(true, false)]
+    #[case::skip_hooks_false_invokes_and_does_not_panic(false, true)]
+    fn run_pre_delete_hook_respects_skip_hooks(
+        #[case] skip_hooks: bool,
+        #[case] expect_invoked: bool,
+    ) {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("feature");
+        let repo = test_repo.open();
+        let worktree_path = test_repo.worktree_path("feature");
+
+        let config_home = TempDir::new().unwrap();
+        let marker = config_home.path().join("marker");
+        install_failing_hook(config_home.path(), &marker);
+
+        temp_env::with_vars(
+            [(
+                "XDG_CONFIG_HOME",
+                Some(config_home.path().to_str().unwrap()),
+            )],
+            || {
+                run_pre_delete_hook(
+                    &repo,
+                    "feature",
+                    worktree_path.to_str().unwrap(),
+                    skip_hooks,
+                );
+            },
+        );
+
+        assert_eq!(marker.exists(), expect_invoked);
+    }
 
     #[test]
     fn resolve_worktree_path_with_existing_path() {
