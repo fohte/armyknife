@@ -367,9 +367,13 @@ fn process_hook_event_impl(
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
     // Claude, its shutdown may fire Stop hooks that would overwrite Paused →
     // Stopped, and then SessionEnd would see Stopped instead of Paused.
-    // However, when the user resumes (SessionStart → Running), the status
-    // must transition out of Paused so the TUI shows the session as active.
+    // However, when the user resumes (SessionStart(resume) → Stopped, same
+    // value a Stop hook would produce), the status must still transition out
+    // of Paused so the TUI shows the session as active and `a cc sweep` can
+    // re-arm its idle timeout. Excluding SessionStart here is what
+    // distinguishes "sweep's own shutdown Stop" from "the user resumed".
     let keep_paused = session.status == SessionStatus::Paused
+        && event != HookEvent::SessionStart
         && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
     if !keep_paused {
         session.status = status;
@@ -768,6 +772,14 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
             Some("idle_prompt") => SessionStatus::Stopped,
             _ => SessionStatus::Running,
         },
+        // A resumed session (`claude -r` / `claude -c` / `/resume`) is waiting
+        // for input just like a session that already hit Stop: if the user
+        // sends no prompt, no further hook will ever fire to correct the
+        // status. Reporting Running here would leave the session stuck
+        // forever, invisible to `a cc sweep`'s idle-timeout check.
+        HookEvent::SessionStart if input.source.as_deref() == Some("resume") => {
+            SessionStatus::Stopped
+        }
         HookEvent::SessionStart
         | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
@@ -985,8 +997,16 @@ mod tests {
         notification_type: Option<&str>,
         source: Option<&str>,
     ) -> HookInput {
+        create_test_input_with_session_and_source("test-123", notification_type, source)
+    }
+
+    fn create_test_input_with_session_and_source(
+        session_id: &str,
+        notification_type: Option<&str>,
+        source: Option<&str>,
+    ) -> HookInput {
         let mut json_parts = vec![
-            r#""session_id":"test-123""#.to_string(),
+            format!(r#""session_id":"{session_id}""#),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
@@ -1012,25 +1032,66 @@ mod tests {
     }
 
     #[rstest]
-    #[case::session_start(HookEvent::SessionStart, None, SessionStatus::Running)]
-    #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
-    #[case::pre_tool_use(HookEvent::PreToolUse, None, SessionStatus::Running)]
-    #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Running)]
-    #[case::permission_request(HookEvent::PermissionRequest, None, SessionStatus::WaitingInput)]
-    #[case::stop(HookEvent::Stop, None, SessionStatus::Stopped)]
-    #[case::notification_generic(HookEvent::Notification, Some("info"), SessionStatus::Running)]
+    #[case::session_start(HookEvent::SessionStart, None, None, SessionStatus::Running)]
+    #[case::session_start_startup(
+        HookEvent::SessionStart,
+        None,
+        Some("startup"),
+        SessionStatus::Running
+    )]
+    #[case::session_start_resume(
+        HookEvent::SessionStart,
+        None,
+        Some("resume"),
+        SessionStatus::Stopped
+    )]
+    #[case::session_start_clear(
+        HookEvent::SessionStart,
+        None,
+        Some("clear"),
+        SessionStatus::Running
+    )]
+    #[case::session_start_compact(
+        HookEvent::SessionStart,
+        None,
+        Some("compact"),
+        SessionStatus::Running
+    )]
+    #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, None, SessionStatus::Running)]
+    #[case::pre_tool_use(HookEvent::PreToolUse, None, None, SessionStatus::Running)]
+    #[case::post_tool_use(HookEvent::PostToolUse, None, None, SessionStatus::Running)]
+    #[case::permission_request(
+        HookEvent::PermissionRequest,
+        None,
+        None,
+        SessionStatus::WaitingInput
+    )]
+    #[case::stop(HookEvent::Stop, None, None, SessionStatus::Stopped)]
+    #[case::notification_generic(
+        HookEvent::Notification,
+        Some("info"),
+        None,
+        SessionStatus::Running
+    )]
     #[case::notification_permission(
         HookEvent::Notification,
         Some("permission_prompt"),
+        None,
         SessionStatus::WaitingInput
     )]
-    #[case::notification_idle(HookEvent::Notification, Some("idle_prompt"), SessionStatus::Stopped)]
+    #[case::notification_idle(
+        HookEvent::Notification,
+        Some("idle_prompt"),
+        None,
+        SessionStatus::Stopped
+    )]
     fn test_determine_status(
         #[case] event: HookEvent,
         #[case] notification_type: Option<&str>,
+        #[case] source: Option<&str>,
         #[case] expected: SessionStatus,
     ) {
-        let input = create_test_input(notification_type);
+        let input = create_test_input_with_source(notification_type, source);
         let result = determine_status(event, &input);
         assert_eq!(result, expected);
     }
@@ -1330,13 +1391,27 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stop_preserves_paused(HookEvent::Stop, SessionStatus::Paused)]
-    #[case::pre_tool_use_transitions_to_running(HookEvent::PreToolUse, SessionStatus::Running)]
-    #[case::user_prompt_submit_transitions_to_running(
-        HookEvent::UserPromptSubmit,
+    #[case::stop_preserves_paused(HookEvent::Stop, None, SessionStatus::Paused)]
+    #[case::pre_tool_use_transitions_to_running(
+        HookEvent::PreToolUse,
+        None,
         SessionStatus::Running
     )]
-    fn hook_on_paused_session(#[case] event: HookEvent, #[case] expected: SessionStatus) {
+    #[case::user_prompt_submit_transitions_to_running(
+        HookEvent::UserPromptSubmit,
+        None,
+        SessionStatus::Running
+    )]
+    #[case::session_start_resume_exits_paused(
+        HookEvent::SessionStart,
+        Some("resume"),
+        SessionStatus::Stopped
+    )]
+    fn hook_on_paused_session(
+        #[case] event: HookEvent,
+        #[case] source: Option<&str>,
+        #[case] expected: SessionStatus,
+    ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
@@ -1358,9 +1433,7 @@ mod tests {
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
-        let input: HookInput =
-            serde_json::from_str(r#"{"session_id":"paused-sess","cwd":"/tmp/test"}"#)
-                .expect("valid JSON");
+        let input = create_test_input_with_session_and_source("paused-sess", None, source);
 
         process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
