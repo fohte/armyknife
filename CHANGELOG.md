@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.236](https://github.com/fohte/armyknife/compare/v0.1.235...v0.1.236) (2026-07-16)
+
+
+### Bug Fixes
+
+* **cc:** treat resumed sessions as stopped ([#747](https://github.com/fohte/armyknife/issues/747)) ([96c9223](https://github.com/fohte/armyknife/commit/96c922327f96f00b5dcfe7f708d3fc40c198a039))
+
 ## [0.1.235](https://github.com/fohte/armyknife/compare/v0.1.234...v0.1.235) (2026-07-12)
 
 
