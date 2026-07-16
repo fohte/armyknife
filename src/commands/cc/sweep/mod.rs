@@ -5,6 +5,24 @@
 //! periodically (e.g., by a launchd agent on a 1-minute interval) rather than
 //! spawned on demand from the Stop hook.
 //!
+//! Confirming a pause spans multiple sweep runs rather than happening on a
+//! single SIGTERM. Claude Code (Node.js) can keep running for a long time
+//! after receiving SIGTERM while blocked in known-flaky code paths (a stalled
+//! SSE stream, a Bash-tool thread deadlock, a synchronous CPU spin during
+//! context compaction) -- sending the signal is not proof the process has
+//! exited. So when a session's timeout has elapsed and sweep can still
+//! resolve a live `claude` pid for it, sweep (re-)sends SIGTERM but leaves
+//! `session.status` as `Stopped`. Only once a later sweep run can no longer
+//! resolve a pid for that session -- meaning the process has actually
+//! exited -- does sweep flip the status to `Paused`. This repeats with no
+//! retry limit until the pid disappears.
+//!
+//! While a session waits in that signaled-but-not-yet-Paused window, it is
+//! marked `Session::sweep_signaled`. This lets the `SessionEnd` hook (see
+//! `hook.rs`) recognize a process exiting in response to sweep's own SIGTERM
+//! and confirm it as `Paused` there and then, rather than misreading the
+//! still-`Stopped` status as the user manually ending the session.
+//!
 //! Running sweep has no effect on sessions that are Running, WaitingInput,
 //! Paused, or Ended -- the pure decision function `auto_pause::decide_pause`
 //! owns the timeout policy; `PidResolver` owns the question of "which process
@@ -121,23 +139,27 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         event = "cc.sweep.summary",
         scanned = report.scanned,
         paused = report.paused,
+        signaled = report.signaled,
         waiting = report.waiting,
-        no_pid = report.no_pid,
         active = report.active,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
-    // Otherwise only speak up when we actually paused something, since the
-    // launchd-driven periodic invocation would otherwise flood the log.
+    // Otherwise only speak up when a pause was actually confirmed. A session
+    // stuck in the signaled-but-not-Paused window (see module docs) gets
+    // re-signaled on every sweep pass with no retry limit, so gating on
+    // `signaled` too would flood the log for exactly the stuck-process
+    // scenario this module exists to handle; the structured `tracing::info!`
+    // above already records every signal for anyone tailing the JSONL log.
     if report.paused > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] cc sweep: scanned={} paused={} waiting={} no_pid={} active={} (timeout={})",
+            "[armyknife] cc sweep: scanned={} paused={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
+            report.signaled,
             report.waiting,
-            report.no_pid,
             report.active,
             timeout_str,
         );
@@ -196,15 +218,18 @@ impl<A: ActivityProbe> SessionProbe for TmuxSessionProbe<'_, A> {
 pub struct SweepReport {
     /// Number of non-ended session files scanned.
     pub scanned: usize,
-    /// Sessions that were (or would have been, in --dry-run) paused.
+    /// Sessions confirmed as `Paused` (or that would have been, in
+    /// --dry-run) this run. This means a prior sweep's SIGTERM (or the
+    /// process exiting on its own) has actually taken effect: sweep can no
+    /// longer resolve a live `claude` pid for the session.
     pub paused: usize,
+    /// Sessions whose timeout has elapsed and were (re-)sent SIGTERM this
+    /// run, but not yet confirmed `Paused` because sweep can still resolve a
+    /// live `claude` pid for them. Status stays `Stopped`; a later sweep
+    /// that finds no resolvable pid is what confirms the pause.
+    pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
-    /// Stopped sessions for which sweep could not locate a live `claude`
-    /// process. Usually means the session's tmux pane is gone or no longer
-    /// hosts claude (e.g., user exited with Ctrl-C without triggering
-    /// SessionEnd).
-    pub no_pid: usize,
     /// Sessions in an active state (Running, WaitingInput, Paused).
     pub active: usize,
 }
@@ -290,41 +315,58 @@ where
         let effective = effective_updated_at(&session, probe, now);
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
-            PauseDecision::Pause => {
-                // Resolve the live claude pid for this session. If we can't
-                // find one, the session's host process is already gone and
-                // there is nothing to SIGTERM -- still count it for
-                // observability.
-                let Some(pid) = probe.resolve_pid(&session) else {
+            PauseDecision::Pause => match probe.resolve_pid(&session) {
+                Some(pid) => {
+                    // Still resolves to a live claude pid -- SIGTERM does not
+                    // guarantee prompt exit (see module docs), so we cannot
+                    // confirm Paused yet. (Re-)send SIGTERM and leave status
+                    // as Stopped; a later sweep that finds no resolvable pid
+                    // is what confirms the process has actually exited.
+                    if dry_run {
+                        tracing::info!(
+                            event = "cc.sweep.dry_run_signal",
+                            session = %session.session_id,
+                            pid = pid,
+                        );
+                        eprintln!(
+                            "[armyknife] cc sweep (dry-run): would signal {} (pid={pid})",
+                            session.session_id,
+                        );
+                        report.signaled += 1;
+                        continue;
+                    }
                     tracing::info!(
-                        event = "cc.sweep.no_pid",
-                        session = %session.session_id,
-                    );
-                    report.no_pid += 1;
-                    continue;
-                };
-
-                if dry_run {
-                    tracing::info!(
-                        event = "cc.sweep.dry_run_pause",
+                        event = "cc.sweep.signaled",
                         session = %session.session_id,
                         pid = pid,
                     );
-                    eprintln!(
-                        "[armyknife] cc sweep (dry-run): would pause {} (pid={pid})",
-                        session.session_id,
-                    );
-                    report.paused += 1;
-                    continue;
+                    signal_session(sessions_dir, session, pid, sender)?;
+                    report.signaled += 1;
                 }
-                tracing::info!(
-                    event = "cc.sweep.paused",
-                    session = %session.session_id,
-                    pid = pid,
-                );
-                pause_session(sessions_dir, session, pid, sender, syncer)?;
-                report.paused += 1;
-            }
+                None => {
+                    // No live claude process found -- the process has
+                    // actually exited (from an earlier sweep's SIGTERM, or
+                    // on its own). Confirm the pause now.
+                    if dry_run {
+                        tracing::info!(
+                            event = "cc.sweep.dry_run_pause",
+                            session = %session.session_id,
+                        );
+                        eprintln!(
+                            "[armyknife] cc sweep (dry-run): would confirm {} as paused",
+                            session.session_id,
+                        );
+                        report.paused += 1;
+                        continue;
+                    }
+                    tracing::info!(
+                        event = "cc.sweep.paused",
+                        session = %session.session_id,
+                    );
+                    confirm_paused(sessions_dir, session, syncer)?;
+                    report.paused += 1;
+                }
+            },
             PauseDecision::NotYetElapsed => {
                 report.waiting += 1;
             }
@@ -345,19 +387,24 @@ where
     Ok(report)
 }
 
-/// Sends SIGTERM to `pid` and flips the session status to Paused.
+/// Sends SIGTERM to `pid` and marks the session as `sweep_signaled`. Does not
+/// touch `session.status` -- SIGTERM is not proof the process has exited
+/// (see module docs), so the session stays `Stopped` until a later sweep
+/// observes that no `claude` pid resolves for it anymore (see
+/// `confirm_paused`).
 ///
-/// Also pushes the new status into the pane / window tmux options because the
-/// SIGTERM'd Claude Code will not fire a follow-up hook to do it.
-fn pause_session<S: SignalSender, T: TmuxStatusSyncer>(
+/// `sweep_signaled` lets the `SessionEnd` hook (in `hook.rs`) recognize a
+/// process that exits in response to this signal instead of misreading the
+/// still-`Stopped` status as the user manually ending the session.
+fn signal_session<S: SignalSender>(
     sessions_dir: &Path,
     mut session: Session,
     pid: u32,
     sender: &S,
-    syncer: &T,
 ) -> Result<()> {
-    // Best-effort SIGTERM. ESRCH (process already gone) is not fatal -- we
-    // still want to flip the status so `cc resume` can restore the session.
+    // Best-effort SIGTERM. ESRCH (process already gone) is not fatal --
+    // resolve_pid raced with the process exiting; the next sweep will find
+    // no resolvable pid and confirm the pause then.
     if let Err(e) = sender.send(pid, libc::SIGTERM)
         && e.raw_os_error() != Some(libc::ESRCH)
     {
@@ -369,7 +416,25 @@ fn pause_session<S: SignalSender, T: TmuxStatusSyncer>(
         );
     }
 
+    session.sweep_signaled = true;
+    store::save_session_to(sessions_dir, &session)?;
+
+    Ok(())
+}
+
+/// Flips the session status to Paused now that sweep can no longer resolve a
+/// live `claude` process for it.
+///
+/// Also pushes the new status into the pane / window tmux options because the
+/// (presumably already SIGTERM'd) Claude Code will not fire a follow-up hook
+/// to do it.
+fn confirm_paused<T: TmuxStatusSyncer>(
+    sessions_dir: &Path,
+    mut session: Session,
+    syncer: &T,
+) -> Result<()> {
     session.status = SessionStatus::Paused;
+    session.sweep_signaled = false;
     store::save_session_to(sessions_dir, &session)?;
 
     syncer.sync(
@@ -470,11 +535,15 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
             read_at: None,
+            sweep_signaled: false,
         }
     }
 
     #[rstest]
-    fn pauses_elapsed_stopped_session(test_dir: TestDir) {
+    fn signals_elapsed_stopped_session_with_live_pid(test_dir: TestDir) {
+        // resolve_pid still finds a live claude process, so this run can
+        // only (re-)send SIGTERM -- it cannot confirm the process has
+        // actually exited yet.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-a", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
@@ -492,17 +561,89 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.scanned, 1);
-        assert_eq!(report.paused, 1);
-        assert_eq!(report.waiting, 0);
-        assert_eq!(report.no_pid, 0);
-        assert_eq!(report.active, 0);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 0,
+                signaled: 1,
+                waiting: 0,
+                active: 0,
+            }
+        );
+        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-a")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
+        assert!(
+            reloaded.sweep_signaled,
+            "signaling should mark sweep_signaled so hook.rs's SessionEnd \
+             handler can recognize this shutdown as sweep's own"
+        );
+    }
+
+    #[rstest]
+    fn confirms_paused_once_second_sweep_finds_no_resolvable_pid(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-a", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+
+        let first_pass = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::with_pids(&[("sess-a", 4242)]),
+            &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("first sweep");
+        assert_eq!(
+            first_pass,
+            SweepReport {
+                scanned: 1,
+                paused: 0,
+                signaled: 1,
+                waiting: 0,
+                active: 0,
+            }
+        );
+
+        // The process has since exited -- resolve_pid no longer finds it.
+        let second_pass = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::default(),
+            &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("second sweep");
+        assert_eq!(
+            second_pass,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
+        );
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-a")
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Paused);
+        assert!(
+            !reloaded.sweep_signaled,
+            "confirming Paused should clear sweep_signaled"
+        );
     }
 
     #[rstest]
@@ -594,13 +735,14 @@ mod tests {
     }
 
     #[rstest]
-    fn counts_stopped_session_with_no_resolvable_pid(test_dir: TestDir) {
+    fn confirms_paused_when_pid_no_longer_resolves(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-no-pid", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         // Resolver returns None -- simulates a tmux pane that no longer
-        // hosts claude (or a session without tmux_info at all).
+        // hosts claude (or a session without tmux_info at all), i.e. the
+        // process has actually exited. No SIGTERM needed; confirm Paused.
         let sender = RecordingSender::default();
         let probe = FakeProbe::default();
         let report = sweep_impl(
@@ -614,19 +756,30 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.scanned, 1);
-        assert_eq!(report.paused, 0);
-        assert_eq!(report.no_pid, 1);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
+        );
         assert!(sender.calls.borrow().is_empty());
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-no-pid")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Stopped);
+        assert_eq!(reloaded.status, SessionStatus::Paused);
     }
 
     #[rstest]
-    fn esrch_still_marks_paused(test_dir: TestDir) {
+    fn esrch_does_not_confirm_paused(test_dir: TestDir) {
+        // resolve_pid still finds a pid, but the SIGTERM races with the
+        // process actually exiting and comes back ESRCH. Confirmation is
+        // driven by resolve_pid, not by the signal outcome, so status stays
+        // Stopped until a later sweep observes resolve_pid returning None.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-d", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
@@ -645,13 +798,22 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 1);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 0,
+                signaled: 1,
+                waiting: 0,
+                active: 0,
+            }
+        );
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-d")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Paused);
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
     }
 
     #[rstest]
@@ -704,9 +866,9 @@ mod tests {
 
         let sender = RecordingSender::default();
         // Tmux activity is old enough that the session still gets paused.
+        // No resolvable pid, so this run confirms Paused directly.
         let stale_activity = Utc::now() - TimeDelta::hours(1);
-        let probe = FakeProbe::with_pids(&[("persist-check", 4242)])
-            .with_last_activity(&[("persist-check", stale_activity)]);
+        let probe = FakeProbe::default().with_last_activity(&[("persist-check", stale_activity)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -757,7 +919,7 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 1);
+        assert_eq!(report.signaled, 1);
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
     }
 
@@ -800,11 +962,11 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_pending_bg_task_is_dropped_and_session_paused(test_dir: TestDir) {
+    fn stale_pending_bg_task_is_dropped_and_session_signaled(test_dir: TestDir) {
         // The Claude conversation ended without reading `BashOutput`, so a
         // bg id was orphaned in pending_bg_task_ids even though the process
         // has long since exited. Sweep must drop the stale id and then
-        // pause the session normally.
+        // proceed through the normal pause-decision flow.
         let old = Utc::now() - TimeDelta::hours(1);
         let mut session = make_session("stale-bg", SessionStatus::Stopped, old);
         session.pending_bg_task_ids.insert("dead-bg".to_string());
@@ -824,13 +986,13 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 1);
+        assert_eq!(report.signaled, 1);
         assert_eq!(report.active, 0);
 
         let reloaded = store::load_session_from(&test_dir.path, "stale-bg")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Paused);
+        assert_eq!(reloaded.status, SessionStatus::Stopped);
         assert!(
             reloaded.pending_bg_task_ids.is_empty(),
             "stale bg id should be removed from pending set"
@@ -856,13 +1018,53 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 1);
+        assert_eq!(report.signaled, 1);
         assert!(
             sender.calls.borrow().is_empty(),
             "dry-run must not send signals"
         );
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-dry")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            reloaded.status,
+            SessionStatus::Stopped,
+            "dry-run must not update session status"
+        );
+    }
+
+    #[rstest]
+    fn dry_run_does_not_confirm_paused(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("sess-dry-confirm", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            &RecordingTmuxStatusSyncer::default(),
+            true,
+        )
+        .expect("sweep");
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
+        );
+
+        let reloaded = store::load_session_from(&test_dir.path, "sess-dry-confirm")
             .expect("load")
             .expect("session exists");
         assert_eq!(
@@ -889,7 +1091,8 @@ mod tests {
 
         let sender = RecordingSender::default();
         // Only `pausable` has a resolvable pid; `no-pid` is deliberately
-        // absent from the map to simulate a dead pane.
+        // absent from the map to simulate a session whose process has
+        // already exited.
         let probe = FakeProbe::with_pids(&[("pausable", 4242), ("running", 4243)]);
         let report = sweep_impl(
             &test_dir.path,
@@ -903,12 +1106,18 @@ mod tests {
         .expect("sweep");
 
         // Ended is filtered before counting; the remaining 4 break down into
-        // one pause, one waiting (not elapsed), one no_pid, one active.
-        assert_eq!(report.scanned, 4);
-        assert_eq!(report.paused, 1);
-        assert_eq!(report.waiting, 1);
-        assert_eq!(report.no_pid, 1);
-        assert_eq!(report.active, 1);
+        // one signaled (pid still resolves), one confirmed paused (no
+        // resolvable pid), one waiting (not elapsed), one active.
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 4,
+                paused: 1,
+                signaled: 1,
+                waiting: 1,
+                active: 1,
+            }
+        );
         assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
     }
 
@@ -925,7 +1134,8 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let probe = FakeProbe::with_pids(&[("sess-tmux", 4242)]);
+        // No resolvable pid -- this run confirms Paused and must sync tmux.
+        let probe = FakeProbe::default();
         let syncer = RecordingTmuxStatusSyncer::default();
         let report = sweep_impl(
             &test_dir.path,
@@ -950,15 +1160,57 @@ mod tests {
     }
 
     #[rstest]
+    fn signal_only_does_not_push_tmux_status(test_dir: TestDir) {
+        // While sweep can still resolve a live pid, it must not update the
+        // pane status -- only confirming Paused does that.
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("sess-tmux-signal", SessionStatus::Stopped, old);
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        });
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("sess-tmux-signal", 4242)]);
+        let syncer = RecordingTmuxStatusSyncer::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &AllDeadBgTaskProbe,
+            &syncer,
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 0,
+                signaled: 1,
+                waiting: 0,
+                active: 0,
+            }
+        );
+        assert!(syncer.calls.borrow().is_empty());
+    }
+
+    #[rstest]
     fn pause_without_tmux_info_still_calls_syncer_with_none(test_dir: TestDir) {
         // Sessions without tmux_info (claude run outside tmux) must still go
-        // through the pause flow; syncer receives pane_id=None.
+        // through the confirm-paused flow; syncer receives pane_id=None.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("sess-no-tmux", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let probe = FakeProbe::with_pids(&[("sess-no-tmux", 4242)]);
+        // No resolvable pid -- this run confirms Paused.
+        let probe = FakeProbe::default();
         let syncer = RecordingTmuxStatusSyncer::default();
         sweep_impl(
             &test_dir.path,
