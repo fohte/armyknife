@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.237](https://github.com/fohte/armyknife/compare/v0.1.236...v0.1.237) (2026-07-16)
+
+
+### Bug Fixes
+
+* **cc:** confirm process exit before sweep marks a session paused ([#749](https://github.com/fohte/armyknife/issues/749)) ([e2a924a](https://github.com/fohte/armyknife/commit/e2a924a143ae1909c694d469e1ed8ac76cda6b88))
+
 ## [0.1.236](https://github.com/fohte/armyknife/compare/v0.1.235...v0.1.236) (2026-07-16)
 
 
