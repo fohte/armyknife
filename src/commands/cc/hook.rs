@@ -997,8 +997,16 @@ mod tests {
         notification_type: Option<&str>,
         source: Option<&str>,
     ) -> HookInput {
+        create_test_input_with_session_and_source("test-123", notification_type, source)
+    }
+
+    fn create_test_input_with_session_and_source(
+        session_id: &str,
+        notification_type: Option<&str>,
+        source: Option<&str>,
+    ) -> HookInput {
         let mut json_parts = vec![
-            r#""session_id":"test-123""#.to_string(),
+            format!(r#""session_id":"{session_id}""#),
             r#""cwd":"/tmp/test""#.to_string(),
         ];
         if let Some(t) = notification_type {
@@ -1425,13 +1433,7 @@ mod tests {
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
-        let source_field = source
-            .map(|s| format!(r#","source":"{s}""#))
-            .unwrap_or_default();
-        let input: HookInput = serde_json::from_str(&format!(
-            r#"{{"session_id":"paused-sess","cwd":"/tmp/test"{source_field}}}"#
-        ))
-        .expect("valid JSON");
+        let input = create_test_input_with_session_and_source("paused-sess", None, source);
 
         process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
