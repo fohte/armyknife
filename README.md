@@ -391,9 +391,9 @@ Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which 
 
 #### Auto-pause
 
-Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused`, so `a cc resume` can restore the conversation by invoking `claude --resume`.
+Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a cc resume` can restore the conversation by invoking `claude --resume`.
 
-`a cc sweep` scans every session file once, sends SIGTERM to any session whose `stopped` timeout has elapsed, and marks it as `paused`. Run it periodically via a launchd agent so idle sessions get paused even while no hook is firing.
+`a cc sweep` scans every session file once. For any `stopped` session whose timeout has elapsed, it (re-)sends SIGTERM as long as a live `claude` process still resolves for it; only once no process resolves does it mark the session `paused` (SIGTERM alone does not guarantee prompt exit). Run it periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
 | Command                | Description                                                       |
 | ---------------------- | ----------------------------------------------------------------- |

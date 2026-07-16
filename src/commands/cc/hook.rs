@@ -236,7 +236,11 @@ fn process_hook_event_impl(
     //
     // Paused sessions are preserved: when `a cc sweep` SIGTERMs a stopped
     // Claude Code process, its shutdown fires SessionEnd, which would
-    // otherwise clobber the Paused marker and break `a cc resume`.
+    // otherwise clobber the Paused marker and break `a cc resume`. Sessions
+    // still `Stopped` with `sweep_signaled` set get the same treatment:
+    // sweep re-sends SIGTERM without confirming Paused until a later sweep
+    // sees the pid disappear (see `sweep/mod.rs`), so this SessionEnd IS
+    // that confirmation, arriving before sweep's next pass gets to it.
     if event == HookEvent::SessionEnd {
         // When the session file is gone the pane_id is unrecoverable
         // (hook input only carries session_id), so we silently drop the
@@ -245,16 +249,22 @@ fn process_hook_event_impl(
         // a hook for the new session.
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
             let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
-            if session.status != SessionStatus::Paused {
+            if session.status == SessionStatus::Paused {
+                // No-op: already the sweep-preserved status handled below.
+            } else if session.sweep_signaled {
+                session.status = SessionStatus::Paused;
+                session.sweep_signaled = false;
+                store::save_session_to(sessions_dir, &session)?;
+            } else {
                 session.status = SessionStatus::Ended;
                 session.updated_at = Utc::now();
                 store::save_session_to(sessions_dir, &session)?;
-                // The user terminated this session (sweep flips status to
-                // Paused before SIGTERM, so reaching this branch means a
+                // The user terminated this session (neither already Paused
+                // nor awaiting sweep's pause confirmation, so this is a
                 // Ctrl-C / `/exit` / crash, not a sweep). No further events
-                // will arrive to auto-clear lingering notifications, so do it
-                // here. Paused sessions keep their notification so the user
-                // still sees it after `a cc resume`.
+                // will arrive to auto-clear lingering notifications, so do
+                // it here. Paused sessions keep their notification so the
+                // user still sees it after `a cc resume`.
                 side_effects.remove_notification_group(&input.session_id);
             }
             // Push the preserved status into the pane option so that sweep's
@@ -357,12 +367,19 @@ fn process_hook_event_impl(
                 ancestor_session_ids,
                 pending_bg_task_ids: BTreeSet::new(),
                 read_at: None,
+                sweep_signaled: false,
             }
         });
 
     // Update session fields
     session.cwd.clone_from(&input.cwd);
     session.updated_at = now;
+
+    // Any hook event other than SessionEnd means the process is still
+    // responding, so a pending sweep signal (see `Session::sweep_signaled`)
+    // is no longer relevant -- clear it so a later SessionEnd isn't
+    // mistaken for the confirmation of that earlier signal.
+    session.sweep_signaled = false;
 
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
     // Claude, its shutdown may fire Stop hooks that would overwrite Paused →
@@ -1430,6 +1447,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             read_at: None,
+            sweep_signaled: false,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1448,10 +1466,44 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_ended_clears_notification(SessionStatus::Running, vec!["end-sess".to_string()])]
-    #[case::sweep_paused_keeps_notification(SessionStatus::Paused, Vec::<String>::new())]
+    #[case::stop(HookEvent::Stop)]
+    #[case::pre_tool_use(HookEvent::PreToolUse)]
+    fn non_session_end_event_clears_sweep_signaled(#[case] event: HookEvent) {
+        // sweep_signaled marks "sweep sent SIGTERM and is awaiting
+        // confirmation via a later sweep pass or SessionEnd" (see
+        // `sweep/mod.rs`). Any other hook event firing means the process is
+        // still responding on its own, so that pending signal is stale and
+        // must not later be mistaken for a sweep-driven SessionEnd.
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut session = create_test_session(None);
+        session.session_id = "signaled-sess".to_string();
+        session.status = SessionStatus::Stopped;
+        session.sweep_signaled = true;
+        store::save_session_to(sessions_dir, &session).expect("save");
+
+        let input = create_test_input_with_session_and_source("signaled-sess", None, None);
+
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "signaled-sess")
+            .expect("load")
+            .expect("session exists");
+        assert!(
+            !reloaded.sweep_signaled,
+            "{event:?} should clear a stale sweep_signaled flag"
+        );
+    }
+
+    #[rstest]
+    #[case::user_ended_clears_notification(SessionStatus::Running, false, vec!["end-sess".to_string()])]
+    #[case::sweep_paused_keeps_notification(SessionStatus::Paused, false, Vec::<String>::new())]
+    #[case::sweep_signaled_stopped_keeps_notification(SessionStatus::Stopped, true, Vec::<String>::new())]
     fn session_end_clears_notification_only_when_not_paused(
         #[case] initial_status: SessionStatus,
+        #[case] sweep_signaled: bool,
         #[case] expected_removed: Vec<String>,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
@@ -1472,6 +1524,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             read_at: None,
+            sweep_signaled,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1496,16 +1549,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::sweep_paused_keeps_one(SessionStatus::Paused, SessionStatus::Paused)]
-    #[case::user_ended_clears(SessionStatus::Running, SessionStatus::Ended)]
-    #[case::user_ctrlc_from_stopped_clears(SessionStatus::Stopped, SessionStatus::Ended)]
+    #[case::sweep_paused_keeps_one(SessionStatus::Paused, false, SessionStatus::Paused)]
+    #[case::user_ended_clears(SessionStatus::Running, false, SessionStatus::Ended)]
+    #[case::user_ctrlc_from_stopped_clears(SessionStatus::Stopped, false, SessionStatus::Ended)]
+    #[case::sweep_signaled_stopped_confirms_paused(
+        SessionStatus::Stopped,
+        true,
+        SessionStatus::Paused
+    )]
     fn session_end_syncs_pane_status_preserving_paused(
         #[case] initial_status: SessionStatus,
+        #[case] sweep_signaled: bool,
         #[case] expected_synced: SessionStatus,
     ) {
-        // Sweep flips the status to Paused before SIGTERM, so a Paused
-        // session reaching SessionEnd is the sweep path; that Paused must
-        // be pushed through to tmux unchanged, not turned into Ended.
+        // A Paused session reaching SessionEnd is sweep's own shutdown path;
+        // that Paused must be pushed through to tmux unchanged. So is a
+        // still-Stopped session with sweep_signaled set: sweep sent SIGTERM
+        // to it without confirming Paused yet (see `sweep/mod.rs`), and this
+        // SessionEnd is that confirmation. Neither must turn into Ended.
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
@@ -1517,6 +1578,7 @@ mod tests {
         }));
         session.session_id = "pane-sess".to_string();
         session.status = initial_status;
+        session.sweep_signaled = sweep_signaled;
         store::save_session_to(sessions_dir, &session).expect("save");
 
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1766,6 +1828,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             read_at: None,
+            sweep_signaled: false,
         }
     }
 
@@ -2071,6 +2134,7 @@ mod tests {
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),
                 read_at: None,
+                sweep_signaled: false,
             }
         }
 

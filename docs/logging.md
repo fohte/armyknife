@@ -110,14 +110,15 @@ Stop hook (parent process):
 
 ### `cc sweep`
 
-| event                     | meaning                                           |
-| ------------------------- | ------------------------------------------------- |
-| `cc.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`) |
-| `cc.sweep.paused`         | Session was just SIGTERMed and flipped to Paused  |
-| `cc.sweep.dry_run_pause`  | Would have paused if not in `--dry-run`           |
-| `cc.sweep.no_pid`         | Pause was decided but no live `claude` pid found  |
-| `cc.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)    |
-| `cc.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / …)   |
+| event                     | meaning                                                          |
+| ------------------------- | ---------------------------------------------------------------- |
+| `cc.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)                |
+| `cc.sweep.signaled`       | Live pid still resolves; SIGTERM (re-)sent, status stays Stopped |
+| `cc.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                        |
+| `cc.sweep.paused`         | No resolvable pid; status confirmed Paused                       |
+| `cc.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`                |
+| `cc.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                   |
+| `cc.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)     |
 
 ## Debugging recipes
 
@@ -147,8 +148,9 @@ a cc sweep --dry-run --timeout 1s   # forces every Stopped session to be a candi
 jq -c 'select(.session == "<id>")' ~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 ```
 
-`cc.sweep.no_pid` means the session has no live `claude` (probably already
-exited); otherwise the session should appear in a `cc.sweep.dry_run_pause`.
+`cc.sweep.dry_run_pause` means the session has no live `claude` (probably
+already exited) and would be confirmed Paused; `cc.sweep.dry_run_signal`
+means a pid still resolves, so this pass can only (re-)send SIGTERM.
 
 ## Adding new events
 

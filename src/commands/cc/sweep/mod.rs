@@ -17,6 +17,12 @@
 //! exited -- does sweep flip the status to `Paused`. This repeats with no
 //! retry limit until the pid disappears.
 //!
+//! While a session waits in that signaled-but-not-yet-Paused window, it is
+//! marked `Session::sweep_signaled`. This lets the `SessionEnd` hook (see
+//! `hook.rs`) recognize a process exiting in response to sweep's own SIGTERM
+//! and confirm it as `Paused` there and then, rather than misreading the
+//! still-`Stopped` status as the user manually ending the session.
+//!
 //! Running sweep has no effect on sessions that are Running, WaitingInput,
 //! Paused, or Ended -- the pure decision function `auto_pause::decide_pause`
 //! owns the timeout policy; `PidResolver` owns the question of "which process
@@ -141,9 +147,13 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
-    // Otherwise only speak up when we actually did something, since the
-    // launchd-driven periodic invocation would otherwise flood the log.
-    if report.paused > 0 || report.signaled > 0 || args.dry_run {
+    // Otherwise only speak up when a pause was actually confirmed. A session
+    // stuck in the signaled-but-not-Paused window (see module docs) gets
+    // re-signaled on every sweep pass with no retry limit, so gating on
+    // `signaled` too would flood the log for exactly the stuck-process
+    // scenario this module exists to handle; the structured `tracing::info!`
+    // above already records every signal for anyone tailing the JSONL log.
+    if report.paused > 0 || args.dry_run {
         eprintln!(
             "[armyknife] cc sweep: scanned={} paused={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
@@ -330,7 +340,7 @@ where
                         session = %session.session_id,
                         pid = pid,
                     );
-                    signal_session(&session, pid, sender);
+                    signal_session(sessions_dir, session, pid, sender)?;
                     report.signaled += 1;
                 }
                 None => {
@@ -377,11 +387,21 @@ where
     Ok(report)
 }
 
-/// Sends SIGTERM to `pid`. Does not touch `session.status` -- SIGTERM is not
-/// proof the process has exited (see module docs), so the session stays
-/// `Stopped` until a later sweep observes that no `claude` pid resolves for
-/// it anymore (see `confirm_paused`).
-fn signal_session<S: SignalSender>(session: &Session, pid: u32, sender: &S) {
+/// Sends SIGTERM to `pid` and marks the session as `sweep_signaled`. Does not
+/// touch `session.status` -- SIGTERM is not proof the process has exited
+/// (see module docs), so the session stays `Stopped` until a later sweep
+/// observes that no `claude` pid resolves for it anymore (see
+/// `confirm_paused`).
+///
+/// `sweep_signaled` lets the `SessionEnd` hook (in `hook.rs`) recognize a
+/// process that exits in response to this signal instead of misreading the
+/// still-`Stopped` status as the user manually ending the session.
+fn signal_session<S: SignalSender>(
+    sessions_dir: &Path,
+    mut session: Session,
+    pid: u32,
+    sender: &S,
+) -> Result<()> {
     // Best-effort SIGTERM. ESRCH (process already gone) is not fatal --
     // resolve_pid raced with the process exiting; the next sweep will find
     // no resolvable pid and confirm the pause then.
@@ -395,6 +415,11 @@ fn signal_session<S: SignalSender>(session: &Session, pid: u32, sender: &S) {
             error = %e,
         );
     }
+
+    session.sweep_signaled = true;
+    store::save_session_to(sessions_dir, &session)?;
+
+    Ok(())
 }
 
 /// Flips the session status to Paused now that sweep can no longer resolve a
@@ -409,6 +434,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
     syncer: &T,
 ) -> Result<()> {
     session.status = SessionStatus::Paused;
+    session.sweep_signaled = false;
     store::save_session_to(sessions_dir, &session)?;
 
     syncer.sync(
@@ -509,6 +535,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
             read_at: None,
+            sweep_signaled: false,
         }
     }
 
@@ -550,6 +577,11 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
+        assert!(
+            reloaded.sweep_signaled,
+            "signaling should mark sweep_signaled so hook.rs's SessionEnd \
+             handler can recognize this shutdown as sweep's own"
+        );
     }
 
     #[rstest]
@@ -608,6 +640,10 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Paused);
+        assert!(
+            !reloaded.sweep_signaled,
+            "confirming Paused should clear sweep_signaled"
+        );
     }
 
     #[rstest]
@@ -1017,7 +1053,16 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 1);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
+        );
 
         let reloaded = store::load_session_from(&test_dir.path, "sess-dry-confirm")
             .expect("load")
@@ -1142,7 +1187,16 @@ mod tests {
         )
         .expect("sweep");
 
-        assert_eq!(report.signaled, 1);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 0,
+                signaled: 1,
+                waiting: 0,
+                active: 0,
+            }
+        );
         assert!(syncer.calls.borrow().is_empty());
     }
 

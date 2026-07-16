@@ -59,6 +59,17 @@ pub struct Session {
     /// `status == Stopped`; other statuses ignore it.
     #[serde(default)]
     pub read_at: Option<DateTime<Utc>>,
+    /// Set by `sweep::signal_session` when it (re-)sends SIGTERM without yet
+    /// confirming the session as `Paused` (a live `claude` pid still
+    /// resolved at signal time), so `status` stays `Stopped` in the
+    /// meantime. While set, a `SessionEnd` hook firing on the still-Stopped
+    /// session means the just-signaled process is exiting as a result of
+    /// that signal, not that the user ended it themselves -- see the
+    /// `SessionEnd` handler in `hook.rs`. Cleared by any other hook event
+    /// (the process is still responding, so sweep's earlier signal is no
+    /// longer relevant) and by `sweep::confirm_paused`.
+    #[serde(default)]
+    pub sweep_signaled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,6 +291,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             read_at,
+            sweep_signaled: false,
         }
     }
 
