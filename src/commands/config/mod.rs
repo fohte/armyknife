@@ -140,7 +140,7 @@ mod tests {
               fohte:
                 ai:
                   review:
-                    reviewers: [gemini]
+                    reviewers: [coderabbit]
         "});
         let v = cfg
             .get_value("orgs.fohte", Some("fohte/any"))
@@ -152,7 +152,7 @@ mod tests {
                 ai:
                   review:
                     reviewers:
-                    - gemini
+                    - coderabbit
             "}
         );
     }
@@ -164,7 +164,7 @@ mod tests {
               fohte:
                 ai:
                   review:
-                    reviewers: [gemini, devin]
+                    reviewers: [coderabbit, devin]
         "});
         let v = cfg
             .get_value("orgs.fohte.ai.review.reviewers", None)
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(
             yaml,
             indoc! {"
-                - gemini
+                - coderabbit
                 - devin
             "}
         );

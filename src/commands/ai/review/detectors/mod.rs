@@ -2,11 +2,9 @@
 
 mod coderabbit;
 mod devin;
-mod gemini;
 
 pub use coderabbit::CodeRabbitDetector;
 pub use devin::DevinDetector;
-pub use gemini::GeminiDetector;
 
 use super::detector::{
     CompletionDetection, DetectionClient, DetectionContext, ReviewDetector, StartDetection,
@@ -16,7 +14,6 @@ use chrono::{DateTime, Utc};
 
 /// Enum dispatch for ReviewDetector, allowing static dispatch without dyn.
 pub enum AnyDetector {
-    Gemini(GeminiDetector),
     Devin(DevinDetector),
     CodeRabbit(CodeRabbitDetector),
 }
@@ -24,7 +21,6 @@ pub enum AnyDetector {
 impl ReviewDetector for AnyDetector {
     fn bot_login(&self) -> &'static str {
         match self {
-            Self::Gemini(d) => d.bot_login(),
             Self::Devin(d) => d.bot_login(),
             Self::CodeRabbit(d) => d.bot_login(),
         }
@@ -32,7 +28,6 @@ impl ReviewDetector for AnyDetector {
 
     fn review_command(&self) -> Option<&'static str> {
         match self {
-            Self::Gemini(d) => d.review_command(),
             Self::Devin(d) => d.review_command(),
             Self::CodeRabbit(d) => d.review_command(),
         }
@@ -40,7 +35,6 @@ impl ReviewDetector for AnyDetector {
 
     fn unable_marker(&self) -> &'static str {
         match self {
-            Self::Gemini(d) => d.unable_marker(),
             Self::Devin(d) => d.unable_marker(),
             Self::CodeRabbit(d) => d.unable_marker(),
         }
@@ -48,7 +42,6 @@ impl ReviewDetector for AnyDetector {
 
     fn start_method(&self) -> StartDetection {
         match self {
-            Self::Gemini(d) => d.start_method(),
             Self::Devin(d) => d.start_method(),
             Self::CodeRabbit(d) => d.start_method(),
         }
@@ -56,7 +49,6 @@ impl ReviewDetector for AnyDetector {
 
     fn completion_method(&self) -> CompletionDetection {
         match self {
-            Self::Gemini(d) => d.completion_method(),
             Self::Devin(d) => d.completion_method(),
             Self::CodeRabbit(d) => d.completion_method(),
         }
@@ -64,7 +56,6 @@ impl ReviewDetector for AnyDetector {
 
     async fn is_started<C: DetectionClient>(&self, ctx: &DetectionContext<'_, C>) -> Result<bool> {
         match self {
-            Self::Gemini(d) => d.is_started(ctx).await,
             Self::Devin(d) => d.is_started(ctx).await,
             Self::CodeRabbit(d) => d.is_started(ctx).await,
         }
@@ -75,7 +66,6 @@ impl ReviewDetector for AnyDetector {
         ctx: &DetectionContext<'_, C>,
     ) -> Result<Option<DateTime<Utc>>> {
         match self {
-            Self::Gemini(d) => d.is_completed(ctx).await,
             Self::Devin(d) => d.is_completed(ctx).await,
             Self::CodeRabbit(d) => d.is_completed(ctx).await,
         }
@@ -87,7 +77,6 @@ impl ReviewDetector for AnyDetector {
         after: DateTime<Utc>,
     ) -> Result<Option<String>> {
         match self {
-            Self::Gemini(d) => d.find_unable_comment(ctx, after).await,
             Self::Devin(d) => d.find_unable_comment(ctx, after).await,
             Self::CodeRabbit(d) => d.find_unable_comment(ctx, after).await,
         }
@@ -98,7 +87,6 @@ impl ReviewDetector for AnyDetector {
         ctx: &DetectionContext<'_, C>,
     ) -> Result<()> {
         match self {
-            Self::Gemini(d) => d.request_review(ctx).await,
             Self::Devin(d) => d.request_review(ctx).await,
             Self::CodeRabbit(d) => d.request_review(ctx).await,
         }

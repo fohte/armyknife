@@ -921,7 +921,7 @@ pub mod mock {
         async fn find_latest_review_returns_none_when_empty() {
             let client = MockDetectionClient::new();
             let result = client
-                .find_latest_review("owner", "repo", 1, "gemini-code-assist")
+                .find_latest_review("owner", "repo", 1, "devin-ai-integration")
                 .await
                 .unwrap();
             assert!(result.is_none());
@@ -937,11 +937,11 @@ pub mod mock {
                 .to_utc();
 
             let client = MockDetectionClient::new()
-                .with_review(Reviewer::Gemini, t1)
-                .with_review(Reviewer::Gemini, t2);
+                .with_review(Reviewer::Devin, t1)
+                .with_review(Reviewer::Devin, t2);
 
             let result = client
-                .find_latest_review("owner", "repo", 1, "gemini-code-assist")
+                .find_latest_review("owner", "repo", 1, "devin-ai-integration")
                 .await
                 .unwrap();
 
@@ -965,8 +965,8 @@ pub mod mock {
                 .to_utc();
 
             let client = MockDetectionClient::new().with_comment(
-                "gemini-code-assist",
-                "Gemini is unable to review this PR",
+                "devin-ai-integration",
+                "Devin is unable to review this PR",
                 comment_time,
             );
 
@@ -975,8 +975,8 @@ pub mod mock {
                     "owner",
                     "repo",
                     1,
-                    "gemini-code-assist",
-                    "Gemini is unable to",
+                    "devin-ai-integration",
+                    "Devin is unable to",
                     start_time,
                 )
                 .await
@@ -989,7 +989,7 @@ pub mod mock {
         async fn post_comment_tracks_calls() {
             let client = MockDetectionClient::new();
             client
-                .post_comment("owner", "repo", 42, "/gemini review")
+                .post_comment("owner", "repo", 42, "@coderabbitai review")
                 .await
                 .unwrap();
 
@@ -1001,7 +1001,7 @@ pub mod mock {
                     owner: "owner".to_string(),
                     repo: "repo".to_string(),
                     pr_number: 42,
-                    body: "/gemini review".to_string(),
+                    body: "@coderabbitai review".to_string(),
                 }
             );
         }

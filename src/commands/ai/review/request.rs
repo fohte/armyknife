@@ -24,7 +24,7 @@ pub struct RequestArgs {
     /// Reviewers to request (can specify multiple, waits for all to complete).
     /// Reviewers that don't support request (like Devin) will be waited for without requesting.
     /// Defaults to the configured reviewer set for the repo's org, or
-    /// `[gemini, devin]` if no config applies.
+    /// `[devin]` if no config applies.
     #[arg(short = 'r', long = "reviewer", value_enum)]
     pub reviewers: Option<Vec<Reviewer>>,
 
@@ -155,7 +155,7 @@ mod tests {
         RequestArgs {
             pr: Some(1),
             repo: Some("owner/repo".to_string()),
-            reviewers: Some(vec![Reviewer::Gemini, Reviewer::Devin]),
+            reviewers: Some(vec![Reviewer::CodeRabbit, Reviewer::Devin]),
             interval,
             timeout,
         }
@@ -169,14 +169,17 @@ mod tests {
                 // No existing reviews, both reviews appear after polling
                 // Skip 2 calls: initial check for both reviewers
                 MockDetectionClient::new()
-                    .with_review(Reviewer::Gemini, now + ChronoDuration::milliseconds(100))
+                    .with_review(
+                        Reviewer::CodeRabbit,
+                        now + ChronoDuration::milliseconds(100),
+                    )
                     .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
                     .skip_first_n_review_calls(2)
             }
             "already_reviewed_both" => {
                 // Both reviews exist, commit older than reviews -> skip
                 MockDetectionClient::new()
-                    .with_review(Reviewer::Gemini, now - ChronoDuration::hours(1))
+                    .with_review(Reviewer::CodeRabbit, now - ChronoDuration::hours(1))
                     .with_review(Reviewer::Devin, now - ChronoDuration::hours(1))
                     .with_latest_commit_time(now - ChronoDuration::hours(2))
             }
@@ -212,8 +215,8 @@ mod tests {
         let now = Utc::now();
         let client = MockDetectionClient::new()
             .with_comment(
-                "gemini-code-assist",
-                "Gemini is unable to review this PR.",
+                "coderabbitai",
+                "## Review skipped",
                 now + ChronoDuration::milliseconds(100),
             )
             .with_comment(
@@ -230,12 +233,12 @@ mod tests {
 
     #[tokio::test]
     async fn request_skips_unable_reviewer_and_waits_for_other() {
-        // Gemini posts "unable" during polling, but Devin completes review
+        // CodeRabbit posts "unable" during polling, but Devin completes review
         let now = Utc::now();
         let client = MockDetectionClient::new()
             .with_comment(
-                "gemini-code-assist",
-                "Gemini is unable to review this PR.",
+                "coderabbitai",
+                "## Review skipped",
                 now + ChronoDuration::milliseconds(100),
             )
             .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
@@ -248,15 +251,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_posts_gemini_command_only_when_rereview_needed() {
-        // When Gemini has an old review and new commits exist,
-        // only post command for Gemini (Devin doesn't support command-based requests)
+    async fn request_posts_coderabbit_command_only_when_rereview_needed() {
+        // When CodeRabbit has an old review and new commits exist,
+        // only post command for CodeRabbit (Devin doesn't support command-based requests)
         let now = Utc::now();
         let client = MockDetectionClient::new()
-            // Only Gemini has an old review
-            .with_review(Reviewer::Gemini, now - ChronoDuration::hours(2))
+            // Only CodeRabbit has an old review
+            .with_review(Reviewer::CodeRabbit, now - ChronoDuration::hours(2))
             // New reviews appear after polling (both reviewers)
-            .with_review(Reviewer::Gemini, now + ChronoDuration::seconds(1))
+            .with_review(Reviewer::CodeRabbit, now + ChronoDuration::seconds(1))
             .with_review(Reviewer::Devin, now + ChronoDuration::seconds(1))
             // New commit after old review
             .with_latest_commit_time(now - ChronoDuration::hours(1))
@@ -269,9 +272,9 @@ mod tests {
 
         assert!(result.is_ok());
         let posted = client.posted_comments.lock().unwrap();
-        // Only Gemini gets a comment (it has an old review and supports command-based requests)
+        // Only CodeRabbit gets a comment (it has an old review and supports command-based requests)
         assert_eq!(posted.len(), 1);
-        assert_eq!(posted[0].body, "/gemini review");
+        assert_eq!(posted[0].body, "@coderabbitai review");
     }
 
     #[tokio::test]
@@ -279,7 +282,10 @@ mod tests {
         // Both reviewers must complete for success (not just one)
         let now = Utc::now();
         let client = MockDetectionClient::new()
-            .with_review(Reviewer::Gemini, now + ChronoDuration::milliseconds(100))
+            .with_review(
+                Reviewer::CodeRabbit,
+                now + ChronoDuration::milliseconds(100),
+            )
             .with_review(Reviewer::Devin, now + ChronoDuration::milliseconds(100))
             .skip_first_n_review_calls(2); // Skip initial check for both reviewers
 
