@@ -54,12 +54,14 @@ pub struct Session {
     /// Output file paths for in-flight Task-tool subagents launched in this
     /// session (`Task` with `run_in_background: true`) whose completion has
     /// not yet been observed. Same rationale as `pending_bg_task_ids` (the
-    /// Stop hook fires synthetically right after launch), but there is no
-    /// completion hook to clear these eagerly -- Claude Code documents no
-    /// confirmed hook firing for a background-launched subagent's completion
-    /// -- so entries are only removed lazily by `sweep`'s lsof-based liveness
-    /// probe (see `agent_task.rs`) once Claude Code closes the file. Consumed
-    /// by `auto_compact` and `sweep` exactly like `pending_bg_task_ids`.
+    /// Stop hook fires synthetically right after launch). Claude Code v2.1.145+
+    /// exposes a `background_tasks` array on `Stop`/`SubagentStop` input that
+    /// could report completion directly, but this codebase doesn't consume it
+    /// (`SubagentStop` isn't wired, and relying on it would raise the minimum
+    /// supported Claude Code version) -- so entries here are only removed
+    /// lazily by `sweep`'s lsof-based liveness probe (see `agent_task.rs`)
+    /// once Claude Code closes the file. Consumed by `auto_compact` and
+    /// `sweep` exactly like `pending_bg_task_ids`.
     #[serde(default)]
     pub pending_agent_task_outputs: BTreeSet<PathBuf>,
     /// Timestamp the user last focused this session via `a cc focus`.

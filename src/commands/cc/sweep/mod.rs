@@ -303,26 +303,30 @@ where
             continue;
         }
 
-        if sweep_pending_bg_tasks(&mut session, bg_probe) {
+        let bg_tasks_swept = sweep_pending_bg_tasks(&mut session, bg_probe);
+        if bg_tasks_swept {
             tracing::info!(
                 event = "cc.sweep.bg_task.swept",
                 session = %session.session_id,
                 remaining = session.pending_bg_task_ids.len(),
             );
-            if !dry_run {
-                store::save_session_to(sessions_dir, &session)?;
-            }
         }
 
-        if sweep_pending_agent_tasks(&mut session, agent_probe) {
+        let agent_tasks_swept = sweep_pending_agent_tasks(&mut session, agent_probe);
+        if agent_tasks_swept {
             tracing::info!(
                 event = "cc.sweep.agent_task.swept",
                 session = %session.session_id,
                 remaining = session.pending_agent_task_outputs.len(),
             );
-            if !dry_run {
-                store::save_session_to(sessions_dir, &session)?;
-            }
+        }
+
+        // Single save covering both sweeps -- saving after each separately
+        // would take the file lock twice and, without an intervening reload,
+        // let the second save clobber a concurrent hook write that landed in
+        // between with a now-stale copy of `session`.
+        if (bg_tasks_swept || agent_tasks_swept) && !dry_run {
+            store::save_session_to(sessions_dir, &session)?;
         }
 
         report.scanned += 1;
@@ -1043,8 +1047,9 @@ mod tests {
     fn stale_pending_agent_task_is_dropped_and_session_signaled(test_dir: TestDir) {
         // The subagent's output file is no longer held open (Claude Code
         // closed it on completion) but the conversation never observed that
-        // -- there is no completion hook for background-launched Task
-        // subagents (see `agent_task.rs`). Sweep must drop the stale path
+        // -- see `agent_task.rs`'s liveness-probe design (this codebase
+        // doesn't consume the `background_tasks` array on `Stop`, which
+        // would report completion directly). Sweep must drop the stale path
         // and then proceed through the normal pause-decision flow.
         let old = Utc::now() - TimeDelta::hours(1);
         let mut session = make_session("stale-agent", SessionStatus::Stopped, old);
@@ -1054,8 +1059,8 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        // No paths in the alive set -> probe treats "dead-agent.output" as dead.
         let probe = FakeProbe::with_pids(&[("stale-agent", 4242)]);
+        // AllDeadAgentTaskProbe below treats "dead-agent.output" as dead.
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(60),

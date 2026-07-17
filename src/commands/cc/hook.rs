@@ -977,9 +977,9 @@ fn build_subtitle(session: &Session) -> Option<String> {
 ///   purpose is to terminate the bg task.
 /// - `Task` launch with `run_in_background: true`: tool_response carries
 ///   `outputFile` alongside `"status": "async_launched"`; insert the path.
-///   Unlike Bash bg tasks there is no completion-hook removal path here —
-///   see `pending_agent_task_outputs`'s doc comment — entries are only
-///   dropped lazily by sweep's liveness probe.
+///   Unlike Bash bg tasks there is no hook-based removal path here — see
+///   `pending_agent_task_outputs`'s doc comment — entries are only dropped
+///   lazily by sweep's liveness probe.
 fn update_pending_bg_tasks(session: &mut Session, input: &HookInput) {
     if let Some(bg_id) = input.background_task_id() {
         session.pending_bg_task_ids.insert(bg_id.to_string());
@@ -1624,15 +1624,21 @@ mod tests {
         );
     }
 
-    /// Runs a PostToolUse hook with the given initial pending-id set and the
-    /// given raw JSON payload, then returns the resulting pending set.
-    fn run_post_tool_use(initial: &[&str], payload: &str) -> BTreeSet<String> {
+    /// Runs a PostToolUse hook against a freshly-seeded session and returns
+    /// the reloaded session, so callers can inspect whichever pending-task
+    /// field they're testing. `setup` seeds the initial pending set on the
+    /// session before the hook runs.
+    fn run_post_tool_use_session(
+        session_id: &str,
+        setup: impl FnOnce(&mut Session),
+        payload: &str,
+    ) -> Session {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
         let mut existing = create_test_session(None);
-        existing.session_id = "bg-sess".to_string();
-        existing.pending_bg_task_ids = initial.iter().map(|s| (*s).to_string()).collect();
+        existing.session_id = session_id.to_string();
+        setup(&mut existing);
         store::save_session_to(sessions_dir, &existing).expect("save");
 
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
@@ -1644,10 +1650,20 @@ mod tests {
         )
         .expect("hook should succeed");
 
-        store::load_session_from(sessions_dir, "bg-sess")
+        store::load_session_from(sessions_dir, session_id)
             .expect("load")
             .expect("session exists")
-            .pending_bg_task_ids
+    }
+
+    /// Runs a PostToolUse hook with the given initial pending-id set and the
+    /// given raw JSON payload, then returns the resulting pending set.
+    fn run_post_tool_use(initial: &[&str], payload: &str) -> BTreeSet<String> {
+        run_post_tool_use_session(
+            "bg-sess",
+            |s| s.pending_bg_task_ids = set_of(initial),
+            payload,
+        )
+        .pending_bg_task_ids
     }
 
     fn set_of(ids: &[&str]) -> BTreeSet<String> {
@@ -1740,27 +1756,12 @@ mod tests {
     /// Runs a PostToolUse hook with the given initial pending agent-output
     /// set and the given raw JSON payload, then returns the resulting set.
     fn run_post_tool_use_agent(initial: &[&str], payload: &str) -> BTreeSet<PathBuf> {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let sessions_dir = temp_dir.path();
-
-        let mut existing = create_test_session(None);
-        existing.session_id = "agent-sess".to_string();
-        existing.pending_agent_task_outputs = initial.iter().map(PathBuf::from).collect();
-        store::save_session_to(sessions_dir, &existing).expect("save");
-
-        let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
-        process_hook_event_impl(
-            HookEvent::PostToolUse,
-            input,
-            sessions_dir,
-            &SideEffects::none(),
+        run_post_tool_use_session(
+            "agent-sess",
+            |s| s.pending_agent_task_outputs = path_set_of(initial),
+            payload,
         )
-        .expect("hook should succeed");
-
-        store::load_session_from(sessions_dir, "agent-sess")
-            .expect("load")
-            .expect("session exists")
-            .pending_agent_task_outputs
+        .pending_agent_task_outputs
     }
 
     fn path_set_of(paths: &[&str]) -> BTreeSet<PathBuf> {
@@ -1774,9 +1775,11 @@ mod tests {
         r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"async_launched","outputFile":"/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"}}"#,
         &["/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"],
     )]
-    // A synchronous (non-backgrounded) Task completion ships an array of
-    // content blocks, not an object with status/outputFile.
-    #[case::sync_task_completion_does_not_insert(
+    // tool_response shape varies per tool and Anthropic does not document a
+    // schema (anthropics/claude-code#3671). An array-shaped payload (e.g.
+    // from an MCP tool matched as "Task" by a custom matcher) must
+    // deserialize cleanly and leave the set alone.
+    #[case::mcp_style_array_response_does_not_insert(
         &[],
         r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":[{"type":"text","text":"done"}]}"#,
         &[],

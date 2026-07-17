@@ -1,16 +1,17 @@
 //! Liveness probe for Claude Code Task-tool (Agent) background subagents.
 //!
 //! Mirrors `bg_task.rs`'s approach for Bash `run_in_background` tasks, but
-//! for subagents launched via the Task tool the same way. Unlike Bash bg
-//! tasks, there is no confirmed completion hook for a background-launched
-//! subagent (`SubagentStop` firing for a background launch is not documented
-//! -- see https://code.claude.com/docs/en/sub-agents.md), so removal is
-//! driven purely by this liveness probe rather than by any eager hook-based
-//! removal. Claude Code holds the subagent's output file open for writing
-//! until it exits, exactly like a Bash bg task, so the same `lsof -t`
-//! technique applies -- the only difference is the file path is given
-//! directly by `tool_response.outputFile` rather than reconstructed from an
-//! id.
+//! for subagents launched via the Task tool the same way. This codebase does
+//! not wire `SubagentStop` or read the `background_tasks` array Claude Code
+//! v2.1.145+ exposes on `Stop`/`SubagentStop` input (either of which could
+//! report completion directly) -- doing so would raise the minimum
+//! supported Claude Code version and is left for a follow-up. So removal
+//! here is driven purely by this liveness probe rather than by any
+//! hook-based signal. Claude Code holds the subagent's output file open for
+//! writing until it exits, exactly like a Bash bg task, so the same
+//! `lsof -t` technique applies -- the only difference is the file path is
+//! given directly by `tool_response.outputFile` rather than reconstructed
+//! from an id.
 
 use std::path::Path;
 
