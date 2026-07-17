@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.239](https://github.com/fohte/armyknife/compare/v0.1.238...v0.1.239) (2026-07-17)
+
+
+### Features
+
+* **ai/review:** drop Gemini Code Assist reviewer ([#664](https://github.com/fohte/armyknife/issues/664)) ([75296be](https://github.com/fohte/armyknife/commit/75296be487a310813d893ab7e8c117292fa5b11a))
+
 ## [0.1.238](https://github.com/fohte/armyknife/compare/v0.1.237...v0.1.238) (2026-07-17)
 
 
