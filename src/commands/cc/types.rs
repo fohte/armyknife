@@ -51,6 +51,17 @@ pub struct Session {
     /// reports completion or a `KillShell` PostToolUse fires.
     #[serde(default)]
     pub pending_bg_task_ids: BTreeSet<String>,
+    /// Output file paths for in-flight Task-tool subagents launched in this
+    /// session (`Task` with `run_in_background: true`) whose completion has
+    /// not yet been observed. Same rationale as `pending_bg_task_ids` (the
+    /// Stop hook fires synthetically right after launch), but there is no
+    /// completion hook to clear these eagerly -- Claude Code documents no
+    /// confirmed hook firing for a background-launched subagent's completion
+    /// -- so entries are only removed lazily by `sweep`'s lsof-based liveness
+    /// probe (see `agent_task.rs`) once Claude Code closes the file. Consumed
+    /// by `auto_compact` and `sweep` exactly like `pending_bg_task_ids`.
+    #[serde(default)]
+    pub pending_agent_task_outputs: BTreeSet<PathBuf>,
     /// Timestamp the user last focused this session via `a cc focus`.
     /// `None` means the session has never been focused since its last
     /// transition to `Stopped` (i.e. unread); `Some(_)` means read.
@@ -222,6 +233,21 @@ impl HookInput {
     pub fn bash_output_status(&self) -> Option<&str> {
         self.tool_response.as_ref()?.get("status")?.as_str()
     }
+
+    /// Output file path for a `Task` tool subagent launched with
+    /// `run_in_background: true`. Present in `tool_response` alongside
+    /// `"status": "async_launched"` (see
+    /// https://code.claude.com/docs/en/hooks.md, PreToolUse input > Agent).
+    /// Like the background bg task itself, the subagent fires no completion
+    /// hook, so this is the only signal armyknife has that the immediately
+    /// following Stop is synthetic rather than the end of a real turn.
+    pub fn agent_task_output_file(&self) -> Option<&str> {
+        let response = self.tool_response.as_ref()?;
+        if response.get("status")?.as_str()? != "async_launched" {
+            return None;
+        }
+        response.get("outputFile")?.as_str()
+    }
 }
 
 /// Tool input data from pre-tool-use events.
@@ -290,6 +316,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at,
             sweep_signaled: false,
         }

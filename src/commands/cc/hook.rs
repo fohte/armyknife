@@ -366,6 +366,7 @@ fn process_hook_event_impl(
                 label: env.session_label.clone(),
                 ancestor_session_ids,
                 pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_outputs: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
@@ -963,7 +964,8 @@ fn build_subtitle(session: &Session) -> Option<String> {
     Some(truncate_string(&subtitle, 50))
 }
 
-/// Updates `session.pending_bg_task_ids` based on a `PostToolUse` event.
+/// Updates `session.pending_bg_task_ids` / `pending_agent_task_outputs`
+/// based on a `PostToolUse` event.
 ///
 /// - `Bash` launch with `run_in_background: true`: tool_response carries
 ///   `backgroundTaskId`; insert it.
@@ -973,6 +975,11 @@ fn build_subtitle(session: &Session) -> Option<String> {
 ///   the call-site comment for why stale ids are acceptable.
 /// - `KillShell`: shell id is removed unconditionally; the tool's whole
 ///   purpose is to terminate the bg task.
+/// - `Task` launch with `run_in_background: true`: tool_response carries
+///   `outputFile` alongside `"status": "async_launched"`; insert the path.
+///   Unlike Bash bg tasks there is no completion-hook removal path here —
+///   see `pending_agent_task_outputs`'s doc comment — entries are only
+///   dropped lazily by sweep's liveness probe.
 fn update_pending_bg_tasks(session: &mut Session, input: &HookInput) {
     if let Some(bg_id) = input.background_task_id() {
         session.pending_bg_task_ids.insert(bg_id.to_string());
@@ -995,6 +1002,13 @@ fn update_pending_bg_tasks(session: &mut Session, input: &HookInput) {
         Some("KillShell") => {
             if let Some(shell_id) = input.shell_id() {
                 session.pending_bg_task_ids.remove(shell_id);
+            }
+        }
+        Some("Task") => {
+            if let Some(output_file) = input.agent_task_output_file() {
+                session
+                    .pending_agent_task_outputs
+                    .insert(PathBuf::from(output_file));
             }
         }
         _ => {}
@@ -1446,6 +1460,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         };
@@ -1523,6 +1538,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled,
         };
@@ -1721,6 +1737,71 @@ mod tests {
         assert_eq!(run_post_tool_use(initial, payload), set_of(expected));
     }
 
+    /// Runs a PostToolUse hook with the given initial pending agent-output
+    /// set and the given raw JSON payload, then returns the resulting set.
+    fn run_post_tool_use_agent(initial: &[&str], payload: &str) -> BTreeSet<PathBuf> {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "agent-sess".to_string();
+        existing.pending_agent_task_outputs = initial.iter().map(PathBuf::from).collect();
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        store::load_session_from(sessions_dir, "agent-sess")
+            .expect("load")
+            .expect("session exists")
+            .pending_agent_task_outputs
+    }
+
+    fn path_set_of(paths: &[&str]) -> BTreeSet<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
+    #[rstest]
+    // Task launch with outputFile + async_launched status inserts the path.
+    #[case::inserts_output_file(
+        &[],
+        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"async_launched","outputFile":"/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"}}"#,
+        &["/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"],
+    )]
+    // A synchronous (non-backgrounded) Task completion ships an array of
+    // content blocks, not an object with status/outputFile.
+    #[case::sync_task_completion_does_not_insert(
+        &[],
+        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":[{"type":"text","text":"done"}]}"#,
+        &[],
+    )]
+    #[case::non_async_status_does_not_insert(
+        &[],
+        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"completed"}}"#,
+        &[],
+    )]
+    #[case::non_task_tool_does_not_change(
+        &["/tmp/existing.output"],
+        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Read","tool_response":{"file_path":"/tmp/x","content":"hi"}}"#,
+        &["/tmp/existing.output"],
+    )]
+    fn post_tool_use_updates_pending_agent_task_outputs(
+        #[case] initial: &[&str],
+        #[case] payload: &str,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            run_post_tool_use_agent(initial, payload),
+            path_set_of(expected)
+        );
+    }
+
     #[test]
     fn stop_does_not_clear_pending_bg_tasks() {
         // Synthetic Stop after a bg launch must leave the pending set
@@ -1827,6 +1908,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -2133,6 +2215,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_outputs: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }

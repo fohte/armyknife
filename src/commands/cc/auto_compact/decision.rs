@@ -25,11 +25,13 @@ pub enum CompactDecision {
     /// paused it, or it ended). Cancelling silently is the right move because
     /// either the user resumed work or another worker handled the session.
     NotStopped,
-    /// Session is Stopped but has at least one background task in flight.
-    /// Compacting would SIGTERM the live `claude` and kill the bg task with
-    /// it. Workers scheduled by an earlier turn (before the bg launch) reach
-    /// this branch because the post-bg-launch synthetic Stop suppresses the
-    /// spawn of a *new* worker but cannot retroactively cancel the prior one.
+    /// Session is Stopped but has at least one background task in flight --
+    /// either a Bash `run_in_background: true` command or a Task-tool
+    /// subagent launched the same way. Compacting would SIGTERM the live
+    /// `claude` and kill it with the rest. Workers scheduled by an earlier
+    /// turn (before the launch) reach this branch because the post-launch
+    /// synthetic Stop suppresses the spawn of a *new* worker but cannot
+    /// retroactively cancel the prior one.
     BgTaskPending,
     /// The text inside the Claude Code TUI input box changed between
     /// arm time (Stop hook fired) and wake time (idle_timeout elapsed),
@@ -102,7 +104,9 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::NotStopped;
     }
 
-    if !inputs.session.pending_bg_task_ids.is_empty() {
+    if !inputs.session.pending_bg_task_ids.is_empty()
+        || !inputs.session.pending_agent_task_outputs.is_empty()
+    {
         return CompactDecision::BgTaskPending;
     }
 
@@ -164,6 +168,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
+            pending_agent_task_outputs: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -276,7 +281,11 @@ mod tests {
     }
 
     #[rstest]
-    fn pending_bg_task_aborts() {
+    #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
+    #[case::agent_task(|s: &mut Session| {
+        s.pending_agent_task_outputs.insert(PathBuf::from("/tmp/agent-1.output"));
+    })]
+    fn pending_bg_task_aborts(#[case] populate: fn(&mut Session)) {
         // A worker scheduled by an earlier Stop wakes up after the user has
         // launched a bg task in a later turn. The post-bg-launch synthetic
         // Stop suppresses spawning a *new* worker but cannot retroactively
@@ -284,7 +293,7 @@ mod tests {
         // it SIGTERMs the live claude and kills the bg task with it.
         let now = Utc::now();
         let mut session = stopped_session(now - TimeDelta::hours(1));
-        session.pending_bg_task_ids.insert("bg-1".to_string());
+        populate(&mut session);
         let decision = decide_compact(inputs(&session, now, Duration::from_secs(60)));
         assert_eq!(decision, CompactDecision::BgTaskPending);
     }

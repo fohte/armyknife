@@ -632,6 +632,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }

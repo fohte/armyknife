@@ -38,20 +38,24 @@ pub struct LsofBgTaskProbe;
 
 impl BgTaskProbe for LsofBgTaskProbe {
     fn is_alive(&self, cwd: &Path, session_id: &str, bg_id: &str) -> bool {
-        let path = bg_task_output_path(cwd, session_id, bg_id);
-        if !path.exists() {
-            // fail-open: the output file may not have been created yet in
-            // the brief window between PostToolUse hook and Claude Code
-            // opening the file. Treat absence as alive so a still-running
-            // task is never dropped.
-            return true;
-        }
-        match command::new("lsof").arg("-t").arg("--").arg(&path).output() {
-            Ok(out) => out.status.success() && !out.stdout.trim_ascii().is_empty(),
-            // fail-open on lsof error so a transient failure does not drop
-            // a live bg id.
-            Err(_) => true,
-        }
+        file_is_held_open(&bg_task_output_path(cwd, session_id, bg_id))
+    }
+}
+
+/// True if any process still holds `path` open for writing (`lsof -t`).
+/// Shared by `LsofBgTaskProbe` (Bash `run_in_background` tasks, path
+/// reconstructed from cwd/session_id/bg_id) and `agent_task::LsofAgentTaskProbe`
+/// (Task-tool subagents, path given directly by `tool_response.outputFile`).
+/// Fail-open: a path that doesn't exist yet (the brief window between
+/// PostToolUse and Claude Code opening the file) or an lsof error is treated
+/// as alive so a still-running task is never dropped from the pending set.
+pub(super) fn file_is_held_open(path: &Path) -> bool {
+    if !path.exists() {
+        return true;
+    }
+    match command::new("lsof").arg("-t").arg("--").arg(path).output() {
+        Ok(out) => out.status.success() && !out.stdout.trim_ascii().is_empty(),
+        Err(_) => true,
     }
 }
 
@@ -151,6 +155,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: bg_ids.iter().map(|s| s.to_string()).collect(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
