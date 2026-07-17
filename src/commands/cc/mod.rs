@@ -1,3 +1,4 @@
+pub(crate) mod agent_task;
 mod auto_compact;
 pub(crate) mod auto_pause;
 pub(crate) mod bg_task;

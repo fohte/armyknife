@@ -24,10 +24,11 @@ pub enum PauseDecision {
     NotStopped,
     /// Session is Stopped but the timeout has not elapsed yet.
     NotYetElapsed,
-    /// Session is Stopped but has at least one background task (Bash
-    /// `run_in_background: true`) that has not yet reported completion.
-    /// The Stop hook fires synthetically right after a bg launch, so a
-    /// Stopped status here does not mean the user is idle.
+    /// Session is Stopped but has at least one background task in flight --
+    /// either a Bash `run_in_background: true` command or a Task-tool
+    /// subagent launched the same way -- that has not yet reported
+    /// completion. The Stop hook fires synthetically right after the launch,
+    /// so a Stopped status here does not mean the user is idle.
     BgTaskPending,
 }
 
@@ -56,7 +57,7 @@ pub fn decide_pause_with_effective(
         return PauseDecision::NotStopped;
     }
 
-    if !session.pending_bg_task_ids.is_empty() {
+    if !session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_outputs.is_empty() {
         return PauseDecision::BgTaskPending;
     }
 
@@ -182,6 +183,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_outputs: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -218,10 +220,14 @@ mod tests {
     }
 
     #[rstest]
-    fn decide_pause_skips_when_bg_task_pending() {
+    #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
+    #[case::agent_task(|s: &mut Session| {
+        s.pending_agent_task_outputs.insert(PathBuf::from("/tmp/agent-1.output"));
+    })]
+    fn decide_pause_skips_when_bg_task_pending(#[case] populate: fn(&mut Session)) {
         let now = Utc::now();
         let mut session = stopped_session(now - TimeDelta::hours(1));
-        session.pending_bg_task_ids.insert("bg-1".to_string());
+        populate(&mut session);
         assert_eq!(
             decide_pause(&session, now, Duration::from_secs(60)),
             PauseDecision::BgTaskPending
