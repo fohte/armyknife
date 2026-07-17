@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.238](https://github.com/fohte/armyknife/compare/v0.1.237...v0.1.238) (2026-07-17)
+
+
+### Bug Fixes
+
+* **cc:** don't SIGTERM sessions running a background subagent ([#751](https://github.com/fohte/armyknife/issues/751)) ([a43a483](https://github.com/fohte/armyknife/commit/a43a4834f8f63d650ed4da9219d6843aa460d209))
+
 ## [0.1.237](https://github.com/fohte/armyknife/compare/v0.1.236...v0.1.237) (2026-07-16)
 
 
