@@ -99,7 +99,7 @@ mod tests {
     use chrono::Utc;
     use rstest::rstest;
 
-    use super::test_support::{AllDeadAgentTaskProbe, FakeAgentTaskProbe};
+    use super::test_support::FakeAgentTaskProbe;
     use super::*;
     use crate::commands::cc::types::SessionStatus;
 
@@ -126,36 +126,33 @@ mod tests {
     }
 
     #[rstest]
-    fn sweep_is_noop_when_no_pending() {
-        let mut session = make_session(&[]);
-        let probe = AllDeadAgentTaskProbe;
-        assert!(!sweep_pending_agent_tasks(&mut session, &probe));
-        assert!(session.pending_agent_task_outputs.is_empty());
-    }
-
-    #[rstest]
-    fn sweep_removes_all_dead_output_files() {
-        let mut session = make_session(&["/tmp/a.output", "/tmp/b.output"]);
-        let probe = AllDeadAgentTaskProbe;
-        assert!(sweep_pending_agent_tasks(&mut session, &probe));
-        assert!(session.pending_agent_task_outputs.is_empty());
-    }
-
-    #[rstest]
-    fn sweep_retains_alive_output_files() {
-        let mut session = make_session(&["/tmp/a.output", "/tmp/b.output", "/tmp/c.output"]);
-        let probe = FakeAgentTaskProbe::with_alive(&["/tmp/b.output"]);
-        assert!(sweep_pending_agent_tasks(&mut session, &probe));
-        let remaining: BTreeSet<PathBuf> =
-            session.pending_agent_task_outputs.iter().cloned().collect();
-        assert_eq!(remaining, BTreeSet::from([PathBuf::from("/tmp/b.output")]));
-    }
-
-    #[rstest]
-    fn sweep_returns_false_when_nothing_changed() {
-        let mut session = make_session(&["/tmp/a.output", "/tmp/b.output"]);
-        let probe = FakeAgentTaskProbe::with_alive(&["/tmp/a.output", "/tmp/b.output"]);
-        assert!(!sweep_pending_agent_tasks(&mut session, &probe));
-        assert_eq!(session.pending_agent_task_outputs.len(), 2);
+    #[case::noop_when_no_pending(&[], &[], false, &[])]
+    #[case::removes_all_dead(&["/tmp/a.output", "/tmp/b.output"], &[], true, &[])]
+    #[case::retains_alive(
+        &["/tmp/a.output", "/tmp/b.output", "/tmp/c.output"],
+        &["/tmp/b.output"],
+        true,
+        &["/tmp/b.output"]
+    )]
+    #[case::false_when_nothing_changed(
+        &["/tmp/a.output", "/tmp/b.output"],
+        &["/tmp/a.output", "/tmp/b.output"],
+        false,
+        &["/tmp/a.output", "/tmp/b.output"]
+    )]
+    fn sweep_pending_agent_tasks_cases(
+        #[case] initial: &[&str],
+        #[case] alive: &[&str],
+        #[case] expected_changed: bool,
+        #[case] expected_remaining: &[&str],
+    ) {
+        let mut session = make_session(initial);
+        let probe = FakeAgentTaskProbe::with_alive(alive);
+        assert_eq!(
+            sweep_pending_agent_tasks(&mut session, &probe),
+            expected_changed
+        );
+        let expected: BTreeSet<PathBuf> = expected_remaining.iter().map(PathBuf::from).collect();
+        assert_eq!(session.pending_agent_task_outputs, expected);
     }
 }
