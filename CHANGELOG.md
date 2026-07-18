@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.240](https://github.com/fohte/armyknife/compare/v0.1.239...v0.1.240) (2026-07-18)
+
+
+### Bug Fixes
+
+* **cc:** stop sweep from killing sessions with an in-flight background task ([#754](https://github.com/fohte/armyknife/issues/754)) ([26e206c](https://github.com/fohte/armyknife/commit/26e206ca4159acd17295864d93ac587d5303b65b))
+
 ## [0.1.239](https://github.com/fohte/armyknife/compare/v0.1.238...v0.1.239) (2026-07-17)
 
 
