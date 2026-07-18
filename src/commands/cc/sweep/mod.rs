@@ -275,7 +275,7 @@ where
             continue;
         };
 
-        let session = match store::load_session_from(sessions_dir, session_id)? {
+        let mut session = match store::load_session_from(sessions_dir, session_id)? {
             Some(s) => s,
             None => continue,
         };
@@ -285,6 +285,31 @@ where
         // restore their label / ancestor chain -- they never need pausing.
         if session.status == SessionStatus::Ended {
             continue;
+        }
+
+        // `pending_bg_task_ids` / `pending_agent_task_ids` are only ever
+        // refreshed by a future `Stop` hook (see `hook.rs`). If the `claude`
+        // process backing this session crashed or was killed outside of
+        // sweep's own SIGTERM path, no further hook will ever fire for it,
+        // so those sets would otherwise stay non-empty forever and
+        // permanently block both auto-pause here and `wm clean`'s worktree
+        // protection. Once sweep can independently confirm no `claude` pid
+        // resolves for the session, treat any pending ids as stale and drop
+        // them before making the pause decision.
+        if (!session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_ids.is_empty())
+            && probe.resolve_pid(&session).is_none()
+        {
+            tracing::info!(
+                event = "cc.sweep.stale_pending_tasks_cleared",
+                session = %session.session_id,
+                pending_bg_tasks = session.pending_bg_task_ids.len(),
+                pending_agent_tasks = session.pending_agent_task_ids.len(),
+            );
+            session.pending_bg_task_ids.clear();
+            session.pending_agent_task_ids.clear();
+            if !dry_run {
+                store::save_session_to(sessions_dir, &session)?;
+            }
         }
 
         report.scanned += 1;
@@ -434,7 +459,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::path::PathBuf;
 
     use chrono::{DateTime, TimeDelta, Utc};
@@ -937,6 +962,63 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    // The claude process backing this session is confirmed gone (no pid
+    // resolves), so a pending id left over from before it crashed/was killed
+    // is stale rather than evidence of an in-flight task -- `hook.rs` will
+    // never get another `Stop` for this session_id to refresh it. Sweep must
+    // clear the stale id and fall through to the normal pause decision
+    // instead of reporting `BgTaskPending` forever.
+    #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
+    #[case::agent_task(|s: &mut Session| {
+        s.pending_agent_task_ids.insert("agent-task-1".to_string());
+    })]
+    fn stale_pending_task_is_cleared_when_process_is_gone(
+        test_dir: TestDir,
+        #[case] populate: fn(&mut Session),
+    ) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("task-gone", SessionStatus::Stopped, old);
+        populate(&mut session);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        // No resolvable pid -- the process has already exited.
+        let probe = FakeProbe::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(60),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
+        );
+
+        let reloaded = store::load_session_from(&test_dir.path, "task-gone")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids,
+            ),
+            (SessionStatus::Paused, BTreeSet::new(), BTreeSet::new()),
+        );
     }
 
     #[rstest]

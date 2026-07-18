@@ -48,9 +48,12 @@ pub struct Session {
     /// hook fires synthetically as soon as a bg task is spawned, so a
     /// non-empty set means "the user is still mid-task even though Claude's
     /// main loop went idle". Overwritten wholesale from that array on every
-    /// `Stop` event rather than incrementally accumulated. Older Claude Code
-    /// builds omit `background_tasks` entirely, which deserializes to an
-    /// empty array and safely falls back to "nothing pending". Consumed by
+    /// `Stop` event. Older Claude Code builds omit `background_tasks`
+    /// entirely, which deserializes to an empty array and safely falls back
+    /// to "nothing pending". `sweep` also clears this set early -- without
+    /// waiting for a `Stop` -- once it can independently confirm no `claude`
+    /// process resolves for the session (see `sweep/mod.rs`), so a crashed
+    /// or killed process can't leave it stuck non-empty forever. Consumed by
     /// `auto_compact` (skip compaction while non-empty) and by `sweep` (do
     /// not auto-pause while non-empty).
     #[serde(default)]
@@ -59,9 +62,14 @@ pub struct Session {
     /// with `run_in_background: true`), as reported by Claude Code's own task
     /// registry (`background_tasks` on `Stop` input, filtered to
     /// `type == "subagent"`; see `HookInput::pending_agent_task_ids`). Same
-    /// rationale and refresh model as `pending_bg_task_ids` above. Consumed
-    /// by `sweep` exactly like `pending_bg_task_ids`.
-    #[serde(default)]
+    /// rationale and refresh model as `pending_bg_task_ids` above, including
+    /// `sweep`'s early clear once no `claude` process resolves. Consumed by
+    /// `sweep` exactly like `pending_bg_task_ids`.
+    ///
+    /// `alias` accepts the field's pre-rename name so a session file
+    /// written by an older `armyknife` build still deserializes instead of
+    /// silently reverting to an empty set until the next `Stop`.
+    #[serde(default, alias = "pending_agent_task_outputs")]
     pub pending_agent_task_ids: BTreeSet<String>,
     /// Timestamp the user last focused this session via `a cc focus`.
     /// `None` means the session has never been focused since its last
@@ -192,14 +200,16 @@ pub struct HookInput {
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
 
-    /// Claude Code's own task registry snapshot, present on `Stop` /
-    /// `SubagentStop` input from Claude Code v2.1.145+
-    /// (https://code.claude.com/docs/en/hooks.md, Stop input / SubagentStop
-    /// input). Older builds omit the field entirely, which deserializes to
-    /// an empty vec. An entry disappears once its task is no longer in
-    /// flight or scheduled -- the docs describe the array itself as empty
-    /// whenever nothing is in-flight/scheduled, so presence in this list is
-    /// the pending signal, not any particular `status` string.
+    /// Claude Code's own task registry snapshot. Per
+    /// https://code.claude.com/docs/en/hooks.md (Stop input / SubagentStop
+    /// input), Claude Code v2.1.145+ populates this on both `Stop` and
+    /// `SubagentStop` input, but armyknife only wires the `Stop` hook (see
+    /// `hook.rs`), so this is only ever read there. Older builds omit the
+    /// field entirely, which deserializes to an empty vec. An entry
+    /// disappears once its task is no longer in flight or scheduled -- the
+    /// docs describe the array itself as empty whenever nothing is
+    /// in-flight/scheduled, so presence in this list is the pending signal,
+    /// not any particular `status` string.
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTask>,
 
@@ -350,5 +360,30 @@ mod tests {
         let session: Session =
             serde_json::from_value(json).expect("legacy session should deserialize");
         assert_eq!(session.read_at, None);
+    }
+
+    #[test]
+    fn pending_agent_task_ids_accepts_pre_rename_field_name() {
+        // A session written by an older armyknife build (before
+        // `pending_agent_task_outputs` was renamed to `pending_agent_task_ids`)
+        // must still deserialize non-empty, not silently drop the pending
+        // task and revert to an empty set until the next `Stop`.
+        let json = serde_json::json!({
+            "session_id": "legacy",
+            "cwd": "/tmp/legacy",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+            "pending_agent_task_outputs": ["/tmp/claude-1/proj/legacy/tasks/agent-1.output"],
+        });
+        let session: Session =
+            serde_json::from_value(json).expect("legacy session should deserialize");
+        assert_eq!(
+            session.pending_agent_task_ids,
+            BTreeSet::from(["/tmp/claude-1/proj/legacy/tasks/agent-1.output".to_string()])
+        );
     }
 }

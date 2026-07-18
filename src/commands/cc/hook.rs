@@ -435,13 +435,12 @@ fn process_hook_event_impl(
     // Refresh in-flight background tasks (Bash bg shells and Task-tool
     // subagents) from Claude Code's own task registry (see
     // `HookInput::pending_bg_task_ids` / `pending_agent_task_ids` and the
-    // matching `Session` fields). `background_tasks` only appears on `Stop`
-    // input, so each Stop overwrites both sets wholesale with the registry's
-    // current view rather than incrementally tracking insertions/removals
-    // across separate hook events. The immediately-following Stop after a
-    // launch fires synthetically -- Claude moves on as soon as the task is
-    // spawned, not when it finishes -- so a non-empty set here means "the
-    // user is still mid-task even though Claude's main loop went idle":
+    // matching `Session` fields). armyknife only wires the `Stop` hook, so
+    // each Stop overwrites both sets wholesale with the registry's current
+    // view. The immediately-following Stop after a launch fires
+    // synthetically -- Claude moves on as soon as the task is spawned, not
+    // when it finishes -- so a non-empty set here means "the user is still
+    // mid-task even though Claude's main loop went idle":
     //
     // - `auto_compact` skips the synthetic Stop while any id is pending.
     // - `sweep` does not SIGTERM the session while any id is pending
@@ -489,10 +488,9 @@ fn process_hook_event_impl(
     //
     // Skip while any background task launched in this session has not
     // reported completion: the user is still mid-task even if Claude's
-    // main loop went idle (the post-launch Stop is synthetic). Ids are
-    // removed lazily by BashOutput / KillShell PostToolUse hooks, not
-    // cleared here, so a turn that mixes a bg launch with a real Stop is
-    // still suppressed correctly.
+    // main loop went idle (the post-launch Stop is synthetic). This reads
+    // `pending_bg_task_ids` as refreshed from `background_tasks` a few
+    // lines above, not any state accumulated across separate hook events.
     if side_effects.auto_compact && event == HookEvent::Stop {
         if !session.pending_bg_task_ids.is_empty() {
             tracing::info!(
