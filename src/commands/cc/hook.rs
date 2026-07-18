@@ -366,7 +366,7 @@ fn process_hook_event_impl(
                 label: env.session_label.clone(),
                 ancestor_session_ids,
                 pending_bg_task_ids: BTreeSet::new(),
-                pending_agent_task_outputs: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
@@ -432,27 +432,23 @@ fn process_hook_event_impl(
         _ => session.current_tool, // Keep existing value for other events
     };
 
-    // Track in-flight background tasks (Bash `run_in_background: true`).
-    // The immediately-following Stop fires synthetically — Claude moves on
-    // as soon as the bg task is spawned, not when it finishes — and there
-    // is no completion hook for the bg task itself. We accumulate ids here
-    // so that:
+    // Refresh in-flight background tasks (Bash bg shells and Task-tool
+    // subagents) from Claude Code's own task registry (see
+    // `HookInput::pending_bg_task_ids` / `pending_agent_task_ids` and the
+    // matching `Session` fields). `background_tasks` only appears on `Stop`
+    // input, so each Stop overwrites both sets wholesale with the registry's
+    // current view rather than incrementally tracking insertions/removals
+    // across separate hook events. The immediately-following Stop after a
+    // launch fires synthetically -- Claude moves on as soon as the task is
+    // spawned, not when it finishes -- so a non-empty set here means "the
+    // user is still mid-task even though Claude's main loop went idle":
     //
     // - `auto_compact` skips the synthetic Stop while any id is pending.
     // - `sweep` does not SIGTERM the session while any id is pending
-    //   (otherwise a long bg task gets killed mid-flight).
-    //
-    // Removal is driven by PostToolUse for `BashOutput` / `KillShell`,
-    // which observe completion / explicit kill respectively. Schema for
-    // those tool_response payloads is not documented
-    // (anthropics/claude-code#3671); we treat any string `status` matching
-    // a known terminal value as completion and silently ignore everything
-    // else. Stale ids left behind by schema drift are harmless: they only
-    // delay auto-compact / auto-pause until the user explicitly resumes
-    // the session (which initializes a fresh set on the next session
-    // creation cycle).
-    if event == HookEvent::PostToolUse {
-        update_pending_bg_tasks(&mut session, &input);
+    //   (otherwise a long-running task gets killed mid-flight).
+    if event == HookEvent::Stop {
+        session.pending_bg_task_ids = input.pending_bg_task_ids();
+        session.pending_agent_task_ids = input.pending_agent_task_ids();
     }
 
     // Save updated session
@@ -964,57 +960,6 @@ fn build_subtitle(session: &Session) -> Option<String> {
     Some(truncate_string(&subtitle, 50))
 }
 
-/// Updates `session.pending_bg_task_ids` / `pending_agent_task_outputs`
-/// based on a `PostToolUse` event.
-///
-/// - `Bash` launch with `run_in_background: true`: tool_response carries
-///   `backgroundTaskId`; insert it.
-/// - `BashOutput`: tool_response carries `status`; remove the referenced
-///   shell id when status is "completed", "killed", or "failed". Any other
-///   status (running, missing, schema mismatch) leaves the set alone — see
-///   the call-site comment for why stale ids are acceptable.
-/// - `KillShell`: shell id is removed unconditionally; the tool's whole
-///   purpose is to terminate the bg task.
-/// - `Task` launch with `run_in_background: true`: tool_response carries
-///   `outputFile` alongside `"status": "async_launched"`; insert the path.
-///   Unlike Bash bg tasks there is no hook-based removal path here — see
-///   `pending_agent_task_outputs`'s doc comment — entries are only dropped
-///   lazily by sweep's liveness probe.
-fn update_pending_bg_tasks(session: &mut Session, input: &HookInput) {
-    if let Some(bg_id) = input.background_task_id() {
-        session.pending_bg_task_ids.insert(bg_id.to_string());
-        return;
-    }
-
-    let tool_name = input.tool_name.as_deref();
-    match tool_name {
-        Some("BashOutput") => {
-            let Some(shell_id) = input.shell_id() else {
-                return;
-            };
-            if matches!(
-                input.bash_output_status(),
-                Some("completed" | "killed" | "failed")
-            ) {
-                session.pending_bg_task_ids.remove(shell_id);
-            }
-        }
-        Some("KillShell") => {
-            if let Some(shell_id) = input.shell_id() {
-                session.pending_bg_task_ids.remove(shell_id);
-            }
-        }
-        Some("Task") => {
-            if let Some(output_file) = input.agent_task_output_file() {
-                session
-                    .pending_agent_task_outputs
-                    .insert(PathBuf::from(output_file));
-            }
-        }
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1460,7 +1405,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_agent_task_outputs: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         };
@@ -1538,7 +1483,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_agent_task_outputs: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled,
         };
@@ -1624,24 +1569,90 @@ mod tests {
         );
     }
 
-    /// Runs a PostToolUse hook against a freshly-seeded session and returns
-    /// the reloaded session, so callers can inspect whichever pending-task
-    /// field they're testing. `setup` seeds the initial pending set on the
-    /// session before the hook runs.
-    fn run_post_tool_use_session(
-        session_id: &str,
-        setup: impl FnOnce(&mut Session),
-        payload: &str,
-    ) -> Session {
+    fn set_of(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[rstest]
+    // A shell task and a subagent task both reported running -- each id
+    // lands in the field matching its own `type`, not the other's.
+    #[case::mixed_types_split_by_field(
+        &[], &[],
+        r#","background_tasks":[{"id":"shell-1","type":"shell","status":"running"},{"id":"task-1","type":"subagent","status":"running"}]"#,
+        &["shell-1"], &["task-1"],
+    )]
+    // Other task-registry entry types (monitor, workflow, teammate, cloud
+    // session, MCP task) are not acted on by armyknife.
+    #[case::other_registry_types_are_ignored(
+        &[], &[],
+        r#","background_tasks":[{"id":"mon-1","type":"monitor","status":"running"}]"#,
+        &[], &[],
+    )]
+    // Stop overwrites both sets wholesale from the registry's current view --
+    // an id no longer present in background_tasks is dropped, not merged
+    // with whatever was pending before.
+    #[case::stale_ids_are_dropped(
+        &["stale-bg"], &["stale-agent"],
+        r#","background_tasks":[]"#,
+        &[], &[],
+    )]
+    // Claude Code older than v2.1.145 omits the field entirely; it
+    // deserializes to an empty vec and both sets fall back to "nothing
+    // pending".
+    #[case::missing_field_falls_back_to_empty(
+        &["stale-bg"], &["stale-agent"], "", &[], &[],
+    )]
+    fn stop_refreshes_pending_task_ids_from_background_tasks(
+        #[case] initial_bg: &[&str],
+        #[case] initial_agent: &[&str],
+        #[case] background_tasks_json: &str,
+        #[case] expected_bg: &[&str],
+        #[case] expected_agent: &[&str],
+    ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
         let mut existing = create_test_session(None);
-        existing.session_id = session_id.to_string();
-        setup(&mut existing);
+        existing.session_id = "task-sess".to_string();
+        existing.pending_bg_task_ids = set_of(initial_bg);
+        existing.pending_agent_task_ids = set_of(initial_agent);
         store::save_session_to(sessions_dir, &existing).expect("save");
 
-        let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
+        let payload =
+            format!(r#"{{"session_id":"task-sess","cwd":"/tmp/test"{background_tasks_json}}}"#);
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "task-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids
+            ),
+            (set_of(expected_bg), set_of(expected_agent)),
+        );
+    }
+
+    #[test]
+    fn non_stop_event_does_not_touch_pending_task_ids() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "task-sess-2".to_string();
+        existing.pending_bg_task_ids.insert("bg-1".to_string());
+        existing.pending_agent_task_ids.insert("task-1".to_string());
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"task-sess-2","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"async_launched"}}"#,
+        )
+        .expect("valid JSON");
+
         process_hook_event_impl(
             HookEvent::PostToolUse,
             input,
@@ -1650,193 +1661,16 @@ mod tests {
         )
         .expect("hook should succeed");
 
-        store::load_session_from(sessions_dir, session_id)
-            .expect("load")
-            .expect("session exists")
-    }
-
-    /// Runs a PostToolUse hook with the given initial pending-id set and the
-    /// given raw JSON payload, then returns the resulting pending set.
-    fn run_post_tool_use(initial: &[&str], payload: &str) -> BTreeSet<String> {
-        run_post_tool_use_session(
-            "bg-sess",
-            |s| s.pending_bg_task_ids = set_of(initial),
-            payload,
-        )
-        .pending_bg_task_ids
-    }
-
-    fn set_of(ids: &[&str]) -> BTreeSet<String> {
-        ids.iter().map(|s| (*s).to_string()).collect()
-    }
-
-    #[rstest]
-    // Bash launch with backgroundTaskId inserts the id.
-    #[case::inserts_bg_id(
-        &[],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"Bash","tool_response":{"backgroundTaskId":"bg-123"}}"#,
-        &["bg-123"],
-    )]
-    // Non-bg PostToolUse must leave the set alone (Read/Edit/etc. ship
-    // object payloads without backgroundTaskId).
-    #[case::read_does_not_change(
-        &["bg-9"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"Read","tool_response":{"file_path":"/tmp/x","content":"hi"}}"#,
-        &["bg-9"],
-    )]
-    // tool_response shape varies per tool and Anthropic does not document a
-    // schema (anthropics/claude-code#3671). Anything that is not an object
-    // with backgroundTaskId must deserialize cleanly and leave the set alone.
-    #[case::mcp_array_does_not_change(
-        &["bg-9"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_response":[{"type":"text","text":"x"}]}"#,
-        &["bg-9"],
-    )]
-    #[case::null_bg_id_does_not_insert(
-        &[],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"Bash","tool_response":{"backgroundTaskId":null}}"#,
-        &[],
-    )]
-    #[case::no_tool_response_does_not_change(
-        &["bg-9"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"Bash"}"#,
-        &["bg-9"],
-    )]
-    // BashOutput with a terminal status removes the referenced shell id.
-    #[case::bash_output_completed_removes(
-        &["bg-1", "bg-2"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"shell_id":"bg-1"},"tool_response":{"status":"completed"}}"#,
-        &["bg-2"],
-    )]
-    #[case::bash_output_killed_removes(
-        &["bg-1"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"shell_id":"bg-1"},"tool_response":{"status":"killed"}}"#,
-        &[],
-    )]
-    #[case::bash_output_failed_removes(
-        &["bg-1"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"shell_id":"bg-1"},"tool_response":{"status":"failed"}}"#,
-        &[],
-    )]
-    // BashOutput while the shell is still running must leave the set alone.
-    #[case::bash_output_running_keeps(
-        &["bg-1"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"shell_id":"bg-1"},"tool_response":{"status":"running"}}"#,
-        &["bg-1"],
-    )]
-    // Legacy `bash_id` field name fallback (current builds use `shell_id`).
-    #[case::bash_output_legacy_bash_id(
-        &["bg-1"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"bash_id":"bg-1"},"tool_response":{"status":"completed"}}"#,
-        &[],
-    )]
-    // KillShell removes the referenced id unconditionally — the tool's
-    // entire purpose is to terminate the bg task.
-    #[case::kill_shell_removes(
-        &["bg-1", "bg-2"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"KillShell","tool_input":{"shell_id":"bg-1"}}"#,
-        &["bg-2"],
-    )]
-    // Schema mismatch: BashOutput with no parseable status — leave set
-    // alone (a stale id is preferable to dropping a real bg task on the
-    // floor; see call-site comment).
-    #[case::bash_output_unknown_status_keeps(
-        &["bg-1"],
-        r#"{"session_id":"bg-sess","cwd":"/tmp/test","tool_name":"BashOutput","tool_input":{"shell_id":"bg-1"},"tool_response":{}}"#,
-        &["bg-1"],
-    )]
-    fn post_tool_use_updates_pending_bg_tasks(
-        #[case] initial: &[&str],
-        #[case] payload: &str,
-        #[case] expected: &[&str],
-    ) {
-        assert_eq!(run_post_tool_use(initial, payload), set_of(expected));
-    }
-
-    /// Runs a PostToolUse hook with the given initial pending agent-output
-    /// set and the given raw JSON payload, then returns the resulting set.
-    fn run_post_tool_use_agent(initial: &[&str], payload: &str) -> BTreeSet<PathBuf> {
-        run_post_tool_use_session(
-            "agent-sess",
-            |s| s.pending_agent_task_outputs = path_set_of(initial),
-            payload,
-        )
-        .pending_agent_task_outputs
-    }
-
-    fn path_set_of(paths: &[&str]) -> BTreeSet<PathBuf> {
-        paths.iter().map(PathBuf::from).collect()
-    }
-
-    #[rstest]
-    // Task launch with outputFile + async_launched status inserts the path.
-    #[case::inserts_output_file(
-        &[],
-        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"async_launched","outputFile":"/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"}}"#,
-        &["/tmp/claude-1/proj/agent-sess/tasks/agent-1.output"],
-    )]
-    // tool_response shape varies per tool and Anthropic does not document a
-    // schema (anthropics/claude-code#3671). An array-shaped payload (e.g.
-    // from an MCP tool matched as "Task" by a custom matcher) must
-    // deserialize cleanly and leave the set alone.
-    #[case::mcp_style_array_response_does_not_insert(
-        &[],
-        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":[{"type":"text","text":"done"}]}"#,
-        &[],
-    )]
-    #[case::non_async_status_does_not_insert(
-        &[],
-        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Task","tool_response":{"status":"completed"}}"#,
-        &[],
-    )]
-    #[case::non_task_tool_does_not_change(
-        &["/tmp/existing.output"],
-        r#"{"session_id":"agent-sess","cwd":"/tmp/test","tool_name":"Read","tool_response":{"file_path":"/tmp/x","content":"hi"}}"#,
-        &["/tmp/existing.output"],
-    )]
-    fn post_tool_use_updates_pending_agent_task_outputs(
-        #[case] initial: &[&str],
-        #[case] payload: &str,
-        #[case] expected: &[&str],
-    ) {
-        assert_eq!(
-            run_post_tool_use_agent(initial, payload),
-            path_set_of(expected)
-        );
-    }
-
-    #[test]
-    fn stop_does_not_clear_pending_bg_tasks() {
-        // Synthetic Stop after a bg launch must leave the pending set
-        // intact so that `sweep` can see it and skip auto-pause. Removal
-        // only happens via BashOutput/KillShell PostToolUse.
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let sessions_dir = temp_dir.path();
-
-        let mut existing = create_test_session(None);
-        existing.session_id = "bg-stop".to_string();
-        existing.pending_bg_task_ids.insert("bg-1".to_string());
-        store::save_session_to(sessions_dir, &existing).expect("save");
-
-        let side_effects = SideEffects {
-            tmux: false,
-            notifications: false,
-            auto_compact: true,
-            removed_notification_groups: None,
-            tmux_sync_calls: None,
-        };
-
-        let input: HookInput =
-            serde_json::from_str(r#"{"session_id":"bg-stop","cwd":"/tmp/test"}"#)
-                .expect("valid JSON");
-
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &side_effects)
-            .expect("hook should succeed");
-
-        let reloaded = store::load_session_from(sessions_dir, "bg-stop")
+        let reloaded = store::load_session_from(sessions_dir, "task-sess-2")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.pending_bg_task_ids, set_of(&["bg-1"]));
+        assert_eq!(
+            (
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids
+            ),
+            (set_of(&["bg-1"]), set_of(&["task-1"])),
+        );
     }
 
     #[rstest]
@@ -1911,7 +1745,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_agent_task_outputs: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -2218,7 +2052,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),
-                pending_agent_task_outputs: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
