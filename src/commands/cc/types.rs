@@ -41,29 +41,36 @@ pub struct Session {
     /// child sessions can still find their nearest living ancestor.
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
-    /// IDs of background tasks (`Bash` with `run_in_background: true`) that
-    /// were launched in this session and whose completion has not yet been
-    /// observed. The Stop hook fires synthetically as soon as a bg task is
-    /// spawned, so a non-empty set means "the user is still mid-task even
-    /// though Claude's main loop went idle". Consumed by `auto_compact`
-    /// (skip compaction while non-empty) and by `sweep` (do not auto-pause
-    /// while non-empty). Cleared per-id when a `BashOutput` PostToolUse
-    /// reports completion or a `KillShell` PostToolUse fires.
+    /// IDs of in-flight Bash background tasks (`run_in_background: true`)
+    /// launched in this session, as reported by Claude Code's own task
+    /// registry (`background_tasks` on `Stop` input, filtered to
+    /// `type == "shell"`; see `HookInput::pending_bg_task_ids`). The Stop
+    /// hook fires synthetically as soon as a bg task is spawned, so a
+    /// non-empty set means "the user is still mid-task even though Claude's
+    /// main loop went idle". Overwritten wholesale from that array on every
+    /// `Stop` event. Older Claude Code builds omit `background_tasks`
+    /// entirely, which deserializes to an empty array and safely falls back
+    /// to "nothing pending". `sweep` also clears this set early -- without
+    /// waiting for a `Stop` -- once it can independently confirm no `claude`
+    /// process resolves for the session (see `sweep/mod.rs`), so a crashed
+    /// or killed process can't leave it stuck non-empty forever. Consumed by
+    /// `auto_compact` (skip compaction while non-empty) and by `sweep` (do
+    /// not auto-pause while non-empty).
     #[serde(default)]
     pub pending_bg_task_ids: BTreeSet<String>,
-    /// Output file paths for in-flight Task-tool subagents launched in this
-    /// session (`Task` with `run_in_background: true`) whose completion has
-    /// not yet been observed. Same rationale as `pending_bg_task_ids` (the
-    /// Stop hook fires synthetically right after launch). Claude Code v2.1.145+
-    /// exposes a `background_tasks` array on `Stop`/`SubagentStop` input that
-    /// could report completion directly, but this codebase doesn't consume it
-    /// (`SubagentStop` isn't wired, and relying on it would raise the minimum
-    /// supported Claude Code version) -- so entries here are only removed
-    /// lazily by `sweep`'s lsof-based liveness probe (see `agent_task.rs`)
-    /// once Claude Code closes the file. Consumed by `auto_compact` and
+    /// IDs of in-flight Task-tool subagents launched in this session (`Task`
+    /// with `run_in_background: true`), as reported by Claude Code's own task
+    /// registry (`background_tasks` on `Stop` input, filtered to
+    /// `type == "subagent"`; see `HookInput::pending_agent_task_ids`). Same
+    /// rationale and refresh model as `pending_bg_task_ids` above, including
+    /// `sweep`'s early clear once no `claude` process resolves. Consumed by
     /// `sweep` exactly like `pending_bg_task_ids`.
-    #[serde(default)]
-    pub pending_agent_task_outputs: BTreeSet<PathBuf>,
+    ///
+    /// `alias` accepts the field's pre-rename name so a session file
+    /// written by an older `armyknife` build still deserializes instead of
+    /// silently reverting to an empty set until the next `Stop`.
+    #[serde(default, alias = "pending_agent_task_outputs")]
+    pub pending_agent_task_ids: BTreeSet<String>,
     /// Timestamp the user last focused this session via `a cc focus`.
     /// `None` means the session has never been focused since its last
     /// transition to `Stopped` (i.e. unread); `Some(_)` means read.
@@ -193,13 +200,18 @@ pub struct HookInput {
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
 
-    /// PostToolUse only. Claude Code does not document a stable schema for
-    /// this field — its shape varies per tool (object for Bash/Read/Write,
-    /// array of content blocks for MCP tools, etc.) and Anthropic has
-    /// declined to publish one (anthropics/claude-code#3671). Accept any
-    /// JSON value and extract only what we need at the call site.
+    /// Claude Code's own task registry snapshot. Per
+    /// https://code.claude.com/docs/en/hooks.md (Stop input / SubagentStop
+    /// input), Claude Code v2.1.145+ populates this on both `Stop` and
+    /// `SubagentStop` input, but armyknife only wires the `Stop` hook (see
+    /// `hook.rs`), so this is only ever read there. Older builds omit the
+    /// field entirely, which deserializes to an empty vec. An entry
+    /// disappears once its task is no longer in flight or scheduled -- the
+    /// docs describe the array itself as empty whenever nothing is
+    /// in-flight/scheduled, so presence in this list is the pending signal,
+    /// not any particular `status` string.
     #[serde(default)]
-    pub tool_response: Option<serde_json::Value>,
+    pub background_tasks: Vec<BackgroundTask>,
 
     // Ignore other fields from Claude Code hooks
     #[serde(flatten)]
@@ -207,49 +219,43 @@ pub struct HookInput {
 }
 
 impl HookInput {
-    /// Background task id set by Claude Code when the Bash tool was launched
-    /// with `run_in_background: true`. The background task itself fires no
-    /// completion hook, so this is the only signal armyknife has that the
-    /// next Stop is "I kicked off a background command", not the end of a
-    /// real turn. Returns `None` for any tool_response shape that does not
-    /// carry the field (MCP arrays, Read/Write objects, missing field, etc.).
-    pub fn background_task_id(&self) -> Option<&str> {
-        self.tool_response
-            .as_ref()?
-            .get("backgroundTaskId")?
-            .as_str()
+    /// IDs of Bash background tasks (`run_in_background: true`) that Claude
+    /// Code's task registry reports as still in flight or scheduled, per
+    /// `background_tasks` (see its doc comment). Filtered to
+    /// `type == "shell"` since `background_tasks` also covers Task-tool
+    /// subagents (tracked separately via `pending_agent_task_ids`) and other
+    /// task-registry entry types armyknife does not act on.
+    pub fn pending_bg_task_ids(&self) -> BTreeSet<String> {
+        self.pending_task_ids_of_type("shell")
     }
 
-    /// Shell id referenced by `BashOutput` / `KillShell` tool calls. Claude
-    /// Code's tool_input schema for these tools is not documented
-    /// (anthropics/claude-code#3671); empirically the field is `shell_id`
-    /// but `bash_id` has appeared in older builds. Try both.
-    pub fn shell_id(&self) -> Option<&str> {
-        let ti = self.tool_input.as_ref()?;
-        ti.shell_id.as_deref().or(ti.bash_id.as_deref())
+    /// IDs of Task-tool subagents that Claude Code's task registry reports
+    /// as still in flight or scheduled, per `background_tasks` (see its doc
+    /// comment). Filtered to `type == "subagent"` since `background_tasks`
+    /// also covers Bash bg shells (tracked separately via
+    /// `pending_bg_task_ids`) and other task-registry entry types armyknife
+    /// does not act on.
+    pub fn pending_agent_task_ids(&self) -> BTreeSet<String> {
+        self.pending_task_ids_of_type("subagent")
     }
 
-    /// Status string from a `BashOutput` PostToolUse `tool_response`. Returns
-    /// `None` for any shape that does not carry a string `status` field
-    /// (still running, schema mismatch, MCP array payload, etc.).
-    pub fn bash_output_status(&self) -> Option<&str> {
-        self.tool_response.as_ref()?.get("status")?.as_str()
+    fn pending_task_ids_of_type(&self, task_type: &str) -> BTreeSet<String> {
+        self.background_tasks
+            .iter()
+            .filter(|t| t.task_type == task_type)
+            .map(|t| t.id.clone())
+            .collect()
     }
+}
 
-    /// Output file path for a `Task` tool subagent launched with
-    /// `run_in_background: true`. Present in `tool_response` alongside
-    /// `"status": "async_launched"` (see
-    /// https://code.claude.com/docs/en/hooks.md, PreToolUse input > Agent).
-    /// Like the background bg task itself, the subagent fires no completion
-    /// hook, so this is the only signal armyknife has that the immediately
-    /// following Stop is synthetic rather than the end of a real turn.
-    pub fn agent_task_output_file(&self) -> Option<&str> {
-        let response = self.tool_response.as_ref()?;
-        if response.get("status")?.as_str()? != "async_launched" {
-            return None;
-        }
-        response.get("outputFile")?.as_str()
-    }
+/// One entry of `HookInput::background_tasks`. Only `id` and `type` are
+/// consumed by armyknife; `status`, `description`, `command`, `agent_type`
+/// are accepted implicitly (serde ignores unlisted JSON keys).
+#[derive(Debug, Deserialize)]
+pub struct BackgroundTask {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub task_type: String,
 }
 
 /// Tool input data from pre-tool-use events.
@@ -261,12 +267,6 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
-    /// Shell id for `BashOutput` / `KillShell` tools (current Claude Code).
-    #[serde(default)]
-    pub shell_id: Option<String>,
-    /// Shell id for `BashOutput` / `KillShell` tools (legacy field name).
-    #[serde(default)]
-    pub bash_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,7 +318,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_agent_task_outputs: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
             read_at,
             sweep_signaled: false,
         }
@@ -360,5 +360,30 @@ mod tests {
         let session: Session =
             serde_json::from_value(json).expect("legacy session should deserialize");
         assert_eq!(session.read_at, None);
+    }
+
+    #[test]
+    fn pending_agent_task_ids_accepts_pre_rename_field_name() {
+        // A session written by an older armyknife build (before
+        // `pending_agent_task_outputs` was renamed to `pending_agent_task_ids`)
+        // must still deserialize non-empty, not silently drop the pending
+        // task and revert to an empty set until the next `Stop`.
+        let json = serde_json::json!({
+            "session_id": "legacy",
+            "cwd": "/tmp/legacy",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+            "pending_agent_task_outputs": ["/tmp/claude-1/proj/legacy/tasks/agent-1.output"],
+        });
+        let session: Session =
+            serde_json::from_value(json).expect("legacy session should deserialize");
+        assert_eq!(
+            session.pending_agent_task_ids,
+            BTreeSet::from(["/tmp/claude-1/proj/legacy/tasks/agent-1.output".to_string()])
+        );
     }
 }

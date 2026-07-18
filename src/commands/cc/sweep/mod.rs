@@ -36,9 +36,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 
-use super::agent_task::{AgentTaskProbe, LsofAgentTaskProbe, sweep_pending_agent_tasks};
 use super::auto_pause::{self, PauseDecision};
-use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
@@ -125,16 +123,12 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
-    let bg_probe = LsofBgTaskProbe;
-    let agent_probe = LsofAgentTaskProbe;
     let syncer = LiveTmuxStatusSyncer;
     let report = sweep_impl(
         &sessions_dir,
         timeout,
         &sender,
         &probe,
-        &bg_probe,
-        &agent_probe,
         &syncer,
         args.dry_run,
     )?;
@@ -241,27 +235,17 @@ pub struct SweepReport {
 /// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
 /// timeout has elapsed. Ended sessions are ignored entirely so that the
 /// counts match what `a cc list` displays.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each param is an independently-injected test double (signal sender, pid/activity \
-              probe, two liveness probes, tmux syncer); bundling them into a struct would not \
-              reduce the real dependency count"
-)]
-pub(crate) fn sweep_impl<S, P, B, A, T>(
+pub(crate) fn sweep_impl<S, P, T>(
     sessions_dir: &Path,
     timeout: Duration,
     sender: &S,
     probe: &P,
-    bg_probe: &B,
-    agent_probe: &A,
     syncer: &T,
     dry_run: bool,
 ) -> Result<SweepReport>
 where
     S: SignalSender,
     P: SessionProbe,
-    B: BgTaskProbe,
-    A: AgentTaskProbe,
     T: TmuxStatusSyncer,
 {
     let mut report = SweepReport::default();
@@ -303,30 +287,29 @@ where
             continue;
         }
 
-        let bg_tasks_swept = sweep_pending_bg_tasks(&mut session, bg_probe);
-        if bg_tasks_swept {
+        // `pending_bg_task_ids` / `pending_agent_task_ids` are only ever
+        // refreshed by a future `Stop` hook (see `hook.rs`). If the `claude`
+        // process backing this session crashed or was killed outside of
+        // sweep's own SIGTERM path, no further hook will ever fire for it,
+        // so those sets would otherwise stay non-empty forever and
+        // permanently block both auto-pause here and `wm clean`'s worktree
+        // protection. Once sweep can independently confirm no `claude` pid
+        // resolves for the session, treat any pending ids as stale and drop
+        // them before making the pause decision.
+        if (!session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_ids.is_empty())
+            && probe.resolve_pid(&session).is_none()
+        {
             tracing::info!(
-                event = "cc.sweep.bg_task.swept",
+                event = "cc.sweep.stale_pending_tasks_cleared",
                 session = %session.session_id,
-                remaining = session.pending_bg_task_ids.len(),
+                pending_bg_tasks = session.pending_bg_task_ids.len(),
+                pending_agent_tasks = session.pending_agent_task_ids.len(),
             );
-        }
-
-        let agent_tasks_swept = sweep_pending_agent_tasks(&mut session, agent_probe);
-        if agent_tasks_swept {
-            tracing::info!(
-                event = "cc.sweep.agent_task.swept",
-                session = %session.session_id,
-                remaining = session.pending_agent_task_outputs.len(),
-            );
-        }
-
-        // Single save covering both sweeps -- saving after each separately
-        // would take the file lock twice and, without an intervening reload,
-        // let the second save clobber a concurrent hook write that landed in
-        // between with a now-stale copy of `session`.
-        if (bg_tasks_swept || agent_tasks_swept) && !dry_run {
-            store::save_session_to(sessions_dir, &session)?;
+            session.pending_bg_task_ids.clear();
+            session.pending_agent_task_ids.clear();
+            if !dry_run {
+                store::save_session_to(sessions_dir, &session)?;
+            }
         }
 
         report.scanned += 1;
@@ -404,7 +387,7 @@ where
                     event = "cc.sweep.bg_task_pending",
                     session = %session.session_id,
                     pending_bg_tasks = session.pending_bg_task_ids.len(),
-                    pending_agent_tasks = session.pending_agent_task_outputs.len(),
+                    pending_agent_tasks = session.pending_agent_task_ids.len(),
                 );
                 report.active += 1;
             }
@@ -476,15 +459,13 @@ fn confirm_paused<T: TmuxStatusSyncer>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::path::PathBuf;
 
     use chrono::{DateTime, TimeDelta, Utc};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use super::super::agent_task::test_support::{AllDeadAgentTaskProbe, FakeAgentTaskProbe};
-    use super::super::bg_task::test_support::{AllDeadBgTaskProbe, FakeBgTaskProbe};
     use super::super::signal::test_support::RecordingSender;
     use super::super::store::save_session_to;
     use super::super::tmux_sync::test_support::RecordingTmuxStatusSyncer;
@@ -562,7 +543,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
-            pending_agent_task_outputs: std::collections::BTreeSet::new(),
+            pending_agent_task_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -584,8 +565,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -627,8 +606,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &FakeProbe::with_pids(&[("sess-a", 4242)]),
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -650,8 +627,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &FakeProbe::default(),
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -694,8 +669,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -725,8 +698,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -751,8 +722,6 @@ mod tests {
             Duration::from_secs(3600),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -785,8 +754,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -828,8 +795,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -873,8 +838,6 @@ mod tests {
             Duration::from_secs(60),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -913,8 +876,6 @@ mod tests {
             Duration::from_secs(30 * 60),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -952,8 +913,6 @@ mod tests {
             Duration::from_secs(30 * 60),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -964,26 +923,29 @@ mod tests {
     }
 
     #[rstest]
-    fn pending_bg_task_blocks_pause(test_dir: TestDir) {
-        // Stopped well past the timeout, but a background task launched
-        // earlier in the turn has not reported completion. Pausing here
-        // would kill the bg task — sweep must leave it alone and count it
-        // as active.
+    // Stopped well past the timeout, but a background task launched earlier
+    // in the turn -- a Bash bg shell or a Task-tool subagent, per the most
+    // recent Stop hook's `background_tasks` (populated by `hook.rs`; sweep
+    // does not probe task liveness itself) -- has not reported completion.
+    // Pausing here would SIGTERM the live claude and kill the task with it
+    // -- sweep must leave it alone and count it as active.
+    #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
+    #[case::agent_task(|s: &mut Session| {
+        s.pending_agent_task_ids.insert("agent-task-1".to_string());
+    })]
+    fn pending_task_blocks_pause(test_dir: TestDir, #[case] populate: fn(&mut Session)) {
         let old = Utc::now() - TimeDelta::hours(1);
-        let mut session = make_session("bg-busy", SessionStatus::Stopped, old);
-        session.pending_bg_task_ids.insert("bg-1".to_string());
+        let mut session = make_session("task-busy", SessionStatus::Stopped, old);
+        populate(&mut session);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let probe = FakeProbe::with_pids(&[("bg-busy", 4242)]);
-        let bg_probe = FakeBgTaskProbe::with_alive(&["bg-1"]);
+        let probe = FakeProbe::with_pids(&[("task-busy", 4242)]);
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(60),
             &sender,
             &probe,
-            &bg_probe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -993,135 +955,69 @@ mod tests {
         assert_eq!(report.active, 1);
         assert!(
             sender.calls.borrow().is_empty(),
-            "session with pending bg tasks must not be SIGTERM'd"
+            "session with a pending background task must not be SIGTERM'd"
         );
 
-        let reloaded = store::load_session_from(&test_dir.path, "bg-busy")
+        let reloaded = store::load_session_from(&test_dir.path, "task-busy")
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
     }
 
     #[rstest]
-    fn pending_agent_task_blocks_pause(test_dir: TestDir) {
-        // Stopped well past the timeout, but a Task-tool subagent launched
-        // earlier in the turn has not reported completion. Pausing here
-        // would SIGTERM the live claude and kill the subagent with it —
-        // sweep must leave it alone and count it as active.
+    // The claude process backing this session is confirmed gone (no pid
+    // resolves), so a pending id left over from before it crashed/was killed
+    // is stale rather than evidence of an in-flight task -- `hook.rs` will
+    // never get another `Stop` for this session_id to refresh it. Sweep must
+    // clear the stale id and fall through to the normal pause decision
+    // instead of reporting `BgTaskPending` forever.
+    #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
+    #[case::agent_task(|s: &mut Session| {
+        s.pending_agent_task_ids.insert("agent-task-1".to_string());
+    })]
+    fn stale_pending_task_is_cleared_when_process_is_gone(
+        test_dir: TestDir,
+        #[case] populate: fn(&mut Session),
+    ) {
         let old = Utc::now() - TimeDelta::hours(1);
-        let mut session = make_session("agent-busy", SessionStatus::Stopped, old);
-        session
-            .pending_agent_task_outputs
-            .insert(PathBuf::from("/tmp/agent-1.output"));
+        let mut session = make_session("task-gone", SessionStatus::Stopped, old);
+        populate(&mut session);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let probe = FakeProbe::with_pids(&[("agent-busy", 4242)]);
-        let agent_probe = FakeAgentTaskProbe::with_alive(&["/tmp/agent-1.output"]);
+        // No resolvable pid -- the process has already exited.
+        let probe = FakeProbe::default();
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(60),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &agent_probe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
         .expect("sweep");
 
-        assert_eq!(report.paused, 0);
-        assert_eq!(report.active, 1);
-        assert!(
-            sender.calls.borrow().is_empty(),
-            "session with a pending agent task must not be SIGTERM'd"
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                paused: 1,
+                signaled: 0,
+                waiting: 0,
+                active: 0,
+            }
         );
 
-        let reloaded = store::load_session_from(&test_dir.path, "agent-busy")
+        let reloaded = store::load_session_from(&test_dir.path, "task-gone")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Stopped);
-    }
-
-    #[rstest]
-    fn stale_pending_agent_task_is_dropped_and_session_signaled(test_dir: TestDir) {
-        // The subagent's output file is no longer held open (Claude Code
-        // closed it on completion) but the conversation never observed that
-        // -- see `agent_task.rs`'s liveness-probe design (this codebase
-        // doesn't consume the `background_tasks` array on `Stop`, which
-        // would report completion directly). Sweep must drop the stale path
-        // and then proceed through the normal pause-decision flow.
-        let old = Utc::now() - TimeDelta::hours(1);
-        let mut session = make_session("stale-agent", SessionStatus::Stopped, old);
-        session
-            .pending_agent_task_outputs
-            .insert(PathBuf::from("/tmp/dead-agent.output"));
-        save_session_to(&test_dir.path, &session).expect("save");
-
-        let sender = RecordingSender::default();
-        let probe = FakeProbe::with_pids(&[("stale-agent", 4242)]);
-        // AllDeadAgentTaskProbe below treats "dead-agent.output" as dead.
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(60),
-            &sender,
-            &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
-            &RecordingTmuxStatusSyncer::default(),
-            false,
-        )
-        .expect("sweep");
-
-        assert_eq!(report.signaled, 1);
-        assert_eq!(report.active, 0);
-
-        let reloaded = store::load_session_from(&test_dir.path, "stale-agent")
-            .expect("load")
-            .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Stopped);
-        assert!(
-            reloaded.pending_agent_task_outputs.is_empty(),
-            "stale agent output path should be removed from pending set"
-        );
-    }
-
-    #[rstest]
-    fn stale_pending_bg_task_is_dropped_and_session_signaled(test_dir: TestDir) {
-        // The Claude conversation ended without reading `BashOutput`, so a
-        // bg id was orphaned in pending_bg_task_ids even though the process
-        // has long since exited. Sweep must drop the stale id and then
-        // proceed through the normal pause-decision flow.
-        let old = Utc::now() - TimeDelta::hours(1);
-        let mut session = make_session("stale-bg", SessionStatus::Stopped, old);
-        session.pending_bg_task_ids.insert("dead-bg".to_string());
-        save_session_to(&test_dir.path, &session).expect("save");
-
-        let sender = RecordingSender::default();
-        // No bg ids in the alive set -> probe treats "dead-bg" as dead.
-        let probe = FakeProbe::with_pids(&[("stale-bg", 4242)]);
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(60),
-            &sender,
-            &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
-            &RecordingTmuxStatusSyncer::default(),
-            false,
-        )
-        .expect("sweep");
-
-        assert_eq!(report.signaled, 1);
-        assert_eq!(report.active, 0);
-
-        let reloaded = store::load_session_from(&test_dir.path, "stale-bg")
-            .expect("load")
-            .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Stopped);
-        assert!(
-            reloaded.pending_bg_task_ids.is_empty(),
-            "stale bg id should be removed from pending set"
+        assert_eq!(
+            (
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids,
+            ),
+            (SessionStatus::Paused, BTreeSet::new(), BTreeSet::new()),
         );
     }
 
@@ -1138,8 +1034,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             true,
         )
@@ -1174,8 +1068,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             true,
         )
@@ -1227,8 +1119,6 @@ mod tests {
             Duration::from_secs(60),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
@@ -1271,8 +1161,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &syncer,
             false,
         )
@@ -1311,8 +1199,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &syncer,
             false,
         )
@@ -1348,8 +1234,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &syncer,
             false,
         )
@@ -1371,8 +1255,6 @@ mod tests {
             Duration::from_secs(1),
             &sender,
             &probe,
-            &AllDeadBgTaskProbe,
-            &AllDeadAgentTaskProbe,
             &RecordingTmuxStatusSyncer::default(),
             false,
         )

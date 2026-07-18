@@ -57,7 +57,7 @@ pub fn decide_pause_with_effective(
         return PauseDecision::NotStopped;
     }
 
-    if !session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_outputs.is_empty() {
+    if !session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_ids.is_empty() {
         return PauseDecision::BgTaskPending;
     }
 
@@ -183,7 +183,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_agent_task_outputs: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -222,7 +222,7 @@ mod tests {
     #[rstest]
     #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
     #[case::agent_task(|s: &mut Session| {
-        s.pending_agent_task_outputs.insert(PathBuf::from("/tmp/agent-1.output"));
+        s.pending_agent_task_ids.insert("agent-1".to_string());
     })]
     fn decide_pause_skips_when_bg_task_pending(#[case] populate: fn(&mut Session)) {
         let now = Utc::now();

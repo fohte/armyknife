@@ -105,7 +105,7 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
     }
 
     if !inputs.session.pending_bg_task_ids.is_empty()
-        || !inputs.session.pending_agent_task_outputs.is_empty()
+        || !inputs.session.pending_agent_task_ids.is_empty()
     {
         return CompactDecision::BgTaskPending;
     }
@@ -168,7 +168,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
-            pending_agent_task_outputs: std::collections::BTreeSet::new(),
+            pending_agent_task_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -283,7 +283,7 @@ mod tests {
     #[rstest]
     #[case::bash_bg_task(|s: &mut Session| { s.pending_bg_task_ids.insert("bg-1".to_string()); })]
     #[case::agent_task(|s: &mut Session| {
-        s.pending_agent_task_outputs.insert(PathBuf::from("/tmp/agent-1.output"));
+        s.pending_agent_task_ids.insert("agent-1".to_string());
     })]
     fn pending_bg_task_aborts(#[case] populate: fn(&mut Session)) {
         // A worker scheduled by an earlier Stop wakes up after the user has

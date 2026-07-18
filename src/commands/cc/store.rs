@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
 
-use super::bg_task::{BgTaskProbe, LsofBgTaskProbe, sweep_pending_bg_tasks};
 use super::error::CcError;
 use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
@@ -352,58 +351,6 @@ pub fn list_sessions() -> Result<Vec<Session>> {
     Ok(sessions)
 }
 
-/// Probes every non-ended session's `pending_bg_task_ids` for liveness and
-/// drops dead ids. Run explicitly by commands that need an up-to-date view
-/// before `list_sessions` (e.g. `wm clean`); `list_sessions` itself stays
-/// side-effect-free so frequent read paths (TUI render, `cc list`) do not
-/// spawn `lsof`.
-pub fn sweep_pending_bg_tasks_in_all_sessions() -> Result<()> {
-    let dir = sessions_dir()?;
-    sweep_pending_bg_tasks_in_all_sessions_in(&dir, &LsofBgTaskProbe)
-}
-
-pub(crate) fn sweep_pending_bg_tasks_in_all_sessions_in<P: BgTaskProbe>(
-    dir: &Path,
-    bg_probe: &P,
-) -> Result<()> {
-    if !dir.exists() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        // Go through `load_session_from` so the read is performed under the
-        // same shared lock that `save_session_to` takes exclusively. A raw
-        // `read_to_string` here would race with a concurrent hook writing a
-        // new bg id and our subsequent save would overwrite it.
-        let Some(mut session) = load_session_from(dir, session_id)? else {
-            continue;
-        };
-        if session.status == SessionStatus::Ended {
-            continue;
-        }
-        if sweep_pending_bg_tasks(&mut session, bg_probe)
-            && let Err(e) = save_session_to(dir, &session)
-        {
-            tracing::warn!(
-                event = "cc.sweep_bg.persist_failed",
-                session = %session.session_id,
-                error = %e,
-            );
-        }
-    }
-
-    Ok(())
-}
-
 /// Removes stale sessions from disk.
 ///
 /// A session is considered stale and removed if its tmux pane no longer exists.
@@ -534,7 +481,7 @@ mod tests {
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
-            pending_agent_task_outputs: std::collections::BTreeSet::new(),
+            pending_agent_task_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -957,7 +904,7 @@ mod tests {
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
-                pending_agent_task_outputs: std::collections::BTreeSet::new(),
+                pending_agent_task_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
