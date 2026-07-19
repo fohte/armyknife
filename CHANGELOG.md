@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.241](https://github.com/fohte/armyknife/compare/v0.1.240...v0.1.241) (2026-07-19)
+
+
+### Bug Fixes
+
+* **cc:** stop giving stopped sessions a grace period in the clean view ([#756](https://github.com/fohte/armyknife/issues/756)) ([d16c077](https://github.com/fohte/armyknife/commit/d16c077aa990d50aded4035081edf2d98eaaa88a))
+
 ## [0.1.240](https://github.com/fohte/armyknife/compare/v0.1.239...v0.1.240) (2026-07-18)
 
 
