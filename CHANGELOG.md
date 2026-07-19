@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.242](https://github.com/fohte/armyknife/compare/v0.1.241...v0.1.242) (2026-07-19)
+
+
+### Bug Fixes
+
+* **cc:** report sessions as running while a background task is in flight ([#758](https://github.com/fohte/armyknife/issues/758)) ([65f86d6](https://github.com/fohte/armyknife/commit/65f86d6dd522e500a6fd7f7442061e66fa4f5921))
+
 ## [0.1.241](https://github.com/fohte/armyknife/compare/v0.1.240...v0.1.241) (2026-07-19)
 
 
