@@ -860,6 +860,37 @@ mod tests {
     }
 
     #[rstest]
+    #[case::no_pending_task(false, false, (false, CleanSection::ToDelete))]
+    #[case::pending_bg_task(true, false, (true, CleanSection::Kept))]
+    #[case::pending_agent_task(false, true, (true, CleanSection::Kept))]
+    fn stopped_session_has_no_active_grace_period(
+        #[case] pending_bg_task: bool,
+        #[case] pending_agent_task: bool,
+        #[case] expected: (bool, CleanSection),
+    ) {
+        // The clean view passes timeout=0 in production (unlike `wm clean` /
+        // `cc sweep`, which wait out `auto_pause.timeout`), so a `Stopped`
+        // session is active only while a bg/agent task is still pending.
+        let mut stopped = session("s1", PathBuf::from("/tmp/r1/wt-a"));
+        stopped.status = SessionStatus::Stopped;
+        if pending_bg_task {
+            stopped.pending_bg_task_ids.insert("bg".to_string());
+        }
+        if pending_agent_task {
+            stopped.pending_agent_task_ids.insert("agent".to_string());
+        }
+
+        let rows = build_clean_rows(
+            vec![merged_input("repo1", "feat/a", "feat-a", "/tmp/r1/wt-a", 1)],
+            &[stopped],
+            Utc::now(),
+            Duration::ZERO,
+        );
+
+        assert_eq!((rows[0].has_active, rows[0].section), expected);
+    }
+
+    #[rstest]
     fn pending_row_defaults_to_kept_with_fetching_label() {
         let rows = build_clean_rows(
             vec![pending_input("r1", "feat/a", "feat-a", "/tmp/r1/wt-a")],
