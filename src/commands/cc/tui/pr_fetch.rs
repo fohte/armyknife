@@ -12,19 +12,19 @@ use chrono::Utc;
 
 use super::clean_view::{CleanRow, CleanRowInput, build_clean_rows};
 use super::worktree_view::WorktreeRow;
-use crate::commands::cc::auto_pause::parse_duration;
 use crate::commands::cc::types::Session;
 use crate::infra::git::{GitRepo, github_owner_and_repo, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
-use crate::shared::config::load_config;
 
-/// Default `auto_pause.timeout` used when the config file cannot be
-/// loaded, matching the `wm clean` / `cc sweep` definition of "active".
-fn default_active_timeout() -> Duration {
-    load_config()
-        .ok()
-        .and_then(|c| parse_duration(&c.cc.auto_pause.timeout).ok())
-        .unwrap_or_else(|| Duration::from_secs(30 * 60))
+/// Timeout the clean view uses for its own active-session check. Unlike
+/// `wm clean` / `cc sweep`, which wait out `auto_pause.timeout` before
+/// treating a `Stopped` session as gone (giving the user a grace period
+/// to keep typing), the clean view treats `Stopped` as "done responding,
+/// nothing running" the moment it happens: zero grace period, so only a
+/// pending bg/agent task (handled separately by `decide_pause_with_effective`)
+/// keeps a `Stopped` session's worktree out of "To delete".
+fn clean_view_active_timeout() -> Duration {
+    Duration::ZERO
 }
 
 /// Build placeholder clean rows from the worktree snapshot without
@@ -40,7 +40,7 @@ pub fn build_initial_clean_rows(rows: Vec<WorktreeRow>, sessions: &[Session]) ->
             pr_loaded: false,
         })
         .collect();
-    build_clean_rows(inputs, sessions, Utc::now(), default_active_timeout())
+    build_clean_rows(inputs, sessions, Utc::now(), clean_view_active_timeout())
 }
 
 /// Fetch PR statuses for `rows` and build the PR-enriched clean-row
@@ -114,6 +114,6 @@ pub async fn fetch_clean_inputs(
         inputs,
         &sessions,
         Utc::now(),
-        default_active_timeout(),
+        clean_view_active_timeout(),
     ))
 }
