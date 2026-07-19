@@ -141,7 +141,8 @@ impl Session {
     /// `pending_agent_task_ids`). Shared by every consumer that must treat
     /// such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
-    /// `determine_status` (skip the `Stop` -> `Stopped` transition).
+    /// the status clamp in `hook::process_hook_event_impl` (turn a
+    /// `determine_status`-computed `Stopped` back into `Running`).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
@@ -247,18 +248,6 @@ impl HookInput {
     /// does not act on.
     pub fn pending_agent_task_ids(&self) -> BTreeSet<String> {
         self.pending_task_ids_of_type("subagent")
-    }
-
-    /// True if `background_tasks` reports at least one Bash background task
-    /// or Task-tool subagent still in flight or scheduled. Equivalent to
-    /// `Session::has_pending_bg_tasks` once `Stop` has refreshed the
-    /// session's pending sets from this same input; checking it directly
-    /// here lets `determine_status` see the same signal before that refresh
-    /// happens.
-    pub fn has_pending_bg_tasks(&self) -> bool {
-        self.background_tasks
-            .iter()
-            .any(|t| t.task_type == "shell" || t.task_type == "subagent")
     }
 
     fn pending_task_ids_of_type(&self, task_type: &str) -> BTreeSet<String> {
@@ -427,21 +416,5 @@ mod tests {
             s.pending_agent_task_ids.insert("agent-1".to_string());
         }
         assert_eq!(s.has_pending_bg_tasks(), expected);
-    }
-
-    #[rstest]
-    #[case::empty("[]", false)]
-    #[case::shell_task(r#"[{"id":"bg-1","type":"shell","status":"running"}]"#, true)]
-    #[case::subagent_task(r#"[{"id":"task-1","type":"subagent","status":"running"}]"#, true)]
-    #[case::other_type_only(r#"[{"id":"mon-1","type":"monitor","status":"running"}]"#, false)]
-    fn hook_input_has_pending_bg_tasks_table(
-        #[case] background_tasks_json: &str,
-        #[case] expected: bool,
-    ) {
-        let json = format!(
-            r#"{{"session_id":"s","cwd":"/tmp/test","background_tasks":{background_tasks_json}}}"#
-        );
-        let input: HookInput = serde_json::from_str(&json).expect("valid JSON");
-        assert_eq!(input.has_pending_bg_tasks(), expected);
     }
 }
