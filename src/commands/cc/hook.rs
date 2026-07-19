@@ -442,6 +442,9 @@ fn process_hook_event_impl(
     // when it finishes -- so a non-empty set here means "the user is still
     // mid-task even though Claude's main loop went idle":
     //
+    // - `determine_status` (above) reports `Running` instead of `Stopped`
+    //   while any id is pending, so `cc list` / `cc watch` / tmux don't show
+    //   the session as idle.
     // - `auto_compact` skips the synthetic Stop while any id is pending.
     // - `sweep` does not SIGTERM the session while any id is pending
     //   (otherwise a long-running task gets killed mid-flight).
@@ -777,6 +780,13 @@ fn export_session_id_to_env_file(session_id: &str) {
 /// Note: SessionEnd is handled separately in run() before this function is called.
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     match event {
+        // Claude Code fires Stop synthetically as soon as a Bash bg shell or
+        // Task-tool subagent (`run_in_background: true`) is launched, not
+        // when it finishes. Reporting Stopped here would show the session as
+        // idle to `cc list` / `cc watch` / tmux while the user is still
+        // mid-task, so treat a non-empty `background_tasks` the same as
+        // still-Running until a later Stop reports it empty.
+        HookEvent::Stop if input.has_pending_bg_tasks() => SessionStatus::Running,
         HookEvent::Stop => SessionStatus::Stopped,
         HookEvent::PermissionRequest => SessionStatus::WaitingInput,
         HookEvent::Notification => match input.notification_type.as_deref() {
@@ -1068,6 +1078,35 @@ mod tests {
         let input = create_test_input_with_source(notification_type, source);
         let result = determine_status(event, &input);
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::shell_task_pending(
+        r#","background_tasks":[{"id":"bg-1","type":"shell","status":"running"}]"#,
+        SessionStatus::Running
+    )]
+    #[case::subagent_task_pending(
+        r#","background_tasks":[{"id":"task-1","type":"subagent","status":"running"}]"#,
+        SessionStatus::Running
+    )]
+    #[case::other_registry_type_does_not_count(
+        r#","background_tasks":[{"id":"mon-1","type":"monitor","status":"running"}]"#,
+        SessionStatus::Stopped
+    )]
+    #[case::empty_background_tasks("", SessionStatus::Stopped)]
+    fn test_determine_status_stop_reflects_pending_bg_tasks(
+        #[case] background_tasks_json: &str,
+        #[case] expected: SessionStatus,
+    ) {
+        // Claude Code fires Stop synthetically the instant a bg shell or
+        // Task-tool subagent is launched, so `determine_status` must not
+        // report `Stopped` while `background_tasks` still lists one --
+        // otherwise `cc list` / `cc watch` / tmux show the session as idle
+        // while it's actually still mid-task.
+        let payload =
+            format!(r#"{{"session_id":"test-123","cwd":"/tmp/test"{background_tasks_json}}}"#);
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+        assert_eq!(determine_status(HookEvent::Stop, &input), expected);
     }
 
     #[test]
@@ -1573,32 +1612,35 @@ mod tests {
 
     #[rstest]
     // A shell task and a subagent task both reported running -- each id
-    // lands in the field matching its own `type`, not the other's.
+    // lands in the field matching its own `type`, not the other's, and the
+    // session stays Running instead of transitioning to Stopped.
     #[case::mixed_types_split_by_field(
         &[], &[],
         r#","background_tasks":[{"id":"shell-1","type":"shell","status":"running"},{"id":"task-1","type":"subagent","status":"running"}]"#,
-        &["shell-1"], &["task-1"],
+        &["shell-1"], &["task-1"], SessionStatus::Running,
     )]
     // Other task-registry entry types (monitor, workflow, teammate, cloud
-    // session, MCP task) are not acted on by armyknife.
+    // session, MCP task) are not acted on by armyknife, and do not keep the
+    // session Running either.
     #[case::other_registry_types_are_ignored(
         &[], &[],
         r#","background_tasks":[{"id":"mon-1","type":"monitor","status":"running"}]"#,
-        &[], &[],
+        &[], &[], SessionStatus::Stopped,
     )]
     // Stop overwrites both sets wholesale from the registry's current view --
     // an id no longer present in background_tasks is dropped, not merged
-    // with whatever was pending before.
+    // with whatever was pending before, and the now-empty sets let the
+    // session transition to Stopped.
     #[case::stale_ids_are_dropped(
         &["stale-bg"], &["stale-agent"],
         r#","background_tasks":[]"#,
-        &[], &[],
+        &[], &[], SessionStatus::Stopped,
     )]
     // Claude Code older than v2.1.145 omits the field entirely; it
     // deserializes to an empty vec and both sets fall back to "nothing
     // pending".
     #[case::missing_field_falls_back_to_empty(
-        &["stale-bg"], &["stale-agent"], "", &[], &[],
+        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Stopped,
     )]
     fn stop_refreshes_pending_task_ids_from_background_tasks(
         #[case] initial_bg: &[&str],
@@ -1606,6 +1648,7 @@ mod tests {
         #[case] background_tasks_json: &str,
         #[case] expected_bg: &[&str],
         #[case] expected_agent: &[&str],
+        #[case] expected_status: SessionStatus,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
@@ -1629,9 +1672,10 @@ mod tests {
         assert_eq!(
             (
                 reloaded.pending_bg_task_ids,
-                reloaded.pending_agent_task_ids
+                reloaded.pending_agent_task_ids,
+                reloaded.status,
             ),
-            (set_of(expected_bg), set_of(expected_agent)),
+            (set_of(expected_bg), set_of(expected_agent), expected_status),
         );
     }
 

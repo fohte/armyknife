@@ -57,7 +57,7 @@ pub fn decide_pause_with_effective(
         return PauseDecision::NotStopped;
     }
 
-    if !session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_ids.is_empty() {
+    if session.has_pending_bg_tasks() {
         return PauseDecision::BgTaskPending;
     }
 

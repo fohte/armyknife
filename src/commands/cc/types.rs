@@ -136,6 +136,16 @@ impl Session {
         self.status == SessionStatus::Stopped && self.read_at.is_none()
     }
 
+    /// True if this session has a Bash background task or Task-tool subagent
+    /// that has not yet reported completion (see `pending_bg_task_ids` /
+    /// `pending_agent_task_ids`). Shared by every consumer that must treat
+    /// such a session as still mid-task despite an idle main loop:
+    /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
+    /// `determine_status` (skip the `Stop` -> `Stopped` transition).
+    pub fn has_pending_bg_tasks(&self) -> bool {
+        !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
+    }
+
     /// Status symbol that also reflects unread state.
     pub fn display_symbol(&self) -> &'static str {
         if self.is_unread_stopped() {
@@ -237,6 +247,18 @@ impl HookInput {
     /// does not act on.
     pub fn pending_agent_task_ids(&self) -> BTreeSet<String> {
         self.pending_task_ids_of_type("subagent")
+    }
+
+    /// True if `background_tasks` reports at least one Bash background task
+    /// or Task-tool subagent still in flight or scheduled. Equivalent to
+    /// `Session::has_pending_bg_tasks` once `Stop` has refreshed the
+    /// session's pending sets from this same input; checking it directly
+    /// here lets `determine_status` see the same signal before that refresh
+    /// happens.
+    pub fn has_pending_bg_tasks(&self) -> bool {
+        self.background_tasks
+            .iter()
+            .any(|t| t.task_type == "shell" || t.task_type == "subagent")
     }
 
     fn pending_task_ids_of_type(&self, task_type: &str) -> BTreeSet<String> {
@@ -385,5 +407,41 @@ mod tests {
             session.pending_agent_task_ids,
             BTreeSet::from(["/tmp/claude-1/proj/legacy/tasks/agent-1.output".to_string()])
         );
+    }
+
+    #[rstest]
+    #[case::neither(false, false, false)]
+    #[case::bg_only(true, false, true)]
+    #[case::agent_only(false, true, true)]
+    #[case::both(true, true, true)]
+    fn session_has_pending_bg_tasks_table(
+        #[case] bg_pending: bool,
+        #[case] agent_pending: bool,
+        #[case] expected: bool,
+    ) {
+        let mut s = session(SessionStatus::Stopped, None);
+        if bg_pending {
+            s.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+        if agent_pending {
+            s.pending_agent_task_ids.insert("agent-1".to_string());
+        }
+        assert_eq!(s.has_pending_bg_tasks(), expected);
+    }
+
+    #[rstest]
+    #[case::empty("[]", false)]
+    #[case::shell_task(r#"[{"id":"bg-1","type":"shell","status":"running"}]"#, true)]
+    #[case::subagent_task(r#"[{"id":"task-1","type":"subagent","status":"running"}]"#, true)]
+    #[case::other_type_only(r#"[{"id":"mon-1","type":"monitor","status":"running"}]"#, false)]
+    fn hook_input_has_pending_bg_tasks_table(
+        #[case] background_tasks_json: &str,
+        #[case] expected: bool,
+    ) {
+        let json = format!(
+            r#"{{"session_id":"s","cwd":"/tmp/test","background_tasks":{background_tasks_json}}}"#
+        );
+        let input: HookInput = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(input.has_pending_bg_tasks(), expected);
     }
 }
