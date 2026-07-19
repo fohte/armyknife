@@ -104,9 +104,7 @@ pub fn decide_compact(inputs: CompactInputs<'_>) -> CompactDecision {
         return CompactDecision::NotStopped;
     }
 
-    if !inputs.session.pending_bg_task_ids.is_empty()
-        || !inputs.session.pending_agent_task_ids.is_empty()
-    {
+    if inputs.session.has_pending_bg_tasks() {
         return CompactDecision::BgTaskPending;
     }
 

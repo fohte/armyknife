@@ -136,6 +136,17 @@ impl Session {
         self.status == SessionStatus::Stopped && self.read_at.is_none()
     }
 
+    /// True if this session has a Bash background task or Task-tool subagent
+    /// that has not yet reported completion (see `pending_bg_task_ids` /
+    /// `pending_agent_task_ids`). Shared by every consumer that must treat
+    /// such a session as still mid-task despite an idle main loop:
+    /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
+    /// the status clamp in `hook::process_hook_event_impl` (turn a
+    /// `determine_status`-computed `Stopped` back into `Running`).
+    pub fn has_pending_bg_tasks(&self) -> bool {
+        !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
+    }
+
     /// Status symbol that also reflects unread state.
     pub fn display_symbol(&self) -> &'static str {
         if self.is_unread_stopped() {
@@ -385,5 +396,25 @@ mod tests {
             session.pending_agent_task_ids,
             BTreeSet::from(["/tmp/claude-1/proj/legacy/tasks/agent-1.output".to_string()])
         );
+    }
+
+    #[rstest]
+    #[case::neither(false, false, false)]
+    #[case::bg_only(true, false, true)]
+    #[case::agent_only(false, true, true)]
+    #[case::both(true, true, true)]
+    fn session_has_pending_bg_tasks_table(
+        #[case] bg_pending: bool,
+        #[case] agent_pending: bool,
+        #[case] expected: bool,
+    ) {
+        let mut s = session(SessionStatus::Stopped, None);
+        if bg_pending {
+            s.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+        if agent_pending {
+            s.pending_agent_task_ids.insert("agent-1".to_string());
+        }
+        assert_eq!(s.has_pending_bg_tasks(), expected);
     }
 }

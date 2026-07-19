@@ -296,9 +296,7 @@ where
         // protection. Once sweep can independently confirm no `claude` pid
         // resolves for the session, treat any pending ids as stale and drop
         // them before making the pause decision.
-        if (!session.pending_bg_task_ids.is_empty() || !session.pending_agent_task_ids.is_empty())
-            && probe.resolve_pid(&session).is_none()
-        {
+        if session.has_pending_bg_tasks() && probe.resolve_pid(&session).is_none() {
             tracing::info!(
                 event = "cc.sweep.stale_pending_tasks_cleared",
                 session = %session.session_id,
