@@ -18,7 +18,7 @@ shellcheck = "0.11.0"
 shfmt = "3.13.1"
 
 # sandbox runtime for tests
-"npm:@anthropic-ai/sandbox-runtime" = "0.0.55"
+"npm:@anthropic-ai/sandbox-runtime" = "0.0.65"
 
 [tasks.test]
 description = "Run tests in sandbox"
