@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.250](https://github.com/fohte/armyknife/compare/v0.1.249...v0.1.250) (2026-07-29)
+
+
+### Dependencies
+
+* update rust crate thiserror to v2.0.19 ([#783](https://github.com/fohte/armyknife/issues/783)) ([47f0b6b](https://github.com/fohte/armyknife/commit/47f0b6b2d876075d6f1f81a4c6c6d05478e5bc87))
+
 ## [0.1.249](https://github.com/fohte/armyknife/compare/v0.1.248...v0.1.249) (2026-07-29)
 
 
