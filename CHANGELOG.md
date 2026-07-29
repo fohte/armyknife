@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.245](https://github.com/fohte/armyknife/compare/v0.1.244...v0.1.245) (2026-07-29)
+
+
+### Dependencies
+
+* update rust crate anyhow to v1.0.104 ([#773](https://github.com/fohte/armyknife/issues/773)) ([0b07b36](https://github.com/fohte/armyknife/commit/0b07b3624812d47cbf4f4d5f231494fa05237954))
+
 ## [0.1.244](https://github.com/fohte/armyknife/compare/v0.1.243...v0.1.244) (2026-07-29)
 
 
