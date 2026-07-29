@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.249](https://github.com/fohte/armyknife/compare/v0.1.248...v0.1.249) (2026-07-29)
+
+
+### Dependencies
+
+* update rust crate serde_json to v1.0.151 ([#781](https://github.com/fohte/armyknife/issues/781)) ([0ac7c4a](https://github.com/fohte/armyknife/commit/0ac7c4a07aba23a70820da96e6a44c4f7012058a))
+
 ## [0.1.248](https://github.com/fohte/armyknife/compare/v0.1.247...v0.1.248) (2026-07-29)
 
 
