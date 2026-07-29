@@ -499,6 +499,14 @@ fn process_hook_event_impl(
         let config = config::load_config().unwrap_or_default();
         if should_notify(event, session.has_pending_bg_tasks(), &config) {
             send_notification(event, &input, &session, &config);
+        } else if event == HookEvent::Stop && session.has_pending_bg_tasks() {
+            tracing::info!(
+                event = "cc.notification.skipped",
+                session = %session.session_id,
+                reason = "bg_task_pending",
+                pending_bg_tasks = session.pending_bg_task_ids.len(),
+                pending_agent_tasks = session.pending_agent_task_ids.len(),
+            );
         }
     }
 
@@ -853,6 +861,12 @@ fn should_notify(event: HookEvent, has_pending_bg_tasks: bool, config: &Config) 
 /// finished subagent/bg shell instead of one when the session is truly idle.
 /// `PermissionRequest` always notifies regardless: it's the user's turn by
 /// definition.
+///
+/// Accepted trade-off: a bg shell that never exits (e.g. a dev server
+/// started with `run_in_background: true`) keeps `has_pending_bg_tasks` true
+/// for as long as it runs, suppressing every Stop notification for that
+/// session until the process ends -- consistent with how the status clamp,
+/// `auto_pause`, and `auto_compact` all treat the same field.
 fn is_notifiable_event(event: HookEvent, has_pending_bg_tasks: bool) -> bool {
     match event {
         HookEvent::Stop => !has_pending_bg_tasks,
@@ -1399,33 +1413,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_should_notify_respects_config_disabled() {
+    #[rstest]
+    #[case::config_disabled_stop(false, HookEvent::Stop, false, false)]
+    #[case::config_disabled_permission_request(false, HookEvent::PermissionRequest, false, false)]
+    #[case::config_enabled_stop(true, HookEvent::Stop, false, true)]
+    #[case::config_enabled_permission_request(true, HookEvent::PermissionRequest, false, true)]
+    #[case::config_enabled_non_notifiable_event(true, HookEvent::UserPromptSubmit, false, false)]
+    #[case::stop_skipped_with_pending_bg_tasks(true, HookEvent::Stop, true, false)]
+    #[case::permission_request_ignores_pending_bg_tasks(
+        true,
+        HookEvent::PermissionRequest,
+        true,
+        true
+    )]
+    fn test_should_notify(
+        #[case] config_enabled: bool,
+        #[case] event: HookEvent,
+        #[case] has_pending_bg_tasks: bool,
+        #[case] expected: bool,
+    ) {
         let mut config = Config::default();
-        config.notification.enabled = false;
+        config.notification.enabled = config_enabled;
 
-        assert!(!should_notify(HookEvent::Stop, false, &config));
-        assert!(!should_notify(HookEvent::PermissionRequest, false, &config));
-    }
-
-    #[test]
-    fn test_should_notify_respects_config_enabled() {
-        let config = Config::default();
-
-        // Default config has notifications enabled
-        assert!(should_notify(HookEvent::Stop, false, &config));
-        assert!(should_notify(HookEvent::PermissionRequest, false, &config));
-        // Non-notifiable events still return false
-        assert!(!should_notify(HookEvent::UserPromptSubmit, false, &config));
-    }
-
-    #[test]
-    fn test_should_notify_skips_stop_with_pending_bg_tasks() {
-        let config = Config::default();
-
-        assert!(!should_notify(HookEvent::Stop, true, &config));
-        // PermissionRequest is unaffected by pending background tasks.
-        assert!(should_notify(HookEvent::PermissionRequest, true, &config));
+        assert_eq!(
+            should_notify(event, has_pending_bg_tasks, &config),
+            expected
+        );
     }
 
     #[test]
