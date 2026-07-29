@@ -497,7 +497,7 @@ fn process_hook_event_impl(
     // Use default config if loading fails to avoid config errors blocking notifications.
     if side_effects.notifications {
         let config = config::load_config().unwrap_or_default();
-        if should_notify(event, &config) {
+        if should_notify(event, session.has_pending_bg_tasks(), &config) {
             send_notification(event, &input, &session, &config);
         }
     }
@@ -839,15 +839,26 @@ fn is_notification_enabled(config: &Config) -> bool {
 }
 
 /// Determines if a notification should be sent for the given event.
-fn should_notify(event: HookEvent, config: &Config) -> bool {
-    is_notification_enabled(config) && is_notifiable_event(event)
+fn should_notify(event: HookEvent, has_pending_bg_tasks: bool, config: &Config) -> bool {
+    is_notification_enabled(config) && is_notifiable_event(event, has_pending_bg_tasks)
 }
 
 /// Checks if the event type warrants a notification.
 /// Uses PermissionRequest for permission notifications (has tool details),
 /// skips Notification/permission_prompt to avoid duplicates.
-fn is_notifiable_event(event: HookEvent) -> bool {
-    matches!(event, HookEvent::Stop | HookEvent::PermissionRequest)
+///
+/// A `Stop` with a pending background task (see `Session::has_pending_bg_tasks`)
+/// is synthetic -- Claude's main loop went idle but the user's turn hasn't
+/// actually arrived yet -- so it's suppressed to avoid a notification per
+/// finished subagent/bg shell instead of one when the session is truly idle.
+/// `PermissionRequest` always notifies regardless: it's the user's turn by
+/// definition.
+fn is_notifiable_event(event: HookEvent, has_pending_bg_tasks: bool) -> bool {
+    match event {
+        HookEvent::Stop => !has_pending_bg_tasks,
+        HookEvent::PermissionRequest => true,
+        _ => false,
+    }
 }
 
 /// Sends a notification for the given event.
@@ -1143,14 +1154,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stop_always_notifies(HookEvent::Stop, true)]
-    #[case::permission_request_notifies(HookEvent::PermissionRequest, true)]
-    #[case::notification_no_notify(HookEvent::Notification, false)]
-    #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, false)]
-    #[case::pre_tool_no_notification(HookEvent::PreToolUse, false)]
-    #[case::post_tool_no_notification(HookEvent::PostToolUse, false)]
-    fn test_is_notifiable_event(#[case] event: HookEvent, #[case] expected: bool) {
-        assert_eq!(is_notifiable_event(event), expected);
+    #[case::stop_notifies_without_pending(HookEvent::Stop, false, true)]
+    #[case::stop_no_notify_with_pending(HookEvent::Stop, true, false)]
+    #[case::permission_request_notifies_without_pending(HookEvent::PermissionRequest, false, true)]
+    #[case::permission_request_notifies_with_pending(HookEvent::PermissionRequest, true, true)]
+    #[case::notification_no_notify(HookEvent::Notification, false, false)]
+    #[case::user_prompt_no_notification(HookEvent::UserPromptSubmit, false, false)]
+    #[case::pre_tool_no_notification(HookEvent::PreToolUse, false, false)]
+    #[case::post_tool_no_notification(HookEvent::PostToolUse, false, false)]
+    fn test_is_notifiable_event(
+        #[case] event: HookEvent,
+        #[case] has_pending_bg_tasks: bool,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_notifiable_event(event, has_pending_bg_tasks), expected);
     }
 
     #[test]
@@ -1387,8 +1404,8 @@ mod tests {
         let mut config = Config::default();
         config.notification.enabled = false;
 
-        assert!(!should_notify(HookEvent::Stop, &config));
-        assert!(!should_notify(HookEvent::PermissionRequest, &config));
+        assert!(!should_notify(HookEvent::Stop, false, &config));
+        assert!(!should_notify(HookEvent::PermissionRequest, false, &config));
     }
 
     #[test]
@@ -1396,10 +1413,19 @@ mod tests {
         let config = Config::default();
 
         // Default config has notifications enabled
-        assert!(should_notify(HookEvent::Stop, &config));
-        assert!(should_notify(HookEvent::PermissionRequest, &config));
+        assert!(should_notify(HookEvent::Stop, false, &config));
+        assert!(should_notify(HookEvent::PermissionRequest, false, &config));
         // Non-notifiable events still return false
-        assert!(!should_notify(HookEvent::UserPromptSubmit, &config));
+        assert!(!should_notify(HookEvent::UserPromptSubmit, false, &config));
+    }
+
+    #[test]
+    fn test_should_notify_skips_stop_with_pending_bg_tasks() {
+        let config = Config::default();
+
+        assert!(!should_notify(HookEvent::Stop, true, &config));
+        // PermissionRequest is unaffected by pending background tasks.
+        assert!(should_notify(HookEvent::PermissionRequest, true, &config));
     }
 
     #[test]
