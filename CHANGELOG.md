@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.244](https://github.com/fohte/armyknife/compare/v0.1.243...v0.1.244) (2026-07-29)
+
+
+### Bug Fixes
+
+* **cc:** suppress Stop notifications while a background task is pending ([#770](https://github.com/fohte/armyknife/issues/770)) ([1639fae](https://github.com/fohte/armyknife/commit/1639faefc239c1719be6f5392d78478a21fce69a))
+
 ## [0.1.243](https://github.com/fohte/armyknife/compare/v0.1.242...v0.1.243) (2026-07-22)
 
 
