@@ -224,8 +224,9 @@ pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String
 }
 
 /// Variant of [`get_session_title`] that accepts a pre-loaded
-/// `sessionId` → `summary` map. When `index` is `Some`, no file I/O is
-/// performed; when `None`, `sessions-index.json` is read inline.
+/// `sessionId` → `summary` map to avoid re-reading `sessions-index.json`.
+/// The `.jsonl` reads (last `ai-title` entry, and the first-user-prompt
+/// fallback) happen regardless of `index`.
 pub fn get_session_title_with_index(
     project_path: &Path,
     session_id: &str,
@@ -263,6 +264,18 @@ pub fn get_last_ai_title(project_path: &Path, session_id: &str) -> Option<String
 }
 
 /// Internal function for testing: allows overriding the home directory.
+///
+/// Most sessions have no `ai-title` entry at all (transcripts predating this
+/// feature, or subagent sidechains), so this deliberately does *not* fall
+/// back to a full-file forward scan the way the sibling assistant-message /
+/// usage-token readers do -- that fallback is cheap for them because a hit is
+/// the common case, but here it would mean linearly scanning every large,
+/// title-less transcript on every call (`cc list`'s per-session loop, and the
+/// TUI's title cache rebuild on each `Modified` event). Forward scanning is
+/// only used for files small enough that it's equivalent in cost to the
+/// bounded reverse scan; for larger files, an `ai-title` older than
+/// `MAX_READ_SIZE` from EOF is treated as absent and callers fall through to
+/// the next title source.
 fn get_last_ai_title_in_home(home: &Path, project_path: &Path, session_id: &str) -> Option<String> {
     let encoded = encode_project_path(project_path);
     let jsonl_path = home
@@ -276,29 +289,27 @@ fn get_last_ai_title_in_home(home: &Path, project_path: &Path, session_id: &str)
     }
 
     let file = File::open(&jsonl_path).ok()?;
+    let file_size = file.metadata().ok()?.len();
 
-    if let Some(title) = read_last_ai_title_reverse(&file) {
-        return Some(title);
+    if file_size < INITIAL_READ_SIZE as u64 {
+        return read_last_ai_title_forward(&file);
     }
 
-    read_last_ai_title_forward(&file)
+    read_last_ai_title_reverse(&file)
 }
 
-/// Reverse-scan for the last `ai-title` entry.
+/// Reverse-scan for the last `ai-title` entry within the last `MAX_READ_SIZE`
+/// bytes of the file.
 ///
 /// Unlike `read_last_assistant_message_reverse` / `read_last_context_tokens_reverse`,
 /// this does not cap the per-window scan to `MAX_LINES_TO_SCAN` lines:
 /// `ai-title` entries are appended far more sparsely than assistant/usage
 /// entries (Claude Code only rewrites the title occasionally), so the last
 /// one can sit well beyond 20 lines from EOF even in an actively growing
-/// transcript. The `MAX_READ_SIZE` cap on buffer growth still bounds the work.
+/// transcript.
 fn read_last_ai_title_reverse(file: &File) -> Option<String> {
     let metadata = file.metadata().ok()?;
     let file_size = metadata.len();
-
-    if file_size < INITIAL_READ_SIZE as u64 {
-        return None;
-    }
 
     let mut read_size = INITIAL_READ_SIZE;
 
