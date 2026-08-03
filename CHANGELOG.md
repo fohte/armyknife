@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.251](https://github.com/fohte/armyknife/compare/v0.1.250...v0.1.251) (2026-08-03)
+
+
+### Bug Fixes
+
+* **cc:** show the AI-generated title in the session list TITLE column ([#787](https://github.com/fohte/armyknife/issues/787)) ([149d4db](https://github.com/fohte/armyknife/commit/149d4dbfbb777295b219241223cc76b234a37915))
+
 ## [0.1.250](https://github.com/fohte/armyknife/compare/v0.1.249...v0.1.250) (2026-07-29)
 
 
