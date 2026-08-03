@@ -1002,7 +1002,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
     let tmux_info = session.tmux_info.as_ref()?;
     let tmux_part = format!("{}:{}", tmux_info.session_name, tmux_info.window_name);
 
-    // Get session title: label (armyknife) > firstPrompt (Claude Code)
+    // Get session title: label (armyknife) > ai-title (Claude Code)
     let session_title = session
         .label
         .clone()

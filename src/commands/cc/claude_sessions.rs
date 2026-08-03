@@ -33,6 +33,19 @@ struct JsonlMessage {
     content: Option<String>,
 }
 
+/// `ai-title` entry in .jsonl files.
+///
+/// Claude Code appends one of these as it refines the AI-generated session
+/// title over the course of a conversation; the last entry in the file holds
+/// the currently active title (matches what's shown in the tmux pane title).
+#[derive(Debug, Deserialize)]
+struct AiTitleJsonlEntry {
+    #[serde(rename = "type")]
+    entry_type: Option<String>,
+    #[serde(rename = "aiTitle")]
+    ai_title: Option<String>,
+}
+
 /// Assistant message entry in .jsonl files
 #[derive(Debug, Deserialize)]
 struct AssistantJsonlEntry {
@@ -204,19 +217,25 @@ fn sessions_index_summaries_in_home(home: &Path, project_path: &Path) -> HashMap
 
 /// Retrieves the session title.
 ///
-/// Priority: `sessions-index.json` `summary` > first user prompt in `.jsonl`.
+/// Priority: last `ai-title` entry in `.jsonl` > `sessions-index.json`
+/// `summary` > first user prompt in `.jsonl`.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
     get_session_title_with_index(project_path, session_id, None)
 }
 
 /// Variant of [`get_session_title`] that accepts a pre-loaded
-/// `sessionId` → `summary` map. When `index` is `Some`, no file I/O is
-/// performed; when `None`, `sessions-index.json` is read inline.
+/// `sessionId` → `summary` map to avoid re-reading `sessions-index.json`.
+/// The `.jsonl` reads (last `ai-title` entry, and the first-user-prompt
+/// fallback) happen regardless of `index`.
 pub fn get_session_title_with_index(
     project_path: &Path,
     session_id: &str,
     index: Option<&HashMap<String, String>>,
 ) -> Option<String> {
+    if let Some(title) = get_last_ai_title(project_path, session_id) {
+        return Some(title);
+    }
+
     let summary = match index {
         Some(map) => map.get(session_id).cloned(),
         None => sessions_index_summaries(project_path)
@@ -231,6 +250,137 @@ pub fn get_session_title_with_index(
     }
 
     get_title_from_jsonl(project_path, session_id)
+}
+
+/// Retrieves the currently active AI-generated session title, i.e. the
+/// `aiTitle` of the last `ai-title` entry in a session's .jsonl file.
+///
+/// Returns `None` when the session has no `ai-title` entries (sessions
+/// created before this feature existed, or subagent sidechains) -- callers
+/// fall through to the next title source.
+pub fn get_last_ai_title(project_path: &Path, session_id: &str) -> Option<String> {
+    let home = crate::shared::dirs::home_dir()?;
+    get_last_ai_title_in_home(&home, project_path, session_id)
+}
+
+/// Internal function for testing: allows overriding the home directory.
+///
+/// Most sessions have no `ai-title` entry at all (transcripts predating this
+/// feature, or subagent sidechains), so this deliberately does *not* fall
+/// back to a full-file forward scan the way the sibling assistant-message /
+/// usage-token readers do -- that fallback is cheap for them because a hit is
+/// the common case, but here it would mean linearly scanning every large,
+/// title-less transcript on every call (`cc list`'s per-session loop, and the
+/// TUI's title cache rebuild on each `Modified` event). Forward scanning is
+/// only used for files small enough that it's equivalent in cost to the
+/// bounded reverse scan; for larger files, an `ai-title` older than
+/// `MAX_READ_SIZE` from EOF is treated as absent and callers fall through to
+/// the next title source.
+fn get_last_ai_title_in_home(home: &Path, project_path: &Path, session_id: &str) -> Option<String> {
+    let encoded = encode_project_path(project_path);
+    let jsonl_path = home
+        .join(".claude")
+        .join("projects")
+        .join(&encoded)
+        .join(format!("{session_id}.jsonl"));
+
+    if !jsonl_path.exists() {
+        return None;
+    }
+
+    let file = File::open(&jsonl_path).ok()?;
+    let file_size = file.metadata().ok()?.len();
+
+    if file_size < INITIAL_READ_SIZE as u64 {
+        return read_last_ai_title_forward(&file);
+    }
+
+    read_last_ai_title_reverse(&file)
+}
+
+/// Reverse-scan for the last `ai-title` entry within the last `MAX_READ_SIZE`
+/// bytes of the file.
+///
+/// Unlike `read_last_assistant_message_reverse` / `read_last_context_tokens_reverse`,
+/// this does not cap the per-window scan to `MAX_LINES_TO_SCAN` lines:
+/// `ai-title` entries are appended far more sparsely than assistant/usage
+/// entries (Claude Code only rewrites the title occasionally), so the last
+/// one can sit well beyond 20 lines from EOF even in an actively growing
+/// transcript.
+fn read_last_ai_title_reverse(file: &File) -> Option<String> {
+    let metadata = file.metadata().ok()?;
+    let file_size = metadata.len();
+
+    let mut read_size = INITIAL_READ_SIZE;
+
+    while read_size <= MAX_READ_SIZE {
+        let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
+
+        if let Some(title) = try_read_last_lines_for_ai_title(file, actual_read, file_size) {
+            return Some(title);
+        }
+
+        read_size *= 2;
+    }
+
+    None
+}
+
+fn try_read_last_lines_for_ai_title(
+    file: &File,
+    read_size: usize,
+    file_size: u64,
+) -> Option<String> {
+    let mut reader = BufReader::new(file);
+
+    reader.seek(SeekFrom::End(-(read_size as i64))).ok()?;
+
+    let mut buffer = vec![0u8; read_size];
+    reader.read_exact(&mut buffer).ok()?;
+
+    let content = String::from_utf8_lossy(&buffer);
+
+    let complete_content = if read_size as u64 >= file_size {
+        &content[..]
+    } else {
+        let first_newline = content.find('\n')?;
+        &content[first_newline + 1..]
+    };
+
+    complete_content.lines().rev().find_map(ai_title_from_line)
+}
+
+fn read_last_ai_title_forward(file: &File) -> Option<String> {
+    let mut file = BufReader::new(file);
+    file.seek(SeekFrom::Start(0)).ok()?;
+
+    let mut last_title: Option<String> = None;
+
+    for line in file.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(title) = ai_title_from_line(&line) {
+            last_title = Some(title);
+        }
+    }
+
+    last_title
+}
+
+fn ai_title_from_line(line: &str) -> Option<String> {
+    let entry: AiTitleJsonlEntry = serde_json::from_str(line).ok()?;
+    if entry.entry_type.as_deref() != Some("ai-title") {
+        return None;
+    }
+    let title = entry.ai_title?;
+    if title.trim().is_empty() {
+        return None;
+    }
+    Some(normalize_title(&title))
 }
 
 /// Reads the first user prompt from a session's .jsonl file.
@@ -719,6 +869,93 @@ mod tests {
         );
 
         assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Tests for get_last_ai_title
+    // =========================================================================
+
+    #[rstest]
+    #[case::returns_last_title(
+        indoc! {r#"
+            {"type":"ai-title","aiTitle":"First Title","sessionId":"s"}
+            {"type":"user","message":{"content":"hi"}}
+            {"type":"ai-title","aiTitle":"Second Title","sessionId":"s"}
+        "#},
+        Some("Second Title")
+    )]
+    #[case::skips_empty_title_and_falls_back_to_earlier(
+        indoc! {r#"
+            {"type":"ai-title","aiTitle":"Earlier Title","sessionId":"s"}
+            {"type":"ai-title","aiTitle":"","sessionId":"s"}
+        "#},
+        Some("Earlier Title")
+    )]
+    #[case::ignores_non_ai_title_entries(
+        indoc! {r#"
+            {"type":"user","message":{"content":"hi"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
+        "#},
+        None
+    )]
+    fn test_get_last_ai_title(#[case] jsonl_content: &str, #[case] expected: Option<&str>) {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "test-session";
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
+
+        let result = get_last_ai_title_in_home(home_dir, Path::new(project_path), session_id);
+
+        assert_eq!(result, expected.map(String::from));
+    }
+
+    #[test]
+    fn test_get_last_ai_title_handles_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let result =
+            get_last_ai_title_in_home(home_dir, Path::new("/nonexistent/path"), "test-session");
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ai_title_reverse_scan_finds_entry_beyond_max_lines_to_scan() {
+        // Padding pushes the file past INITIAL_READ_SIZE so the reverse-scan
+        // path activates instead of forward reading.
+        let mut content = String::new();
+        for i in 0..300 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"padding {i}"}}}}"#
+            ));
+            content.push('\n');
+        }
+        content.push_str(r#"{"type":"ai-title","aiTitle":"Real Title","sessionId":"s"}"#);
+        content.push('\n');
+        // More than MAX_LINES_TO_SCAN (20) lines follow the ai-title entry,
+        // all still within the same reverse-scan read window. A scan capped
+        // at the last 20 lines (like the assistant-message/usage scanners)
+        // would miss it here.
+        for i in 0..30 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"after {i}"}}}}"#
+            ));
+            content.push('\n');
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let jsonl_path = temp_dir.path().join("test.jsonl");
+        std::fs::write(&jsonl_path, &content).unwrap();
+        let file = File::open(&jsonl_path).unwrap();
+
+        assert_eq!(
+            read_last_ai_title_reverse(&file),
+            Some("Real Title".to_string())
+        );
     }
 
     // =========================================================================
