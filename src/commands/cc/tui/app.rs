@@ -1077,7 +1077,8 @@ fn build_title_cache(sessions: &[Session]) -> HashMap<String, String> {
 }
 
 /// Gets the title display name for a session.
-/// Priority: label (armyknife) > sessions-index summary > .jsonl first user prompt > cwd basename.
+/// Priority: label (armyknife) > last ai-title entry > sessions-index summary >
+/// .jsonl first user prompt > cwd basename.
 /// All outputs are sanitized to strip ANSI escape sequences.
 fn get_title_display_name(session: &Session) -> String {
     get_title_display_name_with_summaries(session, None)

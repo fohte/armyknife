@@ -157,7 +157,7 @@ fn render_session_row<W: Write>(
 }
 
 /// Gets the title display name for a session.
-/// Priority: label (armyknife) > firstPrompt (Claude Code) > "-".
+/// Priority: label (armyknife) > ai-title (Claude Code) > "-".
 fn get_title_display_name(session: &Session) -> String {
     if let Some(ref label) = session.label {
         return claude_sessions::normalize_title(label);
