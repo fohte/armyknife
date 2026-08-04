@@ -454,6 +454,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.quit();
         }
 
+        // Toggle the full key-binding list in the help bar
+        (KeyCode::Char('?'), KeyModifiers::NONE) => {
+            app.toggle_help();
+        }
+
         // Navigation
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
             app.select_next();
@@ -621,6 +626,7 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.worktree_view.select_by_number(num as usize);
             }
         }
+        (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
         _ => {}
     }
     KeyEffects::default()
@@ -764,6 +770,19 @@ mod tests {
         let mut app = create_test_app_with_sessions(1);
         handle_key_event(&mut app, key(code));
         assert!(app.should_quit);
+    }
+
+    #[rstest]
+    #[case::session_view(View::Session)]
+    #[case::worktree_view(View::Worktree)]
+    fn test_handle_key_toggle_help(#[case] view: View) {
+        let mut app = create_test_app_with_sessions(1);
+        app.view = view;
+        assert!(!app.show_help);
+        handle_key_event(&mut app, key(KeyCode::Char('?')));
+        assert!(app.show_help);
+        handle_key_event(&mut app, key(KeyCode::Char('?')));
+        assert!(!app.show_help);
     }
 
     #[rstest]
