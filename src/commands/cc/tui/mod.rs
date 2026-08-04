@@ -482,11 +482,6 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.request_delete();
         }
 
-        // Expand/collapse the Paused/Stopped section
-        (KeyCode::Char(' '), KeyModifiers::NONE) => {
-            app.toggle_paused_stopped_section();
-        }
-
         // Status filters (toggle). Use Ctrl-prefixed bindings so that plain
         // letters (`r`, `s`, `w`) remain available for other actions such as
         // resuming a paused session.

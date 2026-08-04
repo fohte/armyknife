@@ -42,6 +42,51 @@ pub(super) fn wt_row(repo: &str, branch: &str, name: &str, path: &str) -> Worktr
     }
 }
 
+/// Renders the entire UI to a TestBackend and returns the raw cell buffer,
+/// so tests can assert on styles (fg/bg/modifier) that a plain-text
+/// comparison can't see.
+pub(super) fn render_buffer(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+) -> ratatui::buffer::Buffer {
+    render_buffer_with(sessions, selected_index, now, width, height, |_| {})
+}
+
+/// Same as `render_buffer`, but lets the caller mutate the `App` between
+/// construction and render.
+fn render_buffer_with<F>(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+    setup: F,
+) -> ratatui::buffer::Buffer
+where
+    F: FnOnce(&mut App),
+{
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut app = App::with_sessions(sessions.to_vec());
+    app.list_state.select(selected_index);
+    setup(&mut app);
+
+    terminal
+        .draw(|frame| {
+            render_with_time(frame, &mut app, now);
+        })
+        .unwrap();
+
+    terminal.backend().buffer().clone()
+}
+
 /// Renders the entire UI to a TestBackend for testing.
 /// Returns the rendered output as a string.
 pub(super) fn render_to_string(
@@ -68,25 +113,7 @@ pub(super) fn render_to_string_with<F>(
 where
     F: FnOnce(&mut App),
 {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).unwrap();
-
-    let mut app = App::with_sessions(sessions.to_vec());
-    app.list_state.select(selected_index);
-    setup(&mut app);
-
-    terminal
-        .draw(|frame| {
-            render_with_time(frame, &mut app, now);
-        })
-        .unwrap();
-
-    // Convert buffer to string
-    let backend = terminal.backend();
-    let buffer = backend.buffer();
+    let buffer = render_buffer_with(sessions, selected_index, now, width, height, setup);
     let mut output = String::new();
 
     for y in 0..buffer.area.height {

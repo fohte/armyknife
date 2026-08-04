@@ -3,6 +3,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Dim foreground for idle/secondary text (idle status, repo column, section
+/// headers, breadcrumbs, ...). A fixed 256-color grayscale index rather than
+/// the ANSI-16 `Color::Gray`/`Color::DarkGray` names, whose actual rendered
+/// brightness depends on the terminal's configurable palette.
+pub(super) const DIM_FG: Color = Color::Indexed(245);
+
 /// Returns the color for a session status icon.
 ///
 /// Only 3 colors are used: amber for waiting-for-user, green for running,
@@ -11,7 +17,7 @@ pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
+        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => DIM_FG,
     }
 }
 
@@ -53,24 +59,15 @@ pub(super) fn get_title_display_name_fallback(session: &Session) -> String {
     claude_sessions::normalize_title(&raw_title)
 }
 
-/// Gets the session info field rendered next to the repo bar.
-/// Format: `<repo> <worktree-name>`. When neither label is available yet
-/// (first frame before the cache is populated), falls back to the cwd
-/// basename so the row stays within reasonable width.
+/// Gets the repo name rendered in the repo column. Falls back to the cwd
+/// basename when the repo label is not yet cached (first frame before the
+/// cache is populated, or a path outside any git repo).
 /// All outputs are sanitized to strip ANSI escape sequences.
-pub(super) fn get_session_info(session: &Session, repo: &str, worktree_name: &str) -> String {
+pub(super) fn get_session_info(session: &Session, repo: &str) -> String {
     use crate::commands::cc::claude_sessions;
 
-    let raw = if !repo.is_empty() && !worktree_name.is_empty() {
-        if repo == worktree_name {
-            repo.to_string()
-        } else {
-            format!("{repo} {worktree_name}")
-        }
-    } else if !repo.is_empty() {
+    let raw = if !repo.is_empty() {
         repo.to_string()
-    } else if !worktree_name.is_empty() {
-        worktree_name.to_string()
     } else {
         session
             .cwd
@@ -279,8 +276,8 @@ mod tests {
     #[test]
     fn test_get_title_display_name_fallback_ignores_tmux() {
         // Tmux session:window is no longer used as a label fallback; the
-        // row already shows `<repo> <worktree-name>` instead. Without an
-        // explicit label, the fallback is the cwd basename.
+        // row already shows the repo name instead. Without an explicit
+        // label, the fallback is the cwd basename.
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
@@ -299,18 +296,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::repo_only("armyknife", "", "armyknife")]
-    #[case::worktree_only("", "feat-x", "feat-x")]
-    #[case::repo_and_worktree("armyknife", "feat-x", "armyknife feat-x")]
-    #[case::dedup_when_equal("docs", "docs", "docs")]
-    #[case::empty_falls_back_to_cwd_basename("", "", "project")]
-    fn test_get_session_info_formats_repo_and_worktree(
-        #[case] repo: &str,
-        #[case] worktree: &str,
-        #[case] expected: &str,
-    ) {
+    #[case::repo("armyknife", "armyknife")]
+    #[case::empty_falls_back_to_cwd_basename("", "project")]
+    fn test_get_session_info_formats_repo(#[case] repo: &str, #[case] expected: &str) {
         let session = create_test_session("test");
-        assert_eq!(get_session_info(&session, repo, worktree), expected);
+        assert_eq!(get_session_info(&session, repo), expected);
     }
 
     #[rstest]
@@ -327,9 +317,9 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running, Color::Green)]
     #[case::waiting_input(SessionStatus::WaitingInput, Color::Yellow)]
-    #[case::paused(SessionStatus::Paused, Color::DarkGray)]
-    #[case::stopped(SessionStatus::Stopped, Color::DarkGray)]
-    #[case::ended(SessionStatus::Ended, Color::DarkGray)]
+    #[case::paused(SessionStatus::Paused, DIM_FG)]
+    #[case::stopped(SessionStatus::Stopped, DIM_FG)]
+    #[case::ended(SessionStatus::Ended, DIM_FG)]
     fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
         assert_eq!(status_color(status), expected);
     }

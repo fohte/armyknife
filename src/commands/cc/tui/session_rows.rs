@@ -4,22 +4,20 @@ use crate::commands::cc::types::{Session, SessionStatus};
 
 /// One row in the session list's selection/render order.
 ///
-/// Section headers and the collapsed-summary row are not individually
-/// selectable; only `Session` rows are (see [`SessionRow::session_id`]).
+/// Section headers are not individually selectable; only `Session` rows are
+/// (see [`SessionRow::session_id`]).
 #[derive(Debug)]
 pub(super) enum SessionRow<'a> {
     SectionHeader(SectionHeaderRow),
     Session(SessionRowEntry<'a>),
-    /// The Paused/Stopped section collapsed to a single summary row.
-    CollapsedSummary(Vec<&'a Session>),
 }
 
 #[derive(Debug)]
 pub(super) struct SectionHeaderRow {
     pub label: String,
-    /// `Some(is_expanded)` for the collapsible Paused/Stopped section header,
-    /// `None` for the other (non-collapsible) section headers.
-    pub collapsible: Option<bool>,
+    /// Which section this header represents, so the renderer can color it
+    /// consistently with that section's status (e.g. amber for NEEDS YOU).
+    pub kind: Section,
 }
 
 #[derive(Debug)]
@@ -36,12 +34,13 @@ impl<'a> SessionRow<'a> {
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
             SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
-            SessionRow::SectionHeader(_) | SessionRow::CollapsedSummary(_) => None,
+            SessionRow::SectionHeader(_) => None,
         }
     }
 }
 
-enum Section {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Section {
     NeedsYou,
     Running,
     Unread,
@@ -60,16 +59,16 @@ fn section_of(session: &Session) -> Section {
     }
 }
 
-/// Whether `session` sits in the collapsible last section (Paused, read
-/// Stopped, Ended). Exposed for the renderer's idle-styling decision, so the
-/// "which statuses count as idle" rule lives in one place.
+/// Whether `session` sits in the last section (Paused, read Stopped, Ended).
+/// Exposed for the renderer's idle-styling decision, so the "which statuses
+/// count as idle" rule lives in one place.
 pub(super) fn is_idle_session(session: &Session) -> bool {
     matches!(section_of(session), Section::Idle)
 }
 
-/// Label for the collapsible last section, based on which idle statuses are
-/// actually present. Ended sessions are rare in practice (retained briefly
-/// for `claude -c` resume) and fall under "STOPPED" alongside read Stopped
+/// Label for the last section, based on which idle statuses are actually
+/// present. Ended sessions are rare in practice (retained briefly for
+/// `claude -c` resume) and fall under "STOPPED" alongside read Stopped
 /// sessions.
 fn idle_section_label(idle: &[&Session]) -> &'static str {
     let has_paused = idle.iter().any(|s| s.status == SessionStatus::Paused);
@@ -87,13 +86,7 @@ fn idle_section_label(idle: &[&Session]) -> &'static str {
 /// empty: NEEDS YOU (waiting) -> RUNNING -> UNREAD (unread stopped) ->
 /// PAUSED/STOPPED. Within a section, sessions keep the relative order of
 /// `sessions` (the caller is expected to pass them already time-sorted).
-///
-/// The last section collapses to a single [`SessionRow::CollapsedSummary`]
-/// row unless `paused_stopped_expanded` is set.
-pub(super) fn build_session_rows<'a>(
-    sessions: &[&'a Session],
-    paused_stopped_expanded: bool,
-) -> Vec<SessionRow<'a>> {
+pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow<'a>> {
     let by_id: HashMap<&str, &'a Session> = sessions
         .iter()
         .map(|s| (s.session_id.as_str(), *s))
@@ -117,6 +110,7 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         "NEEDS YOU".to_string(),
+        Section::NeedsYou,
         &needs_you,
         &by_id,
         &displayed_ids,
@@ -124,6 +118,7 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         format!("RUNNING ({})", running.len()),
+        Section::Running,
         &running,
         &by_id,
         &displayed_ids,
@@ -131,27 +126,21 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         format!("UNREAD ({})", unread.len()),
+        Section::Unread,
         &unread,
         &by_id,
         &displayed_ids,
     );
 
-    if !idle.is_empty() {
-        rows.push(SessionRow::SectionHeader(SectionHeaderRow {
-            label: format!("{} ({})", idle_section_label(&idle), idle.len()),
-            collapsible: Some(paused_stopped_expanded),
-        }));
-        if paused_stopped_expanded {
-            for &session in &idle {
-                rows.push(SessionRow::Session(SessionRowEntry {
-                    session,
-                    breadcrumb_ancestor: nearest_living_ancestor(session, &by_id, &displayed_ids),
-                }));
-            }
-        } else {
-            rows.push(SessionRow::CollapsedSummary(idle));
-        }
-    }
+    let idle_label = format!("{} ({})", idle_section_label(&idle), idle.len());
+    push_group(
+        &mut rows,
+        idle_label,
+        Section::Idle,
+        &idle,
+        &by_id,
+        &displayed_ids,
+    );
 
     rows
 }
@@ -159,6 +148,7 @@ pub(super) fn build_session_rows<'a>(
 fn push_group<'a>(
     rows: &mut Vec<SessionRow<'a>>,
     label: String,
+    kind: Section,
     group: &[&'a Session],
     by_id: &HashMap<&str, &'a Session>,
     displayed_ids: &HashSet<&str>,
@@ -166,10 +156,7 @@ fn push_group<'a>(
     if group.is_empty() {
         return;
     }
-    rows.push(SessionRow::SectionHeader(SectionHeaderRow {
-        label,
-        collapsible: None,
-    }));
+    rows.push(SessionRow::SectionHeader(SectionHeaderRow { label, kind }));
     for &session in group {
         rows.push(SessionRow::Session(SessionRowEntry {
             session,
@@ -237,13 +224,11 @@ mod tests {
     enum RowDescription {
         Header {
             label: String,
-            collapsible: Option<bool>,
         },
         Session {
             id: String,
             breadcrumb: Option<String>,
         },
-        Collapsed(Vec<String>),
     }
 
     fn describe(rows: &[SessionRow]) -> Vec<RowDescription> {
@@ -251,22 +236,18 @@ mod tests {
             .map(|row| match row {
                 SessionRow::SectionHeader(header) => RowDescription::Header {
                     label: header.label.clone(),
-                    collapsible: header.collapsible,
                 },
                 SessionRow::Session(entry) => RowDescription::Session {
                     id: entry.session.session_id.clone(),
                     breadcrumb: entry.breadcrumb_ancestor.map(|s| s.session_id.clone()),
                 },
-                SessionRow::CollapsedSummary(sessions) => RowDescription::Collapsed(
-                    sessions.iter().map(|s| s.session_id.clone()).collect(),
-                ),
             })
             .collect()
     }
 
     #[test]
     fn test_build_session_rows_empty_input() {
-        let rows = build_session_rows(&[], false);
+        let rows = build_session_rows(&[]);
         assert_eq!(describe(&rows), Vec::<RowDescription>::new());
     }
 
@@ -279,14 +260,13 @@ mod tests {
         let paused = create_test_session("paused", SessionStatus::Paused);
 
         let sessions: Vec<&Session> = vec![&waiting, &running, &unread, &paused];
-        let rows = build_session_rows(&sessions, false);
+        let rows = build_session_rows(&sessions);
 
         assert_eq!(
             describe(&rows),
             vec![
                 RowDescription::Header {
                     label: "NEEDS YOU".to_string(),
-                    collapsible: None,
                 },
                 RowDescription::Session {
                     id: "waiting".to_string(),
@@ -294,7 +274,6 @@ mod tests {
                 },
                 RowDescription::Header {
                     label: "RUNNING (1)".to_string(),
-                    collapsible: None,
                 },
                 RowDescription::Session {
                     id: "running".to_string(),
@@ -302,7 +281,6 @@ mod tests {
                 },
                 RowDescription::Header {
                     label: "UNREAD (1)".to_string(),
-                    collapsible: None,
                 },
                 RowDescription::Session {
                     id: "unread".to_string(),
@@ -310,9 +288,11 @@ mod tests {
                 },
                 RowDescription::Header {
                     label: "PAUSED (1)".to_string(),
-                    collapsible: Some(false),
                 },
-                RowDescription::Collapsed(vec!["paused".to_string()]),
+                RowDescription::Session {
+                    id: "paused".to_string(),
+                    breadcrumb: None,
+                },
             ]
         );
     }
@@ -321,14 +301,13 @@ mod tests {
     fn test_build_session_rows_empty_sections_produce_no_header() {
         let running = create_test_session("running", SessionStatus::Running);
         let sessions: Vec<&Session> = vec![&running];
-        let rows = build_session_rows(&sessions, false);
+        let rows = build_session_rows(&sessions);
 
         assert_eq!(
             describe(&rows),
             vec![
                 RowDescription::Header {
                     label: "RUNNING (1)".to_string(),
-                    collapsible: None,
                 },
                 RowDescription::Session {
                     id: "running".to_string(),
@@ -364,7 +343,7 @@ mod tests {
             })
             .collect();
         let refs: Vec<&Session> = sessions.iter().collect();
-        let rows = build_session_rows(&refs, false);
+        let rows = build_session_rows(&refs);
 
         let header_label = match rows.first() {
             Some(SessionRow::SectionHeader(header)) => header.label.clone(),
@@ -374,37 +353,17 @@ mod tests {
     }
 
     #[test]
-    fn test_build_session_rows_idle_section_collapsed() {
+    fn test_build_session_rows_idle_section_shows_individual_rows() {
         let paused1 = create_test_session("paused1", SessionStatus::Paused);
         let paused2 = create_test_session("paused2", SessionStatus::Paused);
         let sessions: Vec<&Session> = vec![&paused1, &paused2];
-        let rows = build_session_rows(&sessions, false);
+        let rows = build_session_rows(&sessions);
 
         assert_eq!(
             describe(&rows),
             vec![
                 RowDescription::Header {
                     label: "PAUSED (2)".to_string(),
-                    collapsible: Some(false),
-                },
-                RowDescription::Collapsed(vec!["paused1".to_string(), "paused2".to_string()]),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_idle_section_expanded() {
-        let paused1 = create_test_session("paused1", SessionStatus::Paused);
-        let paused2 = create_test_session("paused2", SessionStatus::Paused);
-        let sessions: Vec<&Session> = vec![&paused1, &paused2];
-        let rows = build_session_rows(&sessions, true);
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "PAUSED (2)".to_string(),
-                    collapsible: Some(true),
                 },
                 RowDescription::Session {
                     id: "paused1".to_string(),
@@ -425,14 +384,13 @@ mod tests {
         child.ancestor_session_ids = vec!["root".to_string(), "deleted_middle".to_string()];
 
         let sessions: Vec<&Session> = vec![&root, &child];
-        let rows = build_session_rows(&sessions, false);
+        let rows = build_session_rows(&sessions);
 
         assert_eq!(
             describe(&rows),
             vec![
                 RowDescription::Header {
                     label: "RUNNING (2)".to_string(),
-                    collapsible: None,
                 },
                 RowDescription::Session {
                     id: "root".to_string(),
@@ -455,7 +413,7 @@ mod tests {
 
         // Deliberately out of the fixed section order.
         let sessions: Vec<&Session> = vec![&paused, &unread, &running, &waiting];
-        let rows = build_session_rows(&sessions, true);
+        let rows = build_session_rows(&sessions);
 
         let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
         assert_eq!(session_ids, vec!["waiting", "running", "unread", "paused"]);
@@ -468,7 +426,7 @@ mod tests {
 
         // Input order is "b then a"; the function must not re-sort.
         let sessions: Vec<&Session> = vec![&running_b, &running_a];
-        let rows = build_session_rows(&sessions, false);
+        let rows = build_session_rows(&sessions);
 
         let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
         assert_eq!(session_ids, vec!["running_b", "running_a"]);
