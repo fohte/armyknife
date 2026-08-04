@@ -51,6 +51,11 @@ pub enum AppMode {
         is_alive: bool,
         worktree_cleanup: Option<PathBuf>,
     },
+    /// Editing the title (`label`) of the session with this ID. See
+    /// `title_edit` for the enter/update/cancel/confirm orchestration.
+    Edit {
+        session_id: String,
+    },
 }
 
 /// Application state for the TUI.
@@ -69,6 +74,9 @@ pub struct App {
     pub search_query: String,
     /// Confirmed search query (applied filter).
     pub confirmed_query: String,
+    /// Edit buffer for `AppMode::Edit`, seeded from the session's currently
+    /// displayed title when entering edit mode.
+    pub edit_title_query: String,
     /// Indices of sessions that match the current filter.
     pub filtered_indices: Vec<usize>,
     /// Selection index before entering search mode (for restoration on cancel).
@@ -156,6 +164,7 @@ impl App {
             mode: AppMode::Normal,
             search_query: String::new(),
             confirmed_query: String::new(),
+            edit_title_query: String::new(),
             filtered_indices,
             pre_search_selection: None,
             status_filter: None,
@@ -492,6 +501,22 @@ impl App {
     /// Returns the cached title for a session, if available.
     pub fn get_cached_title(&self, session_id: &str) -> Option<&str> {
         self.title_cache.get(session_id).map(String::as_str)
+    }
+
+    /// Sets `label` on the given session and recomputes its cached title,
+    /// so a rename confirmed in the TUI shows up immediately without
+    /// waiting for the file-watcher's own reload.
+    pub(crate) fn set_session_label(&mut self, session_id: &str, label: Option<String>) {
+        let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.session_id == session_id)
+        else {
+            return;
+        };
+        session.label = label;
+        let title = get_title_display_name(session);
+        self.title_cache.insert(session_id.to_string(), title);
     }
 
     /// Cache lookup only. Misses are expected for sessions whose async

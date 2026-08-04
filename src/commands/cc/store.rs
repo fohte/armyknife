@@ -242,17 +242,19 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
-/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+/// Loads a session under the exclusive lock, lets `mutate` decide whether
+/// and how to change it, and writes the result back atomically iff `mutate`
+/// returns `true`. A no-op when the session file is missing or corrupted.
 ///
-/// Holds the exclusive lock across the load-modify-save round-trip so a
-/// concurrent hook write of the full session (e.g. a new `last_message`)
-/// is not clobbered by a stale copy. A no-op when the session is missing,
-/// corrupted, no longer `Stopped`, or already marked read — `mark-read`
-/// only flips unread→read, never overwrites a fresh Stop.
-pub(crate) fn mark_session_read_in(
+/// Holds the exclusive lock across the whole load-modify-save round-trip so
+/// a concurrent hook write of the full session (e.g. a new `last_message`)
+/// cannot interleave with this one and tear the result. Shared by every
+/// single-field session update (`mark_session_read_in`,
+/// `update_session_label_in`) so the atomic-write plumbing exists once.
+fn update_session_field_in(
     sessions_dir: &Path,
     session_id: &str,
-    now: DateTime<Utc>,
+    mutate: impl FnOnce(&mut Session) -> bool,
 ) -> Result<()> {
     let path = session_file_in(sessions_dir, session_id)?;
     if !path.exists() {
@@ -275,10 +277,9 @@ pub(crate) fn mark_session_read_in(
     let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
         return Ok(());
     };
-    if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+    if !mutate(&mut session) {
         return Ok(());
     }
-    session.read_at = Some(now);
 
     let new_content = serde_json::to_string_pretty(&session)?;
     let temp_path = path.with_extension("json.tmp");
@@ -287,6 +288,45 @@ pub(crate) fn mark_session_read_in(
     temp_file.sync_all()?;
     fs::rename(&temp_path, &path)?;
     Ok(())
+}
+
+/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+/// A no-op when the session is missing, corrupted, no longer `Stopped`, or
+/// already marked read — `mark-read` only flips unread→read, never
+/// overwrites a fresh Stop.
+pub(crate) fn mark_session_read_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    update_session_field_in(sessions_dir, session_id, |session| {
+        if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+            return false;
+        }
+        session.read_at = Some(now);
+        true
+    })
+}
+
+/// Sets `label` on a session, resolving the default sessions directory.
+/// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
+/// about `sessions_dir()`.
+pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<()> {
+    update_session_label_in(&sessions_dir()?, session_id, label)
+}
+
+/// Atomically overwrites a session's `label` field. Unlike
+/// `mark_session_read_in` there is no precondition on the current value --
+/// `label` is always overwritten with the given value.
+pub(crate) fn update_session_label_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    label: Option<String>,
+) -> Result<()> {
+    update_session_field_in(sessions_dir, session_id, |session| {
+        session.label = label;
+        true
+    })
 }
 
 /// Deletes a session from disk.
@@ -827,6 +867,53 @@ mod tests {
             let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
             mark_session_read_in(&temp_session_dir.sessions_path, "ghost", now)
                 .expect("missing session should be ok");
+        }
+    }
+
+    mod update_session_label_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(label: Option<&str>) -> Session {
+            let mut s = create_test_session("label-target");
+            s.label = label.map(str::to_string);
+            s
+        }
+
+        #[rstest]
+        #[case::sets_label_on_none(None, Some("New Title"), Some("New Title"))]
+        #[case::overwrites_existing_label(Some("Old Title"), Some("New Title"), Some("New Title"))]
+        #[case::clears_via_none(Some("Old Title"), None, None)]
+        fn overwrites_label(
+            temp_session_dir: TempSessionDir,
+            #[case] initial: Option<&str>,
+            #[case] update: Option<&str>,
+            #[case] expected: Option<&str>,
+        ) {
+            let session = make_session(initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_label_in(
+                &temp_session_dir.sessions_path,
+                "label-target",
+                update.map(str::to_string),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(reloaded.label, expected.map(str::to_string));
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            update_session_label_in(
+                &temp_session_dir.sessions_path,
+                "ghost",
+                Some("New Title".to_string()),
+            )
+            .expect("missing session should be ok");
         }
     }
 
