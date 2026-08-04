@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::cc::tui::app::{App, AppMode};
 use crate::commands::cc::tui::session_rows::{
-    SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows,
+    SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows, is_idle_session,
 };
 
 use super::helpers::{
@@ -121,18 +121,6 @@ pub(super) fn render_session_list(
 
 fn blank_separator() -> ListItem<'static> {
     ListItem::new(vec![Line::from("")])
-}
-
-/// A session counts as "idle" for styling purposes when it sits in the
-/// collapsible last section (Paused, read Stopped, Ended) -- mirrors
-/// `session_rows::section_of`'s `Idle` branch, which is private to that
-/// module.
-fn is_idle_session(session: &Session) -> bool {
-    match session.status {
-        SessionStatus::Running | SessionStatus::WaitingInput => false,
-        SessionStatus::Stopped => !session.is_unread_stopped(),
-        SessionStatus::Paused | SessionStatus::Ended => true,
-    }
 }
 
 /// Variable width of the title column: whatever's left after the fixed
@@ -270,9 +258,9 @@ fn build_session_item(
 
     let mut lines = vec![Line::from(spans)];
 
-    // Unlike the old code's line 2 (which silently rendered blank content
-    // when there was nothing to show), the question line is unconditional
-    // for every waiting row -- an empty question still renders bare quotes.
+    // The question line is unconditional for every waiting row, so an
+    // empty question still renders bare quotes rather than an inconsistent
+    // row shape.
     if session.status == SessionStatus::WaitingInput {
         let question = session
             .current_tool

@@ -60,6 +60,13 @@ fn section_of(session: &Session) -> Section {
     }
 }
 
+/// Whether `session` sits in the collapsible last section (Paused, read
+/// Stopped, Ended). Exposed for the renderer's idle-styling decision, so the
+/// "which statuses count as idle" rule lives in one place.
+pub(super) fn is_idle_session(session: &Session) -> bool {
+    matches!(section_of(session), Section::Idle)
+}
+
 /// Label for the collapsible last section, based on which idle statuses are
 /// actually present. Ended sessions are rare in practice (retained briefly
 /// for `claude -c` resume) and fall under "STOPPED" alongside read Stopped

@@ -129,7 +129,8 @@ impl App {
             .or_else(|| store::load_last_selected_session().ok().flatten());
 
         if let Some(session_id) = initial_session_id {
-            app.restore_selection(Some(&session_id));
+            let old_pos = app.list_state.selected();
+            app.restore_selection(old_pos, Some(&session_id));
         }
 
         Ok(app)
@@ -190,8 +191,11 @@ impl App {
 
     /// Performs a full reload of all sessions.
     fn full_reload(&mut self) -> Result<()> {
-        // Remember the currently selected session_id
+        // Remember the currently selected session_id and row position
+        // before any mutation below can reset `list_state` (`apply_filter`
+        // always does).
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let old_pos = self.list_state.selected();
 
         self.sessions = load_sessions()?;
 
@@ -205,14 +209,17 @@ impl App {
 
         // Re-apply filter with current query
         self.apply_filter();
-        self.restore_selection(selected_session_id.as_deref());
+        self.restore_selection(old_pos, selected_session_id.as_deref());
 
         Ok(())
     }
 
     /// Applies incremental changes to the session list.
     fn apply_incremental_changes(&mut self, changes: &[SessionChange]) -> Result<()> {
+        // Same ordering requirement as `full_reload`: capture the position
+        // before `apply_filter` below can reset it.
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let old_pos = self.list_state.selected();
 
         for change in changes {
             match change.change_type {
@@ -251,7 +258,7 @@ impl App {
         }
 
         self.apply_filter();
-        self.restore_selection(selected_session_id.as_deref());
+        self.restore_selection(old_pos, selected_session_id.as_deref());
 
         Ok(())
     }
@@ -352,8 +359,12 @@ impl App {
     /// Rebuilds the row order from the current filtered sessions so that
     /// the cursor position is resolved against the actual display order,
     /// not the flat `updated_at` sort order.
-    fn restore_selection(&mut self, session_id: Option<&str>) {
-        let old_pos = self.list_state.selected();
+    ///
+    /// `old_pos` must be captured by the caller *before* any prior mutation
+    /// (e.g. `apply_filter`) that could have already reset `list_state` --
+    /// otherwise the fallback in [`Self::resync_selection`] anchors on that
+    /// reset position instead of the user's actual previous cursor.
+    fn restore_selection(&mut self, old_pos: Option<usize>, session_id: Option<&str>) {
         self.rebuild_row_order();
         self.resync_selection(old_pos, session_id.map(String::from));
     }
@@ -1851,16 +1862,65 @@ mod tests {
         // Move the selected session to a different (still individually
         // selectable) section, then re-resolve the row order/selection the
         // same way `reload_sessions` does internally after a mutation.
+        let old_pos = app.list_state.selected();
         app.sessions
             .iter_mut()
             .find(|s| s.session_id == "running-2")
             .expect("running-2 exists")
             .status = SessionStatus::WaitingInput;
-        app.restore_selection(Some("running-2"));
+        app.restore_selection(old_pos, Some("running-2"));
 
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("running-2")
+        );
+    }
+
+    #[test]
+    fn test_restore_selection_fallback_anchors_on_pre_reload_position() {
+        // Regression test: `restore_selection`'s `old_pos` must be the
+        // cursor position from *before* the caller's own `apply_filter`
+        // call (as `full_reload`/`apply_incremental_changes` do), not
+        // whatever `apply_filter` already reset `list_state` to -- otherwise
+        // the fallback always lands on the first selectable row instead of
+        // the nearest one to where the user actually was.
+        let mut app = create_test_app(vec![
+            create_test_session("a"),
+            create_test_session("b"),
+            create_test_session("c"),
+        ]);
+        app.select_by_number(3);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("c")
+        );
+        let old_pos = app.list_state.selected();
+
+        // "c" is about to be excluded by a status filter -- mimics a status
+        // change observed mid-reload that moves the selected session out of
+        // the filtered set entirely.
+        app.sessions
+            .iter_mut()
+            .find(|s| s.session_id == "c")
+            .expect("c exists")
+            .status = SessionStatus::Paused;
+        // Applying the filter resets `list_state` to the first selectable
+        // row ("a") before `restore_selection` runs, same as every real
+        // caller's `apply_filter(); restore_selection(...);` sequence.
+        app.toggle_status_filter(SessionStatus::Running);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("a")
+        );
+
+        app.restore_selection(old_pos, Some("c"));
+
+        // "c" no longer matches the filter and has no row at all; falls
+        // back to the nearest selectable row at/after its own old position
+        // (3) -- "b", the last selectable row -- not "a".
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("b")
         );
     }
 

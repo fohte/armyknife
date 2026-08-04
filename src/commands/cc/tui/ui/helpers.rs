@@ -6,8 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// Returns the color for a session status icon.
 ///
 /// Only 3 colors are used: amber for waiting-for-user, green for running,
-/// and a single neutral color for everything else (paused/stopped/ended),
-/// collapsing what used to be visually distinct shades into one weight.
+/// and a single neutral color for every idle status (paused/stopped/ended).
 pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
