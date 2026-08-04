@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{List, ListItem, Paragraph},
 };
 
-use super::helpers::{repo_label_color, truncate};
+use super::helpers::truncate;
 
 /// Renders the worktree list, grouped by repo.
 pub(super) fn render_worktree_list(
@@ -94,8 +94,7 @@ fn create_worktree_list_item(
         }
         WorktreeListEntry::Worktree(row) => {
             let (symbol, color) = worktree_status_glyph(row.status());
-            let repo_color = repo_label_color(&row.repo);
-            let bar = Span::styled("▎", Style::default().fg(repo_color));
+            let bar = Span::styled("▎", Style::default().fg(Color::DarkGray));
 
             // Line 1: "  {status} ▎ {repo} {branch}"
             let primary = if row.repo == row.name || row.branch.is_empty() {
