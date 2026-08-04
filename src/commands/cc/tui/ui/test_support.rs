@@ -42,6 +42,34 @@ pub(super) fn wt_row(repo: &str, branch: &str, name: &str, path: &str) -> Worktr
     }
 }
 
+/// Renders the entire UI to a TestBackend and returns the raw cell buffer,
+/// so tests can assert on styles (fg/bg/modifier) that a plain-text
+/// comparison can't see.
+pub(super) fn render_buffer(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+) -> ratatui::buffer::Buffer {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut app = App::with_sessions(sessions.to_vec());
+    app.list_state.select(selected_index);
+
+    terminal
+        .draw(|frame| {
+            render_with_time(frame, &mut app, now);
+        })
+        .unwrap();
+
+    terminal.backend().buffer().clone()
+}
+
 /// Renders the entire UI to a TestBackend for testing.
 /// Returns the rendered output as a string.
 pub(super) fn render_to_string(

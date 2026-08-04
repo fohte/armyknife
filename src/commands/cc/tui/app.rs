@@ -88,14 +88,17 @@ pub struct App {
     /// Cwds whose async resolution is in flight. Guards `claim_unresolved_label_cwds`
     /// against re-dispatch before the corresponding result event arrives.
     pending_label_cwds: HashSet<PathBuf>,
-    /// Maps each display row (list_state index) to the `sessions` index it
-    /// shows, or `None` for a row that is not individually selectable
-    /// (a section header or the collapsed-summary row).
+    /// Maps each display row to the `sessions` index it shows, or `None`
+    /// for a row that is not individually selectable (a section header or
+    /// the collapsed-summary row). Index `i` here always corresponds to
+    /// `list_state`'s index `i` and to the `i`-th `ListItem` passed to
+    /// `List::new` -- the UI layer must keep those three in exact 1:1
+    /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
     /// Whether the collapsible Paused/Stopped section is expanded into
-    /// individual rows (`true`) or shown as a single collapsed summary
-    /// row (`false`, the default).
+    /// individual rows (`true`, the default) or shown as a single
+    /// collapsed summary row (`false`).
     pub paused_stopped_expanded: bool,
     /// Currently active top-level view.
     pub view: View,
@@ -163,7 +166,7 @@ impl App {
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             row_sessions: Vec::new(),
-            paused_stopped_expanded: false,
+            paused_stopped_expanded: true,
             title_cache,
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
@@ -1839,6 +1842,14 @@ mod tests {
             create_session_with_status("paused-1", SessionStatus::Paused),
             create_session_with_status("paused-2", SessionStatus::Paused),
         ]);
+        // Expanded by default.
+        assert!(app.paused_stopped_expanded);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("paused-1")
+        );
+
+        app.toggle_paused_stopped_section();
         assert!(!app.paused_stopped_expanded);
         // Collapsed to a single summary row, which is not selectable.
         assert_eq!(app.list_state.selected(), None);
@@ -1849,10 +1860,6 @@ mod tests {
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("paused-1")
         );
-
-        app.toggle_paused_stopped_section();
-        assert!(!app.paused_stopped_expanded);
-        assert_eq!(app.list_state.selected(), None);
     }
 
     #[test]
@@ -1971,7 +1978,8 @@ mod tests {
             create_session_with_status("paused-1", SessionStatus::Paused),
             create_session_with_status("paused-2", SessionStatus::Paused),
         ]);
-        app.toggle_paused_stopped_section();
+        // Paused/Stopped starts expanded by default, so "paused-1" already
+        // has an individual row.
         app.select_next();
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),

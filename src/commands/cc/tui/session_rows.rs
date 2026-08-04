@@ -20,6 +20,9 @@ pub(super) struct SectionHeaderRow {
     /// `Some(is_expanded)` for the collapsible Paused/Stopped section header,
     /// `None` for the other (non-collapsible) section headers.
     pub collapsible: Option<bool>,
+    /// Which section this header represents, so the renderer can color it
+    /// consistently with that section's status (e.g. amber for NEEDS YOU).
+    pub kind: Section,
 }
 
 #[derive(Debug)]
@@ -41,7 +44,8 @@ impl<'a> SessionRow<'a> {
     }
 }
 
-enum Section {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Section {
     NeedsYou,
     Running,
     Unread,
@@ -117,6 +121,7 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         "NEEDS YOU".to_string(),
+        Section::NeedsYou,
         &needs_you,
         &by_id,
         &displayed_ids,
@@ -124,6 +129,7 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         format!("RUNNING ({})", running.len()),
+        Section::Running,
         &running,
         &by_id,
         &displayed_ids,
@@ -131,6 +137,7 @@ pub(super) fn build_session_rows<'a>(
     push_group(
         &mut rows,
         format!("UNREAD ({})", unread.len()),
+        Section::Unread,
         &unread,
         &by_id,
         &displayed_ids,
@@ -140,6 +147,7 @@ pub(super) fn build_session_rows<'a>(
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {
             label: format!("{} ({})", idle_section_label(&idle), idle.len()),
             collapsible: Some(paused_stopped_expanded),
+            kind: Section::Idle,
         }));
         if paused_stopped_expanded {
             for &session in &idle {
@@ -159,6 +167,7 @@ pub(super) fn build_session_rows<'a>(
 fn push_group<'a>(
     rows: &mut Vec<SessionRow<'a>>,
     label: String,
+    kind: Section,
     group: &[&'a Session],
     by_id: &HashMap<&str, &'a Session>,
     displayed_ids: &HashSet<&str>,
@@ -169,6 +178,7 @@ fn push_group<'a>(
     rows.push(SessionRow::SectionHeader(SectionHeaderRow {
         label,
         collapsible: None,
+        kind,
     }));
     for &session in group {
         rows.push(SessionRow::Session(SessionRowEntry {

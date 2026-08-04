@@ -53,24 +53,15 @@ pub(super) fn get_title_display_name_fallback(session: &Session) -> String {
     claude_sessions::normalize_title(&raw_title)
 }
 
-/// Gets the session info field rendered next to the repo bar.
-/// Format: `<repo> <worktree-name>`. When neither label is available yet
-/// (first frame before the cache is populated), falls back to the cwd
-/// basename so the row stays within reasonable width.
+/// Gets the repo name rendered in the repo column. Falls back to the cwd
+/// basename when the repo label is not yet cached (first frame before the
+/// cache is populated, or a path outside any git repo).
 /// All outputs are sanitized to strip ANSI escape sequences.
-pub(super) fn get_session_info(session: &Session, repo: &str, worktree_name: &str) -> String {
+pub(super) fn get_session_info(session: &Session, repo: &str) -> String {
     use crate::commands::cc::claude_sessions;
 
-    let raw = if !repo.is_empty() && !worktree_name.is_empty() {
-        if repo == worktree_name {
-            repo.to_string()
-        } else {
-            format!("{repo} {worktree_name}")
-        }
-    } else if !repo.is_empty() {
+    let raw = if !repo.is_empty() {
         repo.to_string()
-    } else if !worktree_name.is_empty() {
-        worktree_name.to_string()
     } else {
         session
             .cwd
@@ -299,18 +290,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::repo_only("armyknife", "", "armyknife")]
-    #[case::worktree_only("", "feat-x", "feat-x")]
-    #[case::repo_and_worktree("armyknife", "feat-x", "armyknife feat-x")]
-    #[case::dedup_when_equal("docs", "docs", "docs")]
-    #[case::empty_falls_back_to_cwd_basename("", "", "project")]
-    fn test_get_session_info_formats_repo_and_worktree(
-        #[case] repo: &str,
-        #[case] worktree: &str,
-        #[case] expected: &str,
-    ) {
+    #[case::repo("armyknife", "armyknife")]
+    #[case::empty_falls_back_to_cwd_basename("", "project")]
+    fn test_get_session_info_formats_repo(#[case] repo: &str, #[case] expected: &str) {
         let session = create_test_session("test");
-        assert_eq!(get_session_info(&session, repo, worktree), expected);
+        assert_eq!(get_session_info(&session, repo), expected);
     }
 
     #[rstest]
