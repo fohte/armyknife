@@ -289,6 +289,58 @@ pub(crate) fn mark_session_read_in(
     Ok(())
 }
 
+/// Sets `label` on a session, resolving the default sessions directory.
+/// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
+/// about `sessions_dir()`.
+pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<()> {
+    update_session_label_in(&sessions_dir()?, session_id, label)
+}
+
+/// Atomically overwrites a session's `label` field.
+///
+/// Holds the exclusive lock across the load-modify-save round-trip, same
+/// rationale as `mark_session_read_in`: without it, a concurrent hook write
+/// of the full session could be clobbered by a stale copy. Unlike
+/// `mark_session_read_in` there is no precondition on the current value --
+/// `label` is always overwritten with the given value. A no-op when the
+/// session file is missing or corrupted.
+pub(crate) fn update_session_label_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    label: Option<String>,
+) -> Result<()> {
+    let path = session_file_in(sessions_dir, session_id)?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    acquire_lock(&lock_file)?;
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
+        return Ok(());
+    };
+    session.label = label;
+
+    let new_content = serde_json::to_string_pretty(&session)?;
+    let temp_path = path.with_extension("json.tmp");
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(new_content.as_bytes())?;
+    temp_file.sync_all()?;
+    fs::rename(&temp_path, &path)?;
+    Ok(())
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
@@ -827,6 +879,53 @@ mod tests {
             let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
             mark_session_read_in(&temp_session_dir.sessions_path, "ghost", now)
                 .expect("missing session should be ok");
+        }
+    }
+
+    mod update_session_label_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(label: Option<&str>) -> Session {
+            let mut s = create_test_session("label-target");
+            s.label = label.map(str::to_string);
+            s
+        }
+
+        #[rstest]
+        #[case::sets_label_on_none(None, Some("New Title"), Some("New Title"))]
+        #[case::overwrites_existing_label(Some("Old Title"), Some("New Title"), Some("New Title"))]
+        #[case::clears_via_none(Some("Old Title"), None, None)]
+        fn overwrites_label(
+            temp_session_dir: TempSessionDir,
+            #[case] initial: Option<&str>,
+            #[case] update: Option<&str>,
+            #[case] expected: Option<&str>,
+        ) {
+            let session = make_session(initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_label_in(
+                &temp_session_dir.sessions_path,
+                "label-target",
+                update.map(str::to_string),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(reloaded.label, expected.map(str::to_string));
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            update_session_label_in(
+                &temp_session_dir.sessions_path,
+                "ghost",
+                Some("New Title".to_string()),
+            )
+            .expect("missing session should be ok");
         }
     }
 

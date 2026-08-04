@@ -6,7 +6,10 @@ use anyhow::Result;
 use clap::Args;
 
 use super::store;
-use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_WINDOW_STATUS_OPTION};
+use super::types::{
+    Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_WINDOW_STATUS_OPTION,
+    TMUX_WINDOW_TITLE_OPTION,
+};
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -31,24 +34,37 @@ pub fn run(args: &WindowStatusArgs) -> Result<()> {
     Ok(())
 }
 
-/// Recomputes `window_id`'s aggregated Claude Code status symbols and writes
-/// them to the window's `@armyknife-cc-window-status` user option.
+/// Recomputes `window_id`'s aggregated Claude Code status symbols and title,
+/// and writes each to its own window option (`@armyknife-cc-window-status`,
+/// `@armyknife-cc-window-title`).
 ///
-/// The option write and the status-bar refresh are skipped when the rendered
-/// value matches what tmux already holds, so an event that does not change
-/// the visible status (e.g. running → running) costs no redraw. This is what
-/// turns the per-redraw polling of `#(a cc window-status)` into an
-/// event-driven update fired only by `a cc hook`.
+/// Each option's write is skipped independently when its rendered value
+/// matches what tmux already holds, so an event that only changes one of the
+/// two (e.g. a status transition with no rename) costs a single option write.
+/// The status-bar refresh still runs at most once, if either option changed.
+/// This is what turns the per-redraw polling of `#(a cc window-status)` into
+/// an event-driven update fired only by `a cc hook`.
 pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
     let sessions = load_window_sessions(window_id, sessions_dir)?;
-    let rendered = render_window_status(&sessions);
 
-    let current = tmux::get_window_option(window_id, TMUX_WINDOW_STATUS_OPTION);
-    if !window_status_changed(current.as_deref(), &rendered) {
+    let rendered_status = render_window_status(&sessions);
+    let current_status = tmux::get_window_option(window_id, TMUX_WINDOW_STATUS_OPTION);
+    let status_changed = tmux_option_changed(current_status.as_deref(), &rendered_status);
+
+    let rendered_title = render_window_title(&sessions);
+    let current_title = tmux::get_window_option(window_id, TMUX_WINDOW_TITLE_OPTION);
+    let title_changed = tmux_option_changed(current_title.as_deref(), &rendered_title);
+
+    if !status_changed && !title_changed {
         return Ok(());
     }
 
-    tmux::set_window_option(window_id, TMUX_WINDOW_STATUS_OPTION, &rendered)?;
+    if status_changed {
+        tmux::set_window_option(window_id, TMUX_WINDOW_STATUS_OPTION, &rendered_status)?;
+    }
+    if title_changed {
+        tmux::set_window_option(window_id, TMUX_WINDOW_TITLE_OPTION, &rendered_title)?;
+    }
     tmux::refresh_status()?;
 
     Ok(())
@@ -99,12 +115,26 @@ fn render_window_status(sessions: &[Session]) -> String {
     }
 }
 
-/// Whether the window option must be rewritten: true when the freshly
+/// Picks the `label` of the first session (in `sessions`' order, i.e. the
+/// existing deterministic pane order from `load_window_sessions`) that has
+/// one set, or an empty string if none do.
+///
+/// Deliberately does not concatenate across sessions: a tmux window
+/// normally hosts one worktree / one session in practice, and a multi-session
+/// window has no well-defined "combined" title.
+fn render_window_title(sessions: &[Session]) -> String {
+    sessions
+        .iter()
+        .find_map(|s| s.label.clone())
+        .unwrap_or_default()
+}
+
+/// Whether a tmux window option must be rewritten: true when the freshly
 /// rendered value differs from what tmux currently holds.
 ///
 /// An unset option (`None`) is treated as an empty string, so a window that
 /// never hosted a Claude Code session does not get a redundant write.
-fn window_status_changed(current: Option<&str>, rendered: &str) -> bool {
+fn tmux_option_changed(current: Option<&str>, rendered: &str) -> bool {
     current.unwrap_or("") != rendered
 }
 
@@ -198,11 +228,27 @@ mod tests {
     #[case::unchanged(Some("\u{25cf} "), "\u{25cf} ", false)]
     #[case::status_changed(Some("\u{25cf} "), "\u{25d0} ", true)]
     #[case::cleared(Some("\u{25cf} "), "", true)]
-    fn test_window_status_changed(
+    fn test_tmux_option_changed(
         #[case] current: Option<&str>,
         #[case] rendered: &str,
         #[case] expected: bool,
     ) {
-        assert_eq!(window_status_changed(current, rendered), expected);
+        assert_eq!(tmux_option_changed(current, rendered), expected);
+    }
+
+    fn session_with_label(label: Option<&str>) -> Session {
+        let mut s = session(SessionStatus::Running, None);
+        s.label = label.map(str::to_string);
+        s
+    }
+
+    #[rstest]
+    #[case::no_label_anywhere(vec![None, None], "")]
+    #[case::first_session_has_label(vec![Some("Fix login bug"), None], "Fix login bug")]
+    #[case::first_none_second_has_label(vec![None, Some("Second title")], "Second title")]
+    #[case::empty_label_string_counts_as_has_label(vec![Some(""), Some("Ignored")], "")]
+    fn test_render_window_title(#[case] labels: Vec<Option<&str>>, #[case] expected: &str) {
+        let sessions: Vec<Session> = labels.into_iter().map(session_with_label).collect();
+        assert_eq!(render_window_title(&sessions), expected);
     }
 }

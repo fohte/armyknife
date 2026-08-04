@@ -12,6 +12,7 @@ use crate::commands::cc::tui::app::{App, AppMode, View};
 use crate::commands::cc::tui::worktree_view::WorktreeMode;
 
 use super::clean_list::render_clean_list;
+use super::edit_bar::render_edit_input;
 use super::helpers::{count_statuses, truncate};
 use super::session_list::render_session_list;
 use super::worktree_list::render_worktree_list;
@@ -26,26 +27,27 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     let area = frame.area();
 
-    // The search bar is session-view only.
+    // The top bar (search / rename) is session-view only.
     let has_error = app.error_message.is_some();
     let is_search_mode = app.view == View::Session && app.mode == AppMode::Search;
+    let is_edit_mode = app.view == View::Session && matches!(app.mode, AppMode::Edit { .. });
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
-    let show_search_bar = is_search_mode || has_text_filter;
+    let show_top_bar = is_search_mode || has_text_filter || is_edit_mode;
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
 
-    let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
+    let layouts: Vec<Constraint> = match (show_top_bar, has_error) {
         (true, true) => vec![
             Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(1), // Search bar (at top)
+            Constraint::Length(1), // Top bar (search / rename)
             Constraint::Min(1),    // Session list
             Constraint::Length(help_height),
             Constraint::Length(1), // Error
         ],
         (true, false) => vec![
             Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(1), // Search bar (at top)
+            Constraint::Length(1), // Top bar (search / rename)
             Constraint::Min(1),    // Session list
             Constraint::Length(help_height),
         ],
@@ -66,15 +68,15 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
 
     render_header(frame, areas[0], app);
 
-    match (show_search_bar, has_error) {
+    match (show_top_bar, has_error) {
         (true, true) => {
-            render_search_input(frame, areas[1], app);
+            render_top_bar(frame, areas[1], app);
             render_main_list(frame, areas[2], app, now);
             render_help_lines(frame, areas[3], help_lines);
             render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
         }
         (true, false) => {
-            render_search_input(frame, areas[1], app);
+            render_top_bar(frame, areas[1], app);
             render_main_list(frame, areas[2], app, now);
             render_help_lines(frame, areas[3], help_lines);
         }
@@ -87,6 +89,18 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
             render_main_list(frame, areas[1], app, now);
             render_help_lines(frame, areas[2], help_lines);
         }
+    }
+}
+
+/// Dispatches the bar rendered above the session list: the rename bar
+/// while `AppMode::Edit` is active, the search bar otherwise (live query
+/// while searching, or the confirmed filter query while browsing a
+/// filtered list).
+fn render_top_bar(frame: &mut Frame, area: Rect, app: &App) {
+    if matches!(app.mode, AppMode::Edit { .. }) {
+        render_edit_input(frame, area, app);
+    } else {
+        render_search_input(frame, area, app);
     }
 }
 
@@ -293,6 +307,12 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Span::raw(": move  "),
             Span::styled("Enter", bold),
             Span::raw(": focus  "),
+            Span::styled("Esc", bold),
+            Span::raw(": cancel"),
+        ])],
+        AppMode::Edit { .. } => vec![Line::from(vec![
+            Span::styled("  Enter", bold),
+            Span::raw(": save  "),
             Span::styled("Esc", bold),
             Span::raw(": cancel"),
         ])],

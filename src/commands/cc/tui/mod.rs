@@ -4,6 +4,7 @@ mod clean_view;
 mod event;
 mod pr_fetch;
 mod session_rows;
+mod title_edit;
 mod ui;
 mod worktree_session_children;
 mod worktree_view;
@@ -482,6 +483,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.request_delete();
         }
 
+        // Rename the selected session's title
+        (KeyCode::Char('e'), KeyModifiers::NONE) => {
+            app.enter_edit_title();
+        }
+
         // Status filters (toggle). Use Ctrl-prefixed bindings so that plain
         // letters (`r`, `s`, `w`) remain available for other actions such as
         // resuming a paused session.
@@ -576,6 +582,7 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         AppMode::Normal => handle_normal_key_event(app, key),
         AppMode::Search => handle_search_key_event(app, key),
         AppMode::Confirm { .. } => handle_confirm_key_event(app, key),
+        AppMode::Edit { .. } => title_edit::handle_key_event(app, key),
     }
     KeyEffects::default()
 }

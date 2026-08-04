@@ -1,5 +1,6 @@
 mod chrome;
 mod clean_list;
+mod edit_bar;
 mod helpers;
 mod session_list;
 #[cfg(test)]

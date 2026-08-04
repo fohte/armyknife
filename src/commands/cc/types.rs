@@ -17,6 +17,14 @@ pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
 /// directly instead of re-running `a cc window-status` on every redraw.
 pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 
+/// Tmux window-scoped user option mirroring the `label` of the window's
+/// (first, in pane order) labeled Claude Code session. Kept in sync
+/// whenever `sync_window_option` runs, so `window-status-format` can show
+/// a user-set title (via `a cc watch`'s rename key) without opening the
+/// TUI. Empty when no session in the window has a label; tmux's own
+/// `window-status-format` is expected to fall back to `#W` in that case.
+pub const TMUX_WINDOW_TITLE_OPTION: &str = "@armyknife-cc-window-title";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,

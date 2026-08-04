@@ -459,13 +459,15 @@ Stopped sessions that have not been focused since their most recent Stop render 
 
 `a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
 
-Reference the option from tmux's `window-status-format` to surface per-window session state next to the window name:
+The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do. Press `e` in `a cc watch` to rename the selected session's title — it is persisted as `label` and reflected here, so a renamed session shows its title next to the window index without opening the TUI. Titles are not concatenated across sessions in the same window, since a window normally hosts one session in practice.
+
+Reference both options from tmux's `window-status-format` to surface per-window session state and title next to the window index. `#{?...}` falls back to `#W` (the tmux window name) when no session in the window has a title set:
 
 ```tmux
-set -g window-status-format '#{@armyknife-cc-window-status}#I:#W'
+set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc-window-title},#{@armyknife-cc-window-title},#W}'
 ```
 
-`a cc window-status <window_id>` prints the same symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
+`a cc window-status <window_id>` prints the same status symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
 
 #### Pane has-paused flag
 
