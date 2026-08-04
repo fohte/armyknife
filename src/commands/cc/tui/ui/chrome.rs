@@ -149,8 +149,7 @@ fn render_help_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
 /// Builds the help-bar content for the current app state. The line count
 /// this returns determines how many rows the caller reserves for the bar
 /// (see `render_with_time`), so branches that don't need the full
-/// key-hint list return a single line instead of padding with a blank
-/// filler line the way the old fixed-height bar did.
+/// key-hint list return just a single line rather than padding to a fixed height.
 fn build_help_lines(app: &App) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
@@ -186,6 +185,22 @@ fn clean_status_line(app: &App, bold: Style) -> Option<Line<'static>> {
         Span::styled("Tab", bold),
         Span::raw(": switch view"),
     ]))
+}
+
+/// Builds the collapsed `?: keys   <hint>   <hint>   ...` line shared by the
+/// worktree and session views' default (non-expanded) help bar state.
+fn build_compact_help_line(bold: Style, hints: &[(&str, &str)]) -> Vec<Line<'static>> {
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled("?", bold),
+        Span::raw(": keys   "),
+    ];
+    for (i, (key, label)) in hints.iter().enumerate() {
+        spans.push(Span::styled((*key).to_string(), bold));
+        let sep = if i + 1 == hints.len() { "" } else { "   " };
+        spans.push(Span::raw(format!(": {label}{sep}")));
+    }
+    vec![Line::from(spans)]
 }
 
 fn build_worktree_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
@@ -237,17 +252,10 @@ fn build_worktree_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Span::styled("q", bold),
             Span::raw(": quit"),
         ])],
-        WorktreeMode::Normal => vec![Line::from(vec![
-            Span::raw(" "),
-            Span::styled("?", bold),
-            Span::raw(": keys   "),
-            Span::styled("Enter/f", bold),
-            Span::raw(": focus   "),
-            Span::styled("Tab", bold),
-            Span::raw(": switch view   "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ])],
+        WorktreeMode::Normal => build_compact_help_line(
+            bold,
+            &[("Enter/f", "focus"), ("Tab", "switch view"), ("q", "quit")],
+        ),
     }
 }
 
@@ -336,30 +344,18 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 Span::raw(": quit"),
             ]),
         ],
-        AppMode::Normal if app.has_filter() => vec![Line::from(vec![
-            Span::raw(" "),
-            Span::styled("?", bold),
-            Span::raw(": keys   "),
-            Span::styled("/", bold),
-            Span::raw(": search   "),
-            Span::styled("Esc", bold),
-            Span::raw(": clear filter   "),
-            Span::styled("Tab", bold),
-            Span::raw(": worktree   "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ])],
-        AppMode::Normal => vec![Line::from(vec![
-            Span::raw(" "),
-            Span::styled("?", bold),
-            Span::raw(": keys   "),
-            Span::styled("/", bold),
-            Span::raw(": search   "),
-            Span::styled("Tab", bold),
-            Span::raw(": worktree   "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ])],
+        AppMode::Normal if app.has_filter() => build_compact_help_line(
+            bold,
+            &[
+                ("/", "search"),
+                ("Esc", "clear filter"),
+                ("Tab", "worktree"),
+                ("q", "quit"),
+            ],
+        ),
+        AppMode::Normal => {
+            build_compact_help_line(bold, &[("/", "search"), ("Tab", "worktree"), ("q", "quit")])
+        }
     }
 }
 

@@ -772,20 +772,12 @@ mod tests {
         assert!(app.should_quit);
     }
 
-    #[test]
-    fn test_handle_key_toggle_help_session_view() {
+    #[rstest]
+    #[case::session_view(View::Session)]
+    #[case::worktree_view(View::Worktree)]
+    fn test_handle_key_toggle_help(#[case] view: View) {
         let mut app = create_test_app_with_sessions(1);
-        assert!(!app.show_help);
-        handle_key_event(&mut app, key(KeyCode::Char('?')));
-        assert!(app.show_help);
-        handle_key_event(&mut app, key(KeyCode::Char('?')));
-        assert!(!app.show_help);
-    }
-
-    #[test]
-    fn test_handle_key_toggle_help_worktree_view() {
-        let mut app = create_test_app_with_sessions(1);
-        app.view = View::Worktree;
+        app.view = view;
         assert!(!app.show_help);
         handle_key_event(&mut app, key(KeyCode::Char('?')));
         assert!(app.show_help);
