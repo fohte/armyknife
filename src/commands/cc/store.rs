@@ -242,17 +242,19 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
-/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+/// Loads a session under the exclusive lock, lets `mutate` decide whether
+/// and how to change it, and writes the result back atomically iff `mutate`
+/// returns `true`. A no-op when the session file is missing or corrupted.
 ///
-/// Holds the exclusive lock across the load-modify-save round-trip so a
-/// concurrent hook write of the full session (e.g. a new `last_message`)
-/// is not clobbered by a stale copy. A no-op when the session is missing,
-/// corrupted, no longer `Stopped`, or already marked read — `mark-read`
-/// only flips unread→read, never overwrites a fresh Stop.
-pub(crate) fn mark_session_read_in(
+/// Holds the exclusive lock across the whole load-modify-save round-trip so
+/// a concurrent hook write of the full session (e.g. a new `last_message`)
+/// cannot interleave with this one and tear the result. Shared by every
+/// single-field session update (`mark_session_read_in`,
+/// `update_session_label_in`) so the atomic-write plumbing exists once.
+fn update_session_field_in(
     sessions_dir: &Path,
     session_id: &str,
-    now: DateTime<Utc>,
+    mutate: impl FnOnce(&mut Session) -> bool,
 ) -> Result<()> {
     let path = session_file_in(sessions_dir, session_id)?;
     if !path.exists() {
@@ -275,10 +277,9 @@ pub(crate) fn mark_session_read_in(
     let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
         return Ok(());
     };
-    if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+    if !mutate(&mut session) {
         return Ok(());
     }
-    session.read_at = Some(now);
 
     let new_content = serde_json::to_string_pretty(&session)?;
     let temp_path = path.with_extension("json.tmp");
@@ -287,6 +288,24 @@ pub(crate) fn mark_session_read_in(
     temp_file.sync_all()?;
     fs::rename(&temp_path, &path)?;
     Ok(())
+}
+
+/// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
+/// A no-op when the session is missing, corrupted, no longer `Stopped`, or
+/// already marked read — `mark-read` only flips unread→read, never
+/// overwrites a fresh Stop.
+pub(crate) fn mark_session_read_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    update_session_field_in(sessions_dir, session_id, |session| {
+        if session.status != SessionStatus::Stopped || session.read_at.is_some() {
+            return false;
+        }
+        session.read_at = Some(now);
+        true
+    })
 }
 
 /// Sets `label` on a session, resolving the default sessions directory.
@@ -296,49 +315,18 @@ pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<(
     update_session_label_in(&sessions_dir()?, session_id, label)
 }
 
-/// Atomically overwrites a session's `label` field.
-///
-/// Holds the exclusive lock across the load-modify-save round-trip, same
-/// rationale as `mark_session_read_in`: without it, a concurrent hook write
-/// of the full session could be clobbered by a stale copy. Unlike
+/// Atomically overwrites a session's `label` field. Unlike
 /// `mark_session_read_in` there is no precondition on the current value --
-/// `label` is always overwritten with the given value. A no-op when the
-/// session file is missing or corrupted.
+/// `label` is always overwritten with the given value.
 pub(crate) fn update_session_label_in(
     sessions_dir: &Path,
     session_id: &str,
     label: Option<String>,
 ) -> Result<()> {
-    let path = session_file_in(sessions_dir, session_id)?;
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let lock_path = path.with_extension("json.lock");
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    acquire_lock(&lock_file)?;
-
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
-    let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
-        return Ok(());
-    };
-    session.label = label;
-
-    let new_content = serde_json::to_string_pretty(&session)?;
-    let temp_path = path.with_extension("json.tmp");
-    let mut temp_file = File::create(&temp_path)?;
-    temp_file.write_all(new_content.as_bytes())?;
-    temp_file.sync_all()?;
-    fs::rename(&temp_path, &path)?;
-    Ok(())
+    update_session_field_in(sessions_dir, session_id, |session| {
+        session.label = label;
+        true
+    })
 }
 
 /// Deletes a session from disk.
