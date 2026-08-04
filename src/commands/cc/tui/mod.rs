@@ -454,6 +454,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.quit();
         }
 
+        // Toggle the full key-binding list in the help bar
+        (KeyCode::Char('?'), KeyModifiers::NONE) => {
+            app.toggle_help();
+        }
+
         // Navigation
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
             app.select_next();
@@ -626,6 +631,7 @@ fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.worktree_view.select_by_number(num as usize);
             }
         }
+        (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
         _ => {}
     }
     KeyEffects::default()
@@ -774,6 +780,19 @@ mod tests {
     // All 3 sessions default to `Running`, so row 0 is the "RUNNING (3)"
     // header and rows 1-3 are the sessions; raw indices are shifted by +1
     // relative to a header-less list.
+    #[rstest]
+    #[case::session_view(View::Session)]
+    #[case::worktree_view(View::Worktree)]
+    fn test_handle_key_toggle_help(#[case] view: View) {
+        let mut app = create_test_app_with_sessions(1);
+        app.view = view;
+        assert!(!app.show_help);
+        handle_key_event(&mut app, key(KeyCode::Char('?')));
+        assert!(app.show_help);
+        handle_key_event(&mut app, key(KeyCode::Char('?')));
+        assert!(!app.show_help);
+    }
+
     #[rstest]
     #[case::j(KeyCode::Char('j'), Some(1), Some(2))]
     #[case::k(KeyCode::Char('k'), Some(3), Some(2))]

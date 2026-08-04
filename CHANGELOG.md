@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.252](https://github.com/fohte/armyknife/compare/v0.1.251...v0.1.252) (2026-08-04)
+
+
+### Features
+
+* **cc:** compact watch header and help bar ([#790](https://github.com/fohte/armyknife/issues/790)) ([1b7d586](https://github.com/fohte/armyknife/commit/1b7d586fdaa3d89a79c022772264db6b014c8d7f))
+
 ## [0.1.251](https://github.com/fohte/armyknife/compare/v0.1.250...v0.1.251) (2026-08-03)
 
 

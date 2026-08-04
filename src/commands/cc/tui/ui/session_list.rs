@@ -421,15 +421,15 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 9);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >● project         project                                              just now
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -447,16 +447,16 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 1  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project                                              just now
                                “Which approach do you prefer?”
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -475,16 +475,16 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 1  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project                                              just now
                                “”
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -507,9 +507,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 12);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 1  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project › project                                          2m
                                “Pick one”
@@ -517,8 +515,10 @@ mod tests {
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
              ● project         project                                              just now
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -536,15 +536,15 @@ mod tests {
         let output = render_to_string(&sessions, None, now, 80, 9);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 2  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 0 running · 2 idle
             ── PAUSED (2) ────────────────────────────────────────────── Space: expand ────
               project ×2 · project / project
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -564,16 +564,16 @@ mod tests {
         });
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 2  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 0 running · 2 idle
             ── PAUSED (2) ──────────────────────────────────────────── Space: collapse ────
             ⏸ project         project                                              just now
             ⏸ project         project                                              just now
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
