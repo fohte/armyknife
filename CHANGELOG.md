@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.255](https://github.com/fohte/armyknife/compare/v0.1.254...v0.1.255) (2026-08-04)
+
+
+### Features
+
+* **cc:** allow renaming a session's title from the TUI ([#796](https://github.com/fohte/armyknife/issues/796)) ([b5ca5a2](https://github.com/fohte/armyknife/commit/b5ca5a2e469f190a20c880707de01f088a373d3b))
+
 ## [0.1.254](https://github.com/fohte/armyknife/compare/v0.1.253...v0.1.254) (2026-08-04)
 
 
