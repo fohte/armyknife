@@ -313,9 +313,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 13);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 1  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       1 needs you · 1 running · 0 idle
             >● ▎ project  just now
                ▎
 
@@ -324,8 +322,10 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -336,16 +336,10 @@ mod tests {
         let sessions: Vec<Session> = vec![];
         let output = render_to_string(&sessions, None, now, 80, 9);
 
-        let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
-              No active Claude Code sessions.
-
-
-
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+        // Not `indoc!`: every non-blank line here has a leading space (the
+        // header/help text itself starts with one), so there is no
+        // zero-indent line for `indoc!` to anchor its dedent on.
+        let expected = " cc watch                                       0 needs you · 0 running · 0 idle\n  No active Claude Code sessions.\n\n\n\n\n\n\n ?: keys   /: search   Tab: worktree   q: quit";
 
         assert_eq!(output, expected);
     }
@@ -369,15 +363,15 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 1 running · 0 idle
             >● ▎ project  just now
                ▎ I've updated the code as requested.
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -400,15 +394,15 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 1  ◐ 0  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 1 running · 0 idle
             >● ▎ project  just now
                ▎
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -428,15 +422,15 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 9);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 0  ◐ 0  ⏸ 0  ○ 1               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 0 running · 1 idle
             >✱ ▎ docs  just now
                ▎
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -476,9 +470,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 13);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 2  ◐ 0  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       0 needs you · 2 running · 0 idle
             >● ▎ project  just now
                ▎ Bash(cargo build)
              │
@@ -487,8 +479,10 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -531,9 +525,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(0), now, 80, 16);
 
         let expected = indoc! {"
-            ┌──────────────────────────────────────────────────────────────────────────────┐
-            │  Claude Code Sessions                       ● 2  ◐ 1  ⏸ 0  ○ 0               │
-            └──────────────────────────────────────────────────────────────────────────────┘
+             cc watch                                       1 needs you · 2 running · 0 idle
             >● ▎ project  just now
                ▎
              │
@@ -545,8 +537,10 @@ mod tests {
 
 
 
-              j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search
-              C-r/w/s/p: filter  Tab: worktree view  q: quit"};
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
     }

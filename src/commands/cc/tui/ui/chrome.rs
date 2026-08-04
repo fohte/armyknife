@@ -1,11 +1,10 @@
-use crate::commands::cc::types::SessionStatus;
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -17,8 +16,7 @@ use super::helpers::{count_statuses, truncate};
 use super::session_list::render_session_list;
 use super::worktree_list::render_worktree_list;
 
-const HEADER_HEIGHT: u16 = 3;
-const HELP_BAR_HEIGHT: u16 = 2;
+const HEADER_HEIGHT: u16 = 1;
 
 /// Renders the entire UI.
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -34,30 +32,33 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
     let show_search_bar = is_search_mode || has_text_filter;
 
+    let help_lines = build_help_lines(app);
+    let help_height = help_lines.len() as u16;
+
     let layouts: Vec<Constraint> = match (show_search_bar, has_error) {
         (true, true) => vec![
             Constraint::Length(HEADER_HEIGHT),
             Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
-            Constraint::Length(HELP_BAR_HEIGHT),
+            Constraint::Length(help_height),
             Constraint::Length(1), // Error
         ],
         (true, false) => vec![
             Constraint::Length(HEADER_HEIGHT),
             Constraint::Length(1), // Search bar (at top)
             Constraint::Min(1),    // Session list
-            Constraint::Length(HELP_BAR_HEIGHT),
+            Constraint::Length(help_height),
         ],
         (false, true) => vec![
             Constraint::Length(HEADER_HEIGHT),
             Constraint::Min(1), // Session list
-            Constraint::Length(HELP_BAR_HEIGHT),
+            Constraint::Length(help_height),
             Constraint::Length(1), // Error
         ],
         (false, false) => vec![
             Constraint::Length(HEADER_HEIGHT),
             Constraint::Min(1), // Session list
-            Constraint::Length(HELP_BAR_HEIGHT),
+            Constraint::Length(help_height),
         ],
     };
 
@@ -69,91 +70,65 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
         (true, true) => {
             render_search_input(frame, areas[1], app);
             render_main_list(frame, areas[2], app, now);
-            render_help(frame, areas[3], app);
+            render_help_lines(frame, areas[3], help_lines);
             render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
         }
         (true, false) => {
             render_search_input(frame, areas[1], app);
             render_main_list(frame, areas[2], app, now);
-            render_help(frame, areas[3], app);
+            render_help_lines(frame, areas[3], help_lines);
         }
         (false, true) => {
             render_main_list(frame, areas[1], app, now);
-            render_help(frame, areas[2], app);
+            render_help_lines(frame, areas[2], help_lines);
             render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
         }
         (false, false) => {
             render_main_list(frame, areas[1], app, now);
-            render_help(frame, areas[2], app);
+            render_help_lines(frame, areas[2], help_lines);
         }
     }
 }
 
-/// Returns the style for a status indicator, highlighted when it matches the active filter.
-fn get_status_style(
-    base_color: Color,
-    status: SessionStatus,
-    active_filter: Option<SessionStatus>,
-) -> Style {
-    let style = Style::default().fg(base_color);
-    if active_filter == Some(status) {
-        style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-    } else {
-        style
-    }
-}
-
-/// Renders the header with status counts.
-/// When a status filter is active, the matching status is visually highlighted.
+/// Renders the single-line header: title on the left, a compact status
+/// summary right-aligned. `idle` folds together Stopped and Paused since
+/// neither needs the user's attention.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let (running, waiting, stopped, paused) = count_statuses(&app.sessions);
-    let status_filter = app.status_filter;
+    let idle = stopped + paused;
 
-    let running_style = get_status_style(Color::Green, SessionStatus::Running, status_filter);
-    let waiting_style = get_status_style(Color::Yellow, SessionStatus::WaitingInput, status_filter);
-    let stopped_style = get_status_style(Color::DarkGray, SessionStatus::Stopped, status_filter);
-    let paused_style = get_status_style(Color::Indexed(245), SessionStatus::Paused, status_filter);
+    let title = " cc watch";
+    let needs_you = format!("{waiting} needs you");
+    let running_text = format!("{running} running");
+    let idle_text = format!("{idle} idle");
+    let summary = format!("{needs_you} · {running_text} · {idle_text}");
 
-    let title = match app.view {
-        View::Session => "  Claude Code Sessions",
-        View::Worktree => "  Worktrees           ",
-        View::Clean => "  Clean worktrees     ",
-    };
-    let status_line = Line::from(vec![
+    let term_width = area.width as usize;
+    let gap = term_width
+        .saturating_sub(title.width())
+        .saturating_sub(summary.width());
+
+    let line = Line::from(vec![
         Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("                       "),
+        Span::raw(" ".repeat(gap)),
         Span::styled(
-            format!("{} {}", SessionStatus::Running.display_symbol(), running),
-            running_style,
+            needs_you,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
+        Span::raw(" · "),
         Span::styled(
-            format!(
-                "{} {}",
-                SessionStatus::WaitingInput.display_symbol(),
-                waiting
-            ),
-            waiting_style,
+            running_text,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
-        Span::styled(
-            format!("{} {}", SessionStatus::Paused.display_symbol(), paused),
-            paused_style,
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("{} {}", SessionStatus::Stopped.display_symbol(), stopped),
-            stopped_style,
-        ),
+        Span::raw(" · "),
+        Span::styled(idle_text, Style::default().fg(Color::DarkGray)),
     ]);
 
-    let header = Paragraph::new(status_line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-
-    frame.render_widget(header, area);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Dispatch list rendering on the active view.
@@ -165,98 +140,119 @@ fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<
     }
 }
 
-/// Renders the help bar at the bottom.
-fn render_help(frame: &mut Frame, area: Rect, app: &App) {
+/// Renders help-bar content that was already built by `build_help_lines`.
+fn render_help_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+    let help = Paragraph::new(Text::from(lines)).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, area);
+}
+
+/// Builds the help-bar content for the current app state. The line count
+/// this returns determines how many rows the caller reserves for the bar
+/// (see `render_with_time`), so branches that don't need the full
+/// key-hint list return a single line instead of padding with a blank
+/// filler line the way the old fixed-height bar did.
+fn build_help_lines(app: &App) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     if app.view == View::Clean {
-        render_clean_help(frame, area, app);
-        return;
+        return build_clean_help_lines(app);
     }
 
-    // While a detached clean is in flight (or a startup banner is
-    // queued) the help bar's first line carries a progress / summary
-    // notice instead of the usual key hints.
-    if let Some(line) = clean_status_line(app) {
-        let help_lines = vec![
-            line,
-            Line::from(vec![
-                Span::styled("  q", bold),
-                Span::raw(": quit  "),
-                Span::styled("Tab", bold),
-                Span::raw(": switch view"),
-            ]),
-        ];
-        let help =
-            Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(help, area);
-        return;
+    if let Some(line) = clean_status_line(app, bold) {
+        return vec![line];
     }
 
-    // Worktree view has its own help line set.
     if app.view == View::Worktree {
-        let help_lines: Vec<Line> = match &app.worktree_view.mode {
-            WorktreeMode::Confirm {
-                session_count,
-                has_active,
-                ..
-            } => {
-                let warn_color = if *has_active {
-                    Color::Red
-                } else {
-                    Color::Yellow
-                };
-                let warn_style = Style::default().fg(warn_color).add_modifier(Modifier::BOLD);
-                let prompt = if *has_active {
-                    format!(
-                        "  WARNING: ACTIVE session — delete worktree and {session_count} session{}?",
-                        if *session_count == 1 { "" } else { "s" }
-                    )
-                } else if *session_count > 0 {
-                    format!(
-                        "  Delete worktree and {session_count} session{}?",
-                        if *session_count == 1 { "" } else { "s" }
-                    )
-                } else {
-                    "  Delete worktree?".to_string()
-                };
-                vec![
-                    Line::from(vec![
-                        Span::styled(prompt, warn_style),
-                        Span::raw(" "),
-                        Span::styled("y", bold),
-                        Span::raw(": yes  "),
-                        Span::styled("n/Esc", bold),
-                        Span::raw(": cancel"),
-                    ]),
-                    Line::from(""),
-                ]
-            }
-            WorktreeMode::Normal => vec![
-                Line::from(vec![
-                    Span::styled("  j/k", bold),
-                    Span::raw(": move  "),
-                    Span::styled("Enter/f", bold),
-                    Span::raw(": focus  "),
-                    Span::styled("d", bold),
-                    Span::raw(": delete  "),
-                    Span::styled("1-9", bold),
-                    Span::raw(": quick  "),
-                    Span::styled("Tab", bold),
-                    Span::raw(": switch view  "),
-                    Span::styled("q", bold),
-                    Span::raw(": quit"),
-                ]),
-                Line::from(""),
-            ],
-        };
-        let help =
-            Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(help, area);
-        return;
+        return build_worktree_help_lines(app, bold);
     }
 
-    let help_lines: Vec<Line> = match &app.mode {
+    build_session_help_lines(app, bold)
+}
+
+/// Progress/summary line shown in place of the regular help bar while a
+/// detached cleanup is in flight (or its "Done" summary hasn't been
+/// dismissed yet). Returns `None` when there is nothing notable to show.
+fn clean_status_line(app: &App, bold: Style) -> Option<Line<'static>> {
+    let progress_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let progress = app.clean_progress.as_ref()?;
+    Some(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(progress.render_line(), progress_style),
+        Span::raw("   "),
+        Span::styled("q", bold),
+        Span::raw(": quit  "),
+        Span::styled("Tab", bold),
+        Span::raw(": switch view"),
+    ]))
+}
+
+fn build_worktree_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
+    match &app.worktree_view.mode {
+        WorktreeMode::Confirm {
+            session_count,
+            has_active,
+            ..
+        } => {
+            let warn_color = if *has_active {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            let warn_style = Style::default().fg(warn_color).add_modifier(Modifier::BOLD);
+            let prompt = if *has_active {
+                format!(
+                    "  WARNING: ACTIVE session — delete worktree and {session_count} session{}?",
+                    if *session_count == 1 { "" } else { "s" }
+                )
+            } else if *session_count > 0 {
+                format!(
+                    "  Delete worktree and {session_count} session{}?",
+                    if *session_count == 1 { "" } else { "s" }
+                )
+            } else {
+                "  Delete worktree?".to_string()
+            };
+            vec![Line::from(vec![
+                Span::styled(prompt, warn_style),
+                Span::raw(" "),
+                Span::styled("y", bold),
+                Span::raw(": yes  "),
+                Span::styled("n/Esc", bold),
+                Span::raw(": cancel"),
+            ])]
+        }
+        WorktreeMode::Normal if app.show_help => vec![Line::from(vec![
+            Span::styled("  j/k", bold),
+            Span::raw(": move  "),
+            Span::styled("Enter/f", bold),
+            Span::raw(": focus  "),
+            Span::styled("d", bold),
+            Span::raw(": delete  "),
+            Span::styled("1-9", bold),
+            Span::raw(": quick  "),
+            Span::styled("Tab", bold),
+            Span::raw(": switch view  "),
+            Span::styled("q", bold),
+            Span::raw(": quit"),
+        ])],
+        WorktreeMode::Normal => vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("?", bold),
+            Span::raw(": keys   "),
+            Span::styled("Enter/f", bold),
+            Span::raw(": focus   "),
+            Span::styled("Tab", bold),
+            Span::raw(": switch view   "),
+            Span::styled("q", bold),
+            Span::raw(": quit"),
+        ])],
+    }
+}
+
+fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
+    match &app.mode {
         AppMode::Confirm {
             is_alive,
             worktree_cleanup,
@@ -276,29 +272,23 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
             let warn_style = Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
-            vec![
-                Line::from(vec![
-                    Span::styled(format!("  {prompt} "), warn_style),
-                    Span::styled("y", bold),
-                    Span::raw(": yes  "),
-                    Span::styled("n/Esc", bold),
-                    Span::raw(": cancel"),
-                ]),
-                Line::from(""),
-            ]
-        }
-        AppMode::Search => vec![
-            Line::from(vec![
-                Span::styled("  C-n/C-p", bold),
-                Span::raw(": move  "),
-                Span::styled("Enter", bold),
-                Span::raw(": focus  "),
-                Span::styled("Esc", bold),
+            vec![Line::from(vec![
+                Span::styled(format!("  {prompt} "), warn_style),
+                Span::styled("y", bold),
+                Span::raw(": yes  "),
+                Span::styled("n/Esc", bold),
                 Span::raw(": cancel"),
-            ]),
-            Line::from(""),
-        ],
-        AppMode::Normal if app.has_filter() => vec![
+            ])]
+        }
+        AppMode::Search => vec![Line::from(vec![
+            Span::styled("  C-n/C-p", bold),
+            Span::raw(": move  "),
+            Span::styled("Enter", bold),
+            Span::raw(": focus  "),
+            Span::styled("Esc", bold),
+            Span::raw(": cancel"),
+        ])],
+        AppMode::Normal if app.show_help && app.has_filter() => vec![
             Line::from(vec![
                 Span::styled("  j/k", bold),
                 Span::raw(": move  "),
@@ -320,7 +310,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(": clear"),
             ]),
         ],
-        AppMode::Normal => vec![
+        AppMode::Normal if app.show_help => vec![
             Line::from(vec![
                 Span::styled("  j/k", bold),
                 Span::raw(": move  "),
@@ -346,30 +336,38 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(": quit"),
             ]),
         ],
-    };
-
-    let help = Paragraph::new(Text::from(help_lines)).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, area);
+        AppMode::Normal if app.has_filter() => vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("?", bold),
+            Span::raw(": keys   "),
+            Span::styled("/", bold),
+            Span::raw(": search   "),
+            Span::styled("Esc", bold),
+            Span::raw(": clear filter   "),
+            Span::styled("Tab", bold),
+            Span::raw(": worktree   "),
+            Span::styled("q", bold),
+            Span::raw(": quit"),
+        ])],
+        AppMode::Normal => vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled("?", bold),
+            Span::raw(": keys   "),
+            Span::styled("/", bold),
+            Span::raw(": search   "),
+            Span::styled("Tab", bold),
+            Span::raw(": worktree   "),
+            Span::styled("q", bold),
+            Span::raw(": quit"),
+        ])],
+    }
 }
 
-/// Status line shown in place of the regular help bar's top row when a
-/// detached cleanup is in flight. Returns `None` when there is nothing
-/// notable to display.
-fn clean_status_line(app: &App) -> Option<Line<'static>> {
-    let progress_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    let progress = app.clean_progress.as_ref()?;
-    Some(Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(progress.render_line(), progress_style),
-    ]))
-}
-
-/// Help / confirmation bar for the clean view. The bottom line is the
-/// `Clean N worktree (M active excluded)? [y/N]` prompt; the line
-/// above lists the basic key bindings.
-fn render_clean_help(frame: &mut Frame, area: Rect, app: &App) {
+/// Extracts the clean-view's help/confirmation content. The bottom line is
+/// the `Clean N worktree (M active excluded)? [y/N]` prompt; the line above
+/// lists the basic key bindings. Always 2 lines — not gated by
+/// `show_help`, since the delete-count prompt must always be visible.
+fn build_clean_help_lines(app: &App) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
     let warn = Style::default()
@@ -416,9 +414,7 @@ fn render_clean_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(": cancel"),
         ])
     };
-    let help = Paragraph::new(Text::from(vec![help_line, prompt_line]))
-        .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, area);
+    vec![help_line, prompt_line]
 }
 
 /// Renders an error message at the bottom.
@@ -487,4 +483,111 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let search_text = Line::from(spans);
     let search = Paragraph::new(search_text);
     frame.render_widget(search, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::cc::tui::ui::test_support::{
+        create_test_session, render_to_string, render_to_string_with, wt_row,
+    };
+    use crate::commands::cc::types::{Session, SessionStatus};
+    use rstest::rstest;
+
+    #[test]
+    fn test_render_header_status_summary() {
+        let now = Utc::now();
+
+        let mut running = create_test_session("s1");
+        running.status = SessionStatus::Running;
+        let mut waiting = create_test_session("s2");
+        waiting.status = SessionStatus::WaitingInput;
+        let mut paused = create_test_session("s3");
+        paused.status = SessionStatus::Paused;
+        let mut stopped = create_test_session("s4");
+        stopped.status = SessionStatus::Stopped;
+
+        let sessions = vec![running, waiting, paused, stopped];
+        let output = render_to_string(&sessions, Some(0), now, 80, 20);
+        let header_line = output.lines().next().unwrap();
+
+        assert_eq!(
+            header_line,
+            " cc watch                                       1 needs you · 1 running · 2 idle"
+        );
+    }
+
+    #[rstest]
+    #[case::session_view_default(View::Session, false, vec![
+        " ?: keys   /: search   Tab: worktree   q: quit".to_string(),
+    ])]
+    #[case::session_view_expanded(View::Session, true, vec![
+        "  j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search".to_string(),
+        "  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
+    ])]
+    #[case::worktree_view_default(View::Worktree, false, vec![
+        " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),
+    ])]
+    #[case::worktree_view_expanded(View::Worktree, true, vec![
+        "  j/k: move  Enter/f: focus  d: delete  1-9: quick  Tab: switch view  q: quit".to_string(),
+    ])]
+    fn test_help_bar_default_vs_expanded(
+        #[case] view: View,
+        #[case] show_help: bool,
+        #[case] expected_lines: Vec<String>,
+    ) {
+        let now = Utc::now();
+        let sessions: Vec<Session> = vec![];
+        let height = 8 + expected_lines.len() as u16;
+        let output = render_to_string_with(&sessions, None, now, 80, height, |app| {
+            app.view = view;
+            app.show_help = show_help;
+        });
+
+        let actual_lines: Vec<&str> = output
+            .lines()
+            .skip(output.lines().count() - expected_lines.len())
+            .collect();
+        assert_eq!(actual_lines, expected_lines);
+    }
+
+    #[test]
+    fn test_confirm_mode_help_bar_is_single_line() {
+        let now = Utc::now();
+        let sessions = vec![create_test_session("s1")];
+        let output = render_to_string_with(&sessions, Some(0), now, 80, 9, |app| {
+            app.mode = AppMode::Confirm {
+                session_id: "s1".to_string(),
+                is_alive: false,
+                worktree_cleanup: None,
+            };
+        });
+
+        let help_line = output.lines().last().unwrap();
+        assert_eq!(help_line, "  Delete session? y: yes  n/Esc: cancel");
+    }
+
+    #[test]
+    fn test_clean_view_help_bar_unchanged() {
+        let now = Utc::now();
+        let output = render_to_string_with(&[], None, now, 80, 16, |app| {
+            app.set_worktrees(vec![wt_row(
+                "armyknife",
+                "feat/a",
+                "feat-a",
+                "/tmp/armyknife/.worktrees/feat-a",
+            )]);
+            app.enter_clean_view();
+        });
+
+        let lines: Vec<&str> = output.lines().collect();
+        let help_lines = &lines[lines.len() - 2..];
+        assert_eq!(
+            help_lines,
+            &[
+                "  j/k: move  Enter: toggle / focus session  y: run  n/Esc/q: cancel",
+                "  Nothing to clean. n/Esc/q: back",
+            ]
+        );
+    }
 }

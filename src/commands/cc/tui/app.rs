@@ -94,6 +94,8 @@ pub struct App {
     tree_ordered_indices: Vec<usize>,
     /// Currently active top-level view.
     pub view: View,
+    /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
+    pub show_help: bool,
     /// View to return to when the user exits the clean view (Esc/n/q).
     pub clean_return_view: View,
     /// Worktree-view state (background-loaded list, sub-mode, selection).
@@ -164,6 +166,7 @@ impl App {
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
             view: View::Session,
+            show_help: false,
             clean_return_view: View::Session,
             worktree_view: WorktreeView::new(),
             clean_view: CleanView::new(),
@@ -429,6 +432,11 @@ impl App {
     /// Clears the error message.
     pub fn clear_error(&mut self) {
         self.error_message = None;
+    }
+
+    /// Toggles whether the full key-binding list is shown in the help bar.
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
     }
 
     /// Enters search mode.
