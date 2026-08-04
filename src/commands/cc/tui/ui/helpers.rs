@@ -1,95 +1,17 @@
 use crate::commands::cc::types::{Session, SessionStatus};
-use chrono::{DateTime, Utc};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Number of distinct hue slots for repo label colors.
-/// Using a prime number helps avoid systematic collisions with
-/// common string patterns.
-const REPO_LABEL_HUE_SLOTS: u64 = 31;
-
-// Green-to-gray gradient for the "time ago" label
-const TIME_AGO_BRIGHT_GREEN: Color = Color::Indexed(82);
-const TIME_AGO_GREEN: Color = Color::Indexed(78);
-const TIME_AGO_DARK_GREEN: Color = Color::Indexed(72);
-const TIME_AGO_DARKER_GREEN: Color = Color::Indexed(65);
-const TIME_AGO_LIGHT_GRAY: Color = Color::Indexed(245);
-const TIME_AGO_DARK_GRAY: Color = Color::Indexed(241);
-
-/// Returns a deterministic color for a repository name.
-/// Uses FNV-1a hash for good distribution, then maps to a hue on the
-/// HSL color wheel with fixed saturation and lightness for terminal
-/// readability.
-pub(super) fn repo_label_color(repo_name: &str) -> Color {
-    // FNV-1a hash for better distribution than simple multiply-add
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x00000100000001B3;
-    // FNV-1a: XOR first, then multiply
-    let hash = repo_name.bytes().fold(FNV_OFFSET, |acc, b| {
-        (acc ^ (b as u64)).wrapping_mul(FNV_PRIME)
-    });
-
-    let slot = (hash % REPO_LABEL_HUE_SLOTS) as f64;
-    let hue = (slot / REPO_LABEL_HUE_SLOTS as f64) * 360.0;
-    let (r, g, b) = hsl_to_rgb(hue, 0.65, 0.45);
-    Color::Rgb(r, g, b)
-}
-
-/// Converts HSL color to RGB (each component 0-255).
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let h_prime = h / 60.0;
-    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
-    let (r1, g1, b1) = match h_prime as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = l - c / 2.0;
-    (
-        ((r1 + m) * 255.0) as u8,
-        ((g1 + m) * 255.0) as u8,
-        ((b1 + m) * 255.0) as u8,
-    )
-}
-
 /// Returns the color for a session status icon.
+///
+/// Only 3 colors are used: amber for waiting-for-user, green for running,
+/// and a single neutral color for every idle status (paused/stopped/ended).
 pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        // Paused gets a lighter gray than Stopped so the ⏸ icon stays
-        // readable; the text itself is dimmed separately.
-        SessionStatus::Paused => Color::Indexed(245),
-        SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
-    }
-}
-
-/// Returns a color for the "time ago" label based on elapsed time since last update.
-///
-/// Uses a green-to-gray gradient: bright green for recent activity, fading
-/// through darker greens, then to gray for stale sessions.
-pub(super) fn time_ago_color(updated_at: DateTime<Utc>, now: DateTime<Utc>) -> Color {
-    let seconds = now.signed_duration_since(updated_at).num_seconds().max(0);
-    let minutes = seconds / 60;
-
-    match minutes {
-        // < 1 minute: bright green
-        0 => TIME_AGO_BRIGHT_GREEN,
-        // 1-5 minutes: green
-        1..=5 => TIME_AGO_GREEN,
-        // 6-30 minutes: slightly darker green
-        6..=30 => TIME_AGO_DARK_GREEN,
-        // 31-60 minutes: dark green
-        31..=60 => TIME_AGO_DARKER_GREEN,
-        // 1-6 hours: light gray
-        61..=360 => TIME_AGO_LIGHT_GRAY,
-        // 6+ hours: darker gray (floor)
-        _ => TIME_AGO_DARK_GRAY,
+        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
     }
 }
 
@@ -293,7 +215,6 @@ mod tests {
     use super::*;
     use crate::commands::cc::tui::ui::test_support::create_test_session;
     use crate::commands::cc::types::TmuxInfo;
-    use chrono::Duration;
     use rstest::rstest;
 
     #[test]
@@ -403,36 +324,14 @@ mod tests {
         assert_eq!(truncate(input, max_width), expected);
     }
 
-    #[test]
-    fn test_status_color() {
-        assert_eq!(status_color(SessionStatus::Running), Color::Green);
-        assert_eq!(status_color(SessionStatus::WaitingInput), Color::Yellow);
-        assert_eq!(status_color(SessionStatus::Stopped), Color::DarkGray);
-        assert_eq!(status_color(SessionStatus::Paused), Color::Indexed(245));
-    }
-
     #[rstest]
-    #[case::just_now(0, Color::Indexed(82))]
-    #[case::thirty_seconds(30, Color::Indexed(82))]
-    #[case::almost_one_minute(59, Color::Indexed(82))]
-    #[case::one_minute(60, Color::Indexed(78))]
-    #[case::three_minutes(180, Color::Indexed(78))]
-    #[case::five_minutes(300, Color::Indexed(78))]
-    #[case::six_minutes(360, Color::Indexed(72))]
-    #[case::fifteen_minutes(900, Color::Indexed(72))]
-    #[case::thirty_minutes(1800, Color::Indexed(72))]
-    #[case::thirty_one_minutes(1860, Color::Indexed(65))]
-    #[case::forty_five_minutes(2700, Color::Indexed(65))]
-    #[case::one_hour(3600, Color::Indexed(65))]
-    #[case::two_hours(7200, Color::Indexed(245))]
-    #[case::five_hours(18000, Color::Indexed(245))]
-    #[case::six_hours(21600, Color::Indexed(245))]
-    #[case::seven_hours(25200, Color::Indexed(241))]
-    #[case::one_day(86400, Color::Indexed(241))]
-    fn test_time_ago_color(#[case] seconds_ago: i64, #[case] expected: Color) {
-        let now = Utc::now();
-        let updated_at = now - Duration::seconds(seconds_ago);
-        assert_eq!(time_ago_color(updated_at, now), expected);
+    #[case::running(SessionStatus::Running, Color::Green)]
+    #[case::waiting_input(SessionStatus::WaitingInput, Color::Yellow)]
+    #[case::paused(SessionStatus::Paused, Color::DarkGray)]
+    #[case::stopped(SessionStatus::Stopped, Color::DarkGray)]
+    #[case::ended(SessionStatus::Ended, Color::DarkGray)]
+    fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
+        assert_eq!(status_color(status), expected);
     }
 
     // =========================================================================
@@ -466,36 +365,6 @@ mod tests {
         for (span, &(content, is_highlighted)) in spans.iter().zip(expected) {
             assert_eq!(span.content, content);
             assert_eq!(span.style, if is_highlighted { highlight } else { base });
-        }
-    }
-
-    // =========================================================================
-    // Repo label tests
-    // =========================================================================
-
-    #[test]
-    fn test_repo_label_color_is_deterministic() {
-        let color1 = repo_label_color("armyknife");
-        let color2 = repo_label_color("armyknife");
-        assert_eq!(color1, color2);
-    }
-
-    #[test]
-    fn test_repo_label_color_differs_for_different_names() {
-        let color1 = repo_label_color("armyknife");
-        let color2 = repo_label_color("specs");
-        assert_ne!(color1, color2);
-    }
-
-    #[test]
-    fn test_repo_label_color_returns_rgb() {
-        let names = ["armyknife", "webapp", "api", "docs", "infra", "tools"];
-        for name in names {
-            let color = repo_label_color(name);
-            assert!(
-                matches!(color, Color::Rgb(_, _, _)),
-                "{name} got {color:?}, expected Rgb"
-            );
         }
     }
 }

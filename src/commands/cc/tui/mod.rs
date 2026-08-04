@@ -3,7 +3,7 @@ mod clean_progress;
 mod clean_view;
 mod event;
 mod pr_fetch;
-mod session_tree;
+mod session_rows;
 mod ui;
 mod worktree_session_children;
 mod worktree_view;
@@ -482,6 +482,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.request_delete();
         }
 
+        // Expand/collapse the Paused/Stopped section
+        (KeyCode::Char(' '), KeyModifiers::NONE) => {
+            app.toggle_paused_stopped_section();
+        }
+
         // Status filters (toggle). Use Ctrl-prefixed bindings so that plain
         // letters (`r`, `s`, `w`) remain available for other actions such as
         // resuming a paused session.
@@ -772,6 +777,9 @@ mod tests {
         assert!(app.should_quit);
     }
 
+    // All 3 sessions default to `Running`, so row 0 is the "RUNNING (3)"
+    // header and rows 1-3 are the sessions; raw indices are shifted by +1
+    // relative to a header-less list.
     #[rstest]
     #[case::session_view(View::Session)]
     #[case::worktree_view(View::Worktree)]
@@ -786,10 +794,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::j(KeyCode::Char('j'), Some(0), Some(1))]
-    #[case::k(KeyCode::Char('k'), Some(2), Some(1))]
-    #[case::down(KeyCode::Down, Some(0), Some(1))]
-    #[case::up(KeyCode::Up, Some(1), Some(0))]
+    #[case::j(KeyCode::Char('j'), Some(1), Some(2))]
+    #[case::k(KeyCode::Char('k'), Some(3), Some(2))]
+    #[case::down(KeyCode::Down, Some(1), Some(2))]
+    #[case::up(KeyCode::Up, Some(2), Some(1))]
     fn test_handle_key_navigation(
         #[case] code: KeyCode,
         #[case] initial: Option<usize>,
@@ -801,9 +809,11 @@ mod tests {
         assert_eq!(app.list_state.selected(), expected);
     }
 
+    // All 5 sessions default to `Running`, so row 0 is the "RUNNING (5)"
+    // header and rows 1-5 are the sessions.
     #[rstest]
-    #[case::select_3('3', Some(0), Some(2))]
-    #[case::select_1('1', Some(2), Some(0))]
+    #[case::select_3('3', Some(1), Some(3))]
+    #[case::select_1('1', Some(3), Some(1))]
     #[case::zero_ignored('0', Some(2), Some(2))]
     fn test_handle_key_quick_select(
         #[case] c: char,
@@ -849,15 +859,18 @@ mod tests {
     #[test]
     fn test_search_mode_ctrl_n_p_for_navigation() {
         let mut app = create_test_app_with_sessions(3);
+        // Row 0 is the "RUNNING (3)" header, so the default selection
+        // (first selectable row) already sits on row 1.
+        assert_eq!(app.list_state.selected(), Some(1));
         handle_key_event(&mut app, key(KeyCode::Char('/')));
 
         // Ctrl+n should move down
         handle_key_event(&mut app, key_ctrl('n'));
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.list_state.selected(), Some(2));
 
         // Ctrl+p should move up
         handle_key_event(&mut app, key_ctrl('p'));
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.list_state.selected(), Some(1));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::clean_progress::{CleanLogEvent, CleanProgress};
 use super::clean_view::CleanView;
 use super::event::{SessionChange, SessionChangeType};
-use super::session_tree::build_session_tree;
+use super::session_rows::build_session_rows;
 use super::worktree_view::{
     WorktreeMode, WorktreeRow, WorktreeView, canonicalize_or_self, session_lives_under,
 };
@@ -88,10 +88,15 @@ pub struct App {
     /// Cwds whose async resolution is in flight. Guards `claim_unresolved_label_cwds`
     /// against re-dispatch before the corresponding result event arrives.
     pending_label_cwds: HashSet<PathBuf>,
-    /// Tree-ordered indices into `sessions`.
-    /// Updated each render by the UI layer after building the session tree.
-    /// Maps display position (list_state index) to sessions index.
-    tree_ordered_indices: Vec<usize>,
+    /// Maps each display row (list_state index) to the `sessions` index it
+    /// shows, or `None` for a row that is not individually selectable
+    /// (a section header or the collapsed-summary row).
+    /// Updated each render by the UI layer after building the row list.
+    row_sessions: Vec<Option<usize>>,
+    /// Whether the collapsible Paused/Stopped section is expanded into
+    /// individual rows (`true`) or shown as a single collapsed summary
+    /// row (`false`, the default).
+    pub paused_stopped_expanded: bool,
     /// Currently active top-level view.
     pub view: View,
     /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
@@ -126,7 +131,8 @@ impl App {
             .or_else(|| store::load_last_selected_session().ok().flatten());
 
         if let Some(session_id) = initial_session_id {
-            app.restore_selection(Some(&session_id));
+            let old_pos = app.list_state.selected();
+            app.restore_selection(old_pos, Some(&session_id));
         }
 
         Ok(app)
@@ -135,18 +141,13 @@ impl App {
     /// Creates a new App instance with the given sessions.
     /// Useful for testing without disk I/O.
     pub fn with_sessions(sessions: Vec<Session>) -> Self {
-        let mut list_state = ListState::default();
+        let list_state = ListState::default();
 
         // Build initial filtered indices (all sessions)
         let filtered_indices: Vec<usize> = (0..sessions.len()).collect();
 
         // Build title cache for fast UI rendering
         let title_cache = build_title_cache(&sessions);
-
-        // Select first item if there are any sessions
-        if !sessions.is_empty() {
-            list_state.select(Some(0));
-        }
 
         let mut app = Self {
             sessions,
@@ -161,7 +162,8 @@ impl App {
             status_filter: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
-            tree_ordered_indices: Vec::new(),
+            row_sessions: Vec::new(),
+            paused_stopped_expanded: false,
             title_cache,
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
@@ -172,7 +174,9 @@ impl App {
             clean_view: CleanView::new(),
             clean_progress: None,
         };
-        app.rebuild_tree_order();
+        app.rebuild_row_order();
+        app.list_state
+            .select(app.selectable_positions().first().copied());
         app
     }
 
@@ -190,8 +194,11 @@ impl App {
 
     /// Performs a full reload of all sessions.
     fn full_reload(&mut self) -> Result<()> {
-        // Remember the currently selected session_id
+        // Remember the currently selected session_id and row position
+        // before any mutation below can reset `list_state` (`apply_filter`
+        // always does).
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let old_pos = self.list_state.selected();
 
         self.sessions = load_sessions()?;
 
@@ -205,14 +212,17 @@ impl App {
 
         // Re-apply filter with current query
         self.apply_filter();
-        self.restore_selection(selected_session_id.as_deref());
+        self.restore_selection(old_pos, selected_session_id.as_deref());
 
         Ok(())
     }
 
     /// Applies incremental changes to the session list.
     fn apply_incremental_changes(&mut self, changes: &[SessionChange]) -> Result<()> {
+        // Same ordering requirement as `full_reload`: capture the position
+        // before `apply_filter` below can reset it.
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let old_pos = self.list_state.selected();
 
         for change in changes {
             match change.change_type {
@@ -251,7 +261,7 @@ impl App {
         }
 
         self.apply_filter();
-        self.restore_selection(selected_session_id.as_deref());
+        self.restore_selection(old_pos, selected_session_id.as_deref());
 
         Ok(())
     }
@@ -278,56 +288,103 @@ impl App {
         }
     }
 
-    /// Rebuilds `tree_ordered_indices` from the current `filtered_indices`.
+    /// Rebuilds `row_sessions` from the current `filtered_indices`.
     ///
-    /// Runs the same DFS tree-building logic that the render layer uses,
-    /// so that cursor positions always match the displayed order.
-    fn rebuild_tree_order(&mut self) {
+    /// Runs the same section-grouping logic that the render layer uses, so
+    /// that cursor positions always match the displayed order.
+    fn rebuild_row_order(&mut self) {
         let filtered: Vec<&Session> = self
             .filtered_indices
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let tree_entries = build_session_tree(&filtered);
-        self.tree_ordered_indices = tree_entries
+        let rows = build_session_rows(&filtered, self.paused_stopped_expanded);
+        self.row_sessions = rows
             .iter()
-            .filter_map(|entry| {
-                self.sessions
-                    .iter()
-                    .position(|s| s.session_id == entry.session.session_id)
+            .map(|r| {
+                r.session_id()
+                    .and_then(|id| self.sessions.iter().position(|s| s.session_id == id))
             })
             .collect();
     }
 
-    /// Restores selection by session_id if possible, otherwise adjusts.
-    ///
-    /// Rebuilds the tree order from the current filtered sessions so that
-    /// the cursor position is resolved against the actual display order,
-    /// not the flat `updated_at` sort order.
-    fn restore_selection(&mut self, session_id: Option<&str>) {
-        self.rebuild_tree_order();
+    /// Indices of rows that are individually selectable (i.e. hold a
+    /// session, as opposed to a section header or the collapsed-summary
+    /// row).
+    fn selectable_positions(&self) -> Vec<usize> {
+        self.row_sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.is_some().then_some(i))
+            .collect()
+    }
 
-        if let Some(id) = session_id
-            && let Some(pos) = self
-                .tree_ordered_indices
-                .iter()
-                .position(|&i| self.sessions.get(i).is_some_and(|s| s.session_id == id))
+    /// The row index whose session has the given id, if it currently has
+    /// an individual row (i.e. is not buried inside a collapsed summary).
+    fn position_of_session_row(&self, session_id: &str) -> Option<usize> {
+        self.row_sessions.iter().position(|opt| {
+            opt.and_then(|idx| self.sessions.get(idx))
+                .is_some_and(|s| s.session_id == session_id)
+        })
+    }
+
+    /// Resolves the selection after a row-order rebuild.
+    ///
+    /// Selection follows a session by id across status changes / section
+    /// moves whenever that session still has an individual row. Otherwise
+    /// (the session was filtered out entirely, or is now buried inside a
+    /// collapsed summary) falls back to the first selectable position at or
+    /// after the previous one, else the last selectable position, else
+    /// `None`.
+    fn resync_selection(&mut self, old_pos: Option<usize>, old_session_id: Option<String>) {
+        if let Some(id) = old_session_id
+            && let Some(pos) = self.position_of_session_row(&id)
         {
             self.list_state.select(Some(pos));
             return;
         }
 
-        // Fallback: adjust selection if needed
-        if self.tree_ordered_indices.is_empty() {
-            self.list_state.select(None);
-        } else if let Some(selected) = self.list_state.selected() {
-            if selected >= self.tree_ordered_indices.len() {
-                self.list_state
-                    .select(Some(self.tree_ordered_indices.len() - 1));
-            }
-        } else {
-            self.list_state.select(Some(0));
-        }
+        let selectable = self.selectable_positions();
+        let next = old_pos
+            .and_then(|p| {
+                selectable
+                    .iter()
+                    .find(|&&i| i >= p)
+                    .copied()
+                    .or_else(|| selectable.last().copied())
+            })
+            .or_else(|| selectable.first().copied());
+        self.list_state.select(next);
+    }
+
+    /// Restores selection by session_id if possible, otherwise adjusts.
+    ///
+    /// Rebuilds the row order from the current filtered sessions so that
+    /// the cursor position is resolved against the actual display order,
+    /// not the flat `updated_at` sort order.
+    ///
+    /// `old_pos` must be captured by the caller *before* any prior mutation
+    /// (e.g. `apply_filter`) that could have already reset `list_state` --
+    /// otherwise the fallback in [`Self::resync_selection`] anchors on that
+    /// reset position instead of the user's actual previous cursor.
+    fn restore_selection(&mut self, old_pos: Option<usize>, session_id: Option<&str>) {
+        self.rebuild_row_order();
+        self.resync_selection(old_pos, session_id.map(String::from));
+    }
+
+    /// Toggles the collapsible Paused/Stopped section between its
+    /// collapsed-summary row and individually expanded rows.
+    ///
+    /// Toggling only ever changes rows at the tail (the collapsible
+    /// section is always last), so earlier row positions never shift --
+    /// but the previously selected row can become invalid, e.g. collapsing
+    /// while the cursor sits on a now-hidden individual paused/stopped row.
+    pub fn toggle_paused_stopped_section(&mut self) {
+        let old_pos = self.list_state.selected();
+        let old_id = self.selected_session().map(|s| s.session_id.clone());
+        self.paused_stopped_expanded = !self.paused_stopped_expanded;
+        self.rebuild_row_order();
+        self.resync_selection(old_pos, old_id);
     }
 
     /// Persists the currently selected session ID to disk.
@@ -338,62 +395,61 @@ impl App {
         }
     }
 
-    /// Moves selection to the next item in the displayed list.
+    /// Moves selection to the next selectable row in the displayed list,
+    /// wrapping around. Skips section headers and the collapsed-summary row.
     pub fn select_next(&mut self) {
-        if self.tree_ordered_indices.is_empty() {
+        let selectable = self.selectable_positions();
+        if selectable.is_empty() {
             return;
         }
 
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.tree_ordered_indices.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
+        let current = self.list_state.selected();
+        let next = match current.and_then(|pos| selectable.iter().position(|&i| i == pos)) {
+            Some(idx) => selectable[(idx + 1) % selectable.len()],
+            None => selectable[0],
         };
-        self.list_state.select(Some(i));
+        self.list_state.select(Some(next));
         self.persist_selection();
     }
 
-    /// Moves selection to the previous item in the displayed list.
+    /// Moves selection to the previous selectable row in the displayed
+    /// list, wrapping around. Skips section headers and the
+    /// collapsed-summary row.
     pub fn select_previous(&mut self) {
-        if self.tree_ordered_indices.is_empty() {
+        let selectable = self.selectable_positions();
+        if selectable.is_empty() {
             return;
         }
 
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.tree_ordered_indices.len() - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
+        let current = self.list_state.selected();
+        let next = match current.and_then(|pos| selectable.iter().position(|&i| i == pos)) {
+            Some(idx) => selectable[(idx + selectable.len() - 1) % selectable.len()],
+            None => selectable[0],
         };
-        self.list_state.select(Some(i));
+        self.list_state.select(Some(next));
         self.persist_selection();
     }
 
-    /// Selects a session by its 1-indexed number (1-9) within the displayed list.
+    /// Selects a session by its 1-indexed number (1-9) among the
+    /// selectable rows of the displayed list.
     pub fn select_by_number(&mut self, num: usize) {
-        if num > 0 && num <= self.tree_ordered_indices.len() {
-            self.list_state.select(Some(num - 1));
+        if num == 0 {
+            return;
+        }
+        let selectable = self.selectable_positions();
+        if let Some(&pos) = selectable.get(num - 1) {
+            self.list_state.select(Some(pos));
             self.persist_selection();
         }
     }
 
     /// Returns the currently selected session, if any.
-    /// Uses tree-ordered indices which reflect the actual display order
-    /// after tree view reordering.
     pub fn selected_session(&self) -> Option<&Session> {
         self.list_state
             .selected()
-            .and_then(|i| self.tree_ordered_indices.get(i))
-            .and_then(|&session_idx| self.sessions.get(session_idx))
+            .and_then(|i| self.row_sessions.get(i))
+            .and_then(|opt| *opt)
+            .and_then(|idx| self.sessions.get(idx))
     }
 
     /// Returns the filtered sessions for display.
@@ -404,13 +460,14 @@ impl App {
             .collect()
     }
 
-    /// Updates tree-ordered indices from display-ordered session IDs.
-    /// Called by the UI layer after building the session tree to keep
-    /// the selection mapping in sync with the rendered list order.
-    pub fn update_tree_order(&mut self, session_ids: &[&str]) {
-        self.tree_ordered_indices = session_ids
+    /// Updates `row_sessions` from display-ordered row session IDs (`None`
+    /// for a header/summary row). Called by the UI layer after building
+    /// the row list to keep the selection mapping in sync with the
+    /// rendered list order.
+    pub fn update_row_order(&mut self, row_session_ids: &[Option<&str>]) {
+        self.row_sessions = row_session_ids
             .iter()
-            .filter_map(|id| self.sessions.iter().position(|s| s.session_id == *id))
+            .map(|id| id.and_then(|id| self.sessions.iter().position(|s| s.session_id == id)))
             .collect();
     }
 
@@ -607,31 +664,24 @@ impl App {
     }
 
     /// Exits search mode, confirming the search.
-    /// Preserves the current selection position.
+    /// Preserves the current selection (by session id) when possible.
     pub fn confirm_search(&mut self) {
-        let current_selection = self.list_state.selected();
+        let old_pos = self.list_state.selected();
+        let old_id = self.selected_session().map(|s| s.session_id.clone());
         self.confirmed_query = self.search_query.clone();
         self.apply_filter();
-        // Restore selection position (apply_filter resets to 0)
-        if let Some(pos) = current_selection
-            && pos < self.filtered_indices.len()
-        {
-            self.list_state.select(Some(pos));
-        }
+        self.resync_selection(old_pos, old_id);
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
     }
 
     /// Exits search mode, cancelling the search.
     pub fn cancel_search(&mut self) {
+        let old_pos = self.list_state.selected();
+        let old_id = self.selected_session().map(|s| s.session_id.clone());
         self.search_query = self.confirmed_query.clone();
         self.apply_filter();
-        // Restore previous selection if possible
-        if let Some(prev) = self.pre_search_selection
-            && prev < self.filtered_indices.len()
-        {
-            self.list_state.select(Some(prev));
-        }
+        self.resync_selection(old_pos, old_id);
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
     }
@@ -746,15 +796,7 @@ impl App {
             self.update_searchable_text_cache();
         }
         self.apply_filter();
-
-        if let Some(selected) = previous_selection {
-            let new_len = self.tree_ordered_indices.len();
-            if new_len > 0 {
-                self.list_state.select(Some(selected.min(new_len - 1)));
-            } else {
-                self.list_state.select(None);
-            }
-        }
+        self.resync_selection(previous_selection, None);
     }
 
     /// Clears the filter and shows all sessions.
@@ -763,12 +805,9 @@ impl App {
         self.confirmed_query.clear();
         self.status_filter = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
-        self.rebuild_tree_order();
-        if !self.filtered_indices.is_empty() {
-            self.list_state.select(Some(0));
-        } else {
-            self.list_state.select(None);
-        }
+        self.rebuild_row_order();
+        self.list_state
+            .select(self.selectable_positions().first().copied());
     }
 
     /// Toggles a status filter. If the same status is already active, clears it.
@@ -821,14 +860,11 @@ impl App {
             .map(|(i, _)| i)
             .collect();
 
-        self.rebuild_tree_order();
+        self.rebuild_row_order();
 
-        // Reset selection to first item or none
-        if self.filtered_indices.is_empty() {
-            self.list_state.select(None);
-        } else {
-            self.list_state.select(Some(0));
-        }
+        // Reset selection to the first selectable row, or none.
+        self.list_state
+            .select(self.selectable_positions().first().copied());
     }
 
     /// Incrementally updates the searchable text cache.
@@ -1321,25 +1357,35 @@ mod tests {
     #[test]
     fn test_select_next_wraps() {
         let mut app = create_test_app(vec![create_test_session("1"), create_test_session("2")]);
-        app.list_state.select(Some(1));
+        // Both sessions default to `Running`, so row 0 is the "RUNNING (2)"
+        // header (not selectable) and rows 1-2 are the sessions. Starting
+        // on the last selectable row exercises wraparound skipping the
+        // header at row 0 rather than landing on it.
+        app.list_state.select(Some(2));
 
         app.select_next();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.list_state.selected(), Some(1));
     }
 
     #[test]
     fn test_select_previous_wraps() {
         let mut app = create_test_app(vec![create_test_session("1"), create_test_session("2")]);
-        app.list_state.select(Some(0));
+        // See test_select_next_wraps: row 0 is a header, rows 1-2 are the
+        // sessions. Starting on the first selectable row exercises
+        // wraparound skipping the header straight to the last row.
+        app.list_state.select(Some(1));
 
         app.select_previous();
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.list_state.selected(), Some(2));
     }
 
+    // 3 sessions default to `Running`, so row 0 is the "RUNNING (3)" header
+    // and rows 1-3 are the sessions; `select_by_number` picks among rows
+    // 1-3 regardless of `initial` (it does not depend on current selection).
     #[rstest]
-    #[case::valid_number(2, Some(0), Some(1))]
-    #[case::out_of_range(10, Some(1), Some(1))]
-    #[case::zero_ignored(0, Some(1), Some(1))]
+    #[case::valid_number(2, Some(1), Some(2))]
+    #[case::out_of_range(10, Some(2), Some(2))]
+    #[case::zero_ignored(0, Some(2), Some(2))]
     fn test_select_by_number(
         #[case] num: usize,
         #[case] initial: Option<usize>,
@@ -1372,7 +1418,8 @@ mod tests {
             create_test_session("second"),
         ]);
 
-        app.list_state.select(Some(1));
+        // Row 0 is the "RUNNING (2)" header; "first"/"second" are rows 1/2.
+        app.list_state.select(Some(2));
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("second")
@@ -1519,7 +1566,10 @@ mod tests {
 
         assert!(!app.has_filter());
         assert_eq!(app.filtered_indices, vec![0, 1]);
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("1")
+        );
     }
 
     #[test]
@@ -1537,17 +1587,22 @@ mod tests {
         app.confirm_search();
 
         assert_eq!(app.filtered_indices, vec![0, 2]);
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("1")
+        );
 
         app.select_next();
-        assert_eq!(app.list_state.selected(), Some(1));
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("3")
         );
 
         app.select_next();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("1")
+        );
     }
 
     // =========================================================================
@@ -1771,6 +1826,166 @@ mod tests {
         assert_eq!(
             app.get_cached_worktree_labels(&PathBuf::from("/tmp/test")),
             Some(("test", "main"))
+        );
+    }
+
+    // =========================================================================
+    // Row-order / selection-persistence tests (TRIAGE inbox layout)
+    // =========================================================================
+
+    #[test]
+    fn test_toggle_paused_stopped_section() {
+        let mut app = create_test_app(vec![
+            create_session_with_status("paused-1", SessionStatus::Paused),
+            create_session_with_status("paused-2", SessionStatus::Paused),
+        ]);
+        assert!(!app.paused_stopped_expanded);
+        // Collapsed to a single summary row, which is not selectable.
+        assert_eq!(app.list_state.selected(), None);
+
+        app.toggle_paused_stopped_section();
+        assert!(app.paused_stopped_expanded);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("paused-1")
+        );
+
+        app.toggle_paused_stopped_section();
+        assert!(!app.paused_stopped_expanded);
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_selection_follows_session_across_status_change() {
+        let mut app = create_test_app(vec![
+            create_test_session("running-1"),
+            create_test_session("running-2"),
+        ]);
+        app.select_by_number(2);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("running-2")
+        );
+
+        // Move the selected session to a different (still individually
+        // selectable) section, then re-resolve the row order/selection the
+        // same way `reload_sessions` does internally after a mutation.
+        let old_pos = app.list_state.selected();
+        app.sessions
+            .iter_mut()
+            .find(|s| s.session_id == "running-2")
+            .expect("running-2 exists")
+            .status = SessionStatus::WaitingInput;
+        app.restore_selection(old_pos, Some("running-2"));
+
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("running-2")
+        );
+    }
+
+    #[test]
+    fn test_restore_selection_fallback_anchors_on_pre_reload_position() {
+        // Regression test: `restore_selection`'s `old_pos` must be the
+        // cursor position from *before* the caller's own `apply_filter`
+        // call (as `full_reload`/`apply_incremental_changes` do), not
+        // whatever `apply_filter` already reset `list_state` to -- otherwise
+        // the fallback always lands on the first selectable row instead of
+        // the nearest one to where the user actually was.
+        let mut app = create_test_app(vec![
+            create_test_session("a"),
+            create_test_session("b"),
+            create_test_session("c"),
+        ]);
+        app.select_by_number(3);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("c")
+        );
+        let old_pos = app.list_state.selected();
+
+        // "c" is about to be excluded by a status filter -- mimics a status
+        // change observed mid-reload that moves the selected session out of
+        // the filtered set entirely.
+        app.sessions
+            .iter_mut()
+            .find(|s| s.session_id == "c")
+            .expect("c exists")
+            .status = SessionStatus::Paused;
+        // Applying the filter resets `list_state` to the first selectable
+        // row ("a") before `restore_selection` runs, same as every real
+        // caller's `apply_filter(); restore_selection(...);` sequence.
+        app.toggle_status_filter(SessionStatus::Running);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("a")
+        );
+
+        app.restore_selection(old_pos, Some("c"));
+
+        // "c" no longer matches the filter and has no row at all; falls
+        // back to the nearest selectable row at/after its own old position
+        // (3) -- "b", the last selectable row -- not "a".
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn test_selection_falls_back_when_session_filtered_out() {
+        let mut session_a = create_test_session("a");
+        session_a.cwd = PathBuf::from("/home/user/keep1");
+        let mut session_b = create_test_session("b");
+        session_b.cwd = PathBuf::from("/home/user/drop");
+        let mut session_c = create_test_session("c");
+        session_c.cwd = PathBuf::from("/home/user/keep2");
+
+        let mut app = create_test_app(vec![session_a, session_b, session_c]);
+        app.select_by_number(2);
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("b")
+        );
+
+        // Set the query directly (skipping `update_search_query`'s live
+        // per-keystroke filtering) so `confirm_search` resolves against
+        // "b" -- the selection made against the *unfiltered* list -- not
+        // against whatever the live filter would have already picked.
+        app.enter_search_mode();
+        app.search_query = "keep".to_string();
+        app.confirm_search();
+
+        // "b" no longer matches and has no row at all; falls back to the
+        // first selectable row at or after its old position ("c").
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("c")
+        );
+    }
+
+    #[test]
+    fn test_selection_falls_back_when_collapsed_into_summary() {
+        let mut app = create_test_app(vec![
+            create_session_with_status("waiting", SessionStatus::WaitingInput),
+            create_session_with_status("paused-1", SessionStatus::Paused),
+            create_session_with_status("paused-2", SessionStatus::Paused),
+        ]);
+        app.toggle_paused_stopped_section();
+        app.select_next();
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("paused-1")
+        );
+
+        app.toggle_paused_stopped_section();
+
+        // "paused-1" no longer has an individual row (buried in the
+        // collapsed summary); falls back to the nearest remaining
+        // selectable row, "waiting".
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("waiting")
         );
     }
 }

@@ -14,7 +14,7 @@ use crate::commands::cc::tui::clean_view::{
 };
 use crate::commands::cc::tui::worktree_session_children::create_session_child_list_item;
 
-use super::helpers::{repo_label_color, truncate};
+use super::helpers::truncate;
 
 /// Renders the clean view: To delete / Kept sections, repo group
 /// headers under each section, one row per worktree, then nested
@@ -150,8 +150,7 @@ fn create_clean_list_item(
             } else {
                 ("◌", Color::DarkGray)
             };
-            let repo_color = repo_label_color(&row.repo);
-            let bar = Span::styled("▎", Style::default().fg(repo_color));
+            let bar = Span::styled("▎", Style::default().fg(Color::DarkGray));
 
             let primary = if row.repo == row.name || row.branch.is_empty() {
                 row.repo.clone()
