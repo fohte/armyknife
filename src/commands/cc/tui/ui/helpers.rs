@@ -3,6 +3,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Dim foreground for idle/secondary text (idle status, repo column, section
+/// headers, breadcrumbs, ...). A fixed 256-color grayscale index rather than
+/// the ANSI-16 `Color::Gray`/`Color::DarkGray` names, whose actual rendered
+/// brightness depends on the terminal's configurable palette.
+pub(super) const DIM_FG: Color = Color::Indexed(245);
+
 /// Returns the color for a session status icon.
 ///
 /// Only 3 colors are used: amber for waiting-for-user, green for running,
@@ -11,9 +17,7 @@ pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => {
-            Color::Indexed(245)
-        }
+        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => DIM_FG,
     }
 }
 
@@ -313,9 +317,9 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running, Color::Green)]
     #[case::waiting_input(SessionStatus::WaitingInput, Color::Yellow)]
-    #[case::paused(SessionStatus::Paused, Color::Indexed(245))]
-    #[case::stopped(SessionStatus::Stopped, Color::Indexed(245))]
-    #[case::ended(SessionStatus::Ended, Color::Indexed(245))]
+    #[case::paused(SessionStatus::Paused, DIM_FG)]
+    #[case::stopped(SessionStatus::Stopped, DIM_FG)]
+    #[case::ended(SessionStatus::Ended, DIM_FG)]
     fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
         assert_eq!(status_color(status), expected);
     }

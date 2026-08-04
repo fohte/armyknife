@@ -15,7 +15,8 @@ use crate::commands::cc::tui::session_rows::{
 };
 
 use super::helpers::{
-    get_session_info, get_title_display_name_fallback, highlight_matches, status_color, truncate,
+    DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, status_color,
+    truncate,
 };
 
 /// Display width reserved by ratatui's `List::highlight_symbol` (the `>`
@@ -38,8 +39,8 @@ const MIN_TITLE_WIDTH: usize = 10;
 /// question sits under the title column rather than the repo column.
 const WAITING_QUESTION_INDENT: usize = MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH;
 /// Below this age, the time column renders in the default (bright)
-/// foreground; at or above it, it dims to `Color::Indexed(245)`. Independent
-/// of status color, so a stale RUNNING session's time still reads as stale.
+/// foreground; at or above it, it dims to `DIM_FG`. Independent of status
+/// color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 
 /// Renders the session list grouped into fixed status sections (NEEDS YOU /
@@ -69,7 +70,7 @@ pub(super) fn render_session_list(
         } else {
             "  No active Claude Code sessions.".to_string()
         };
-        let empty_message = Paragraph::new(message).style(Style::default().fg(Color::Indexed(245)));
+        let empty_message = Paragraph::new(message).style(Style::default().fg(DIM_FG));
         frame.render_widget(empty_message, area);
         return;
     }
@@ -178,7 +179,7 @@ fn header_style(kind: Section) -> Style {
     match kind {
         Section::NeedsYou => base.fg(Color::Yellow),
         Section::Running => base.fg(Color::Green),
-        Section::Unread | Section::Idle => base.fg(Color::Indexed(245)),
+        Section::Unread | Section::Idle => base.fg(DIM_FG),
     }
 }
 
@@ -246,13 +247,13 @@ fn build_session_item(
     let time_style = if seconds_since_update < RECENT_TIME_THRESHOLD_SECS {
         Style::default()
     } else {
-        Style::default().fg(Color::Indexed(245))
+        Style::default().fg(DIM_FG)
     };
 
     let mut spans = vec![
         Span::styled(symbol, status_style),
         Span::raw(" "),
-        Span::styled(repo_col, Style::default().fg(Color::Indexed(245))),
+        Span::styled(repo_col, Style::default().fg(DIM_FG)),
     ];
     spans.extend(title_spans);
     spans.push(Span::styled(time_col, time_style));
@@ -276,7 +277,7 @@ fn build_session_item(
         // cover the remaining status+repo width to reach `WAITING_QUESTION_INDENT`.
         lines.push(Line::from(vec![
             Span::raw(" ".repeat(WAITING_QUESTION_INDENT - MARKER_WIDTH)),
-            Span::styled(truncated_quoted, Style::default().fg(Color::Indexed(245))),
+            Span::styled(truncated_quoted, Style::default().fg(DIM_FG)),
         ]));
     }
 
@@ -296,11 +297,11 @@ fn build_title_spans(
     is_idle: bool,
 ) -> Vec<Span<'static>> {
     let title_style = if is_idle {
-        Style::default().fg(Color::Indexed(245))
+        Style::default().fg(DIM_FG)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
-    let dim_style = Style::default().fg(Color::Indexed(245));
+    let dim_style = Style::default().fg(DIM_FG);
 
     let Some(parent) = entry.breadcrumb_ancestor else {
         let padded = pad_to_width(&truncate(own_title, title_width), title_width);
@@ -363,11 +364,11 @@ mod tests {
     )]
     #[case::unread(
         Section::Unread,
-        Style::default().fg(Color::Indexed(245)).add_modifier(Modifier::BOLD)
+        Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
     )]
     #[case::idle(
         Section::Idle,
-        Style::default().fg(Color::Indexed(245)).add_modifier(Modifier::BOLD)
+        Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
@@ -397,8 +398,8 @@ mod tests {
         // always falls inside the right-aligned time span regardless of
         // the rendered text's length, since the whole padded field shares
         // one style.
-        assert_ne!(buffer[(79, 2)].fg, Color::Indexed(245));
-        assert_eq!(buffer[(79, 3)].fg, Color::Indexed(245));
+        assert_ne!(buffer[(79, 2)].fg, DIM_FG);
+        assert_eq!(buffer[(79, 3)].fg, DIM_FG);
     }
 
     #[test]
@@ -416,8 +417,8 @@ mod tests {
         // Row 2 is "waiting"'s row, row 6 is "running"'s row (accounting
         // for the question line and blank separator in between). Column 3
         // is the first character of the repo column for either row.
-        assert_eq!(buffer[(3, 2)].fg, Color::Indexed(245));
-        assert_eq!(buffer[(3, 6)].fg, Color::Indexed(245));
+        assert_eq!(buffer[(3, 2)].fg, DIM_FG);
+        assert_eq!(buffer[(3, 6)].fg, DIM_FG);
     }
 
     // =========================================================================
