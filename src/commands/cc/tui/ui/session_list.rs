@@ -421,7 +421,7 @@ mod tests {
         create_test_session, render_buffer, render_to_string, render_to_string_with,
     };
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     #[rstest]
     #[case::just_now(0, "just now")]
@@ -627,8 +627,8 @@ mod tests {
     // `ListItem`) is caught by the render, not just by `App`-level state.
     // =========================================================================
 
-    #[test]
-    fn test_select_next_across_two_sections_lands_on_session_row() {
+    #[fixture]
+    fn waiting_and_running_sessions() -> (DateTime<Utc>, Vec<Session>) {
         let now = Utc::now();
 
         let mut waiting = create_test_session("waiting");
@@ -640,7 +640,14 @@ mod tests {
         running.updated_at = now;
         running.status = SessionStatus::Running;
 
-        let sessions = vec![waiting, running];
+        (now, vec![waiting, running])
+    }
+
+    #[rstest]
+    fn test_select_next_across_two_sections_lands_on_session_row(
+        waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
+    ) {
+        let (now, sessions) = waiting_and_running_sessions;
         let output = render_to_string_with(&sessions, Some(1), now, 80, 12, |app| {
             app.select_next();
         });
@@ -662,18 +669,11 @@ mod tests {
         assert_eq!(output, expected);
     }
 
-    #[test]
-    fn test_select_next_across_all_four_sections_lands_on_session_row() {
-        let now = Utc::now();
-
-        let mut waiting = create_test_session("waiting");
-        waiting.updated_at = now;
-        waiting.status = SessionStatus::WaitingInput;
-        waiting.current_tool = Some("Pick one".to_string());
-
-        let mut running = create_test_session("running");
-        running.updated_at = now;
-        running.status = SessionStatus::Running;
+    #[rstest]
+    fn test_select_next_across_all_four_sections_lands_on_session_row(
+        waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
+    ) {
+        let (now, mut sessions) = waiting_and_running_sessions;
 
         let mut unread = create_test_session("unread");
         unread.updated_at = now;
@@ -684,7 +684,8 @@ mod tests {
         paused.updated_at = now;
         paused.status = SessionStatus::Paused;
 
-        let sessions = vec![waiting, running, unread, paused];
+        sessions.push(unread);
+        sessions.push(paused);
         // Start on "waiting" and step through RUNNING, UNREAD, all the way to
         // the (by-default expanded) PAUSED section -- crossing every section
         // boundary, so a cumulative off-by-N from repeated separators would
@@ -716,20 +717,11 @@ mod tests {
         assert_eq!(output, expected);
     }
 
-    #[test]
-    fn test_select_previous_wraps_backward_across_section_lands_on_session_row() {
-        let now = Utc::now();
-
-        let mut waiting = create_test_session("waiting");
-        waiting.updated_at = now;
-        waiting.status = SessionStatus::WaitingInput;
-        waiting.current_tool = Some("Pick one".to_string());
-
-        let mut running = create_test_session("running");
-        running.updated_at = now;
-        running.status = SessionStatus::Running;
-
-        let sessions = vec![waiting, running];
+    #[rstest]
+    fn test_select_previous_wraps_backward_across_section_lands_on_session_row(
+        waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
+    ) {
+        let (now, sessions) = waiting_and_running_sessions;
         // Starting on the first selectable row ("waiting") and going
         // backward must wrap to the last selectable row ("running"), not to
         // the RUNNING section header.

@@ -52,6 +52,22 @@ pub(super) fn render_buffer(
     width: u16,
     height: u16,
 ) -> ratatui::buffer::Buffer {
+    render_buffer_with(sessions, selected_index, now, width, height, |_| {})
+}
+
+/// Same as `render_buffer`, but lets the caller mutate the `App` between
+/// construction and render.
+fn render_buffer_with<F>(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+    setup: F,
+) -> ratatui::buffer::Buffer
+where
+    F: FnOnce(&mut App),
+{
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -60,6 +76,7 @@ pub(super) fn render_buffer(
 
     let mut app = App::with_sessions(sessions.to_vec());
     app.list_state.select(selected_index);
+    setup(&mut app);
 
     terminal
         .draw(|frame| {
@@ -96,25 +113,7 @@ pub(super) fn render_to_string_with<F>(
 where
     F: FnOnce(&mut App),
 {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).unwrap();
-
-    let mut app = App::with_sessions(sessions.to_vec());
-    app.list_state.select(selected_index);
-    setup(&mut app);
-
-    terminal
-        .draw(|frame| {
-            render_with_time(frame, &mut app, now);
-        })
-        .unwrap();
-
-    // Convert buffer to string
-    let backend = terminal.backend();
-    let buffer = backend.buffer();
+    let buffer = render_buffer_with(sessions, selected_index, now, width, height, setup);
     let mut output = String::new();
 
     for y in 0..buffer.area.height {

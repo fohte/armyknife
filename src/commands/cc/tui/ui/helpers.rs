@@ -270,8 +270,8 @@ mod tests {
     #[test]
     fn test_get_title_display_name_fallback_ignores_tmux() {
         // Tmux session:window is no longer used as a label fallback; the
-        // row already shows `<repo> <worktree-name>` instead. Without an
-        // explicit label, the fallback is the cwd basename.
+        // row already shows the repo name instead. Without an explicit
+        // label, the fallback is the cwd basename.
         let mut session = create_test_session("test");
         session.tmux_info = Some(TmuxInfo {
             session_name: "dev".to_string(),
