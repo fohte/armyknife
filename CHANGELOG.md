@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.253](https://github.com/fohte/armyknife/compare/v0.1.252...v0.1.253) (2026-08-04)
+
+
+### Features
+
+* **cc:** redesign the session list as a status-grouped triage view ([#792](https://github.com/fohte/armyknife/issues/792)) ([bfeb69a](https://github.com/fohte/armyknife/commit/bfeb69a30d3ba05b89b6d04ec71eaaed3e9e92dc))
+
 ## [0.1.252](https://github.com/fohte/armyknife/compare/v0.1.251...v0.1.252) (2026-08-04)
 
 
