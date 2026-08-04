@@ -5,7 +5,6 @@
 
 use lazy_regex::regex_replace_all;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -33,17 +32,29 @@ struct JsonlMessage {
     content: Option<String>,
 }
 
-/// `ai-title` entry in .jsonl files.
+/// `ai-title` / `custom-title` entry in .jsonl files.
 ///
-/// Claude Code appends one of these as it refines the AI-generated session
-/// title over the course of a conversation; the last entry in the file holds
-/// the currently active title (matches what's shown in the tmux pane title).
+/// Claude Code appends `ai-title` entries as it refines the AI-generated
+/// session title over the course of a conversation, and appends a
+/// `custom-title` entry when the user sets/renames the session name (e.g.
+/// via `/branch` or `/rename`). The two are written exclusively -- once a
+/// name exists, AI title generation is skipped -- but `custom-title` still
+/// takes priority when both are present, matching Claude Code's documented
+/// title order (https://code.claude.com/docs/en/sessions.md): the set name,
+/// otherwise the AI-generated title.
 #[derive(Debug, Deserialize)]
-struct AiTitleJsonlEntry {
+struct TitleJsonlEntry {
     #[serde(rename = "type")]
     entry_type: Option<String>,
     #[serde(rename = "aiTitle")]
     ai_title: Option<String>,
+    #[serde(rename = "customTitle")]
+    custom_title: Option<String>,
+}
+
+enum TitleEntry {
+    Custom(String),
+    Ai(String),
 }
 
 /// Assistant message entry in .jsonl files
@@ -154,129 +165,44 @@ pub fn normalize_title(s: &str) -> String {
     stripped.trim().replace('\n', " ").replace('\r', "")
 }
 
-/// `sessions-index.json` shape written by Claude Code.
-///
-/// `#[serde(default)]` on `entries` lets the top-level key be absent
-/// without a parse error. Unknown fields (e.g. `version`) are dropped by
-/// serde's default behavior.
-#[derive(Debug, Deserialize)]
-struct SessionsIndex {
-    #[serde(default)]
-    entries: Vec<SessionsIndexEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionsIndexEntry {
-    #[serde(rename = "sessionId")]
-    session_id: Option<String>,
-    summary: Option<String>,
-}
-
-/// Loads Claude Code's `sessions-index.json` for a project and returns a map
-/// from `sessionId` to `summary`.
-///
-/// Only entries whose `summary` is present and non-empty (after trim) are
-/// included. Any I/O or parse error (missing file, malformed JSON, etc.)
-/// yields an empty map -- callers fall through to the next title source.
-pub fn sessions_index_summaries(project_path: &Path) -> HashMap<String, String> {
-    let Some(home) = crate::shared::dirs::home_dir() else {
-        return HashMap::new();
-    };
-    sessions_index_summaries_in_home(&home, project_path)
-}
-
-fn sessions_index_summaries_in_home(home: &Path, project_path: &Path) -> HashMap<String, String> {
-    let encoded = encode_project_path(project_path);
-    let path = home
-        .join(".claude")
-        .join("projects")
-        .join(&encoded)
-        .join("sessions-index.json");
-
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return HashMap::new();
-    };
-    let Ok(index) = serde_json::from_str::<SessionsIndex>(&contents) else {
-        return HashMap::new();
-    };
-
-    index
-        .entries
-        .into_iter()
-        .filter_map(|e| {
-            let sid = e.session_id?;
-            let summary = e.summary?;
-            if summary.trim().is_empty() {
-                None
-            } else {
-                Some((sid, summary))
-            }
-        })
-        .collect()
-}
-
 /// Retrieves the session title.
 ///
-/// Priority: last `ai-title` entry in `.jsonl` > `sessions-index.json`
-/// `summary` > first user prompt in `.jsonl`.
+/// Priority: last `custom-title` entry (user-set name) > last `ai-title`
+/// entry (Claude Code's generated title) > first user prompt in `.jsonl`.
 pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String> {
-    get_session_title_with_index(project_path, session_id, None)
-}
-
-/// Variant of [`get_session_title`] that accepts a pre-loaded
-/// `sessionId` → `summary` map to avoid re-reading `sessions-index.json`.
-/// The `.jsonl` reads (last `ai-title` entry, and the first-user-prompt
-/// fallback) happen regardless of `index`.
-pub fn get_session_title_with_index(
-    project_path: &Path,
-    session_id: &str,
-    index: Option<&HashMap<String, String>>,
-) -> Option<String> {
-    if let Some(title) = get_last_ai_title(project_path, session_id) {
+    if let Some(title) = get_last_title(project_path, session_id) {
         return Some(title);
-    }
-
-    let summary = match index {
-        Some(map) => map.get(session_id).cloned(),
-        None => sessions_index_summaries(project_path)
-            .get(session_id)
-            .cloned(),
-    };
-    if let Some(summary) = summary {
-        let normalized = normalize_title(&summary);
-        if !normalized.is_empty() {
-            return Some(normalized);
-        }
     }
 
     get_title_from_jsonl(project_path, session_id)
 }
 
-/// Retrieves the currently active AI-generated session title, i.e. the
-/// `aiTitle` of the last `ai-title` entry in a session's .jsonl file.
+/// Retrieves the currently active session title from `custom-title` /
+/// `ai-title` entries, i.e. the last `custom-title` entry if one exists,
+/// otherwise the last `ai-title` entry.
 ///
-/// Returns `None` when the session has no `ai-title` entries (sessions
-/// created before this feature existed, or subagent sidechains) -- callers
-/// fall through to the next title source.
-pub fn get_last_ai_title(project_path: &Path, session_id: &str) -> Option<String> {
+/// Returns `None` when the session has neither entry type (sessions created
+/// before this feature existed, or subagent sidechains) -- callers fall
+/// through to the next title source.
+pub fn get_last_title(project_path: &Path, session_id: &str) -> Option<String> {
     let home = crate::shared::dirs::home_dir()?;
-    get_last_ai_title_in_home(&home, project_path, session_id)
+    get_last_title_in_home(&home, project_path, session_id)
 }
 
 /// Internal function for testing: allows overriding the home directory.
 ///
-/// Most sessions have no `ai-title` entry at all (transcripts predating this
-/// feature, or subagent sidechains), so this deliberately does *not* fall
-/// back to a full-file forward scan the way the sibling assistant-message /
-/// usage-token readers do -- that fallback is cheap for them because a hit is
-/// the common case, but here it would mean linearly scanning every large,
-/// title-less transcript on every call (`cc list`'s per-session loop, and the
-/// TUI's title cache rebuild on each `Modified` event). Forward scanning is
-/// only used for files small enough that it's equivalent in cost to the
-/// bounded reverse scan; for larger files, an `ai-title` older than
-/// `MAX_READ_SIZE` from EOF is treated as absent and callers fall through to
-/// the next title source.
-fn get_last_ai_title_in_home(home: &Path, project_path: &Path, session_id: &str) -> Option<String> {
+/// Most sessions have no `custom-title`/`ai-title` entry at all (transcripts
+/// predating this feature, or subagent sidechains), so this deliberately
+/// does *not* fall back to a full-file forward scan the way the sibling
+/// assistant-message / usage-token readers do -- that fallback is cheap for
+/// them because a hit is the common case, but here it would mean linearly
+/// scanning every large, title-less transcript on every call (`cc list`'s
+/// per-session loop, and the TUI's title cache rebuild on each `Modified`
+/// event). Forward scanning is only used for files small enough that it's
+/// equivalent in cost to the bounded reverse scan; for larger files, a
+/// title entry older than `MAX_READ_SIZE` from EOF is treated as absent and
+/// callers fall through to the next title source.
+fn get_last_title_in_home(home: &Path, project_path: &Path, session_id: &str) -> Option<String> {
     let encoded = encode_project_path(project_path);
     let jsonl_path = home
         .join(".claude")
@@ -292,45 +218,61 @@ fn get_last_ai_title_in_home(home: &Path, project_path: &Path, session_id: &str)
     let file_size = file.metadata().ok()?.len();
 
     if file_size < INITIAL_READ_SIZE as u64 {
-        return read_last_ai_title_forward(&file);
+        return read_last_title_forward(&file);
     }
 
-    read_last_ai_title_reverse(&file)
+    read_last_title_reverse(&file)
 }
 
-/// Reverse-scan for the last `ai-title` entry within the last `MAX_READ_SIZE`
-/// bytes of the file.
+/// Reverse-scan for the last `custom-title`/`ai-title` entry within the last
+/// `MAX_READ_SIZE` bytes of the file.
 ///
 /// Unlike `read_last_assistant_message_reverse` / `read_last_context_tokens_reverse`,
-/// this does not cap the per-window scan to `MAX_LINES_TO_SCAN` lines:
-/// `ai-title` entries are appended far more sparsely than assistant/usage
-/// entries (Claude Code only rewrites the title occasionally), so the last
-/// one can sit well beyond 20 lines from EOF even in an actively growing
-/// transcript.
-fn read_last_ai_title_reverse(file: &File) -> Option<String> {
+/// this does not cap the per-window scan to `MAX_LINES_TO_SCAN` lines: these
+/// entries are appended far more sparsely than assistant/usage entries
+/// (Claude Code only rewrites the title occasionally), so the last one can
+/// sit well beyond 20 lines from EOF even in an actively growing transcript.
+///
+/// An `ai-title` found in an early (small) window is only a fallback: since
+/// priority is source-based rather than recency-based, the scan keeps
+/// expanding through `MAX_READ_SIZE` looking for a `custom-title` before
+/// settling for the `ai-title`.
+fn read_last_title_reverse(file: &File) -> Option<String> {
     let metadata = file.metadata().ok()?;
     let file_size = metadata.len();
 
     let mut read_size = INITIAL_READ_SIZE;
+    let mut fallback_ai: Option<String> = None;
 
     while read_size <= MAX_READ_SIZE {
         let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
 
-        if let Some(title) = try_read_last_lines_for_ai_title(file, actual_read, file_size) {
-            return Some(title);
+        match try_read_last_lines_for_title(file, actual_read, file_size) {
+            Some(TitleEntry::Custom(title)) => return Some(title),
+            Some(TitleEntry::Ai(title)) => {
+                fallback_ai.get_or_insert(title);
+            }
+            None => {}
+        }
+
+        if actual_read as u64 >= file_size {
+            break;
         }
 
         read_size *= 2;
     }
 
-    None
+    fallback_ai
 }
 
-fn try_read_last_lines_for_ai_title(
+/// Scans a window of lines from EOF backward. A `custom-title` entry wins
+/// immediately (it always takes priority); an `ai-title` entry is kept only
+/// as a fallback in case no `custom-title` turns up later in the window.
+fn try_read_last_lines_for_title(
     file: &File,
     read_size: usize,
     file_size: u64,
-) -> Option<String> {
+) -> Option<TitleEntry> {
     let mut reader = BufReader::new(file);
 
     reader.seek(SeekFrom::End(-(read_size as i64))).ok()?;
@@ -347,14 +289,24 @@ fn try_read_last_lines_for_ai_title(
         &content[first_newline + 1..]
     };
 
-    complete_content.lines().rev().find_map(ai_title_from_line)
+    let mut last_ai: Option<String> = None;
+    for line in complete_content.lines().rev() {
+        match title_from_line(line) {
+            Some(TitleEntry::Custom(title)) => return Some(TitleEntry::Custom(title)),
+            Some(TitleEntry::Ai(title)) if last_ai.is_none() => last_ai = Some(title),
+            _ => {}
+        }
+    }
+
+    last_ai.map(TitleEntry::Ai)
 }
 
-fn read_last_ai_title_forward(file: &File) -> Option<String> {
+fn read_last_title_forward(file: &File) -> Option<String> {
     let mut file = BufReader::new(file);
     file.seek(SeekFrom::Start(0)).ok()?;
 
-    let mut last_title: Option<String> = None;
+    let mut last_custom: Option<String> = None;
+    let mut last_ai: Option<String> = None;
 
     for line in file.lines() {
         let Ok(line) = line else {
@@ -363,24 +315,37 @@ fn read_last_ai_title_forward(file: &File) -> Option<String> {
         if line.is_empty() {
             continue;
         }
-        if let Some(title) = ai_title_from_line(&line) {
-            last_title = Some(title);
+        match title_from_line(&line) {
+            Some(TitleEntry::Custom(title)) => last_custom = Some(title),
+            Some(TitleEntry::Ai(title)) => last_ai = Some(title),
+            None => {}
         }
     }
 
-    last_title
+    last_custom.or(last_ai)
 }
 
-fn ai_title_from_line(line: &str) -> Option<String> {
-    let entry: AiTitleJsonlEntry = serde_json::from_str(line).ok()?;
-    if entry.entry_type.as_deref() != Some("ai-title") {
-        return None;
+fn title_from_line(line: &str) -> Option<TitleEntry> {
+    let entry: TitleJsonlEntry = serde_json::from_str(line).ok()?;
+    match entry.entry_type.as_deref() {
+        Some("custom-title") => {
+            let title = entry.custom_title?;
+            if title.trim().is_empty() {
+                None
+            } else {
+                Some(TitleEntry::Custom(normalize_title(&title)))
+            }
+        }
+        Some("ai-title") => {
+            let title = entry.ai_title?;
+            if title.trim().is_empty() {
+                None
+            } else {
+                Some(TitleEntry::Ai(normalize_title(&title)))
+            }
+        }
+        _ => None,
     }
-    let title = entry.ai_title?;
-    if title.trim().is_empty() {
-        return None;
-    }
-    Some(normalize_title(&title))
 }
 
 /// Reads the first user prompt from a session's .jsonl file.
@@ -872,11 +837,11 @@ mod tests {
     }
 
     // =========================================================================
-    // Tests for get_last_ai_title
+    // Tests for get_last_title
     // =========================================================================
 
     #[rstest]
-    #[case::returns_last_title(
+    #[case::returns_last_ai_title(
         indoc! {r#"
             {"type":"ai-title","aiTitle":"First Title","sessionId":"s"}
             {"type":"user","message":{"content":"hi"}}
@@ -884,21 +849,48 @@ mod tests {
         "#},
         Some("Second Title")
     )]
-    #[case::skips_empty_title_and_falls_back_to_earlier(
+    #[case::skips_empty_ai_title_and_falls_back_to_earlier(
         indoc! {r#"
             {"type":"ai-title","aiTitle":"Earlier Title","sessionId":"s"}
             {"type":"ai-title","aiTitle":"","sessionId":"s"}
         "#},
         Some("Earlier Title")
     )]
-    #[case::ignores_non_ai_title_entries(
+    #[case::ignores_non_title_entries(
         indoc! {r#"
             {"type":"user","message":{"content":"hi"}}
             {"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
         "#},
         None
     )]
-    fn test_get_last_ai_title(#[case] jsonl_content: &str, #[case] expected: Option<&str>) {
+    #[case::returns_custom_title(
+        indoc! {r#"
+            {"type":"custom-title","customTitle":"My Session","sessionId":"s"}
+        "#},
+        Some("My Session")
+    )]
+    #[case::returns_last_custom_title(
+        indoc! {r#"
+            {"type":"custom-title","customTitle":"First Name","sessionId":"s"}
+            {"type":"custom-title","customTitle":"Second Name","sessionId":"s"}
+        "#},
+        Some("Second Name")
+    )]
+    #[case::custom_title_takes_priority_over_ai_title(
+        indoc! {r#"
+            {"type":"ai-title","aiTitle":"Generated Title","sessionId":"s"}
+            {"type":"custom-title","customTitle":"My Session","sessionId":"s"}
+        "#},
+        Some("My Session")
+    )]
+    #[case::custom_title_takes_priority_even_when_earlier(
+        indoc! {r#"
+            {"type":"custom-title","customTitle":"My Session","sessionId":"s"}
+            {"type":"ai-title","aiTitle":"Generated Title","sessionId":"s"}
+        "#},
+        Some("My Session")
+    )]
+    fn test_get_last_title(#[case] jsonl_content: &str, #[case] expected: Option<&str>) {
         let temp_dir = TempDir::new().unwrap();
         let home_dir = temp_dir.path();
 
@@ -907,24 +899,24 @@ mod tests {
 
         create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
 
-        let result = get_last_ai_title_in_home(home_dir, Path::new(project_path), session_id);
+        let result = get_last_title_in_home(home_dir, Path::new(project_path), session_id);
 
         assert_eq!(result, expected.map(String::from));
     }
 
     #[test]
-    fn test_get_last_ai_title_handles_nonexistent_file() {
+    fn test_get_last_title_handles_nonexistent_file() {
         let temp_dir = TempDir::new().unwrap();
         let home_dir = temp_dir.path();
 
         let result =
-            get_last_ai_title_in_home(home_dir, Path::new("/nonexistent/path"), "test-session");
+            get_last_title_in_home(home_dir, Path::new("/nonexistent/path"), "test-session");
 
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_ai_title_reverse_scan_finds_entry_beyond_max_lines_to_scan() {
+    fn test_title_reverse_scan_finds_entry_beyond_max_lines_to_scan() {
         // Padding pushes the file past INITIAL_READ_SIZE so the reverse-scan
         // path activates instead of forward reading.
         let mut content = String::new();
@@ -953,8 +945,78 @@ mod tests {
         let file = File::open(&jsonl_path).unwrap();
 
         assert_eq!(
-            read_last_ai_title_reverse(&file),
+            read_last_title_reverse(&file),
             Some("Real Title".to_string())
+        );
+    }
+
+    #[test]
+    fn test_title_reverse_scan_prefers_custom_title_even_when_less_recent() {
+        // custom-title sits earlier in the file (further from EOF) than
+        // ai-title, but within the same reverse-scan read window. Priority
+        // is source-based, not recency-based, so custom-title must still win.
+        let mut content = String::new();
+        content.push_str(r#"{"type":"custom-title","customTitle":"My Session","sessionId":"s"}"#);
+        content.push('\n');
+        for i in 0..20 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"padding {i}"}}}}"#
+            ));
+            content.push('\n');
+        }
+        content.push_str(r#"{"type":"ai-title","aiTitle":"Generated Title","sessionId":"s"}"#);
+        content.push('\n');
+
+        // Keep the whole file inside the first reverse-scan window (the
+        // window is INITIAL_READ_SIZE bytes from EOF) so this exercises the
+        // in-window priority logic rather than the window-expansion loop.
+        assert!(content.len() < INITIAL_READ_SIZE);
+
+        let temp_dir = TempDir::new().unwrap();
+        let jsonl_path = temp_dir.path().join("test.jsonl");
+        std::fs::write(&jsonl_path, &content).unwrap();
+        let file = File::open(&jsonl_path).unwrap();
+
+        assert_eq!(
+            read_last_title_reverse(&file),
+            Some("My Session".to_string())
+        );
+    }
+
+    #[test]
+    fn test_title_reverse_scan_expands_window_to_find_older_custom_title() {
+        // ai-title sits within the first (INITIAL_READ_SIZE) reverse-scan
+        // window; custom-title is older and only visible once the window
+        // expands. The scan must not settle for the ai-title just because
+        // it was found first -- it has to keep expanding to check for a
+        // custom-title before falling back.
+        let mut content = String::new();
+        content.push_str(r#"{"type":"custom-title","customTitle":"My Session","sessionId":"s"}"#);
+        content.push('\n');
+        for i in 0..300 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"padding {i}"}}}}"#
+            ));
+            content.push('\n');
+        }
+        content.push_str(r#"{"type":"ai-title","aiTitle":"Generated Title","sessionId":"s"}"#);
+        content.push('\n');
+
+        // custom-title must fall outside the first window, and the whole
+        // file must fit within the second, for this to exercise the
+        // window-expansion path rather than the single-window or
+        // beyond-MAX_READ_SIZE cases.
+        assert!(content.len() > INITIAL_READ_SIZE);
+        assert!(content.len() < 2 * INITIAL_READ_SIZE);
+
+        let temp_dir = TempDir::new().unwrap();
+        let jsonl_path = temp_dir.path().join("test.jsonl");
+        std::fs::write(&jsonl_path, &content).unwrap();
+        let file = File::open(&jsonl_path).unwrap();
+
+        assert_eq!(
+            read_last_title_reverse(&file),
+            Some("My Session".to_string())
         );
     }
 
@@ -1033,139 +1095,6 @@ mod tests {
         let path = Path::new("/nonexistent/path/that/does/not/exist");
         let result = get_session_title(path, "test-session-id");
         assert!(result.is_none());
-    }
-
-    // =========================================================================
-    // Tests for sessions-index.json summary lookup
-    // =========================================================================
-
-    /// Writes a sessions-index.json into the mock home directory.
-    fn write_sessions_index(home_dir: &Path, project_path: &str, contents: &str) {
-        let encoded = encode_project_path(Path::new(project_path));
-        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
-        std::fs::create_dir_all(&project_dir).unwrap();
-        let mut file = File::create(project_dir.join("sessions-index.json")).unwrap();
-        file.write_all(contents.as_bytes()).unwrap();
-    }
-
-    #[rstest]
-    #[case::summary_present(
-        indoc! {r#"
-            {
-              "version": 1,
-              "entries": [
-                {"sessionId": "sess-1", "summary": "First session summary"},
-                {"sessionId": "sess-2", "summary": "Second session summary"}
-              ]
-            }
-        "#},
-        HashMap::from([
-            ("sess-1".to_string(), "First session summary".to_string()),
-            ("sess-2".to_string(), "Second session summary".to_string()),
-        ])
-    )]
-    #[case::summary_empty_string(
-        indoc! {r#"
-            {"entries": [{"sessionId": "sess-1", "summary": ""}]}
-        "#},
-        HashMap::new()
-    )]
-    #[case::summary_whitespace_only(
-        indoc! {r#"
-            {"entries": [{"sessionId": "sess-1", "summary": "   \n  "}]}
-        "#},
-        HashMap::new()
-    )]
-    #[case::summary_null(
-        indoc! {r#"
-            {"entries": [{"sessionId": "sess-1", "summary": null}]}
-        "#},
-        HashMap::new()
-    )]
-    #[case::mixed_present_and_empty(
-        indoc! {r#"
-            {"entries": [
-                {"sessionId": "sess-1", "summary": "kept"},
-                {"sessionId": "sess-2", "summary": ""},
-                {"sessionId": "sess-3", "summary": null}
-            ]}
-        "#},
-        HashMap::from([("sess-1".to_string(), "kept".to_string())])
-    )]
-    #[case::empty_entries_array(r#"{"entries": []}"#, HashMap::new())]
-    fn test_sessions_index_summaries_lookup(
-        #[case] file_contents: &str,
-        #[case] expected: HashMap<String, String>,
-    ) {
-        let temp_dir = TempDir::new().unwrap();
-        let home_dir = temp_dir.path();
-        let project_path = "/test/project";
-        write_sessions_index(home_dir, project_path, file_contents);
-
-        assert_eq!(
-            sessions_index_summaries_in_home(home_dir, Path::new(project_path)),
-            expected,
-        );
-    }
-
-    #[rstest]
-    #[case::missing_file("does not exist -- file not written")]
-    #[case::malformed_json("{ not valid json ...")]
-    #[case::missing_entries_key(r#"{"version": 1}"#)]
-    #[case::entries_wrong_type(r#"{"entries": "not an array"}"#)]
-    fn test_sessions_index_summaries_returns_empty_on_error(#[case] file_contents: &str) {
-        let temp_dir = TempDir::new().unwrap();
-        let home_dir = temp_dir.path();
-        let project_path = "/test/project";
-
-        // The "missing_file" case is signaled by never writing the file.
-        if !file_contents.starts_with("does not exist") {
-            write_sessions_index(home_dir, project_path, file_contents);
-        }
-
-        let map = sessions_index_summaries_in_home(home_dir, Path::new(project_path));
-        assert_eq!(map, HashMap::new());
-    }
-
-    #[test]
-    fn test_get_session_title_with_index_uses_summary_when_present() {
-        // No real .jsonl exists at this path; the summary should win regardless.
-        let project_path = Path::new("/does/not/exist/anywhere");
-        let mut summaries = HashMap::new();
-        summaries.insert("sess-1".to_string(), "Great summary".to_string());
-
-        assert_eq!(
-            get_session_title_with_index(project_path, "sess-1", Some(&summaries)),
-            Some("Great summary".to_string()),
-        );
-    }
-
-    #[test]
-    fn test_get_session_title_with_index_normalizes_ansi_and_newlines() {
-        let project_path = Path::new("/does/not/exist/anywhere");
-        let mut summaries = HashMap::new();
-        summaries.insert(
-            "sess-1".to_string(),
-            "\x1b[31mline one\nline two\x1b[0m".to_string(),
-        );
-
-        assert_eq!(
-            get_session_title_with_index(project_path, "sess-1", Some(&summaries)),
-            Some("line one line two".to_string()),
-        );
-    }
-
-    #[test]
-    fn test_get_session_title_with_index_empty_summary_falls_through() {
-        // Empty index means summary lookup misses; caller must fall through to
-        // .jsonl. With a bogus project path the .jsonl read also returns None,
-        // proving no panic and no short-circuit on empty maps.
-        let project_path = Path::new("/does/not/exist/anywhere");
-        let empty: HashMap<String, String> = HashMap::new();
-        assert_eq!(
-            get_session_title_with_index(project_path, "sess-1", Some(&empty)),
-            None,
-        );
     }
 
     #[rstest]
