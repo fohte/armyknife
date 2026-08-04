@@ -33,15 +33,12 @@ const TIME_COLUMN_WIDTH: usize = 9;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
-/// Number of dashes kept after a section header's collapse/expand hint, so
-/// the rule visibly continues past it instead of stopping dead.
-const HEADER_HINT_TRAILING_DASHES: usize = 4;
 /// Absolute column where a `WaitingInput` session's question line starts:
 /// same width as the marker + status + repo columns combined, so the
 /// question sits under the title column rather than the repo column.
 const WAITING_QUESTION_INDENT: usize = MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH;
 /// Below this age, the time column renders in the default (bright)
-/// foreground; at or above it, it dims to `Color::DarkGray`. Independent of
+/// foreground; at or above it, it dims to `Color::Gray`. Independent of
 /// status color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 
@@ -72,7 +69,7 @@ pub(super) fn render_session_list(
         } else {
             "  No active Claude Code sessions.".to_string()
         };
-        let empty_message = Paragraph::new(message).style(Style::default().fg(Color::DarkGray));
+        let empty_message = Paragraph::new(message).style(Style::default().fg(Color::Gray));
         frame.render_widget(empty_message, area);
         return;
     }
@@ -87,7 +84,7 @@ pub(super) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows(&filtered_sessions, app.paused_stopped_expanded);
+    let rows = build_session_rows(&filtered_sessions);
 
     // Build list items and owned row ids from the same `rows`, then drop
     // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
@@ -106,9 +103,6 @@ pub(super) fn render_session_list(
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
             SessionRow::Session(entry) => build_session_item(entry, app, now, term_width, &query),
-            SessionRow::CollapsedSummary(sessions) => {
-                build_collapsed_summary_item(sessions, app, term_width)
-            }
         };
         items.push(item);
     }
@@ -184,14 +178,12 @@ fn header_style(kind: Section) -> Style {
     match kind {
         Section::NeedsYou => base.fg(Color::Yellow),
         Section::Running => base.fg(Color::Green),
-        Section::Unread | Section::Idle => base.fg(Color::DarkGray),
+        Section::Unread | Section::Idle => base.fg(Color::Gray),
     }
 }
 
 /// Renders a section header as a horizontal rule with the label inline,
-/// e.g. `── RUNNING (3) ──...──`. For the collapsible section, splices a
-/// right-ish hint before a short trailing dash run so the rule visibly
-/// continues past it.
+/// e.g. `── RUNNING (3) ──...──`.
 ///
 /// `with_leading_blank` prepends a blank line as a visual separator from
 /// the previous section (every header but the very first one in the list).
@@ -205,28 +197,8 @@ fn build_header_item(
     let content_width = term_width.saturating_sub(MARKER_WIDTH);
     let style = header_style(header.kind);
     let prefix = format!("── {} ", header.label);
-
-    let content = match header.collapsible {
-        Some(is_expanded) => {
-            let hint = if is_expanded {
-                "Space: collapse"
-            } else {
-                "Space: expand"
-            };
-            let hint_str = format!(" {hint} ");
-            let used = prefix.width() + hint_str.width() + HEADER_HINT_TRAILING_DASHES;
-            let leading_dashes = content_width.saturating_sub(used);
-            format!(
-                "{prefix}{}{hint_str}{}",
-                "─".repeat(leading_dashes),
-                "─".repeat(HEADER_HINT_TRAILING_DASHES)
-            )
-        }
-        None => {
-            let dashes = content_width.saturating_sub(prefix.width());
-            format!("{prefix}{}", "─".repeat(dashes))
-        }
-    };
+    let dashes = content_width.saturating_sub(prefix.width());
+    let content = format!("{prefix}{}", "─".repeat(dashes));
 
     let mut lines = Vec::with_capacity(2);
     if with_leading_blank {
@@ -274,13 +246,13 @@ fn build_session_item(
     let time_style = if seconds_since_update < RECENT_TIME_THRESHOLD_SECS {
         Style::default()
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
 
     let mut spans = vec![
         Span::styled(symbol, status_style),
         Span::raw(" "),
-        Span::styled(repo_col, Style::default().fg(Color::DarkGray)),
+        Span::styled(repo_col, Style::default().fg(Color::Gray)),
     ];
     spans.extend(title_spans);
     spans.push(Span::styled(time_col, time_style));
@@ -304,7 +276,7 @@ fn build_session_item(
         // cover the remaining status+repo width to reach `WAITING_QUESTION_INDENT`.
         lines.push(Line::from(vec![
             Span::raw(" ".repeat(WAITING_QUESTION_INDENT - MARKER_WIDTH)),
-            Span::styled(truncated_quoted, Style::default().fg(Color::DarkGray)),
+            Span::styled(truncated_quoted, Style::default().fg(Color::Gray)),
         ]));
     }
 
@@ -324,11 +296,11 @@ fn build_title_spans(
     is_idle: bool,
 ) -> Vec<Span<'static>> {
     let title_style = if is_idle {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let dim_style = Style::default().fg(Color::Gray);
 
     let Some(parent) = entry.breadcrumb_ancestor else {
         let padded = pad_to_width(&truncate(own_title, title_width), title_width);
@@ -358,60 +330,6 @@ fn build_title_spans(
     let mut spans = highlight_matches(&breadcrumb_part, query, dim_style);
     spans.extend(highlight_matches(&title_part, query, title_style));
     spans
-}
-
-/// Resolves a session's repo name for the collapsed-summary grouping: the
-/// cached repo label when available, otherwise the same cwd-basename
-/// fallback `get_session_info` would produce.
-fn resolve_repo_label(session: &Session, app: &App) -> String {
-    match app.get_cached_worktree_labels(&session.cwd) {
-        Some((repo, _worktree)) if !repo.is_empty() => repo.to_string(),
-        _ => get_session_info(session, ""),
-    }
-}
-
-/// Renders the collapsed Paused/Stopped section as a single summary row:
-/// `"{repo} ×{count} · {title} / {title} / +{n}"` (or `"{count} sessions"`
-/// when the group spans more than one repo).
-fn build_collapsed_summary_item(
-    sessions: &[&Session],
-    app: &App,
-    term_width: usize,
-) -> ListItem<'static> {
-    let content_width = term_width.saturating_sub(MARKER_WIDTH);
-    let dim_style = Style::default().fg(Color::DarkGray);
-
-    let labels: Vec<String> = sessions
-        .iter()
-        .map(|s| resolve_repo_label(s, app))
-        .collect();
-    let same_repo = labels
-        .first()
-        .is_some_and(|first| labels.iter().all(|l| l == first));
-    let prefix = if same_repo {
-        format!("{} \u{d7}{}", labels[0], sessions.len())
-    } else {
-        format!("{} sessions", sessions.len())
-    };
-
-    let titles: Vec<String> = sessions
-        .iter()
-        .take(2)
-        .map(|s| {
-            app.get_cached_title(&s.session_id)
-                .map(String::from)
-                .unwrap_or_else(|| get_title_display_name_fallback(s))
-        })
-        .collect();
-    let mut titles_text = titles.join(" / ");
-    if sessions.len() > 2 {
-        titles_text.push_str(&format!(" / +{}", sessions.len() - 2));
-    }
-
-    let full = format!("  {prefix} \u{b7} {titles_text}");
-    let truncated = truncate(&full, content_width);
-
-    ListItem::new(vec![Line::from(Span::styled(truncated, dim_style))])
 }
 
 #[cfg(test)]
@@ -445,11 +363,11 @@ mod tests {
     )]
     #[case::unread(
         Section::Unread,
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
     )]
     #[case::idle(
         Section::Idle,
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
@@ -479,8 +397,8 @@ mod tests {
         // always falls inside the right-aligned time span regardless of
         // the rendered text's length, since the whole padded field shares
         // one style.
-        assert_ne!(buffer[(79, 2)].fg, Color::DarkGray);
-        assert_eq!(buffer[(79, 3)].fg, Color::DarkGray);
+        assert_ne!(buffer[(79, 2)].fg, Color::Gray);
+        assert_eq!(buffer[(79, 3)].fg, Color::Gray);
     }
 
     #[test]
@@ -498,8 +416,8 @@ mod tests {
         // Row 2 is "waiting"'s row, row 6 is "running"'s row (accounting
         // for the question line and blank separator in between). Column 3
         // is the first character of the repo column for either row.
-        assert_eq!(buffer[(3, 2)].fg, Color::DarkGray);
-        assert_eq!(buffer[(3, 6)].fg, Color::DarkGray);
+        assert_eq!(buffer[(3, 2)].fg, Color::Gray);
+        assert_eq!(buffer[(3, 6)].fg, Color::Gray);
     }
 
     // =========================================================================
@@ -687,9 +605,8 @@ mod tests {
         sessions.push(unread);
         sessions.push(paused);
         // Start on "waiting" and step through RUNNING, UNREAD, all the way to
-        // the (by-default expanded) PAUSED section -- crossing every section
-        // boundary, so a cumulative off-by-N from repeated separators would
-        // show up here.
+        // the PAUSED section -- crossing every section boundary, so a
+        // cumulative off-by-N from repeated separators would show up here.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 16, |app| {
             app.select_next();
             app.select_next();
@@ -708,7 +625,7 @@ mod tests {
              ── UNREAD (1) ─────────────────────────────────────────────────────────────────
              ✱ project         project                                              just now
 
-             ── PAUSED (1) ──────────────────────────────────────────── Space: collapse ────
+             ── PAUSED (1) ─────────────────────────────────────────────────────────────────
             >⏸ project         project                                              just now
 
 
@@ -747,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_collapsed_paused_summary_single_repo() {
+    fn test_render_paused_section_shows_individual_session_rows() {
         let now = Utc::now();
 
         let mut paused1 = create_test_session("paused1");
@@ -756,40 +673,11 @@ mod tests {
         paused2.status = SessionStatus::Paused;
 
         let sessions = vec![paused1, paused2];
-        let output = render_to_string_with(&sessions, None, now, 80, 9, |app| {
-            app.paused_stopped_expanded = false;
-        });
-
-        let expected = indoc! {"
-             cc watch                                       0 needs you · 0 running · 2 idle
-            ── PAUSED (2) ────────────────────────────────────────────── Space: expand ────
-              project ×2 · project / project
-
-
-
-
-
-             ?: keys   /: search   Tab: worktree   q: quit"};
-
-        assert_eq!(output, expected);
-    }
-
-    #[test]
-    fn test_render_expanded_paused_section_shows_individual_rows() {
-        let now = Utc::now();
-
-        let mut paused1 = create_test_session("paused1");
-        paused1.status = SessionStatus::Paused;
-        let mut paused2 = create_test_session("paused2");
-        paused2.status = SessionStatus::Paused;
-
-        let sessions = vec![paused1, paused2];
-        // Expanded by default; no setup override needed.
         let output = render_to_string(&sessions, None, now, 80, 10);
 
         let expected = indoc! {"
              cc watch                                       0 needs you · 0 running · 2 idle
-            ── PAUSED (2) ──────────────────────────────────────────── Space: collapse ────
+            ── PAUSED (2) ─────────────────────────────────────────────────────────────────
             ⏸ project         project                                              just now
             ⏸ project         project                                              just now
 

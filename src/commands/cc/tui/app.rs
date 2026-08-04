@@ -96,10 +96,6 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
-    /// Whether the collapsible Paused/Stopped section is expanded into
-    /// individual rows (`true`, the default) or shown as a single
-    /// collapsed summary row (`false`).
-    pub paused_stopped_expanded: bool,
     /// Currently active top-level view.
     pub view: View,
     /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
@@ -166,7 +162,6 @@ impl App {
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             row_sessions: Vec::new(),
-            paused_stopped_expanded: true,
             title_cache,
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
@@ -301,7 +296,7 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let rows = build_session_rows(&filtered, self.paused_stopped_expanded);
+        let rows = build_session_rows(&filtered);
         self.row_sessions = rows
             .iter()
             .map(|r| {
@@ -373,21 +368,6 @@ impl App {
     fn restore_selection(&mut self, old_pos: Option<usize>, session_id: Option<&str>) {
         self.rebuild_row_order();
         self.resync_selection(old_pos, session_id.map(String::from));
-    }
-
-    /// Toggles the collapsible Paused/Stopped section between its
-    /// collapsed-summary row and individually expanded rows.
-    ///
-    /// Toggling only ever changes rows at the tail (the collapsible
-    /// section is always last), so earlier row positions never shift --
-    /// but the previously selected row can become invalid, e.g. collapsing
-    /// while the cursor sits on a now-hidden individual paused/stopped row.
-    pub fn toggle_paused_stopped_section(&mut self) {
-        let old_pos = self.list_state.selected();
-        let old_id = self.selected_session().map(|s| s.session_id.clone());
-        self.paused_stopped_expanded = !self.paused_stopped_expanded;
-        self.rebuild_row_order();
-        self.resync_selection(old_pos, old_id);
     }
 
     /// Persists the currently selected session ID to disk.
@@ -1837,32 +1817,6 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_toggle_paused_stopped_section() {
-        let mut app = create_test_app(vec![
-            create_session_with_status("paused-1", SessionStatus::Paused),
-            create_session_with_status("paused-2", SessionStatus::Paused),
-        ]);
-        // Expanded by default.
-        assert!(app.paused_stopped_expanded);
-        assert_eq!(
-            app.selected_session().map(|s| s.session_id.as_str()),
-            Some("paused-1")
-        );
-
-        app.toggle_paused_stopped_section();
-        assert!(!app.paused_stopped_expanded);
-        // Collapsed to a single summary row, which is not selectable.
-        assert_eq!(app.list_state.selected(), None);
-
-        app.toggle_paused_stopped_section();
-        assert!(app.paused_stopped_expanded);
-        assert_eq!(
-            app.selected_session().map(|s| s.session_id.as_str()),
-            Some("paused-1")
-        );
-    }
-
-    #[test]
     fn test_selection_follows_session_across_status_change() {
         let mut app = create_test_app(vec![
             create_test_session("running-1"),
@@ -1968,32 +1922,6 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("c")
-        );
-    }
-
-    #[test]
-    fn test_selection_falls_back_when_collapsed_into_summary() {
-        let mut app = create_test_app(vec![
-            create_session_with_status("waiting", SessionStatus::WaitingInput),
-            create_session_with_status("paused-1", SessionStatus::Paused),
-            create_session_with_status("paused-2", SessionStatus::Paused),
-        ]);
-        // Paused/Stopped starts expanded by default, so "paused-1" already
-        // has an individual row.
-        app.select_next();
-        assert_eq!(
-            app.selected_session().map(|s| s.session_id.as_str()),
-            Some("paused-1")
-        );
-
-        app.toggle_paused_stopped_section();
-
-        // "paused-1" no longer has an individual row (buried in the
-        // collapsed summary); falls back to the nearest remaining
-        // selectable row, "waiting".
-        assert_eq!(
-            app.selected_session().map(|s| s.session_id.as_str()),
-            Some("waiting")
         );
     }
 }

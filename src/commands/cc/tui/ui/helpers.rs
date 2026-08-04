@@ -11,7 +11,7 @@ pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Running => Color::Green,
         SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
+        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => Color::Gray,
     }
 }
 
@@ -311,9 +311,9 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running, Color::Green)]
     #[case::waiting_input(SessionStatus::WaitingInput, Color::Yellow)]
-    #[case::paused(SessionStatus::Paused, Color::DarkGray)]
-    #[case::stopped(SessionStatus::Stopped, Color::DarkGray)]
-    #[case::ended(SessionStatus::Ended, Color::DarkGray)]
+    #[case::paused(SessionStatus::Paused, Color::Gray)]
+    #[case::stopped(SessionStatus::Stopped, Color::Gray)]
+    #[case::ended(SessionStatus::Ended, Color::Gray)]
     fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
         assert_eq!(status_color(status), expected);
     }
