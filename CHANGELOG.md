@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.254](https://github.com/fohte/armyknife/compare/v0.1.253...v0.1.254) (2026-08-04)
+
+
+### Bug Fixes
+
+* **cc:** resolve cursor desync and display issues in session list ([#794](https://github.com/fohte/armyknife/issues/794)) ([dcaedcb](https://github.com/fohte/armyknife/commit/dcaedcbebf5c927b575b154d410afb3d16a65873))
+
 ## [0.1.253](https://github.com/fohte/armyknife/compare/v0.1.252...v0.1.253) (2026-08-04)
 
 
