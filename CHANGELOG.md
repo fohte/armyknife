@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.256](https://github.com/fohte/armyknife/compare/v0.1.255...v0.1.256) (2026-08-04)
+
+
+### Bug Fixes
+
+* **cc:** fix session title source ([#798](https://github.com/fohte/armyknife/issues/798)) ([73c928b](https://github.com/fohte/armyknife/commit/73c928b9455e24d24fc99df6126e68b8190e87e7))
+
 ## [0.1.255](https://github.com/fohte/armyknife/compare/v0.1.254...v0.1.255) (2026-08-04)
 
 
