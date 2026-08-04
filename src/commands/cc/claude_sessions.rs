@@ -52,8 +52,6 @@ struct TitleJsonlEntry {
     custom_title: Option<String>,
 }
 
-/// A title-bearing entry found while scanning a .jsonl file, tagged by
-/// source so callers can apply `custom-title` > `ai-title` priority.
 enum TitleEntry {
     Custom(String),
     Ai(String),
@@ -234,29 +232,47 @@ fn get_last_title_in_home(home: &Path, project_path: &Path, session_id: &str) ->
 /// entries are appended far more sparsely than assistant/usage entries
 /// (Claude Code only rewrites the title occasionally), so the last one can
 /// sit well beyond 20 lines from EOF even in an actively growing transcript.
+///
+/// An `ai-title` found in an early (small) window is only a fallback: since
+/// priority is source-based rather than recency-based, the scan keeps
+/// expanding through `MAX_READ_SIZE` looking for a `custom-title` before
+/// settling for the `ai-title`.
 fn read_last_title_reverse(file: &File) -> Option<String> {
     let metadata = file.metadata().ok()?;
     let file_size = metadata.len();
 
     let mut read_size = INITIAL_READ_SIZE;
+    let mut fallback_ai: Option<String> = None;
 
     while read_size <= MAX_READ_SIZE {
         let actual_read = std::cmp::min(read_size as u64, file_size) as usize;
 
-        if let Some(title) = try_read_last_lines_for_title(file, actual_read, file_size) {
-            return Some(title);
+        match try_read_last_lines_for_title(file, actual_read, file_size) {
+            Some(TitleEntry::Custom(title)) => return Some(title),
+            Some(TitleEntry::Ai(title)) => {
+                fallback_ai.get_or_insert(title);
+            }
+            None => {}
+        }
+
+        if actual_read as u64 >= file_size {
+            break;
         }
 
         read_size *= 2;
     }
 
-    None
+    fallback_ai
 }
 
 /// Scans a window of lines from EOF backward. A `custom-title` entry wins
 /// immediately (it always takes priority); an `ai-title` entry is kept only
 /// as a fallback in case no `custom-title` turns up later in the window.
-fn try_read_last_lines_for_title(file: &File, read_size: usize, file_size: u64) -> Option<String> {
+fn try_read_last_lines_for_title(
+    file: &File,
+    read_size: usize,
+    file_size: u64,
+) -> Option<TitleEntry> {
     let mut reader = BufReader::new(file);
 
     reader.seek(SeekFrom::End(-(read_size as i64))).ok()?;
@@ -276,13 +292,13 @@ fn try_read_last_lines_for_title(file: &File, read_size: usize, file_size: u64) 
     let mut last_ai: Option<String> = None;
     for line in complete_content.lines().rev() {
         match title_from_line(line) {
-            Some(TitleEntry::Custom(title)) => return Some(title),
+            Some(TitleEntry::Custom(title)) => return Some(TitleEntry::Custom(title)),
             Some(TitleEntry::Ai(title)) if last_ai.is_none() => last_ai = Some(title),
             _ => {}
         }
     }
 
-    last_ai
+    last_ai.map(TitleEntry::Ai)
 }
 
 fn read_last_title_forward(file: &File) -> Option<String> {
@@ -955,6 +971,43 @@ mod tests {
         // window is INITIAL_READ_SIZE bytes from EOF) so this exercises the
         // in-window priority logic rather than the window-expansion loop.
         assert!(content.len() < INITIAL_READ_SIZE);
+
+        let temp_dir = TempDir::new().unwrap();
+        let jsonl_path = temp_dir.path().join("test.jsonl");
+        std::fs::write(&jsonl_path, &content).unwrap();
+        let file = File::open(&jsonl_path).unwrap();
+
+        assert_eq!(
+            read_last_title_reverse(&file),
+            Some("My Session".to_string())
+        );
+    }
+
+    #[test]
+    fn test_title_reverse_scan_expands_window_to_find_older_custom_title() {
+        // ai-title sits within the first (INITIAL_READ_SIZE) reverse-scan
+        // window; custom-title is older and only visible once the window
+        // expands. The scan must not settle for the ai-title just because
+        // it was found first -- it has to keep expanding to check for a
+        // custom-title before falling back.
+        let mut content = String::new();
+        content.push_str(r#"{"type":"custom-title","customTitle":"My Session","sessionId":"s"}"#);
+        content.push('\n');
+        for i in 0..300 {
+            content.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"padding {i}"}}}}"#
+            ));
+            content.push('\n');
+        }
+        content.push_str(r#"{"type":"ai-title","aiTitle":"Generated Title","sessionId":"s"}"#);
+        content.push('\n');
+
+        // custom-title must fall outside the first window, and the whole
+        // file must fit within the second, for this to exercise the
+        // window-expansion path rather than the single-window or
+        // beyond-MAX_READ_SIZE cases.
+        assert!(content.len() > INITIAL_READ_SIZE);
+        assert!(content.len() < 2 * INITIAL_READ_SIZE);
 
         let temp_dir = TempDir::new().unwrap();
         let jsonl_path = temp_dir.path().join("test.jsonl");
