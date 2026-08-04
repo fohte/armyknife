@@ -89,8 +89,8 @@ pub struct App {
     /// against re-dispatch before the corresponding result event arrives.
     pending_label_cwds: HashSet<PathBuf>,
     /// Maps each display row to the `sessions` index it shows, or `None`
-    /// for a row that is not individually selectable (a section header or
-    /// the collapsed-summary row). Index `i` here always corresponds to
+    /// for a row that is not individually selectable (a section header).
+    /// Index `i` here always corresponds to
     /// `list_state`'s index `i` and to the `i`-th `ListItem` passed to
     /// `List::new` -- the UI layer must keep those three in exact 1:1
     /// correspondence (no extra `ListItem`s for separators, etc.).
@@ -307,8 +307,7 @@ impl App {
     }
 
     /// Indices of rows that are individually selectable (i.e. hold a
-    /// session, as opposed to a section header or the collapsed-summary
-    /// row).
+    /// session, as opposed to a section header).
     fn selectable_positions(&self) -> Vec<usize> {
         self.row_sessions
             .iter()
@@ -317,8 +316,8 @@ impl App {
             .collect()
     }
 
-    /// The row index whose session has the given id, if it currently has
-    /// an individual row (i.e. is not buried inside a collapsed summary).
+    /// The row index whose session has the given id, if that session is
+    /// currently displayed.
     fn position_of_session_row(&self, session_id: &str) -> Option<usize> {
         self.row_sessions.iter().position(|opt| {
             opt.and_then(|idx| self.sessions.get(idx))
@@ -329,11 +328,10 @@ impl App {
     /// Resolves the selection after a row-order rebuild.
     ///
     /// Selection follows a session by id across status changes / section
-    /// moves whenever that session still has an individual row. Otherwise
-    /// (the session was filtered out entirely, or is now buried inside a
-    /// collapsed summary) falls back to the first selectable position at or
-    /// after the previous one, else the last selectable position, else
-    /// `None`.
+    /// moves whenever that session is still displayed. Otherwise (the
+    /// session was filtered out entirely) falls back to the first
+    /// selectable position at or after the previous one, else the last
+    /// selectable position, else `None`.
     fn resync_selection(&mut self, old_pos: Option<usize>, old_session_id: Option<String>) {
         if let Some(id) = old_session_id
             && let Some(pos) = self.position_of_session_row(&id)
@@ -379,7 +377,7 @@ impl App {
     }
 
     /// Moves selection to the next selectable row in the displayed list,
-    /// wrapping around. Skips section headers and the collapsed-summary row.
+    /// wrapping around. Skips section headers.
     pub fn select_next(&mut self) {
         let selectable = self.selectable_positions();
         if selectable.is_empty() {
@@ -396,8 +394,7 @@ impl App {
     }
 
     /// Moves selection to the previous selectable row in the displayed
-    /// list, wrapping around. Skips section headers and the
-    /// collapsed-summary row.
+    /// list, wrapping around. Skips section headers.
     pub fn select_previous(&mut self) {
         let selectable = self.selectable_positions();
         if selectable.is_empty() {
