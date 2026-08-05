@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.264](https://github.com/fohte/armyknife/compare/v0.1.263...v0.1.264) (2026-08-05)
+
+
+### Bug Fixes
+
+* **cc:** prevent a cc watch from crashing on lock contention ([#814](https://github.com/fohte/armyknife/issues/814)) ([3b86e95](https://github.com/fohte/armyknife/commit/3b86e953ac5174173bc2b6964bef5ed051a73889))
+
 ## [0.1.263](https://github.com/fohte/armyknife/compare/v0.1.262...v0.1.263) (2026-08-05)
 
 
