@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::commands::cc::types::Session;
 
-use super::super::session_rows::nearest_living_ancestor;
+use super::super::session_rows::{is_descendant_of, nearest_living_ancestor};
 use super::App;
 
 impl App {
@@ -62,12 +62,17 @@ impl App {
     /// ancestors but none of them are currently displayed (filtered out by
     /// search or a status filter), sets an error rather than doing nothing
     /// silently, since a silent no-op would be indistinguishable from the
-    /// root case.
+    /// root case -- unless the selected session is the drill-down scope's
+    /// root, in which case "no displayed ancestor" instead exits the scope
+    /// (see [`Self::is_at_drilldown_root`]).
     pub fn select_parent(&mut self) {
         let Some(session) = self.selected_session() else {
             return;
         };
         if session.ancestor_session_ids.is_empty() {
+            if self.is_at_drilldown_root() {
+                self.exit_drilldown();
+            }
             return;
         }
 
@@ -87,8 +92,67 @@ impl App {
                 }
             }
             None => {
-                self.set_error("Parent session is filtered out of the current view".to_string());
+                if self.is_at_drilldown_root() {
+                    self.exit_drilldown();
+                } else {
+                    self.set_error(
+                        "Parent session is filtered out of the current view".to_string(),
+                    );
+                }
             }
+        }
+    }
+
+    /// Whether the currently selected session is exactly the drill-down
+    /// scope's root. This is the only case where "no displayed ancestor"
+    /// can occur while scoped -- every other displayed session's nearest
+    /// ancestor is either another scoped descendant or the root itself.
+    fn is_at_drilldown_root(&self) -> bool {
+        let Some(root_id) = self.drilldown_scope.as_deref() else {
+            return false;
+        };
+        self.selected_session()
+            .is_some_and(|s| s.session_id == root_id)
+    }
+
+    /// Enters drill-down scope on the selected session: the list narrows to
+    /// that session plus its descendants (any depth, matching the `▸{n}`
+    /// badge rule -- see `session_rows::is_descendant_of`). No-op when the
+    /// session has no descendants (i.e. no badge is shown for it), and when
+    /// there is no selection. Keeps the cursor on the same session --
+    /// jumping the selection elsewhere would make the scope change hard to
+    /// follow.
+    pub fn enter_drilldown(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let session_id = session.session_id.clone();
+        let has_descendants = self
+            .sessions
+            .iter()
+            .any(|s| is_descendant_of(s, &session_id));
+        if !has_descendants {
+            return;
+        }
+
+        self.drilldown_scope = Some(session_id.clone());
+        self.apply_filter();
+        if let Some(pos) = self.position_of_session_row(&session_id) {
+            self.list_state.select(Some(pos));
+        }
+    }
+
+    /// Exits drill-down scope, restoring the search/status-filtered list.
+    /// Keeps the cursor on the same session (the former scope root), which
+    /// remains selectable in the exited list.
+    pub fn exit_drilldown(&mut self) {
+        let old_id = self.selected_session().map(|s| s.session_id.clone());
+        self.drilldown_scope = None;
+        self.apply_filter();
+        if let Some(id) = old_id
+            && let Some(pos) = self.position_of_session_row(&id)
+        {
+            self.list_state.select(Some(pos));
         }
     }
 }
@@ -200,6 +264,17 @@ mod tests {
     fn parent_selection_state(app: &App) -> (Option<String>, Option<String>) {
         (
             app.selected_session().map(|s| s.session_id.clone()),
+            app.error_message.clone(),
+        )
+    }
+
+    /// (selected session id, drill-down scope, error message) triple, for
+    /// asserting the combined effect of drill-down navigation with one
+    /// equality check.
+    fn scoped_selection_state(app: &App) -> (Option<String>, Option<String>, Option<String>) {
+        (
+            app.selected_session().map(|s| s.session_id.clone()),
+            app.drilldown_scope.clone(),
             app.error_message.clone(),
         )
     }
@@ -358,6 +433,177 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("3")
+        );
+    }
+
+    // =========================================================================
+    // Drill-down tests
+    // =========================================================================
+
+    #[test]
+    fn test_enter_drilldown_narrows_to_root_and_descendants() {
+        let root = create_test_session("root");
+        let mut mid = create_test_session("mid");
+        mid.ancestor_session_ids = vec!["root".to_string()];
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string(), "mid".to_string()];
+
+        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/mid/leaf.
+        let mut app = create_test_app(vec![root, mid, leaf]);
+        app.select_by_number(1);
+
+        app.enter_drilldown();
+
+        assert_eq!(
+            app.filtered_sessions()
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root", "mid", "leaf"]
+        );
+        assert_eq!(
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn test_enter_drilldown_without_descendants_is_noop() {
+        let mut app = create_test_app(vec![create_test_session("solo")]);
+        app.select_by_number(1);
+        let filtered_before = app.filtered_indices.clone();
+
+        app.enter_drilldown();
+
+        assert_eq!(app.drilldown_scope, None);
+        assert_eq!(app.filtered_indices, filtered_before);
+    }
+
+    #[test]
+    fn test_enter_drilldown_without_selection_is_noop() {
+        let mut app = create_test_app(vec![]);
+
+        app.enter_drilldown();
+
+        assert_eq!(app.drilldown_scope, None);
+    }
+
+    /// A true root (no ancestors at all) with one descendant and one
+    /// unrelated top-level session, so exiting the scope has something
+    /// observable to widen back into.
+    fn sessions_root_with_no_ancestors() -> Vec<Session> {
+        let root = create_test_session("root");
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string()];
+        let other = create_test_session("other");
+        vec![root, leaf, other]
+    }
+
+    /// A scope root whose real ancestor ("grandparent") exists in
+    /// `app.sessions` but sits outside the scope's own descendant chain, so
+    /// it's excluded from the filtered view by the scope boundary itself
+    /// rather than by deletion.
+    fn sessions_root_with_ancestors_outside_scope() -> Vec<Session> {
+        let grandparent = create_test_session("grandparent");
+        let mut root = create_test_session("root");
+        root.ancestor_session_ids = vec!["grandparent".to_string()];
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["grandparent".to_string(), "root".to_string()];
+        vec![grandparent, root, leaf]
+    }
+
+    #[rstest]
+    #[case::no_ancestors(sessions_root_with_no_ancestors(), vec!["root", "leaf", "other"])]
+    #[case::ancestors_outside_scope(
+        sessions_root_with_ancestors_outside_scope(),
+        vec!["grandparent", "root", "leaf"]
+    )]
+    fn test_select_parent_at_drilldown_root_with_nothing_to_jump_to_exits_scope(
+        #[case] sessions: Vec<Session>,
+        #[case] expected_filtered_after_exit: Vec<&str>,
+    ) {
+        let mut app = create_test_app(sessions);
+        app.list_state.select(app.position_of_session_row("root"));
+        app.enter_drilldown();
+
+        app.select_parent();
+
+        assert_eq!(
+            scoped_selection_state(&app),
+            (Some("root".to_string()), None, None)
+        );
+        assert_eq!(
+            app.filtered_sessions()
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_filtered_after_exit
+        );
+    }
+
+    #[test]
+    fn test_select_parent_repeated_within_scope_only_last_hop_exits() {
+        let root = create_test_session("root");
+        let mut parent = create_test_session("parent");
+        parent.ancestor_session_ids = vec!["root".to_string()];
+        let mut child = create_test_session("child");
+        child.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
+
+        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/parent/child.
+        let mut app = create_test_app(vec![root, parent, child]);
+        app.select_by_number(1);
+        app.enter_drilldown();
+        app.select_by_number(3); // child
+
+        app.select_parent();
+        let after_first_hop = scoped_selection_state(&app);
+        app.select_parent();
+        let after_second_hop = scoped_selection_state(&app);
+        app.select_parent();
+        let after_third_hop = scoped_selection_state(&app);
+
+        assert_eq!(
+            [after_first_hop, after_second_hop, after_third_hop],
+            [
+                (Some("parent".to_string()), Some("root".to_string()), None),
+                (Some("root".to_string()), Some("root".to_string()), None),
+                (Some("root".to_string()), None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_select_parent_immediate_ancestor_hidden_by_status_filter_sets_error_not_exit() {
+        // Regression guard for `is_at_drilldown_root`: the selected session
+        // ("leaf") is a scoped descendant, not the scope root itself, so an
+        // unrelated status filter hiding its immediate ancestor must still
+        // report the existing "filtered out" error rather than exiting the
+        // scope.
+        let mut root = create_test_session("root");
+        root.status = SessionStatus::Paused;
+        let mut mid = create_test_session("mid");
+        mid.status = SessionStatus::Paused;
+        mid.ancestor_session_ids = vec!["root".to_string()];
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string(), "mid".to_string()];
+
+        let mut app = create_test_app(vec![root, mid, leaf]);
+        app.list_state.select(app.position_of_session_row("root"));
+        app.enter_drilldown();
+        // Narrows to Running only: excludes root and mid by status (both
+        // remain part of the scope's descendant chain), leaving "leaf" as
+        // the sole visible row.
+        app.toggle_status_filter(SessionStatus::Running);
+
+        app.select_parent();
+
+        assert_eq!(
+            scoped_selection_state(&app),
+            (
+                Some("leaf".to_string()),
+                Some("root".to_string()),
+                Some("Parent session is filtered out of the current view".to_string())
+            )
         );
     }
 }

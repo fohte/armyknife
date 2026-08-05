@@ -185,14 +185,28 @@ fn descendant_counts(
     displayed_ids: &HashSet<&str>,
 ) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
-    for &session in sessions {
-        for ancestor_id in &session.ancestor_session_ids {
-            if displayed_ids.contains(ancestor_id.as_str()) {
-                *counts.entry(ancestor_id.clone()).or_insert(0) += 1;
-            }
+    for &ancestor_id in displayed_ids {
+        let count = sessions
+            .iter()
+            .filter(|s| is_descendant_of(s, ancestor_id))
+            .count();
+        if count > 0 {
+            counts.insert(ancestor_id.to_string(), count);
         }
     }
     counts
+}
+
+/// Whether `session` descends from `ancestor_id` at any depth (i.e.
+/// `ancestor_id` appears anywhere in `ancestor_session_ids`). Shared by the
+/// descendant-count badge above and the drill-down scope filter
+/// (`App::apply_filter`), so the two never disagree on what counts as a
+/// descendant.
+pub(super) fn is_descendant_of(session: &Session, ancestor_id: &str) -> bool {
+    session
+        .ancestor_session_ids
+        .iter()
+        .any(|id| id == ancestor_id)
 }
 
 /// Finds the nearest living ancestor of a session among the sessions present

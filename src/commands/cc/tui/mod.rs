@@ -473,6 +473,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.select_parent();
         }
 
+        // Drill into the selected session's descendants
+        (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, _) => {
+            app.enter_drilldown();
+        }
+
         // Focus on selected session's tmux pane
         (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
             focus_selected_session(app);
@@ -828,6 +833,32 @@ mod tests {
         handle_key_event(&mut app, key(code));
 
         assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    // Row 0 is the "RUNNING (2)" header; sessions are rows 1/2.
+    #[rstest]
+    #[case::l(KeyCode::Char('l'))]
+    #[case::right(KeyCode::Right)]
+    fn test_handle_key_drilldown_navigation(#[case] code: KeyCode) {
+        let mut app = create_test_app_with_sessions(2);
+        app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];
+        app.list_state.select(Some(1)); // session-0, which has a descendant
+
+        handle_key_event(&mut app, key(code));
+
+        assert_eq!(app.drilldown_scope, Some("session-0".to_string()));
+    }
+
+    #[rstest]
+    #[case::l(KeyCode::Char('l'))]
+    #[case::right(KeyCode::Right)]
+    fn test_handle_key_drilldown_navigation_noop_without_descendants(#[case] code: KeyCode) {
+        let mut app = create_test_app_with_sessions(2);
+        app.list_state.select(Some(1));
+
+        handle_key_event(&mut app, key(code));
+
+        assert_eq!(app.drilldown_scope, None);
     }
 
     // All 5 sessions default to `Running`, so row 0 is the "RUNNING (5)"

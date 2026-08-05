@@ -32,7 +32,8 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let is_search_mode = app.view == View::Session && app.mode == AppMode::Search;
     let is_edit_mode = app.view == View::Session && matches!(app.mode, AppMode::Edit { .. });
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
-    let show_top_bar = is_search_mode || has_text_filter || is_edit_mode;
+    let has_drilldown_scope = app.view == View::Session && app.drilldown_scope.is_some();
+    let show_top_bar = is_search_mode || has_text_filter || is_edit_mode || has_drilldown_scope;
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
@@ -334,6 +335,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  h/←", bold),
                 Span::raw(": parent  "),
+                Span::styled("→/l", bold),
+                Span::raw(": drill down  "),
                 Span::styled("C-r/w/s/p", bold),
                 Span::raw(": filter  "),
                 Span::styled("Esc", bold),
@@ -360,6 +363,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  h/←", bold),
                 Span::raw(": parent  "),
+                Span::styled("→/l", bold),
+                Span::raw(": drill down  "),
                 Span::styled("C-r/w/s/p", bold),
                 Span::raw(": filter  "),
                 Span::styled("Tab", bold),
@@ -468,7 +473,13 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Calculate available width for the search query
-    let prefix = "  /";
+    let prefix = match &app.drilldown_scope {
+        Some(root_id) => {
+            let title = app.get_cached_title(root_id).unwrap_or(root_id.as_str());
+            format!("  \u{25b8} {title} \u{203a} /")
+        }
+        None => "  /".to_string(),
+    };
     let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
     let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
@@ -543,7 +554,7 @@ mod tests {
     ])]
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search".to_string(),
-        "  h/←: parent  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
+        "  h/←: parent  →/l: drill down  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
     ])]
     #[case::worktree_view_default(View::Worktree, false, vec![
         " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),
@@ -585,6 +596,21 @@ mod tests {
 
         let help_line = output.lines().last().unwrap();
         assert_eq!(help_line, "  Delete session? y: yes  n/Esc: cancel");
+    }
+
+    #[test]
+    fn test_search_bar_shows_drilldown_scope_title_prefix() {
+        let now = Utc::now();
+        let sessions = vec![create_test_session("root")];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.drilldown_scope = Some("root".to_string());
+        });
+
+        let top_bar_line = output.lines().nth(1).unwrap();
+        assert_eq!(
+            top_bar_line,
+            "  \u{25b8} project \u{203a} /                                                      (1/1)"
+        );
     }
 
     #[test]

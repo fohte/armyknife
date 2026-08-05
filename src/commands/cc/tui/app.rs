@@ -87,6 +87,11 @@ pub struct App {
     pub pre_search_selection: Option<usize>,
     /// Status filter: when set, only sessions with this status are shown.
     pub status_filter: Option<SessionStatus>,
+    /// Drill-down scope: when set, the session list shows only this session
+    /// (by id) and its descendants (any depth -- same rule as the `▸{n}`
+    /// badge). Entered via `App::enter_drilldown`, exited via
+    /// `App::exit_drilldown`. Counted as part of `has_filter()`.
+    pub drilldown_scope: Option<String>,
     /// Cache of searchable text for each session (keyed by session_id).
     /// Lazily built when search mode is first entered.
     /// Stores (searchable_text, updated_at) for incremental updates.
@@ -172,6 +177,7 @@ impl App {
             filtered_indices,
             pre_search_selection: None,
             status_filter: None,
+            drilldown_scope: None,
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             row_sessions: Vec::new(),

@@ -3,12 +3,15 @@ use crate::commands::cc::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+use super::super::session_rows::is_descendant_of;
 use super::{App, AppMode};
 
 impl App {
     /// Returns whether a filter is currently active.
     pub fn has_filter(&self) -> bool {
-        !self.confirmed_query.is_empty() || self.status_filter.is_some()
+        !self.confirmed_query.is_empty()
+            || self.status_filter.is_some()
+            || self.drilldown_scope.is_some()
     }
 
     /// Enters search mode.
@@ -52,6 +55,7 @@ impl App {
         self.search_query.clear();
         self.confirmed_query.clear();
         self.status_filter = None;
+        self.drilldown_scope = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
         self.rebuild_row_order();
         self.list_state
@@ -74,8 +78,19 @@ impl App {
         self.apply_filter();
     }
 
-    /// Applies the current search query and status filter to filter sessions.
+    /// Applies the current search query, status filter, and drill-down scope
+    /// (all AND'd together) to filter sessions.
     pub(super) fn apply_filter(&mut self) {
+        // A scoped-out root (deleted, or dropped by a reload) leaves the
+        // scope with nothing to anchor on -- clear it rather than filtering
+        // everything else out along with it, which would strand the user
+        // looking at an empty list with no visible way back.
+        if let Some(root_id) = &self.drilldown_scope
+            && !self.sessions.iter().any(|s| &s.session_id == root_id)
+        {
+            self.drilldown_scope = None;
+        }
+
         let query = if self.mode == AppMode::Search {
             &self.search_query
         } else {
@@ -83,12 +98,21 @@ impl App {
         };
 
         let status_filter = self.status_filter;
+        let scope_root = self.drilldown_scope.clone();
 
         self.filtered_indices = self
             .sessions
             .iter()
             .enumerate()
             .filter(|(_, session)| {
+                // Drill-down scope (AND with status/text filters below)
+                if let Some(ref root_id) = scope_root
+                    && session.session_id != *root_id
+                    && !is_descendant_of(session, root_id)
+                {
+                    return false;
+                }
+
                 // Status filter (AND with text search)
                 if let Some(status) = status_filter
                     && session.status != status
@@ -516,5 +540,115 @@ mod tests {
         assert!(app_with_mixed_statuses.status_filter.is_none());
         assert!(!app_with_mixed_statuses.has_filter());
         assert_eq!(app_with_mixed_statuses.filtered_sessions().len(), 4);
+    }
+
+    // =========================================================================
+    // Drill-down scope tests
+    // =========================================================================
+
+    #[test]
+    fn test_has_filter_with_drilldown_scope_only() {
+        let root = create_test_session("root");
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string()];
+
+        // "root" is selected by default (first selectable row).
+        let mut app = create_test_app(vec![root, leaf]);
+        assert!(!app.has_filter());
+
+        app.enter_drilldown();
+
+        assert!(app.has_filter());
+    }
+
+    #[test]
+    fn test_clear_filter_clears_drilldown_scope() {
+        let root = create_test_session("root");
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, leaf]);
+        app.enter_drilldown();
+        assert!(app.has_filter());
+
+        app.clear_filter();
+
+        assert_eq!(app.drilldown_scope, None);
+        assert!(!app.has_filter());
+    }
+
+    #[test]
+    fn test_drilldown_scope_and_status_filter_intersect() {
+        let root = create_test_session("root");
+        let mut running_child = create_test_session("running-child");
+        running_child.ancestor_session_ids = vec!["root".to_string()];
+        let mut paused_child = create_session_with_status("paused-child", SessionStatus::Paused);
+        paused_child.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, running_child, paused_child]);
+        app.enter_drilldown();
+
+        app.toggle_status_filter(SessionStatus::Running);
+
+        assert_eq!(
+            app.filtered_sessions()
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root", "running-child"]
+        );
+    }
+
+    #[test]
+    fn test_drilldown_scope_and_text_search_intersect() {
+        let mut root = create_test_session("root");
+        root.cwd = PathBuf::from("/home/user/webapp");
+        let mut matching_child = create_test_session("matching-child");
+        matching_child.cwd = PathBuf::from("/home/user/webapp/api");
+        matching_child.ancestor_session_ids = vec!["root".to_string()];
+        let mut other_child = create_test_session("other-child");
+        other_child.cwd = PathBuf::from("/home/user/other");
+        other_child.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, matching_child, other_child]);
+        app.enter_drilldown();
+
+        app.enter_search_mode();
+        app.update_search_query("webapp".to_string());
+        app.confirm_search();
+
+        assert_eq!(
+            app.filtered_sessions()
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root", "matching-child"]
+        );
+    }
+
+    #[test]
+    fn test_apply_filter_clears_drilldown_scope_when_root_removed() {
+        let root = create_test_session("root");
+        let mut leaf = create_test_session("leaf");
+        leaf.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, leaf]);
+        app.enter_drilldown();
+        assert_eq!(app.drilldown_scope, Some("root".to_string()));
+
+        // Simulate a reload that dropped "root" (e.g. the session ended and
+        // was pruned) -- mirrors how `app/reload.rs`'s own tests mutate
+        // `app.sessions` directly before re-applying the filter.
+        app.sessions.retain(|s| s.session_id != "root");
+        app.apply_filter();
+
+        assert_eq!(app.drilldown_scope, None);
+        assert_eq!(
+            app.filtered_sessions()
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["leaf"]
+        );
     }
 }
