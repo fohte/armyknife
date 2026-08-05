@@ -495,14 +495,24 @@ mod tests {
         let sessions: Vec<&Session> = vec![&root, &leaf];
         let rows = build_session_rows(&sessions);
 
-        let root_entry = rows
-            .iter()
-            .find_map(|row| match row {
-                SessionRow::Session(entry) if entry.session.session_id == "root" => Some(entry),
-                _ => None,
-            })
-            .expect("root row must be present");
-        assert_eq!(root_entry.descendant_count, 1);
+        assert_eq!(
+            describe(&rows),
+            vec![
+                RowDescription::Header {
+                    label: "RUNNING (2)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "root".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 1,
+                },
+                RowDescription::Session {
+                    id: "leaf".to_string(),
+                    breadcrumb: Some("root".to_string()),
+                    descendant_count: 0,
+                },
+            ]
+        );
     }
 
     #[test]

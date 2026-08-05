@@ -284,9 +284,6 @@ fn build_session_item(
     ListItem::new(lines)
 }
 
-/// Descendant-count badge suffix (e.g. `" ▸3"`), or empty when the session
-/// has no displayed descendants -- per spec, a session with zero
-/// descendants gets no badge at all.
 fn descendant_badge_text(descendant_count: usize) -> String {
     if descendant_count == 0 {
         String::new()
@@ -295,16 +292,11 @@ fn descendant_badge_text(descendant_count: usize) -> String {
     }
 }
 
-/// Builds the title column's spans: an optional dim `"{parent} › "`
-/// breadcrumb, the session's own title, and an optional dim descendant-count
-/// badge (e.g. `" ▸3"`) immediately after the title -- then padded out to
-/// `title_width` so the time column stays aligned.
-///
 /// The badge's width is carved out of `title_width` up front so the
-/// breadcrumb+title portion truncates to leave room for it; the badge
-/// itself is placed right after that (unpadded) content rather than
-/// flush against the time column, so it stays visually attached to the
-/// title it describes.
+/// breadcrumb+title portion truncates to leave room for it, and the badge is
+/// appended right after that (unpadded) content -- rather than after
+/// padding, which would push it flush against the time column instead of
+/// next to the title it describes.
 fn build_title_spans(
     entry: &SessionRowEntry,
     app: &App,
@@ -350,10 +342,9 @@ fn build_title_spans(
     spans
 }
 
-/// Builds the breadcrumb+title portion of the title column, truncated (but
-/// not padded) to at most `max_width`, alongside the display width it
-/// actually used. Split out of [`build_title_spans`] so the descendant-count
-/// badge can be placed right after this content instead of after padding.
+/// Returns the display width actually used (not padded) so the caller can
+/// append the descendant-count badge directly after this content and pad
+/// only once both are known.
 fn build_breadcrumb_title_spans(
     entry: &SessionRowEntry,
     app: &App,
@@ -627,9 +618,6 @@ mod tests {
         let sessions = vec![parent, child];
         let output = render_to_string(&sessions, Some(1), now, 80, 12);
 
-        // Also exercises the descendant badge (parent's row carries "▸1"),
-        // since a parent with a displayed child is exactly the fixture this
-        // breadcrumb test already needs.
         let expected = indoc! {"
              cc watch                                       1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
