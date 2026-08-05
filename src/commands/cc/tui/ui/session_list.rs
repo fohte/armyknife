@@ -12,11 +12,12 @@ use unicode_width::UnicodeWidthStr;
 use crate::commands::cc::tui::app::{App, AppMode};
 use crate::commands::cc::tui::session_rows::{
     Section, SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows, is_idle_session,
+    kin_relation,
 };
 
 use super::helpers::{
-    DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, status_color,
-    truncate,
+    DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
+    status_color, truncate,
 };
 
 /// Display width reserved by ratatui's `List::highlight_symbol` (the `>`
@@ -183,6 +184,27 @@ fn header_style(kind: Section) -> Style {
     }
 }
 
+/// Style for a session's own title text (not the breadcrumb prefix or
+/// badge, which stay `DIM_FG` regardless -- see `build_breadcrumb_title_spans`).
+///
+/// Idleness is expressed only through bold/non-bold here, never through
+/// color: `kin_color` (when `Some`) owns the color axis to show the
+/// session's kinship to the cursor, so an idle kin row still needs its hue
+/// visible rather than washed out by `DIM_FG`. Only a non-kin row falls
+/// back to the old `DIM_FG`-when-idle look.
+fn own_title_style(is_idle: bool, kin_color: Option<Color>) -> Style {
+    let style = if is_idle {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+    match kin_color {
+        Some(color) => style.fg(color),
+        None if is_idle => style.fg(DIM_FG),
+        None => style,
+    }
+}
+
 /// Renders a section header as a horizontal rule with the label inline,
 /// e.g. `── RUNNING (3) ──...──`.
 ///
@@ -238,8 +260,21 @@ fn build_session_item(
         .map(String::from)
         .unwrap_or_else(|| get_title_display_name_fallback(session));
 
+    let title_kin_color = app
+        .selected_session()
+        .and_then(|selected| kin_relation(selected, session))
+        .and_then(|(direction, distance)| kin_color(direction, distance));
+
     let title_width = title_column_width(term_width);
-    let title_spans = build_title_spans(entry, app, &own_title, title_width, query, is_idle);
+    let title_spans = build_title_spans(
+        entry,
+        app,
+        &own_title,
+        title_width,
+        query,
+        is_idle,
+        title_kin_color,
+    );
 
     let time_text = format_compact_time(session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
@@ -304,12 +339,9 @@ fn build_title_spans(
     title_width: usize,
     query: &str,
     is_idle: bool,
+    kin_color: Option<Color>,
 ) -> Vec<Span<'static>> {
-    let title_style = if is_idle {
-        Style::default().fg(DIM_FG)
-    } else {
-        Style::default().add_modifier(Modifier::BOLD)
-    };
+    let title_style = own_title_style(is_idle, kin_color);
     let dim_style = Style::default().fg(DIM_FG);
 
     let badge = descendant_badge_text(entry.descendant_count);
@@ -389,7 +421,8 @@ fn build_breadcrumb_title_spans(
 mod tests {
     use super::*;
     use crate::commands::cc::tui::ui::test_support::{
-        create_test_session, render_buffer, render_to_string, render_to_string_with,
+        create_test_session, render_buffer, render_buffer_with, render_to_string,
+        render_to_string_with,
     };
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -424,6 +457,27 @@ mod tests {
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
+    }
+
+    #[rstest]
+    #[case::idle_no_kin(true, None, Style::default().fg(DIM_FG))]
+    #[case::active_no_kin(false, None, Style::default().add_modifier(Modifier::BOLD))]
+    #[case::idle_kin(
+        true,
+        Some(Color::Indexed(206)),
+        Style::default().fg(Color::Indexed(206))
+    )]
+    #[case::active_kin(
+        false,
+        Some(Color::Indexed(39)),
+        Style::default().add_modifier(Modifier::BOLD).fg(Color::Indexed(39))
+    )]
+    fn test_own_title_style(
+        #[case] is_idle: bool,
+        #[case] kin_color: Option<Color>,
+        #[case] expected: Style,
+    ) {
+        assert_eq!(own_title_style(is_idle, kin_color), expected);
     }
 
     #[test]
@@ -785,5 +839,101 @@ mod tests {
              ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
+    }
+
+    // =========================================================================
+    // Kin highlighting: cursor-relative ancestor/descendant coloring
+    // =========================================================================
+
+    #[rstest]
+    // `e` is selected; `a`..`d` are its ancestors at increasing distance.
+    // `a` sits one generation past `MAX_KIN_DISTANCE` and must render
+    // uncolored, same as the cursor row `e` itself. Rows: chrome(y0),
+    // section header(y1), a(y2) b(y3) c(y4) d(y5) e(y6), in input order.
+    #[case::beyond_cap_ancestor_a(2, 19, Color::Reset)]
+    #[case::great_grandparent_b(3, 29, Color::Indexed(146))]
+    #[case::grandparent_c(4, 29, Color::Indexed(111))]
+    #[case::parent_d(5, 29, Color::Indexed(39))]
+    #[case::cursor_row_e(6, 29, Color::Reset)]
+    fn test_render_kin_highlight_ancestor_ramp_and_cap(
+        #[case] row_y: u16,
+        #[case] col_x: u16,
+        #[case] expected_fg: Color,
+    ) {
+        let now = Utc::now();
+        let mut a = create_test_session("a");
+        a.updated_at = now;
+        let mut b = create_test_session("b");
+        b.updated_at = now;
+        b.ancestor_session_ids = vec!["a".to_string()];
+        let mut c = create_test_session("c");
+        c.updated_at = now;
+        c.ancestor_session_ids = vec!["a".to_string(), "b".to_string()];
+        let mut d = create_test_session("d");
+        d.updated_at = now;
+        d.ancestor_session_ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut e = create_test_session("e");
+        e.updated_at = now;
+        e.ancestor_session_ids = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+
+        let sessions = vec![a, b, c, d, e];
+        // list_state index: header=0, a=1, b=2, c=3, d=4, e=5 -- select "e".
+        let buffer = render_buffer(&sessions, Some(5), now, 80, 12);
+
+        assert_eq!(buffer[(col_x, row_y)].fg, expected_fg);
+    }
+
+    #[test]
+    fn test_render_kin_highlight_does_not_color_siblings() {
+        let now = Utc::now();
+        let mut parent = create_test_session("parent");
+        parent.updated_at = now;
+        let mut child_a = create_test_session("child_a");
+        child_a.updated_at = now;
+        child_a.ancestor_session_ids = vec!["parent".to_string()];
+        let mut child_b = create_test_session("child_b");
+        child_b.updated_at = now;
+        child_b.ancestor_session_ids = vec!["parent".to_string()];
+
+        let sessions = vec![parent, child_a, child_b];
+        // list_state index: header=0, parent=1, child_a=2, child_b=3 --
+        // select "child_b". Rows: chrome(y0), header(y1), parent(y2),
+        // child_a(y3), child_b(y4).
+        let buffer = render_buffer(&sessions, Some(3), now, 80, 10);
+
+        // child_a's own title (after its "project › " breadcrumb) sits at
+        // column 29. Siblings share a parent but are not each other's kin,
+        // so it must render uncolored despite child_b being selected.
+        assert_eq!(buffer[(29, 3)].fg, Color::Reset);
+    }
+
+    #[test]
+    fn test_render_kin_highlight_search_highlight_overrides_kin_color() {
+        let now = Utc::now();
+        let mut root = create_test_session("root");
+        root.updated_at = now;
+        let mut child = create_test_session("child");
+        child.updated_at = now;
+        child.ancestor_session_ids = vec!["root".to_string()];
+
+        let sessions = vec![root, child];
+        // list_state index: header=0, root=1 (selected/cursor), child=2.
+        // A non-empty `confirmed_query` makes the chrome show a top filter
+        // bar, so rows shift down by one: chrome(y0), filter bar(y1),
+        // section header(y2), root(y3), child(y4).
+        let buffer = render_buffer_with(&sessions, Some(1), now, 80, 10, |app| {
+            app.confirmed_query = "project".to_string();
+        });
+
+        // child's own title (after its "project › " breadcrumb) starts at
+        // column 29, row 4. It's a direct descendant of the cursor (pink
+        // kin color), but the query "project" matches it too, and search
+        // hits must win over kin coloring.
+        assert_eq!(buffer[(29, 4)].fg, Color::Yellow);
     }
 }

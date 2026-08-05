@@ -1,3 +1,4 @@
+use crate::commands::cc::tui::session_rows::KinDirection;
 use crate::commands::cc::types::{Session, SessionStatus};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -8,6 +9,41 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// the ANSI-16 `Color::Gray`/`Color::DarkGray` names, whose actual rendered
 /// brightness depends on the terminal's configurable palette.
 pub(super) const DIM_FG: Color = Color::Indexed(245);
+
+/// Distance beyond which a kin relationship no longer gets a distinct
+/// color and renders with the normal (non-kin) title style, e.g. a
+/// great-great-grandparent. Matches the worked example in the spec: parent
+/// > grandparent > great-grandparent, then plain.
+const MAX_KIN_DISTANCE: usize = 3;
+
+/// Ancestor-direction hue (cool blue): most saturated for a direct parent,
+/// fading toward a muted blue-gray by `MAX_KIN_DISTANCE`. `Color::Indexed`
+/// values for the same palette-independence reason as `DIM_FG` above.
+const ANCESTOR_KIN_COLORS: [Color; MAX_KIN_DISTANCE] = [
+    Color::Indexed(39),  // parent
+    Color::Indexed(111), // grandparent
+    Color::Indexed(146), // great-grandparent
+];
+
+/// Descendant-direction hue (warm pink), same fade schedule as
+/// `ANCESTOR_KIN_COLORS`. A distinct hue from the ancestor direction so the
+/// two are distinguishable at a glance, not just by saturation.
+const DESCENDANT_KIN_COLORS: [Color; MAX_KIN_DISTANCE] = [
+    Color::Indexed(206), // child
+    Color::Indexed(176), // grandchild
+    Color::Indexed(182), // great-grandchild
+];
+
+/// Title color for a session at `distance` generations from the cursor in
+/// `direction`, or `None` past `MAX_KIN_DISTANCE` (render with the normal
+/// title style instead).
+pub(super) fn kin_color(direction: KinDirection, distance: usize) -> Option<Color> {
+    let palette = match direction {
+        KinDirection::Ancestor => &ANCESTOR_KIN_COLORS,
+        KinDirection::Descendant => &DESCENDANT_KIN_COLORS,
+    };
+    palette.get(distance.saturating_sub(1)).copied()
+}
 
 /// Returns the color for a session status icon.
 ///
@@ -322,6 +358,39 @@ mod tests {
     #[case::ended(SessionStatus::Ended, DIM_FG)]
     fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
         assert_eq!(status_color(status), expected);
+    }
+
+    // =========================================================================
+    // kin_color tests
+    // =========================================================================
+
+    #[rstest]
+    #[case::ancestor_parent(KinDirection::Ancestor, 1, Some(Color::Indexed(39)))]
+    #[case::ancestor_grandparent(KinDirection::Ancestor, 2, Some(Color::Indexed(111)))]
+    #[case::ancestor_great_grandparent(KinDirection::Ancestor, 3, Some(Color::Indexed(146)))]
+    #[case::ancestor_beyond_cap(KinDirection::Ancestor, 4, None)]
+    #[case::descendant_child(KinDirection::Descendant, 1, Some(Color::Indexed(206)))]
+    #[case::descendant_grandchild(KinDirection::Descendant, 2, Some(Color::Indexed(176)))]
+    #[case::descendant_great_grandchild(KinDirection::Descendant, 3, Some(Color::Indexed(182)))]
+    #[case::descendant_beyond_cap(KinDirection::Descendant, 4, None)]
+    fn test_kin_color(
+        #[case] direction: KinDirection,
+        #[case] distance: usize,
+        #[case] expected: Option<Color>,
+    ) {
+        assert_eq!(kin_color(direction, distance), expected);
+    }
+
+    #[test]
+    fn test_kin_color_ancestor_and_descendant_hues_never_overlap() {
+        // The two directions must stay visually distinguishable at every
+        // saturation step, not just at the closest one.
+        for distance in 1..=MAX_KIN_DISTANCE {
+            assert_ne!(
+                kin_color(KinDirection::Ancestor, distance),
+                kin_color(KinDirection::Descendant, distance)
+            );
+        }
     }
 
     // =========================================================================
