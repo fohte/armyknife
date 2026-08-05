@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.261](https://github.com/fohte/armyknife/compare/v0.1.260...v0.1.261) (2026-08-05)
+
+
+### Features
+
+* **cc:** highlight a session's kin relative to the cursor in the watch TUI ([#808](https://github.com/fohte/armyknife/issues/808)) ([d8d3bc5](https://github.com/fohte/armyknife/commit/d8d3bc51268e8850e6bb36c2f9c621f0921cf495))
+
 ## [0.1.260](https://github.com/fohte/armyknife/compare/v0.1.259...v0.1.260) (2026-08-05)
 
 
