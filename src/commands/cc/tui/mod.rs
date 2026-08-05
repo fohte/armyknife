@@ -473,7 +473,6 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.select_parent();
         }
 
-        // Drill into the selected session's descendants
         (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, _) => {
             app.enter_drilldown();
         }

@@ -482,14 +482,17 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     };
     let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
-    let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
+    // Terminal-cell width, not byte length -- a drill-down scope's prefix
+    // can embed a session title with wide/multi-byte characters.
+    let prefix_width = prefix.width();
+    let fixed_width = prefix_width + cursor_str.len() + count_width + 2; // +2 for spacing
     let query_max_width = term_width.saturating_sub(fixed_width);
 
     // Truncate query if needed
     let display_query = truncate(query, query_max_width);
 
     // Calculate padding to right-align the count
-    let content_width = prefix.len() + display_query.width() + cursor_str.len();
+    let content_width = prefix_width + display_query.width() + cursor_str.len();
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
@@ -609,8 +612,39 @@ mod tests {
         let top_bar_line = output.lines().nth(1).unwrap();
         assert_eq!(
             top_bar_line,
-            "  \u{25b8} project \u{203a} /                                                      (1/1)"
+            "  \u{25b8} project \u{203a} /                                                          (1/1)"
         );
+    }
+
+    #[test]
+    fn test_search_bar_right_aligns_count_with_multibyte_scope_title() {
+        // Regression guard: the padding math must key off the prefix's
+        // terminal-cell width, not its UTF-8 byte length, or a scope title
+        // with multi-byte characters pushes the right-aligned `(n/n)` count
+        // short of its correct column. Cyrillic is single-column-wide per
+        // character but 2 bytes each in UTF-8, so a byte-length-based
+        // computation would overcount width without needing any
+        // double-width (CJK) glyph, which the test backend renders with an
+        // extra filler cell that would otherwise confound the width math
+        // this test is checking. With an empty query and no truncation, the
+        // bar's trimmed rendered width is always `term_width - 2` (the
+        // 2-column spacing built into the padding math) when the width
+        // accounting is correct, regardless of what characters make up the
+        // prefix.
+        let now = Utc::now();
+        let mut root = create_test_session("root");
+        root.label = Some("привет".to_string());
+        let sessions = vec![root];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.drilldown_scope = Some("root".to_string());
+        });
+
+        let top_bar_line = output.lines().nth(1).unwrap();
+        assert!(
+            top_bar_line.ends_with("(1/1)"),
+            "count must stay at the end of the bar, got: {top_bar_line:?}"
+        );
+        assert_eq!(top_bar_line.width(), 78);
     }
 
     #[test]

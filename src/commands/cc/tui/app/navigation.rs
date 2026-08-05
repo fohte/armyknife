@@ -127,8 +127,12 @@ impl App {
             return;
         };
         let session_id = session.session_id.clone();
+        // Check against the currently displayed sessions, not all of
+        // `self.sessions` -- must match exactly what `descendant_counts`
+        // (the `▸{n}` badge) considers, or a session hidden by search/status
+        // filtering could enter a scope for a badge the user can't see.
         let has_descendants = self
-            .sessions
+            .filtered_sessions()
             .iter()
             .any(|s| is_descendant_of(s, &session_id));
         if !has_descendants {
@@ -482,6 +486,26 @@ mod tests {
     #[test]
     fn test_enter_drilldown_without_selection_is_noop() {
         let mut app = create_test_app(vec![]);
+
+        app.enter_drilldown();
+
+        assert_eq!(app.drilldown_scope, None);
+    }
+
+    #[test]
+    fn test_enter_drilldown_noop_when_only_descendant_is_hidden_by_filter() {
+        // "root"'s only descendant ("child") does not match the active
+        // status filter, so no badge is shown for "root" -- entering
+        // drilldown must agree with that and stay a no-op, not scope into a
+        // session the user has no visible reason to believe has children.
+        let root = create_test_session("root");
+        let mut child = create_test_session("child");
+        child.status = SessionStatus::Paused;
+        child.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, child]);
+        app.toggle_status_filter(SessionStatus::Running);
+        app.select_by_number(1);
 
         app.enter_drilldown();
 
