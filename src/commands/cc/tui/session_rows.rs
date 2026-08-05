@@ -623,10 +623,6 @@ mod tests {
         assert_eq!(session_ids, vec!["running_b", "running_a"]);
     }
 
-    // =========================================================================
-    // kin_relation
-    // =========================================================================
-
     #[test]
     fn test_kin_relation_same_session_is_none() {
         let session = create_test_session("s", SessionStatus::Running);
