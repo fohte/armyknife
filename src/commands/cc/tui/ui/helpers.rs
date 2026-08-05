@@ -34,13 +34,32 @@ const DESCENDANT_KIN_COLORS: [Color; MAX_KIN_DISTANCE] = [
     Color::Indexed(182), // great-grandchild
 ];
 
+/// Distance beyond which a collateral (shared-ancestor but not direct-line)
+/// kin relationship no longer gets a distinct color, e.g. a second cousin.
+/// Kept separate from `MAX_KIN_DISTANCE` so the two fade schedules can be
+/// tuned independently.
+const MAX_COLLATERAL_KIN_DISTANCE: usize = 2;
+
+/// Collateral-direction hue (violet): distinct from both the ancestor blue
+/// and descendant pink so a sibling/cousin row is never mistaken for a
+/// direct ancestor or descendant, and from the Green/Yellow used for status
+/// and search-hit highlighting. `Color::Indexed` for the same
+/// palette-independence reason as `DIM_FG` above.
+const COLLATERAL_KIN_COLORS: [Color; MAX_COLLATERAL_KIN_DISTANCE] = [
+    Color::Indexed(129), // sibling
+    Color::Indexed(135), // cousin
+];
+
 /// Title color for a session at `distance` generations from the cursor in
-/// `direction`, or `None` past `MAX_KIN_DISTANCE` (render with the normal
-/// title style instead).
+/// `direction`, or `None` once `distance` exceeds that direction's fade cap
+/// (`MAX_KIN_DISTANCE` for direct lineage, `MAX_COLLATERAL_KIN_DISTANCE` for
+/// a shared-ancestor relationship) -- render with the normal title style
+/// instead.
 pub(super) fn kin_color(direction: KinDirection, distance: usize) -> Option<Color> {
-    let palette = match direction {
+    let palette: &[Color] = match direction {
         KinDirection::Ancestor => &ANCESTOR_KIN_COLORS,
         KinDirection::Descendant => &DESCENDANT_KIN_COLORS,
+        KinDirection::Collateral => &COLLATERAL_KIN_COLORS,
     };
     palette.get(distance.saturating_sub(1)).copied()
 }
@@ -373,6 +392,9 @@ mod tests {
     #[case::descendant_grandchild(KinDirection::Descendant, 2, Some(Color::Indexed(176)))]
     #[case::descendant_great_grandchild(KinDirection::Descendant, 3, Some(Color::Indexed(182)))]
     #[case::descendant_beyond_cap(KinDirection::Descendant, 4, None)]
+    #[case::collateral_sibling(KinDirection::Collateral, 1, Some(Color::Indexed(129)))]
+    #[case::collateral_cousin(KinDirection::Collateral, 2, Some(Color::Indexed(135)))]
+    #[case::collateral_beyond_cap(KinDirection::Collateral, 3, None)]
     fn test_kin_color(
         #[case] direction: KinDirection,
         #[case] distance: usize,
@@ -382,14 +404,31 @@ mod tests {
     }
 
     #[test]
-    fn test_kin_color_ancestor_and_descendant_hues_never_overlap() {
-        // The two directions must stay visually distinguishable at every
-        // saturation step, not just at the closest one.
+    fn test_kin_color_hues_never_overlap_across_directions() {
+        // No two directions may share a color at the same distance, not
+        // just at the closest step -- otherwise a sibling row could read as
+        // an ancestor or descendant at a glance.
+        let directions = [
+            KinDirection::Ancestor,
+            KinDirection::Descendant,
+            KinDirection::Collateral,
+        ];
         for distance in 1..=MAX_KIN_DISTANCE {
-            assert_ne!(
-                kin_color(KinDirection::Ancestor, distance),
-                kin_color(KinDirection::Descendant, distance)
-            );
+            let colors: Vec<Option<Color>> = directions
+                .iter()
+                .map(|&direction| kin_color(direction, distance))
+                .collect();
+            for i in 0..colors.len() {
+                for j in (i + 1)..colors.len() {
+                    if let (Some(a), Some(b)) = (colors[i], colors[j]) {
+                        assert_ne!(
+                            a, b,
+                            "distance {distance}: {:?} vs {:?}",
+                            directions[i], directions[j]
+                        );
+                    }
+                }
+            }
         }
     }
 
