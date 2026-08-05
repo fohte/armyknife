@@ -32,7 +32,8 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let is_search_mode = app.view == View::Session && app.mode == AppMode::Search;
     let is_edit_mode = app.view == View::Session && matches!(app.mode, AppMode::Edit { .. });
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
-    let show_top_bar = is_search_mode || has_text_filter || is_edit_mode;
+    let has_drilldown_scope = app.view == View::Session && app.drilldown_scope.is_some();
+    let show_top_bar = is_search_mode || has_text_filter || is_edit_mode || has_drilldown_scope;
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
@@ -336,6 +337,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  h/←", bold),
                 Span::raw(": parent  "),
+                Span::styled("→/l", bold),
+                Span::raw(": drill down  "),
                 Span::styled("C-r/w/s/p", bold),
                 Span::raw(": filter  "),
                 Span::styled("Esc", bold),
@@ -362,6 +365,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  h/←", bold),
                 Span::raw(": parent  "),
+                Span::styled("→/l", bold),
+                Span::raw(": drill down  "),
                 Span::styled("C-r/w/s/p", bold),
                 Span::raw(": filter  "),
                 Span::styled("Tab", bold),
@@ -470,17 +475,26 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Calculate available width for the search query
-    let prefix = "  /";
+    let prefix = match &app.drilldown_scope {
+        Some(root_id) => {
+            let title = app.get_cached_title(root_id).unwrap_or(root_id.as_str());
+            format!("  \u{25b8} {title} \u{203a} /")
+        }
+        None => "  /".to_string(),
+    };
     let cursor_str = if is_search_mode { "_" } else { "" };
     let count_width = count_str.len();
-    let fixed_width = prefix.len() + cursor_str.len() + count_width + 2; // +2 for spacing
+    // Terminal-cell width, not byte length -- a drill-down scope's prefix
+    // can embed a session title with wide/multi-byte characters.
+    let prefix_width = prefix.width();
+    let fixed_width = prefix_width + cursor_str.len() + count_width + 2; // +2 for spacing
     let query_max_width = term_width.saturating_sub(fixed_width);
 
     // Truncate query if needed
     let display_query = truncate(query, query_max_width);
 
     // Calculate padding to right-align the count
-    let content_width = prefix.len() + display_query.width() + cursor_str.len();
+    let content_width = prefix_width + display_query.width() + cursor_str.len();
     let padding_width = term_width.saturating_sub(content_width + count_width + 2);
     let padding = " ".repeat(padding_width);
 
@@ -545,7 +559,7 @@ mod tests {
     ])]
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  d: delete  1-9: quick  /: search".to_string(),
-        "  h/←: parent  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
+        "  h/←: parent  →/l: drill down  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
     ])]
     #[case::worktree_view_default(View::Worktree, false, vec![
         " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),
@@ -587,6 +601,52 @@ mod tests {
 
         let help_line = output.lines().last().unwrap();
         assert_eq!(help_line, "  Delete session? y: yes  n/Esc: cancel");
+    }
+
+    #[test]
+    fn test_search_bar_shows_drilldown_scope_title_prefix() {
+        let now = Utc::now();
+        let sessions = vec![create_test_session("root")];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.drilldown_scope = Some("root".to_string());
+        });
+
+        let top_bar_line = output.lines().nth(1).unwrap();
+        assert_eq!(
+            top_bar_line,
+            "  \u{25b8} project \u{203a} /                                                          (1/1)"
+        );
+    }
+
+    #[test]
+    fn test_search_bar_right_aligns_count_with_multibyte_scope_title() {
+        // Regression guard: the padding math must key off the prefix's
+        // terminal-cell width, not its UTF-8 byte length, or a scope title
+        // with multi-byte characters pushes the right-aligned `(n/n)` count
+        // short of its correct column. Cyrillic is single-column-wide per
+        // character but 2 bytes each in UTF-8, so a byte-length-based
+        // computation would overcount width without needing any
+        // double-width (CJK) glyph, which the test backend renders with an
+        // extra filler cell that would otherwise confound the width math
+        // this test is checking. With an empty query and no truncation, the
+        // bar's trimmed rendered width is always `term_width - 2` (the
+        // 2-column spacing built into the padding math) when the width
+        // accounting is correct, regardless of what characters make up the
+        // prefix.
+        let now = Utc::now();
+        let mut root = create_test_session("root");
+        root.label = Some("привет".to_string());
+        let sessions = vec![root];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.drilldown_scope = Some("root".to_string());
+        });
+
+        let top_bar_line = output.lines().nth(1).unwrap();
+        assert!(
+            top_bar_line.ends_with("(1/1)"),
+            "count must stay at the end of the bar, got: {top_bar_line:?}"
+        );
+        assert_eq!(top_bar_line.width(), 78);
     }
 
     #[test]
