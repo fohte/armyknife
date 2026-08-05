@@ -25,6 +25,7 @@ pub(super) fn create_test_session(id: &str) -> Session {
         ancestor_session_ids: Vec::new(),
         pending_bg_task_ids: BTreeSet::new(),
         pending_agent_task_ids: BTreeSet::new(),
+        pending_permission_agent_ids: BTreeSet::new(),
         read_at: None,
         sweep_signaled: false,
     }

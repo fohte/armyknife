@@ -242,6 +242,84 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     Ok(())
 }
 
+/// Holds the exclusive session lock across an entire load-mutate-save round
+/// trip, so a concurrent hook process for the same session cannot interleave
+/// and silently lose one side's update -- e.g. two subagents' hook events
+/// racing to add their own key to `Session::pending_permission_agent_ids`
+/// via separate `load_session_from` + `save_session_to` calls, where the
+/// later save would otherwise overwrite the earlier one's in-memory
+/// mutation. `load`/`save` reuse the single lock acquired here instead of
+/// `load_session_from`/`save_session_to`'s own (separate, and therefore
+/// individually race-prone) lock acquisitions -- do not call those two
+/// functions for the same `session_id` while holding a `SessionLock`;
+/// re-opening the lock file from the same process would try to acquire a
+/// second, independent flock on it and time out against the lock this
+/// struct already holds.
+pub(crate) struct SessionLock {
+    path: PathBuf,
+    _lock_file: File,
+}
+
+/// Acquires the exclusive session lock ahead of a load-mutate-save round
+/// trip (see `SessionLock`).
+pub(crate) fn lock_session_for_update(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<SessionLock> {
+    let path = session_file_in(sessions_dir, session_id)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    acquire_lock(&lock_file)?;
+
+    Ok(SessionLock {
+        path,
+        _lock_file: lock_file,
+    })
+}
+
+impl SessionLock {
+    /// Reads the session under the lock already held by this guard. Returns
+    /// `Ok(None)` if the file is missing or corrupted, matching
+    /// `load_session_from`.
+    pub(crate) fn load(&self) -> Result<Option<Session>> {
+        let content = match fs::read_to_string(&self.path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match serde_json::from_str::<Session>(&content) {
+            Ok(session) => Ok(Some(session)),
+            Err(_) => {
+                eprintln!(
+                    "[armyknife] warning: session file corrupted: {}",
+                    self.path.display()
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Writes the session atomically under the lock already held by this
+    /// guard, matching `save_session_to`.
+    pub(crate) fn save(&self, session: &Session) -> Result<()> {
+        let content = serde_json::to_string_pretty(session)?;
+        let temp_path = self.path.with_extension("json.tmp");
+        let mut temp_file = File::create(&temp_path)?;
+        temp_file.write_all(content.as_bytes())?;
+        temp_file.sync_all()?;
+        fs::rename(&temp_path, &self.path)?;
+        Ok(())
+    }
+}
+
 /// Loads a session under the exclusive lock, lets `mutate` decide whether
 /// and how to change it, and writes the result back atomically iff `mutate`
 /// returns `true`. A no-op when the session file is missing or corrupted.
@@ -558,6 +636,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
             pending_agent_task_ids: std::collections::BTreeSet::new(),
+            pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -654,6 +733,34 @@ mod tests {
 
             assert!(result1.is_ok(), "first shared lock should succeed");
             assert!(result2.is_ok(), "second shared lock should succeed");
+        }
+    }
+
+    mod session_lock_tests {
+        use super::*;
+        use rstest::rstest;
+
+        #[rstest]
+        fn load_then_save_round_trips_a_mutation(temp_session_dir: TempSessionDir) {
+            let session = create_test_session("lock-test");
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            let lock = lock_session_for_update(&temp_session_dir.sessions_path, "lock-test")
+                .expect("lock");
+            let mut loaded = lock.load().expect("load").expect("session exists");
+            loaded
+                .pending_permission_agent_ids
+                .insert("agent-a".to_string());
+            lock.save(&loaded).expect("save");
+            drop(lock);
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "lock-test")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                reloaded.pending_permission_agent_ids,
+                std::collections::BTreeSet::from(["agent-a".to_string()])
+            );
         }
     }
 
@@ -1110,6 +1217,7 @@ mod tests {
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
                 pending_agent_task_ids: std::collections::BTreeSet::new(),
+                pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
