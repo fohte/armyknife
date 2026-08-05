@@ -77,15 +77,6 @@ pub struct App {
     /// Edit buffer for `AppMode::Edit`, seeded from the session's currently
     /// displayed title when entering edit mode.
     pub edit_title_query: String,
-    /// Session id and generation id of the title generation currently in
-    /// flight via `Ctrl+g`. `None` when idle. The generation id lets
-    /// `title_generate::apply_title_generated` drop a stale result from a
-    /// request that was superseded (e.g. cancelled and re-triggered) instead
-    /// of overwriting a newer one. Also drives the "Generating..."
-    /// indicator in the edit bar.
-    pub title_generating: Option<(String, u64)>,
-    /// Monotonic counter handed out as the next request's generation id.
-    pub title_generation_seq: u64,
     /// Indices of sessions that match the current filter.
     pub filtered_indices: Vec<usize>,
     /// Selection index before entering search mode (for restoration on cancel).
@@ -174,8 +165,6 @@ impl App {
             search_query: String::new(),
             confirmed_query: String::new(),
             edit_title_query: String::new(),
-            title_generating: None,
-            title_generation_seq: 0,
             filtered_indices,
             pre_search_selection: None,
             status_filter: None,

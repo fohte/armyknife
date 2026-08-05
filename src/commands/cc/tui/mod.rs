@@ -50,9 +50,9 @@ struct KeyEffects {
     /// User pressed `p`: open the selected session's JSONL in
     /// `claude-history` after suspending the TUI.
     preview_session_path: Option<PathBuf>,
-    /// User pressed Ctrl+g in title-edit mode: generate a title in the
-    /// background from the session's transcript.
-    generate_title_request: Option<title_generate::GenerateTitleRequest>,
+    /// User pressed Ctrl+g in title-edit mode: spawn the detached
+    /// title-generation process for this request.
+    spawn_title_generation: Option<title_generate::SpawnTitleGenerationRequest>,
 }
 
 impl KeyEffects {
@@ -66,8 +66,8 @@ impl KeyEffects {
         if other.preview_session_path.is_some() {
             self.preview_session_path = other.preview_session_path;
         }
-        if other.generate_title_request.is_some() {
-            self.generate_title_request = other.generate_title_request;
+        if other.spawn_title_generation.is_some() {
+            self.spawn_title_generation = other.spawn_title_generation;
         }
     }
 }
@@ -137,18 +137,6 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TitleGenerated {
-                    session_id,
-                    generation_id,
-                    result,
-                } => {
-                    title_generate::apply_title_generated(
-                        &mut app,
-                        &session_id,
-                        generation_id,
-                        result,
-                    );
-                }
             }
         }
 
@@ -182,8 +170,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
             }
         }
-        if let Some(request) = effects.generate_title_request {
-            event_handler.start_title_generation(request);
+        if let Some(request) = effects.spawn_title_generation
+            && let Err(e) = title_generate::spawn_detached_title_generation(request)
+        {
+            app.set_error(format!("Failed to start title generation: {e}"));
         }
 
         // Apply merged session changes in a single reload

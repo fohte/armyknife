@@ -1,41 +1,51 @@
 //! Ctrl+g title generation from a session's transcript, triggered from
 //! `AppMode::Edit` (see `title_edit`).
+//!
+//! Generation itself never runs inside `cc watch`: pressing Ctrl+g builds
+//! the prompt and returns to `AppMode::Normal` immediately, and the actual
+//! LLM call happens in a fully detached `a cc generate-title-detached`
+//! process (see `spawn_detached_title_generation`) that keeps running even
+//! if the whole TUI is closed. There is deliberately no in-process
+//! progress tracking or result channel -- the detached process applies the
+//! generated title directly to the session's `label` on disk.
 
+use anyhow::{Context, Result};
 use indoc::formatdoc;
 
 use crate::commands::cc::claude_sessions;
 
 use super::app::{App, AppMode};
 
-/// Everything a background worker needs to generate one session's title.
+/// Everything needed to spawn the detached title-generation process for
+/// one Ctrl+g press.
 #[derive(Debug, PartialEq, Eq)]
-pub struct GenerateTitleRequest {
+pub struct SpawnTitleGenerationRequest {
     pub session_id: String,
-    pub generation_id: u64,
     pub prompt: String,
+    /// The session's `label` at the moment Ctrl+g was pressed. Passed
+    /// through to the detached process so it can no-op if the label has
+    /// since changed (e.g. a manual rename while generation was running).
+    pub previous_label: Option<String>,
 }
 
 /// Handles `Ctrl+g` from `AppMode::Edit`: reads the session's first user
 /// message and last assistant message from its `.jsonl`, builds the LLM
-/// prompt, and marks generation in flight. Returns `None` without spawning
-/// anything when a generation is already in flight -- each press is a
-/// billed LLM call, so repeats are ignored rather than piling up
-/// subprocesses -- or (after setting an error) when neither message is
-/// available, or when the app isn't in `AppMode::Edit` for a known session.
-pub(super) fn request_generate_title(app: &mut App) -> Option<GenerateTitleRequest> {
+/// prompt, and snapshots the session's current `label` (so the eventual
+/// detached write can no-op if the user renames it manually before
+/// generation finishes). Returns `None` (after setting an error) when
+/// neither transcript message is available, or the app isn't in
+/// `AppMode::Edit` for a known session. Does not spawn anything itself --
+/// callers hand the returned request to `spawn_detached_title_generation`.
+pub(super) fn request_generate_title(app: &mut App) -> Option<SpawnTitleGenerationRequest> {
     let session_id = match &app.mode {
         AppMode::Edit { session_id } => session_id.clone(),
         _ => return None,
     };
-    if app.title_generating.is_some() {
-        return None;
-    }
-    let cwd = app
-        .sessions
-        .iter()
-        .find(|s| s.session_id == session_id)?
-        .cwd
-        .clone();
+    let session = app.sessions.iter().find(|s| s.session_id == session_id)?;
+    let cwd = session.cwd.clone();
+    // The on-disk label at request time, not `app.edit_title_query` -- the
+    // edit buffer may already hold unsaved keystrokes that are not `label`.
+    let previous_label = session.label.clone();
 
     let first_user_message = claude_sessions::get_first_user_message(&cwd, &session_id);
     let last_assistant_message = claude_sessions::get_last_assistant_message(&cwd, &session_id);
@@ -50,14 +60,10 @@ pub(super) fn request_generate_title(app: &mut App) -> Option<GenerateTitleReque
         last_assistant_message.as_deref().unwrap_or(""),
     );
 
-    app.title_generation_seq += 1;
-    let generation_id = app.title_generation_seq;
-    app.title_generating = Some((session_id.clone(), generation_id));
-
-    Some(GenerateTitleRequest {
+    Some(SpawnTitleGenerationRequest {
         session_id,
-        generation_id,
         prompt,
+        previous_label,
     })
 }
 
@@ -83,35 +89,68 @@ pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> S
         IMPORTANT: Output ONLY the title. Do not explain."#}
 }
 
-/// Applies a background title-generation result. Drops it entirely if it
-/// doesn't match the currently tracked in-flight request -- either a stale
-/// result from a request that was superseded (cancelled and re-triggered
-/// for the same session), or the user has since left edit mode (Esc /
-/// Enter / different selection). `label` must never be touched from here.
-pub(super) fn apply_title_generated(
-    app: &mut App,
-    session_id: &str,
-    generation_id: u64,
-    result: Result<String, String>,
-) {
-    let is_current_request =
-        app.title_generating.as_ref() == Some(&(session_id.to_string(), generation_id));
-    if !is_current_request {
-        return;
-    }
-    app.title_generating = None;
+/// Spawns `a cc generate-title-detached` as a fully detached process,
+/// mirroring `clean_progress::spawn_detached_clean` (own session via
+/// `setsid`, cwd `/`, stdio to `/dev/null`) so title generation survives
+/// `cc watch` exiting. The prompt is written to a persisted temp file
+/// (never unlinked -- relies on OS `/tmp` GC, same policy as the
+/// clean-detached paths file) since it can exceed a comfortable argv size.
+pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationRequest) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
 
-    let is_editing_this_session = matches!(
-        &app.mode,
-        AppMode::Edit { session_id: editing_id } if editing_id == session_id
-    );
-    if !is_editing_this_session {
-        return;
+    use crate::shared::command;
+
+    let exe = std::env::current_exe().context("failed to resolve current exe")?;
+
+    // Persisted (not auto-deleted) -- the child only reads this file and
+    // never unlinks it. Cleanup relies on OS `/tmp` GC.
+    let mut prompt_file =
+        tempfile::NamedTempFile::new().context("failed to create temp prompt file")?;
+    prompt_file
+        .write_all(request.prompt.as_bytes())
+        .context("failed to write prompt file")?;
+    prompt_file.flush().context("failed to flush prompt file")?;
+    let (_file, file_path) = prompt_file
+        .keep()
+        .map_err(|e| anyhow::anyhow!("failed to persist prompt file: {e}"))?;
+
+    let mut cmd = command::new(&exe);
+    cmd.arg("cc")
+        .arg("generate-title-detached")
+        .arg(&request.session_id)
+        .arg("--prompt-file")
+        .arg(&file_path)
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(label) = &request.previous_label {
+        cmd.arg("--previous-label").arg(label);
     }
 
-    match result {
-        Ok(title) => app.update_edit_title_query(title),
-        Err(e) => app.set_error(format!("Failed to generate title: {e}")),
+    // SAFETY: `setsid` only manipulates the calling process's session
+    // membership; it is async-signal-safe and documented as one of the
+    // operations safe to call in `pre_exec`. Detaching here is what
+    // prevents the parent TTY's HUP / SIGINT from reaching the child.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    match cmd.spawn() {
+        Ok(_child) => Ok(()),
+        Err(e) => {
+            // Roll back the persisted prompt file; without the child it
+            // would only ever be cleaned up by the OS `/tmp` GC.
+            let _ = std::fs::remove_file(&file_path);
+            Err(anyhow::Error::new(e).context("failed to spawn generate-title-detached child"))
+        }
     }
 }
 
@@ -119,6 +158,7 @@ pub(super) fn apply_title_generated(
 mod tests {
     use super::*;
     use crate::commands::cc::types::{Session, SessionStatus};
+    use std::fs;
     use std::path::PathBuf;
 
     fn test_session(id: &str) -> Session {
@@ -175,10 +215,7 @@ mod tests {
 
         let request = request_generate_title(&mut app);
 
-        assert_eq!(
-            (request.is_none(), app.title_generating.clone()),
-            (true, None)
-        );
+        assert!(request.is_none());
     }
 
     #[test]
@@ -189,88 +226,74 @@ mod tests {
         let request = request_generate_title(&mut app);
 
         assert_eq!(
+            (request, app.error_message.clone()),
             (
-                request.is_none(),
-                app.title_generating.clone(),
-                app.error_message.clone()
-            ),
-            (
-                true,
                 None,
                 Some("No conversation content to generate a title from".to_string())
             )
         );
     }
 
+    /// Creates a `.claude/projects/{encoded}/{session_id}.jsonl` fixture
+    /// under `home_dir`, mirroring `claude_sessions.rs`'s own test harness --
+    /// `get_first_user_message`/`get_last_assistant_message` resolve the
+    /// project directory from `HOME`, so this is the only way to exercise
+    /// `request_generate_title`'s success path without a fake reader.
+    fn create_test_project_with_jsonl(
+        home_dir: &std::path::Path,
+        project_path: &std::path::Path,
+        session_id: &str,
+        jsonl_content: &str,
+    ) {
+        let encoded = claude_sessions::encode_project_path(project_path);
+        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
+        fs::create_dir_all(&project_dir).expect("create project dir");
+        let jsonl_path = project_dir.join(format!("{session_id}.jsonl"));
+        fs::write(&jsonl_path, jsonl_content).expect("write jsonl fixture");
+    }
+
     #[test]
-    fn request_generate_title_ignores_repeat_press_while_in_flight() {
-        let mut app = App::with_sessions(vec![test_session("s1")]);
+    fn request_generate_title_snapshots_the_on_disk_label() {
+        use indoc::indoc;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let home_dir = temp_dir.path();
+        let cwd = PathBuf::from("/test/project");
+
+        let mut session = test_session("s1");
+        session.cwd = cwd.clone();
+        session.label = Some("Old Title".to_string());
+        let mut app = App::with_sessions(vec![session]);
         app.enter_edit_title();
-        app.title_generating = Some(("s1".to_string(), 1));
 
-        let request = request_generate_title(&mut app);
-
-        assert_eq!(
-            (request.is_none(), app.title_generating.clone()),
-            (true, Some(("s1".to_string(), 1)))
+        create_test_project_with_jsonl(
+            home_dir,
+            &cwd,
+            "s1",
+            indoc! {r#"
+                {"type":"user","message":{"content":"Fix the login bug"}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Updated auth.rs"}]}}
+            "#},
         );
-    }
 
-    #[test]
-    fn apply_title_generated_updates_buffer_on_success_when_still_editing() {
-        let mut app = App::with_sessions(vec![test_session("s1")]);
-        app.enter_edit_title();
-        app.title_generating = Some(("s1".to_string(), 1));
-
-        apply_title_generated(&mut app, "s1", 1, Ok("New Title".to_string()));
-
-        assert_eq!(
-            (app.edit_title_query.clone(), app.title_generating.clone()),
-            ("New Title".to_string(), None)
+        let request = temp_env::with_vars(
+            [("HOME", Some(home_dir.to_str().expect("utf8 path")))],
+            || request_generate_title(&mut app),
         );
-    }
-
-    #[test]
-    fn apply_title_generated_sets_error_on_failure() {
-        let mut app = App::with_sessions(vec![test_session("s1")]);
-        app.enter_edit_title();
-        app.title_generating = Some(("s1".to_string(), 1));
-
-        apply_title_generated(&mut app, "s1", 1, Err("boom".to_string()));
 
         assert_eq!(
-            (app.title_generating.clone(), app.error_message.clone()),
-            (None, Some("Failed to generate title: boom".to_string()))
-        );
-    }
-
-    #[test]
-    fn apply_title_generated_is_noop_after_leaving_edit_mode() {
-        let mut app = App::with_sessions(vec![test_session("s1")]);
-        app.enter_edit_title();
-        app.title_generating = Some(("s1".to_string(), 1));
-        app.cancel_edit_title(); // back to Normal; also clears title_generating
-        let buffer_before = app.edit_title_query.clone();
-
-        apply_title_generated(&mut app, "s1", 1, Ok("Should not apply".to_string()));
-
-        assert_eq!(app.edit_title_query, buffer_before);
-    }
-
-    #[test]
-    fn apply_title_generated_ignores_stale_generation_id() {
-        // A newer request (id 2) is in flight; a late result from an
-        // earlier, superseded request (id 1) must not clobber it.
-        let mut app = App::with_sessions(vec![test_session("s1")]);
-        app.enter_edit_title();
-        app.title_generating = Some(("s1".to_string(), 2));
-        let buffer_before = app.edit_title_query.clone();
-
-        apply_title_generated(&mut app, "s1", 1, Ok("Stale title".to_string()));
-
-        assert_eq!(
-            (app.edit_title_query.clone(), app.title_generating.clone()),
-            (buffer_before, Some(("s1".to_string(), 2)))
+            (request, app.mode.clone()),
+            (
+                Some(SpawnTitleGenerationRequest {
+                    session_id: "s1".to_string(),
+                    prompt: build_prompt("Fix the login bug", "Updated auth.rs"),
+                    previous_label: Some("Old Title".to_string()),
+                }),
+                AppMode::Edit {
+                    session_id: "s1".to_string()
+                },
+            )
         );
     }
 }

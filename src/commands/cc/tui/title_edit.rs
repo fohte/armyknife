@@ -26,7 +26,6 @@ impl App {
             .map(str::to_string)
             .unwrap_or_default();
         self.mode = AppMode::Edit { session_id };
-        self.title_generating = None;
     }
 
     /// Replaces the edit buffer wholesale. Callers build the new value
@@ -38,7 +37,6 @@ impl App {
     /// Leaves title-edit mode without persisting the buffer.
     pub fn cancel_edit_title(&mut self) {
         self.mode = AppMode::Normal;
-        self.title_generating = None;
     }
 
     /// Confirms the title edit.
@@ -69,7 +67,6 @@ impl App {
         self.set_session_label(&session_id, label);
         self.sync_tmux_window_title(&session_id);
         self.mode = AppMode::Normal;
-        self.title_generating = None;
 
         Ok(())
     }
@@ -119,8 +116,9 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> super::KeyEffect
         }
         (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
             if let Some(request) = super::title_generate::request_generate_title(app) {
+                app.mode = AppMode::Normal;
                 return super::KeyEffects {
-                    generate_title_request: Some(request),
+                    spawn_title_generation: Some(request),
                     ..Default::default()
                 };
             }
@@ -262,7 +260,10 @@ mod tests {
     }
 
     #[rstest]
-    fn ctrl_g_without_transcript_sets_error_and_returns_no_effects() {
+    fn ctrl_g_without_transcript_stays_in_edit_mode_and_sets_error() {
+        // Nothing was spawned, so the user should stay in edit mode to see
+        // the error and keep typing -- contrast with the success path below,
+        // which transitions to Normal.
         let session = create_test_session("s1");
         let mut app = App::with_sessions(vec![session]);
         app.enter_edit_title();
@@ -276,8 +277,69 @@ mod tests {
         );
 
         assert_eq!(
-            (effects, app.error_message.is_some()),
-            (super::super::KeyEffects::default(), true)
+            (effects, app.mode.clone(), app.error_message.is_some()),
+            (
+                super::super::KeyEffects::default(),
+                AppMode::Edit {
+                    session_id: "s1".to_string()
+                },
+                true
+            )
+        );
+    }
+
+    #[rstest]
+    fn ctrl_g_with_transcript_returns_to_normal_and_spawns_generation() {
+        use indoc::indoc;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let home_dir = temp_dir.path();
+        let cwd = PathBuf::from("/test/project");
+
+        let mut session = create_test_session("s1");
+        session.cwd = cwd.clone();
+        let mut app = App::with_sessions(vec![session]);
+        app.enter_edit_title();
+
+        let encoded = crate::commands::cc::claude_sessions::encode_project_path(cwd.as_path());
+        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        std::fs::write(
+            project_dir.join("s1.jsonl"),
+            indoc! {r#"
+                {"type":"user","message":{"content":"Fix the login bug"}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Updated auth.rs"}]}}
+            "#},
+        )
+        .expect("write jsonl fixture");
+
+        let effects = temp_env::with_vars(
+            [("HOME", Some(home_dir.to_str().expect("utf8 path")))],
+            || {
+                handle_key_event(
+                    &mut app,
+                    KeyEvent {
+                        code: KeyCode::Char('g'),
+                        modifiers: KeyModifiers::CONTROL,
+                    },
+                )
+            },
+        );
+
+        assert_eq!(
+            (app.mode.clone(), effects.spawn_title_generation),
+            (
+                AppMode::Normal,
+                Some(super::super::title_generate::SpawnTitleGenerationRequest {
+                    session_id: "s1".to_string(),
+                    prompt: super::super::title_generate::build_prompt(
+                        "Fix the login bug",
+                        "Updated auth.rs"
+                    ),
+                    previous_label: None,
+                })
+            )
         );
     }
 
