@@ -27,6 +27,10 @@ pub(super) struct SessionRowEntry<'a> {
     /// the `parent title › ` breadcrumb prefix. `None` for root sessions or
     /// when every ancestor has been filtered out of the current view.
     pub breadcrumb_ancestor: Option<&'a Session>,
+    /// Number of currently displayed sessions that descend from this one
+    /// (any depth, not just direct children -- see [`descendant_counts`]).
+    /// Drives the `▸{n}` badge; `0` means no badge.
+    pub descendant_count: usize,
 }
 
 impl<'a> SessionRow<'a> {
@@ -92,6 +96,7 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         .map(|s| (s.session_id.as_str(), *s))
         .collect();
     let displayed_ids: HashSet<&str> = by_id.keys().copied().collect();
+    let descendant_counts = descendant_counts(sessions, &displayed_ids);
 
     let mut needs_you = Vec::new();
     let mut running = Vec::new();
@@ -114,6 +119,7 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         &needs_you,
         &by_id,
         &displayed_ids,
+        &descendant_counts,
     );
     push_group(
         &mut rows,
@@ -122,6 +128,7 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         &running,
         &by_id,
         &displayed_ids,
+        &descendant_counts,
     );
     push_group(
         &mut rows,
@@ -130,6 +137,7 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         &unread,
         &by_id,
         &displayed_ids,
+        &descendant_counts,
     );
 
     let idle_label = format!("{} ({})", idle_section_label(&idle), idle.len());
@@ -140,6 +148,7 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         &idle,
         &by_id,
         &displayed_ids,
+        &descendant_counts,
     );
 
     rows
@@ -152,6 +161,7 @@ fn push_group<'a>(
     group: &[&'a Session],
     by_id: &HashMap<&str, &'a Session>,
     displayed_ids: &HashSet<&str>,
+    descendant_counts: &HashMap<String, usize>,
 ) {
     if group.is_empty() {
         return;
@@ -161,8 +171,33 @@ fn push_group<'a>(
         rows.push(SessionRow::Session(SessionRowEntry {
             session,
             breadcrumb_ancestor: nearest_living_ancestor(session, by_id, displayed_ids),
+            descendant_count: descendant_counts
+                .get(session.session_id.as_str())
+                .copied()
+                .unwrap_or(0),
         }));
     }
+}
+
+/// Counts, for every displayed session, how many other displayed sessions
+/// carry its ID anywhere in `ancestor_session_ids` -- i.e. every displayed
+/// descendant at any depth, not just direct children. This lets a badge
+/// count survive an intermediate session being Ended or deleted, and only
+/// ever counts sessions actually visible in the current (filtered) view, so
+/// the number always matches what's on screen.
+fn descendant_counts(
+    sessions: &[&Session],
+    displayed_ids: &HashSet<&str>,
+) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for &session in sessions {
+        for ancestor_id in &session.ancestor_session_ids {
+            if displayed_ids.contains(ancestor_id.as_str()) {
+                *counts.entry(ancestor_id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
 }
 
 /// Finds the nearest living ancestor of a session among the displayed
@@ -228,6 +263,7 @@ mod tests {
         Session {
             id: String,
             breadcrumb: Option<String>,
+            descendant_count: usize,
         },
     }
 
@@ -240,6 +276,7 @@ mod tests {
                 SessionRow::Session(entry) => RowDescription::Session {
                     id: entry.session.session_id.clone(),
                     breadcrumb: entry.breadcrumb_ancestor.map(|s| s.session_id.clone()),
+                    descendant_count: entry.descendant_count,
                 },
             })
             .collect()
@@ -271,6 +308,7 @@ mod tests {
                 RowDescription::Session {
                     id: "waiting".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
                 RowDescription::Header {
                     label: "RUNNING (1)".to_string(),
@@ -278,6 +316,7 @@ mod tests {
                 RowDescription::Session {
                     id: "running".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
                 RowDescription::Header {
                     label: "UNREAD (1)".to_string(),
@@ -285,6 +324,7 @@ mod tests {
                 RowDescription::Session {
                     id: "unread".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
                 RowDescription::Header {
                     label: "PAUSED (1)".to_string(),
@@ -292,6 +332,7 @@ mod tests {
                 RowDescription::Session {
                     id: "paused".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
             ]
         );
@@ -312,6 +353,7 @@ mod tests {
                 RowDescription::Session {
                     id: "running".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
             ]
         );
@@ -368,10 +410,12 @@ mod tests {
                 RowDescription::Session {
                     id: "paused1".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
                 RowDescription::Session {
                     id: "paused2".to_string(),
                     breadcrumb: None,
+                    descendant_count: 0,
                 },
             ]
         );
@@ -395,10 +439,102 @@ mod tests {
                 RowDescription::Session {
                     id: "root".to_string(),
                     breadcrumb: None,
+                    descendant_count: 1,
                 },
                 RowDescription::Session {
                     id: "child".to_string(),
                     breadcrumb: Some("root".to_string()),
+                    descendant_count: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_session_rows_descendant_count_covers_every_depth() {
+        let root = create_test_session("root", SessionStatus::Running);
+        let mut mid = create_test_session("mid", SessionStatus::Running);
+        mid.ancestor_session_ids = vec!["root".to_string()];
+        let mut leaf = create_test_session("leaf", SessionStatus::Running);
+        leaf.ancestor_session_ids = vec!["root".to_string(), "mid".to_string()];
+
+        let sessions: Vec<&Session> = vec![&root, &mid, &leaf];
+        let rows = build_session_rows(&sessions);
+
+        assert_eq!(
+            describe(&rows),
+            vec![
+                RowDescription::Header {
+                    label: "RUNNING (3)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "root".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 2,
+                },
+                RowDescription::Session {
+                    id: "mid".to_string(),
+                    breadcrumb: Some("root".to_string()),
+                    descendant_count: 1,
+                },
+                RowDescription::Session {
+                    id: "leaf".to_string(),
+                    breadcrumb: Some("mid".to_string()),
+                    descendant_count: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_session_rows_descendant_count_survives_deleted_intermediate_ancestor() {
+        let root = create_test_session("root", SessionStatus::Running);
+        let mut leaf = create_test_session("leaf", SessionStatus::Running);
+        leaf.ancestor_session_ids = vec!["root".to_string(), "deleted_middle".to_string()];
+
+        let sessions: Vec<&Session> = vec![&root, &leaf];
+        let rows = build_session_rows(&sessions);
+
+        assert_eq!(
+            describe(&rows),
+            vec![
+                RowDescription::Header {
+                    label: "RUNNING (2)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "root".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 1,
+                },
+                RowDescription::Session {
+                    id: "leaf".to_string(),
+                    breadcrumb: Some("root".to_string()),
+                    descendant_count: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_session_rows_descendant_count_ignores_sessions_outside_current_view() {
+        // "child" is a real descendant of "root" but was filtered out of the
+        // current view before `build_session_rows` was called (e.g. by
+        // search/status filtering), so it must not be reflected in the count.
+        let root = create_test_session("root", SessionStatus::Running);
+
+        let sessions: Vec<&Session> = vec![&root];
+        let rows = build_session_rows(&sessions);
+
+        assert_eq!(
+            describe(&rows),
+            vec![
+                RowDescription::Header {
+                    label: "RUNNING (1)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "root".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 0,
                 },
             ]
         );
