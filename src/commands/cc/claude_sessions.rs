@@ -348,6 +348,11 @@ fn title_from_line(line: &str) -> Option<TitleEntry> {
     }
 }
 
+/// Reads the first user message from a session's `.jsonl` file.
+pub fn get_first_user_message(project_path: &Path, session_id: &str) -> Option<String> {
+    get_title_from_jsonl(project_path, session_id)
+}
+
 /// Reads the first user prompt from a session's .jsonl file.
 fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String> {
     let jsonl_path = session_jsonl_path(project_path, session_id)?;
@@ -832,6 +837,44 @@ mod tests {
             Path::new("/nonexistent/path"),
             "test-session",
         );
+
+        assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Tests for get_first_user_message
+    // =========================================================================
+
+    #[test]
+    fn test_get_first_user_message_returns_first_and_normalizes() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let project_path = "/test/project";
+        let session_id = "test-session";
+        let jsonl_content = indoc! {r#"
+            {"type":"user","message":{"content":"Fix the login bug\nasap"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Sure"}]}}
+            {"type":"user","message":{"content":"second message"}}
+        "#};
+
+        create_test_project_with_jsonl(home_dir, project_path, session_id, jsonl_content);
+
+        let result = temp_env::with_vars([("HOME", Some(home_dir.to_str().unwrap()))], || {
+            get_first_user_message(Path::new(project_path), session_id)
+        });
+
+        assert_eq!(result, Some("Fix the login bug asap".to_string()));
+    }
+
+    #[test]
+    fn test_get_first_user_message_handles_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let home_dir = temp_dir.path();
+
+        let result = temp_env::with_vars([("HOME", Some(home_dir.to_str().unwrap()))], || {
+            get_first_user_message(Path::new("/nonexistent/path"), "test-session")
+        });
 
         assert!(result.is_none());
     }

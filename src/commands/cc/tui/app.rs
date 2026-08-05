@@ -77,6 +77,10 @@ pub struct App {
     /// Edit buffer for `AppMode::Edit`, seeded from the session's currently
     /// displayed title when entering edit mode.
     pub edit_title_query: String,
+    /// Session id currently generating a title via `Ctrl+g` (LLM call in
+    /// flight). `None` when idle. Drives the "Generating..." indicator in the
+    /// edit bar; see `title_generate::request_generate_title`.
+    pub title_generating: Option<String>,
     /// Indices of sessions that match the current filter.
     pub filtered_indices: Vec<usize>,
     /// Selection index before entering search mode (for restoration on cancel).
@@ -165,6 +169,7 @@ impl App {
             search_query: String::new(),
             confirmed_query: String::new(),
             edit_title_query: String::new(),
+            title_generating: None,
             filtered_indices,
             pre_search_selection: None,
             status_filter: None,

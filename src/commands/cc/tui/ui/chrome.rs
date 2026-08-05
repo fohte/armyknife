@@ -313,6 +313,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
         AppMode::Edit { .. } => vec![Line::from(vec![
             Span::styled("  Enter", bold),
             Span::raw(": save  "),
+            Span::styled("Ctrl+g", bold),
+            Span::raw(": generate  "),
             Span::styled("Esc", bold),
             Span::raw(": cancel"),
         ])],

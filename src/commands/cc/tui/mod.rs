@@ -5,6 +5,7 @@ mod event;
 mod pr_fetch;
 mod session_rows;
 mod title_edit;
+mod title_generate;
 mod ui;
 mod worktree_session_children;
 mod worktree_view;
@@ -49,6 +50,9 @@ struct KeyEffects {
     /// User pressed `p`: open the selected session's JSONL in
     /// `claude-history` after suspending the TUI.
     preview_session_path: Option<PathBuf>,
+    /// User pressed Ctrl+g in title-edit mode: generate a title in the
+    /// background from the session's transcript.
+    generate_title_request: Option<title_generate::GenerateTitleRequest>,
 }
 
 impl KeyEffects {
@@ -61,6 +65,9 @@ impl KeyEffects {
         }
         if other.preview_session_path.is_some() {
             self.preview_session_path = other.preview_session_path;
+        }
+        if other.generate_title_request.is_some() {
+            self.generate_title_request = other.generate_title_request;
         }
     }
 }
@@ -130,6 +137,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
+                AppEvent::TitleGenerated { session_id, result } => {
+                    title_generate::apply_title_generated(&mut app, &session_id, result);
+                }
             }
         }
 
@@ -162,6 +172,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                     app.set_error(format!("Failed to spawn cleanup: {e}"));
                 }
             }
+        }
+        if let Some(request) = effects.generate_title_request {
+            event_handler.start_title_generation(request);
         }
 
         // Apply merged session changes in a single reload
@@ -579,12 +592,20 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     }
 
     match app.mode {
-        AppMode::Normal => handle_normal_key_event(app, key),
-        AppMode::Search => handle_search_key_event(app, key),
-        AppMode::Confirm { .. } => handle_confirm_key_event(app, key),
+        AppMode::Normal => {
+            handle_normal_key_event(app, key);
+            KeyEffects::default()
+        }
+        AppMode::Search => {
+            handle_search_key_event(app, key);
+            KeyEffects::default()
+        }
+        AppMode::Confirm { .. } => {
+            handle_confirm_key_event(app, key);
+            KeyEffects::default()
+        }
         AppMode::Edit { .. } => title_edit::handle_key_event(app, key),
     }
-    KeyEffects::default()
 }
 
 fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {

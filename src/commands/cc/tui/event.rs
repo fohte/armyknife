@@ -1,4 +1,5 @@
 use crate::commands::cc::store;
+use crate::commands::name_branch::detect_backend;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use notify::{
@@ -55,6 +56,14 @@ pub enum AppEvent {
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
+    /// Background LLM title generation for `Ctrl+g` in title-edit mode
+    /// finished. `session_id` identifies which session's edit buffer the
+    /// result belongs to; `result` carries the generated title or a
+    /// human-readable failure message.
+    TitleGenerated {
+        session_id: String,
+        result: std::result::Result<String, String>,
+    },
 }
 
 /// Event handler that combines keyboard input and file system events.
@@ -213,6 +222,22 @@ impl EventHandler {
                     }
                 }
             }
+        });
+    }
+
+    /// Kick off Ctrl+g's background title generation. Result arrives as
+    /// [`AppEvent::TitleGenerated`]. Runs a real `claude --model haiku
+    /// --print` subprocess (via `name_branch`'s `Backend`), so this must
+    /// never run on the main thread.
+    pub fn start_title_generation(&self, request: super::title_generate::GenerateTitleRequest) {
+        let tx = self.sender.clone();
+        thread::spawn(move || {
+            let backend = detect_backend();
+            let result = backend.generate(&request.prompt).map_err(|e| e.to_string());
+            let _ = tx.send(AppEvent::TitleGenerated {
+                session_id: request.session_id,
+                result,
+            });
         });
     }
 }

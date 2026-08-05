@@ -26,6 +26,7 @@ impl App {
             .map(str::to_string)
             .unwrap_or_default();
         self.mode = AppMode::Edit { session_id };
+        self.title_generating = None;
     }
 
     /// Replaces the edit buffer wholesale. Callers build the new value
@@ -37,6 +38,7 @@ impl App {
     /// Leaves title-edit mode without persisting the buffer.
     pub fn cancel_edit_title(&mut self) {
         self.mode = AppMode::Normal;
+        self.title_generating = None;
     }
 
     /// Confirms the title edit.
@@ -67,6 +69,7 @@ impl App {
         self.set_session_label(&session_id, label);
         self.sync_tmux_window_title(&session_id);
         self.mode = AppMode::Normal;
+        self.title_generating = None;
 
         Ok(())
     }
@@ -99,7 +102,7 @@ impl App {
 /// Handles key events in `AppMode::Edit`. Mirrors the search mode's text
 /// vocabulary (Esc/Enter/Backspace/char-append); a single-line title editor
 /// needs no in-mode navigation (Ctrl+u/w, arrows).
-pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
+pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> super::KeyEffects {
     match (key.code, key.modifiers) {
         (KeyCode::Esc, _) => {
             app.cancel_edit_title();
@@ -114,6 +117,14 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
             query.pop();
             app.update_edit_title_query(query);
         }
+        (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+            if let Some(request) = super::title_generate::request_generate_title(app) {
+                return super::KeyEffects {
+                    generate_title_request: Some(request),
+                    ..Default::default()
+                };
+            }
+        }
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
             let mut query = app.edit_title_query.clone();
             query.push(c);
@@ -121,6 +132,7 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
+    super::KeyEffects::default()
 }
 
 #[cfg(test)]
@@ -247,6 +259,26 @@ mod tests {
             },
         );
         assert_eq!(app.edit_title_query, "a");
+    }
+
+    #[rstest]
+    fn ctrl_g_without_transcript_sets_error_and_returns_no_effects() {
+        let session = create_test_session("s1");
+        let mut app = App::with_sessions(vec![session]);
+        app.enter_edit_title();
+
+        let effects = handle_key_event(
+            &mut app,
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        );
+
+        assert_eq!(
+            (effects, app.error_message.is_some()),
+            (super::super::KeyEffects::default(), true)
+        );
     }
 
     #[rstest]
