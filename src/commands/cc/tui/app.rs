@@ -455,9 +455,8 @@ impl App {
             .iter()
             .map(|s| (s.session_id.as_str(), *s))
             .collect();
-        let displayed_ids: HashSet<&str> = by_id.keys().copied().collect();
-        let ancestor_id = nearest_living_ancestor(session, &by_id, &displayed_ids)
-            .map(|ancestor| ancestor.session_id.clone());
+        let ancestor_id =
+            nearest_living_ancestor(session, &by_id).map(|ancestor| ancestor.session_id.clone());
 
         match ancestor_id {
             Some(id) => {
@@ -1412,6 +1411,16 @@ mod tests {
     // select_parent tests
     // =========================================================================
 
+    /// (selected session id, error message) pair, for asserting the full
+    /// effect of `select_parent` with one equality check. Owned (not
+    /// borrowed) so callers can keep mutating `app` afterward.
+    fn parent_selection_state(app: &App) -> (Option<String>, Option<String>) {
+        (
+            app.selected_session().map(|s| s.session_id.clone()),
+            app.error_message.clone(),
+        )
+    }
+
     #[test]
     fn test_select_parent_root_session_is_noop() {
         let mut app = create_test_app(vec![create_test_session("root")]);
@@ -1420,11 +1429,8 @@ mod tests {
         app.select_parent();
 
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.error_message.clone()
-            ),
-            (Some("root"), None)
+            parent_selection_state(&app),
+            (Some("root".to_string()), None)
         );
     }
 
@@ -1441,11 +1447,8 @@ mod tests {
         app.select_parent();
 
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.error_message.clone()
-            ),
-            (Some("root"), None)
+            parent_selection_state(&app),
+            (Some("root".to_string()), None)
         );
     }
 
@@ -1462,21 +1465,16 @@ mod tests {
         app.select_by_number(3);
 
         app.select_parent();
-        assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.error_message.clone()
-            ),
-            (Some("parent"), None)
-        );
-
+        let after_first_hop = parent_selection_state(&app);
         app.select_parent();
+        let after_second_hop = parent_selection_state(&app);
+
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.error_message.clone()
-            ),
-            (Some("root"), None)
+            [after_first_hop, after_second_hop],
+            [
+                (Some("parent".to_string()), None),
+                (Some("root".to_string()), None)
+            ]
         );
     }
 
@@ -1495,12 +1493,9 @@ mod tests {
         app.select_parent();
 
         assert_eq!(
+            parent_selection_state(&app),
             (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.error_message.clone()
-            ),
-            (
-                Some("child"),
+                Some("child".to_string()),
                 Some("Parent session is filtered out of the current view".to_string())
             )
         );

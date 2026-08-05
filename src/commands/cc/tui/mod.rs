@@ -468,8 +468,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.select_previous();
         }
 
-        // Jump to the selected session's nearest displayed ancestor
-        // (mirrors the breadcrumb prefix).
+        // Move to the selected session's parent
         (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
             app.select_parent();
         }
