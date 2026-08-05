@@ -468,6 +468,11 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
             app.select_previous();
         }
 
+        // Move to the selected session's parent
+        (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+            app.select_parent();
+        }
+
         // Focus on selected session's tmux pane
         (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
             focus_selected_session(app);
@@ -809,6 +814,20 @@ mod tests {
         app.list_state.select(initial);
         handle_key_event(&mut app, key(code));
         assert_eq!(app.list_state.selected(), expected);
+    }
+
+    // Row 0 is the "RUNNING (2)" header; sessions are rows 1/2.
+    #[rstest]
+    #[case::h(KeyCode::Char('h'))]
+    #[case::left(KeyCode::Left)]
+    fn test_handle_key_parent_navigation(#[case] code: KeyCode) {
+        let mut app = create_test_app_with_sessions(2);
+        app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];
+        app.list_state.select(Some(2));
+
+        handle_key_event(&mut app, key(code));
+
+        assert_eq!(app.list_state.selected(), Some(1));
     }
 
     // All 5 sessions default to `Running`, so row 0 is the "RUNNING (5)"

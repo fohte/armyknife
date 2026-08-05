@@ -118,7 +118,6 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         Section::NeedsYou,
         &needs_you,
         &by_id,
-        &displayed_ids,
         &descendant_counts,
     );
     push_group(
@@ -127,7 +126,6 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         Section::Running,
         &running,
         &by_id,
-        &displayed_ids,
         &descendant_counts,
     );
     push_group(
@@ -136,7 +134,6 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         Section::Unread,
         &unread,
         &by_id,
-        &displayed_ids,
         &descendant_counts,
     );
 
@@ -147,7 +144,6 @@ pub(super) fn build_session_rows<'a>(sessions: &[&'a Session]) -> Vec<SessionRow
         Section::Idle,
         &idle,
         &by_id,
-        &displayed_ids,
         &descendant_counts,
     );
 
@@ -160,7 +156,6 @@ fn push_group<'a>(
     kind: Section,
     group: &[&'a Session],
     by_id: &HashMap<&str, &'a Session>,
-    displayed_ids: &HashSet<&str>,
     descendant_counts: &HashMap<String, usize>,
 ) {
     if group.is_empty() {
@@ -170,7 +165,7 @@ fn push_group<'a>(
     for &session in group {
         rows.push(SessionRow::Session(SessionRowEntry {
             session,
-            breadcrumb_ancestor: nearest_living_ancestor(session, by_id, displayed_ids),
+            breadcrumb_ancestor: nearest_living_ancestor(session, by_id),
             descendant_count: descendant_counts
                 .get(session.session_id.as_str())
                 .copied()
@@ -200,20 +195,21 @@ fn descendant_counts(
     counts
 }
 
-/// Finds the nearest living ancestor of a session among the displayed
-/// sessions. Walks `ancestor_session_ids` from the end (nearest ancestor) to
-/// the start (root).
-fn nearest_living_ancestor<'a>(
+/// Finds the nearest living ancestor of a session among the sessions present
+/// in `by_id` (the currently displayed ones). Walks `ancestor_session_ids`
+/// from the end (nearest ancestor) to the start (root).
+///
+/// Shared with `App::select_parent`, so the "jump to parent" navigation
+/// always lands on the same session the breadcrumb prefix names.
+pub(super) fn nearest_living_ancestor<'a>(
     session: &Session,
     by_id: &HashMap<&str, &'a Session>,
-    displayed_ids: &HashSet<&str>,
 ) -> Option<&'a Session> {
-    for ancestor_id in session.ancestor_session_ids.iter().rev() {
-        if displayed_ids.contains(ancestor_id.as_str()) {
-            return by_id.get(ancestor_id.as_str()).copied();
-        }
-    }
-    None
+    session
+        .ancestor_session_ids
+        .iter()
+        .rev()
+        .find_map(|ancestor_id| by_id.get(ancestor_id.as_str()).copied())
 }
 
 #[cfg(test)]
