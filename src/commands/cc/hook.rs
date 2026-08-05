@@ -508,11 +508,10 @@ fn process_hook_event_impl(
         session.transcript_path.clone_from(&input.transcript_path);
     }
 
-    // Update current_tool based on event type
     session.current_tool = match event {
         HookEvent::PreToolUse => format_current_tool(&input),
         HookEvent::PostToolUse | HookEvent::Stop => None,
-        _ => session.current_tool, // Keep existing value for other events
+        _ => session.current_tool,
     };
 
     // Save the session, then release the lock before the two slow steps
@@ -540,9 +539,14 @@ fn process_hook_event_impl(
         max_retries,
     );
     if last_message != session.last_message {
-        store::update_session_last_message_in(
+        // Compare-and-swap against the pre-read value: a slower sibling
+        // event's own transcript read could otherwise finish and save first,
+        // and this unconditional write would then clobber it with a stale
+        // message.
+        store::update_session_last_message_if_unchanged_in(
             sessions_dir,
             &session.session_id,
+            session.last_message.as_deref(),
             last_message.clone(),
         )?;
         session.last_message = last_message;

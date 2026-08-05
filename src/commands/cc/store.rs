@@ -386,16 +386,24 @@ pub(crate) fn mark_session_read_in(
     })
 }
 
-/// Atomically overwrites a session's `last_message` field under a freshly
-/// acquired lock. Used by the hook handler to persist the transcript read
-/// that happens after releasing its own `SessionLock` -- see that struct's
-/// doc comment for why the read cannot happen while the lock is held.
-pub(crate) fn update_session_last_message_in(
+/// Overwrites a session's `last_message` field under a freshly acquired
+/// lock, but only if its current on-disk value still equals
+/// `expected_current` (the value read before `SessionLock` was released for
+/// the hook handler's possibly slow transcript read -- see that struct's
+/// doc comment for why the read cannot happen while the lock is held).
+/// Without this compare-and-swap, a slow transcript read from one hook event
+/// could overwrite a fresher `last_message` already saved by a later event
+/// on the same session.
+pub(crate) fn update_session_last_message_if_unchanged_in(
     sessions_dir: &Path,
     session_id: &str,
+    expected_current: Option<&str>,
     last_message: Option<String>,
 ) -> Result<()> {
     update_session_field_in(sessions_dir, session_id, |session| {
+        if session.last_message.as_deref() != expected_current {
+            return false;
+        }
         session.last_message = last_message;
         true
     })
