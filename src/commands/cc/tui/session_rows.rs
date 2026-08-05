@@ -660,7 +660,6 @@ mod tests {
 
     #[test]
     fn test_kin_relation_completely_unrelated_sessions_is_none() {
-        // Two independent trees share no ancestor at all.
         let mut a = create_test_session("a", SessionStatus::Running);
         a.ancestor_session_ids = vec!["root_a".to_string()];
         let mut b = create_test_session("b", SessionStatus::Running);
@@ -669,11 +668,6 @@ mod tests {
         assert_eq!(kin_relation(&a, &b), None);
     }
 
-    /// Builds an ancestor path of `generations` ids that shares only its
-    /// oldest (root) entry with any other path built from a different
-    /// `branch`, diverging immediately after -- e.g. `ancestor_path("a", 2)`
-    /// and `ancestor_path("b", 2)` share a grandparent but have different
-    /// parents (first cousins).
     fn ancestor_path(branch: &str, generations: usize) -> Vec<String> {
         let mut ids = vec!["shared_root".to_string()];
         for i in 1..generations {
