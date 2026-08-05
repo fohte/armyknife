@@ -345,37 +345,42 @@ fn process_hook_event_impl(
     // may still upgrade a `Stopped` verdict to `Running`.
     let mut status = determine_status(event, &input);
 
-    // Load existing session or create new one
+    // Load existing session or create new one. The lock is held across this
+    // entire load-mutate-save round trip (see `store::SessionLock`) so a
+    // concurrent hook process for the same session_id -- e.g. a sibling
+    // subagent's own event firing at the same time -- cannot silently lose
+    // this event's mutations, including a just-inserted
+    // `pending_permission_agent_ids` entry.
+    let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
-    let mut session =
-        store::load_session_from(sessions_dir, &input.session_id)?.unwrap_or_else(|| {
-            // Read label and ancestor chain from environment variables (set by `wm new`)
-            let ancestor_session_ids = env
-                .ancestor_session_ids
-                .as_ref()
-                .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
-                .unwrap_or_default();
+    let mut session = session_lock.load()?.unwrap_or_else(|| {
+        // Read label and ancestor chain from environment variables (set by `wm new`)
+        let ancestor_session_ids = env
+            .ancestor_session_ids
+            .as_ref()
+            .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
+            .unwrap_or_default();
 
-            Session {
-                session_id: input.session_id.clone(),
-                cwd: input.cwd.clone(),
-                transcript_path: input.transcript_path.clone(),
-                tty: None,
-                tmux_info: tmux_info.clone(),
-                status,
-                created_at: now,
-                updated_at: now,
-                last_message: None,
-                current_tool: None,
-                label: env.session_label.clone(),
-                ancestor_session_ids,
-                pending_bg_task_ids: BTreeSet::new(),
-                pending_agent_task_ids: BTreeSet::new(),
-                pending_permission_agent_ids: BTreeSet::new(),
-                read_at: None,
-                sweep_signaled: false,
-            }
-        });
+        Session {
+            session_id: input.session_id.clone(),
+            cwd: input.cwd.clone(),
+            transcript_path: input.transcript_path.clone(),
+            tty: None,
+            tmux_info: tmux_info.clone(),
+            status,
+            created_at: now,
+            updated_at: now,
+            last_message: None,
+            current_tool: None,
+            label: env.session_label.clone(),
+            ancestor_session_ids,
+            pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
+            read_at: None,
+            sweep_signaled: false,
+        }
+    });
 
     // Update session fields
     session.cwd.clone_from(&input.cwd);
@@ -525,7 +530,7 @@ fn process_hook_event_impl(
     };
 
     // Save updated session
-    store::save_session_to(sessions_dir, &session)?;
+    session_lock.save(&session)?;
 
     // Push the window's aggregated Claude Code status into its
     // `@armyknife-cc-window-status` tmux option. The write and the status-bar refresh
@@ -1895,10 +1900,9 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "agent-sess".to_string();
-        existing.status = SessionStatus::Running;
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "agent-sess", |session| {
+            session.status = SessionStatus::Running;
+        });
 
         let input: HookInput = serde_json::from_str(
             r#"{"session_id":"agent-sess","cwd":"/tmp/test","agent_id":"agent-a"}"#,
@@ -1927,11 +1931,10 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "multi-agent-sess".to_string();
-        existing.status = SessionStatus::WaitingInput;
-        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "multi-agent-sess", |session| {
+            session.status = SessionStatus::WaitingInput;
+            session.pending_permission_agent_ids = set_of(&["agent-a"]);
+        });
 
         // agent-b's own PreToolUse must not clobber agent-a's still-open wait.
         let input: HookInput = serde_json::from_str(
@@ -1971,10 +1974,9 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "notif-sess".to_string();
-        existing.pending_permission_agent_ids = set_of(initial_pending);
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "notif-sess", |session| {
+            session.pending_permission_agent_ids = set_of(initial_pending);
+        });
 
         let input = create_test_input_with_session_and_source(
             "notif-sess",
@@ -2006,11 +2008,10 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "resolve-sess".to_string();
-        existing.status = SessionStatus::WaitingInput;
-        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "resolve-sess", |session| {
+            session.status = SessionStatus::WaitingInput;
+            session.pending_permission_agent_ids = set_of(&["agent-a"]);
+        });
 
         let input: HookInput = serde_json::from_str(
             r#"{"session_id":"resolve-sess","cwd":"/tmp/test","agent_id":"agent-a"}"#,
@@ -2030,7 +2031,6 @@ mod tests {
     }
 
     #[rstest]
-    // Older Claude Code build: no `background_tasks` field at all.
     #[case::no_background_tasks_field("", &[], SessionStatus::Stopped)]
     // `background_tasks` present but agent-x's subagent already finished.
     #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
@@ -2050,10 +2050,9 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "stale-perm-sess".to_string();
-        existing.pending_permission_agent_ids = set_of(&["agent-x"]);
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "stale-perm-sess", |session| {
+            session.pending_permission_agent_ids = set_of(&["agent-x"]);
+        });
 
         let payload = format!(
             r#"{{"session_id":"stale-perm-sess","cwd":"/tmp/test"{background_tasks_json}}}"#
@@ -2098,11 +2097,10 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "notif-suppress-sess".to_string();
-        existing.status = SessionStatus::WaitingInput;
-        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
-        store::save_session_to(sessions_dir, &existing).expect("save");
+        save_test_session(sessions_dir, "notif-suppress-sess", |session| {
+            session.status = SessionStatus::WaitingInput;
+            session.pending_permission_agent_ids = set_of(&["agent-a"]);
+        });
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let side_effects = SideEffects {
@@ -2202,6 +2200,13 @@ mod tests {
             read_at: None,
             sweep_signaled: false,
         }
+    }
+
+    fn save_test_session(sessions_dir: &Path, session_id: &str, mutate: impl FnOnce(&mut Session)) {
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        mutate(&mut session);
+        store::save_session_to(sessions_dir, &session).expect("save");
     }
 
     mod hook_log_tests {
