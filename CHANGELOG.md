@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.263](https://github.com/fohte/armyknife/compare/v0.1.262...v0.1.263) (2026-08-05)
+
+
+### Bug Fixes
+
+* **cc:** keep permission-wait status across parallel subagents ([#812](https://github.com/fohte/armyknife/issues/812)) ([4b349a4](https://github.com/fohte/armyknife/commit/4b349a49618a8e00d15389f0c35feb598b69e480))
+
 ## [0.1.262](https://github.com/fohte/armyknife/compare/v0.1.261...v0.1.262) (2026-08-05)
 
 
