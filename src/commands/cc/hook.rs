@@ -17,7 +17,10 @@ use super::claude_sessions;
 use super::error::CcError;
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
-use super::types::{HookEvent, HookInput, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
+use super::types::{
+    HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus, TMUX_SESSION_OPTION,
+    TmuxInfo,
+};
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -368,6 +371,7 @@ fn process_hook_event_impl(
                 ancestor_session_ids,
                 pending_bg_task_ids: BTreeSet::new(),
                 pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }
@@ -382,6 +386,35 @@ fn process_hook_event_impl(
     // is no longer relevant -- clear it so a later SessionEnd isn't
     // mistaken for the confirmation of that earlier signal.
     session.sweep_signaled = false;
+
+    // Track per-agent permission-request waits. Each concurrently running
+    // agent (main thread or subagent) gets its own key in
+    // `pending_permission_agent_ids`, so one agent stuck on a permission
+    // prompt isn't cleared by an unrelated event from a sibling agent.
+    // `PermissionRequest` inserts the firing agent's key; every other event
+    // except `Notification` removes it, since Claude Code resolves a
+    // prompt -- approved or denied -- before that agent fires any further
+    // event. `Notification` is skipped because
+    // `Notification(permission_prompt)` fires right after the main
+    // thread's own `PermissionRequest` for the same prompt and would
+    // immediately remove the key it just inserted.
+    let permission_agent_key = input
+        .agent_id
+        .clone()
+        .unwrap_or_else(|| MAIN_THREAD_AGENT_KEY.to_string());
+    match event {
+        HookEvent::PermissionRequest => {
+            session
+                .pending_permission_agent_ids
+                .insert(permission_agent_key);
+        }
+        HookEvent::Notification => {}
+        _ => {
+            session
+                .pending_permission_agent_ids
+                .remove(&permission_agent_key);
+        }
+    }
 
     // Refresh in-flight background tasks (Bash bg shells and Task-tool
     // subagents) from Claude Code's own task registry (see
@@ -402,6 +435,18 @@ fn process_hook_event_impl(
     if event == HookEvent::Stop {
         session.pending_bg_task_ids = input.pending_bg_task_ids();
         session.pending_agent_task_ids = input.pending_agent_task_ids();
+
+        // Drop permission waits for subagents no longer in Claude Code's
+        // task registry. A subagent whose permission request was denied
+        // exits without firing any further hook event, so its key would
+        // otherwise never be removed by the match above. This runs
+        // unconditionally, even when no subagent is currently in flight --
+        // gating it on a non-empty registry would leave a stale key stuck
+        // forever once every subagent has finished.
+        let live_agent_ids = session.pending_agent_task_ids.clone();
+        session
+            .pending_permission_agent_ids
+            .retain(|key| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
     }
 
     // Claude Code resolves both `Stop` and `Notification(idle_prompt)` to
@@ -415,6 +460,14 @@ fn process_hook_event_impl(
     // `Notification(idle_prompt)` too.
     if status == SessionStatus::Stopped && session.has_pending_bg_tasks() {
         status = SessionStatus::Running;
+    }
+
+    // At least one agent (main thread or subagent) is still blocked on a
+    // permission prompt: keep the session `WaitingInput` regardless of what
+    // this event's own status resolved to, so a sibling agent's unrelated
+    // event (e.g. another subagent's `PreToolUse`) can't paper over it.
+    if session.has_pending_permission_requests() {
+        status = SessionStatus::WaitingInput;
     }
 
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
@@ -488,8 +541,10 @@ fn process_hook_event_impl(
     // Notification events.  Notification(permission_prompt) fires right after
     // PermissionRequest for the same permission ask; clearing the group there
     // would erase the just-sent notification before the user sees it.
-    // SessionEnd never reaches here (early return above).
-    if !matches!(event, HookEvent::Notification) {
+    // SessionEnd never reaches here (early return above). Also skipped
+    // while any agent still has a pending permission wait, so a sibling
+    // agent's event doesn't erase a still-relevant permission notification.
+    if !matches!(event, HookEvent::Notification) && !session.has_pending_permission_requests() {
         side_effects.remove_notification_group(&input.session_id);
     }
 
@@ -1497,6 +1552,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         };
@@ -1604,6 +1660,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled,
         };
@@ -1833,6 +1890,241 @@ mod tests {
         );
     }
 
+    #[test]
+    fn permission_request_with_agent_id_sets_waiting_input_and_records_key() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "agent-sess".to_string();
+        existing.status = SessionStatus::Running;
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"agent-sess","cwd":"/tmp/test","agent_id":"agent-a"}"#,
+        )
+        .expect("valid JSON");
+
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "agent-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (reloaded.status, reloaded.pending_permission_agent_ids),
+            (SessionStatus::WaitingInput, set_of(&["agent-a"])),
+        );
+    }
+
+    #[test]
+    fn sibling_agent_event_does_not_clear_another_agents_pending_permission() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "multi-agent-sess".to_string();
+        existing.status = SessionStatus::WaitingInput;
+        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        // agent-b's own PreToolUse must not clobber agent-a's still-open wait.
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"multi-agent-sess","cwd":"/tmp/test","agent_id":"agent-b"}"#,
+        )
+        .expect("valid JSON");
+
+        process_hook_event_impl(
+            HookEvent::PreToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "multi-agent-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (reloaded.status, reloaded.pending_permission_agent_ids),
+            (SessionStatus::WaitingInput, set_of(&["agent-a"])),
+        );
+    }
+
+    #[rstest]
+    // Notification never carries `agent_id` (see `HookInput::agent_id`), so
+    // this always resolves to `MAIN_THREAD_AGENT_KEY` -- but the `Notification`
+    // match arm is a no-op regardless of key, and must stay that way even for
+    // `permission_prompt`, since it fires right after the main thread's own
+    // `PermissionRequest` for the same prompt.
+    #[case::no_existing_key(&[], &[])]
+    #[case::existing_key_preserved(&[MAIN_THREAD_AGENT_KEY], &[MAIN_THREAD_AGENT_KEY])]
+    fn notification_event_does_not_touch_pending_permission_set(
+        #[case] initial_pending: &[&str],
+        #[case] expected_pending: &[&str],
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "notif-sess".to_string();
+        existing.pending_permission_agent_ids = set_of(initial_pending);
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input = create_test_input_with_session_and_source(
+            "notif-sess",
+            Some("permission_prompt"),
+            None,
+        );
+
+        process_hook_event_impl(
+            HookEvent::Notification,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "notif-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            reloaded.pending_permission_agent_ids,
+            set_of(expected_pending)
+        );
+    }
+
+    #[rstest]
+    #[case::post_tool_use_approval(HookEvent::PostToolUse)]
+    #[case::pre_tool_use_retry_after_denial(HookEvent::PreToolUse)]
+    fn same_agent_event_removes_own_pending_permission_key(#[case] event: HookEvent) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "resolve-sess".to_string();
+        existing.status = SessionStatus::WaitingInput;
+        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"resolve-sess","cwd":"/tmp/test","agent_id":"agent-a"}"#,
+        )
+        .expect("valid JSON");
+
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "resolve-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (reloaded.status, reloaded.pending_permission_agent_ids),
+            (SessionStatus::Running, BTreeSet::new()),
+        );
+    }
+
+    #[rstest]
+    // Older Claude Code build: no `background_tasks` field at all.
+    #[case::no_background_tasks_field("", &[], SessionStatus::Stopped)]
+    // `background_tasks` present but agent-x's subagent already finished.
+    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
+    // A different subagent (agent-y) is still live; agent-x's stale key is
+    // still dropped, but the session stays Running per the pre-existing
+    // `has_pending_bg_tasks` clamp on agent-y's own still-pending task.
+    #[case::different_live_subagent_still_pending(
+        r#","background_tasks":[{"id":"agent-y","type":"subagent","status":"running"}]"#,
+        &["agent-y"],
+        SessionStatus::Running
+    )]
+    fn stop_drops_stale_agent_permission_key_not_in_live_registry(
+        #[case] background_tasks_json: &str,
+        #[case] expected_agent_task_ids: &[&str],
+        #[case] expected_status: SessionStatus,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "stale-perm-sess".to_string();
+        existing.pending_permission_agent_ids = set_of(&["agent-x"]);
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let payload = format!(
+            r#"{{"session_id":"stale-perm-sess","cwd":"/tmp/test"{background_tasks_json}}}"#
+        );
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "stale-perm-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (
+                reloaded.pending_permission_agent_ids,
+                reloaded.pending_agent_task_ids,
+                reloaded.status,
+            ),
+            (
+                BTreeSet::new(),
+                set_of(expected_agent_task_ids),
+                expected_status,
+            ),
+        );
+    }
+
+    #[rstest]
+    // agent-b is not the agent that's waiting, so the set stays non-empty
+    // after this event and the notification group must not be cleared.
+    #[case::sibling_agent_leaves_pending_set_non_empty("agent-b", Vec::<String>::new())]
+    // agent-a is the agent that's waiting; this event removes its own key,
+    // clearing the set within the same event and allowing the group removal
+    // gated on `has_pending_permission_requests` to run.
+    #[case::same_agent_clears_pending_set(
+        "agent-a",
+        vec!["notif-suppress-sess".to_string()]
+    )]
+    fn notification_removal_suppressed_while_permission_pending(
+        #[case] firing_agent_id: &str,
+        #[case] expected_removed: Vec<String>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "notif-suppress-sess".to_string();
+        existing.status = SessionStatus::WaitingInput;
+        existing.pending_permission_agent_ids = set_of(&["agent-a"]);
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let side_effects = SideEffects {
+            tmux: false,
+            notifications: false,
+            auto_compact: false,
+            removed_notification_groups: Some(removed.clone()),
+            tmux_sync_calls: None,
+        };
+
+        let payload = format!(
+            r#"{{"session_id":"notif-suppress-sess","cwd":"/tmp/test","agent_id":"{firing_agent_id}"}}"#
+        );
+        let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::PreToolUse, input, sessions_dir, &side_effects)
+            .expect("hook should succeed");
+
+        let recorded = removed.lock().expect("lock").clone();
+        assert_eq!(recorded, expected_removed);
+    }
+
     #[rstest]
     #[case::stop_resets_existing_read(
         HookEvent::Stop,
@@ -1906,6 +2198,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
         }
@@ -2213,6 +2506,7 @@ mod tests {
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),
                 pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
             }

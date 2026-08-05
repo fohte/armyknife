@@ -25,6 +25,13 @@ pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 /// `window-status-format` is expected to fall back to `#W` in that case.
 pub const TMUX_WINDOW_TITLE_OPTION: &str = "@armyknife-cc-window-title";
 
+/// Key used in `Session::pending_permission_agent_ids` for hook events fired
+/// on the main thread (i.e. `HookInput::agent_id` is absent). Claude Code
+/// never emits a real `agent_id` equal to this value: per
+/// https://code.claude.com/docs/en/hooks.md, `agent_id` is only ever set
+/// for hooks that fire inside a subagent.
+pub const MAIN_THREAD_AGENT_KEY: &str = "__main__";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
@@ -79,6 +86,16 @@ pub struct Session {
     /// silently reverting to an empty set until the next `Stop`.
     #[serde(default, alias = "pending_agent_task_outputs")]
     pub pending_agent_task_ids: BTreeSet<String>,
+    /// Keys of hook events currently blocked on a permission prompt
+    /// (`PermissionRequest`), one per concurrently running agent. A key is
+    /// either a subagent's `agent_id` or `MAIN_THREAD_AGENT_KEY` for the
+    /// main thread. Non-empty forces `status` to `WaitingInput` regardless
+    /// of what any other agent's event reports, so one subagent stuck on a
+    /// permission prompt keeps the whole session (and its notification)
+    /// waiting even while other subagents keep firing events in parallel.
+    /// See the insert/remove/reconcile logic in `hook.rs`.
+    #[serde(default)]
+    pub pending_permission_agent_ids: BTreeSet<String>,
     /// Timestamp the user last focused this session via `a cc focus`.
     /// `None` means the session has never been focused since its last
     /// transition to `Stopped` (i.e. unread); `Some(_)` means read.
@@ -155,6 +172,13 @@ impl Session {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
 
+    /// True if any agent (main thread or subagent) in this session is
+    /// currently blocked on a permission prompt. See
+    /// `pending_permission_agent_ids` for what forces this to clear.
+    pub fn has_pending_permission_requests(&self) -> bool {
+        !self.pending_permission_agent_ids.is_empty()
+    }
+
     /// Status symbol that also reflects unread state.
     pub fn display_symbol(&self) -> &'static str {
         if self.is_unread_stopped() {
@@ -218,6 +242,16 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
+
+    /// Identifies which agent fired this hook event. Present only when the
+    /// event fires inside a subagent (per
+    /// https://code.claude.com/docs/en/hooks.md); absent for main-thread
+    /// events. `Stop`'s `background_tasks[].id` uses the same value for a
+    /// `type == "subagent"` entry, which is what lets the `Stop` handler in
+    /// `hook.rs` reconcile `Session::pending_permission_agent_ids` against
+    /// still-live subagents.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 
     /// Claude Code's own task registry snapshot. Per
     /// https://code.claude.com/docs/en/hooks.md (Stop input / SubagentStop
@@ -338,6 +372,7 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
             read_at,
             sweep_signaled: false,
         }
@@ -424,5 +459,17 @@ mod tests {
             s.pending_agent_task_ids.insert("agent-1".to_string());
         }
         assert_eq!(s.has_pending_bg_tasks(), expected);
+    }
+
+    #[rstest]
+    #[case::empty(&[], false)]
+    #[case::non_empty(&["agent-1"], true)]
+    fn session_has_pending_permission_requests_table(
+        #[case] pending: &[&str],
+        #[case] expected: bool,
+    ) {
+        let mut s = session(SessionStatus::WaitingInput, None);
+        s.pending_permission_agent_ids = pending.iter().map(|id| (*id).to_string()).collect();
+        assert_eq!(s.has_pending_permission_requests(), expected);
     }
 }
