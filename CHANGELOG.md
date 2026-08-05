@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.257](https://github.com/fohte/armyknife/compare/v0.1.256...v0.1.257) (2026-08-05)
+
+
+### Features
+
+* **cc:** show descendant count badge on session rows ([#801](https://github.com/fohte/armyknife/issues/801)) ([d0b2128](https://github.com/fohte/armyknife/commit/d0b21284442c26c9c3569398187acfb6fdaa712f))
+
 ## [0.1.256](https://github.com/fohte/armyknife/compare/v0.1.255...v0.1.256) (2026-08-04)
 
 
