@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.260](https://github.com/fohte/armyknife/compare/v0.1.259...v0.1.260) (2026-08-05)
+
+
+### Features
+
+* **cc:** support drilling down into a session's descendants in the watch TUI ([#806](https://github.com/fohte/armyknife/issues/806)) ([2299ad1](https://github.com/fohte/armyknife/commit/2299ad196d2f455986da296d677b2d30c8ba2f09))
+
 ## [0.1.259](https://github.com/fohte/armyknife/compare/v0.1.258...v0.1.259) (2026-08-05)
 
 
