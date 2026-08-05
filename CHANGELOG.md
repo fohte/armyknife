@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.258](https://github.com/fohte/armyknife/compare/v0.1.257...v0.1.258) (2026-08-05)
+
+
+### Features
+
+* **cc:** support jumping to a session's parent in the watch TUI ([#800](https://github.com/fohte/armyknife/issues/800)) ([c2ea37c](https://github.com/fohte/armyknife/commit/c2ea37c2deb75a903854a2f486df8c7c0fc2915c))
+
 ## [0.1.257](https://github.com/fohte/armyknife/compare/v0.1.256...v0.1.257) (2026-08-05)
 
 
