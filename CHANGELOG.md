@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.259](https://github.com/fohte/armyknife/compare/v0.1.258...v0.1.259) (2026-08-05)
+
+
+### Features
+
+* **cc:** support generating a title while renaming a session ([#804](https://github.com/fohte/armyknife/issues/804)) ([87a5b0d](https://github.com/fohte/armyknife/commit/87a5b0dceafd76c3a1671cdbdec8d09fe0b4f06c))
+
 ## [0.1.258](https://github.com/fohte/armyknife/compare/v0.1.257...v0.1.258) (2026-08-05)
 
 
