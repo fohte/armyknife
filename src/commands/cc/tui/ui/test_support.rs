@@ -57,7 +57,7 @@ pub(super) fn render_buffer(
 
 /// Same as `render_buffer`, but lets the caller mutate the `App` between
 /// construction and render.
-fn render_buffer_with<F>(
+pub(super) fn render_buffer_with<F>(
     sessions: &[Session],
     selected_index: Option<usize>,
     now: DateTime<Utc>,

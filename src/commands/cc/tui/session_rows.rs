@@ -226,6 +226,51 @@ pub(super) fn nearest_living_ancestor<'a>(
         .find_map(|ancestor_id| by_id.get(ancestor_id.as_str()).copied())
 }
 
+/// Direction of a kin relationship relative to the cursor session: whether
+/// the other session sits above it (toward the root) or below it (toward
+/// the leaves) in the family tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KinDirection {
+    Ancestor,
+    Descendant,
+}
+
+/// How many generations `session` sits from `selected`, and in which
+/// direction (1 = direct parent/child). `None` if the two are not in a
+/// direct lineage (siblings, cousins, unrelated sessions) or are the same
+/// session.
+///
+/// Distance is derived purely from `ancestor_session_ids`, so it does not
+/// depend on which intermediate ancestors happen to be displayed -- unlike
+/// [`nearest_living_ancestor`] and [`descendant_counts`], which intentionally
+/// scope to the current view.
+pub(super) fn kin_relation(selected: &Session, session: &Session) -> Option<(KinDirection, usize)> {
+    if selected.session_id == session.session_id {
+        return None;
+    }
+    if let Some(pos) = session
+        .ancestor_session_ids
+        .iter()
+        .position(|id| id == &selected.session_id)
+    {
+        return Some((
+            KinDirection::Descendant,
+            session.ancestor_session_ids.len() - pos,
+        ));
+    }
+    if let Some(pos) = selected
+        .ancestor_session_ids
+        .iter()
+        .position(|id| id == &session.session_id)
+    {
+        return Some((
+            KinDirection::Ancestor,
+            selected.ancestor_session_ids.len() - pos,
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +621,85 @@ mod tests {
 
         let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
         assert_eq!(session_ids, vec!["running_b", "running_a"]);
+    }
+
+    // =========================================================================
+    // kin_relation
+    // =========================================================================
+
+    #[test]
+    fn test_kin_relation_same_session_is_none() {
+        let session = create_test_session("s", SessionStatus::Running);
+        assert_eq!(kin_relation(&session, &session), None);
+    }
+
+    #[test]
+    fn test_kin_relation_unrelated_siblings_is_none() {
+        let mut sibling_a = create_test_session("sibling_a", SessionStatus::Running);
+        sibling_a.ancestor_session_ids = vec!["parent".to_string()];
+        let mut sibling_b = create_test_session("sibling_b", SessionStatus::Running);
+        sibling_b.ancestor_session_ids = vec!["parent".to_string()];
+
+        assert_eq!(kin_relation(&sibling_a, &sibling_b), None);
+    }
+
+    #[rstest]
+    #[case::direct_parent(1)]
+    #[case::grandparent(2)]
+    #[case::great_grandparent(3)]
+    fn test_kin_relation_ancestor_distance(#[case] generations: usize) {
+        // `selected` is `generations` hops below `ancestor` in the tree;
+        // from `selected`'s cursor, `ancestor` should read as an Ancestor at
+        // that same distance.
+        let ancestor_ids: Vec<String> = (0..generations).map(|i| format!("gen{i}")).collect();
+        let ancestor = create_test_session(&ancestor_ids[0], SessionStatus::Running);
+        let mut selected = create_test_session("selected", SessionStatus::Running);
+        selected.ancestor_session_ids = ancestor_ids;
+
+        assert_eq!(
+            kin_relation(&selected, &ancestor),
+            Some((KinDirection::Ancestor, generations))
+        );
+    }
+
+    #[rstest]
+    #[case::direct_child(1)]
+    #[case::grandchild(2)]
+    #[case::great_grandchild(3)]
+    fn test_kin_relation_descendant_distance(#[case] generations: usize) {
+        // `descendant` is `generations` hops below `selected`; from
+        // `selected`'s cursor, `descendant` should read as a Descendant at
+        // that same distance.
+        let mut ancestor_ids = vec!["selected".to_string()];
+        for i in 1..generations {
+            ancestor_ids.push(format!("gen{i}"));
+        }
+        let selected = create_test_session("selected", SessionStatus::Running);
+        let mut descendant = create_test_session("descendant", SessionStatus::Running);
+        descendant.ancestor_session_ids = ancestor_ids;
+
+        assert_eq!(
+            kin_relation(&selected, &descendant),
+            Some((KinDirection::Descendant, generations))
+        );
+    }
+
+    #[test]
+    fn test_kin_relation_survives_deleted_intermediate_ancestor() {
+        // Distance is computed from the raw `ancestor_session_ids` array, so
+        // it must not depend on whether intermediate ancestors are actually
+        // displayed (that's `nearest_living_ancestor`'s job, not this one's).
+        let root = create_test_session("root", SessionStatus::Running);
+        let mut leaf = create_test_session("leaf", SessionStatus::Running);
+        leaf.ancestor_session_ids = vec!["root".to_string(), "deleted_middle".to_string()];
+
+        assert_eq!(
+            kin_relation(&root, &leaf),
+            Some((KinDirection::Descendant, 2))
+        );
+        assert_eq!(
+            kin_relation(&leaf, &root),
+            Some((KinDirection::Ancestor, 2))
+        );
     }
 }
