@@ -6,7 +6,6 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::commands::cc::{store, window_status};
-use crate::infra::tmux;
 
 use super::app::{App, AppMode};
 use super::event::KeyEvent;
@@ -77,29 +76,17 @@ impl App {
     /// directory cannot be resolved -- this step is not allowed to fail the
     /// confirm.
     fn sync_tmux_window_title(&self, session_id: &str) {
-        let Some(pane_id) = self
-            .sessions
-            .iter()
-            .find(|s| s.session_id == session_id)
-            .and_then(|s| s.tmux_info.as_ref())
-            .map(|info| info.pane_id.as_str())
-        else {
+        let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id) else {
             return;
         };
-        let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
-            return;
-        };
-        let Ok(sessions_dir) = store::sessions_dir() else {
-            return;
-        };
-        let _ = window_status::sync_window_option(&window_id, &sessions_dir);
+        window_status::sync_window_title_for_session(session);
     }
 }
 
 /// Handles key events in `AppMode::Edit`. Mirrors the search mode's text
 /// vocabulary (Esc/Enter/Backspace/char-append); a single-line title editor
 /// needs no in-mode navigation (Ctrl+u/w, arrows).
-pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
+pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> super::KeyEffects {
     match (key.code, key.modifiers) {
         (KeyCode::Esc, _) => {
             app.cancel_edit_title();
@@ -114,6 +101,15 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
             query.pop();
             app.update_edit_title_query(query);
         }
+        (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+            if let Some(request) = super::title_generate::request_generate_title(app) {
+                app.mode = AppMode::Normal;
+                return super::KeyEffects {
+                    spawn_title_generation: Some(request),
+                    ..Default::default()
+                };
+            }
+        }
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
             let mut query = app.edit_title_query.clone();
             query.push(c);
@@ -121,6 +117,7 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
+    super::KeyEffects::default()
 }
 
 #[cfg(test)]
@@ -247,6 +244,90 @@ mod tests {
             },
         );
         assert_eq!(app.edit_title_query, "a");
+    }
+
+    #[rstest]
+    fn ctrl_g_without_transcript_stays_in_edit_mode_and_sets_error() {
+        // Nothing was spawned, so the user should stay in edit mode to see
+        // the error and keep typing -- contrast with the success path below,
+        // which transitions to Normal.
+        let session = create_test_session("s1");
+        let mut app = App::with_sessions(vec![session]);
+        app.enter_edit_title();
+
+        let effects = handle_key_event(
+            &mut app,
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+        );
+
+        assert_eq!(
+            (effects, app.mode.clone(), app.error_message.is_some()),
+            (
+                super::super::KeyEffects::default(),
+                AppMode::Edit {
+                    session_id: "s1".to_string()
+                },
+                true
+            )
+        );
+    }
+
+    #[rstest]
+    fn ctrl_g_with_transcript_returns_to_normal_and_spawns_generation() {
+        use indoc::indoc;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let home_dir = temp_dir.path();
+        let cwd = PathBuf::from("/test/project");
+
+        let mut session = create_test_session("s1");
+        session.cwd = cwd.clone();
+        let mut app = App::with_sessions(vec![session]);
+        app.enter_edit_title();
+
+        let encoded = crate::commands::cc::claude_sessions::encode_project_path(cwd.as_path());
+        let project_dir = home_dir.join(".claude").join("projects").join(&encoded);
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        std::fs::write(
+            project_dir.join("s1.jsonl"),
+            indoc! {r#"
+                {"type":"user","message":{"content":"Fix the login bug"}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Updated auth.rs"}]}}
+            "#},
+        )
+        .expect("write jsonl fixture");
+
+        let effects = temp_env::with_vars(
+            [("HOME", Some(home_dir.to_str().expect("utf8 path")))],
+            || {
+                handle_key_event(
+                    &mut app,
+                    KeyEvent {
+                        code: KeyCode::Char('g'),
+                        modifiers: KeyModifiers::CONTROL,
+                    },
+                )
+            },
+        );
+
+        assert_eq!(
+            (app.mode.clone(), effects.spawn_title_generation),
+            (
+                AppMode::Normal,
+                Some(super::super::title_generate::SpawnTitleGenerationRequest {
+                    session_id: "s1".to_string(),
+                    prompt: super::super::title_generate::build_prompt(
+                        "Fix the login bug",
+                        "Updated auth.rs"
+                    ),
+                    previous_label: None,
+                })
+            )
+        );
     }
 
     #[rstest]

@@ -329,6 +329,42 @@ pub(crate) fn update_session_label_in(
     })
 }
 
+/// Sets `label` on a session, but only if its current on-disk value still
+/// equals `expected_current`. Resolves the default sessions directory --
+/// see `update_session_label_if_unchanged_in` for the full contract.
+pub fn update_session_label_if_unchanged(
+    session_id: &str,
+    expected_current: Option<&str>,
+    new_label: Option<String>,
+) -> Result<bool> {
+    update_session_label_if_unchanged_in(&sessions_dir()?, session_id, expected_current, new_label)
+}
+
+/// Compare-and-swap variant of `update_session_label_in`: applies
+/// `new_label` only when the session's current `label` still equals
+/// `expected_current`, so a manual rename made after `expected_current` was
+/// snapshotted is never clobbered by a stale write (e.g. a detached title
+/// generation that finishes after the user renamed the session by hand).
+/// Returns whether the write happened -- `false` covers both a mismatched
+/// label and a missing session file.
+pub(crate) fn update_session_label_if_unchanged_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    expected_current: Option<&str>,
+    new_label: Option<String>,
+) -> Result<bool> {
+    let mut applied = false;
+    update_session_field_in(sessions_dir, session_id, |session| {
+        if session.label.as_deref() != expected_current {
+            return false;
+        }
+        session.label = new_label;
+        applied = true;
+        true
+    })?;
+    Ok(applied)
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
@@ -914,6 +950,88 @@ mod tests {
                 Some("New Title".to_string()),
             )
             .expect("missing session should be ok");
+        }
+    }
+
+    mod update_session_label_if_unchanged_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(label: Option<&str>) -> Session {
+            let mut s = create_test_session("label-target");
+            s.label = label.map(str::to_string);
+            s
+        }
+
+        #[rstest]
+        #[case::none_to_none_matches(None, None, Some("New Title"))]
+        #[case::some_to_some_matches(Some("Old Title"), Some("Old Title"), Some("New Title"))]
+        fn applies_when_expected_matches_current(
+            temp_session_dir: TempSessionDir,
+            #[case] initial: Option<&str>,
+            #[case] expected_current: Option<&str>,
+            #[case] new_label: Option<&str>,
+        ) {
+            let session = make_session(initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            let applied = update_session_label_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "label-target",
+                expected_current,
+                new_label.map(str::to_string),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                (applied, reloaded.label),
+                (true, new_label.map(str::to_string))
+            );
+        }
+
+        #[rstest]
+        #[case::none_to_some_mismatches(None, Some("Something Else"))]
+        #[case::some_to_none_mismatches(Some("Old Title"), None)]
+        #[case::some_to_different_some_mismatches(Some("Old Title"), Some("Different"))]
+        fn does_not_apply_when_current_label_changed(
+            temp_session_dir: TempSessionDir,
+            #[case] initial: Option<&str>,
+            #[case] expected_current: Option<&str>,
+        ) {
+            let session = make_session(initial);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            let applied = update_session_label_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "label-target",
+                expected_current,
+                Some("New Title".to_string()),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                (applied, reloaded.label),
+                (false, initial.map(str::to_string))
+            );
+        }
+
+        #[rstest]
+        fn missing_session_file_returns_false_without_error(temp_session_dir: TempSessionDir) {
+            let applied = update_session_label_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "ghost",
+                None,
+                Some("New Title".to_string()),
+            )
+            .expect("missing session should be ok");
+
+            assert!(!applied);
         }
     }
 
