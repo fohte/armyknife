@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.262](https://github.com/fohte/armyknife/compare/v0.1.261...v0.1.262) (2026-08-05)
+
+
+### Features
+
+* **cc:** color collateral kin (siblings, cousins) in the watch TUI ([#810](https://github.com/fohte/armyknife/issues/810)) ([b5ac8ba](https://github.com/fohte/armyknife/commit/b5ac8ba0f34a5510ebd3dfd62048166af9201eb9))
+
 ## [0.1.261](https://github.com/fohte/armyknife/compare/v0.1.260...v0.1.261) (2026-08-05)
 
 
