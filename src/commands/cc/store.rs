@@ -1165,6 +1165,72 @@ mod tests {
         }
     }
 
+    mod update_session_last_message_if_unchanged_tests {
+        use super::*;
+        use rstest::rstest;
+
+        fn make_session(last_message: Option<&str>) -> Session {
+            let mut s = create_test_session("message-target");
+            s.last_message = last_message.map(str::to_string);
+            s
+        }
+
+        #[rstest]
+        fn applies_when_expected_matches_current(temp_session_dir: TempSessionDir) {
+            let session = make_session(Some("old message"));
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_last_message_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "message-target",
+                Some("old message"),
+                Some("new message".to_string()),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "message-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(reloaded.last_message, Some("new message".to_string()));
+        }
+
+        #[rstest]
+        fn does_not_apply_when_current_message_changed(temp_session_dir: TempSessionDir) {
+            // Simulates a slower sibling hook event whose transcript read
+            // (based on the stale "old message" snapshot) finishes after a
+            // faster event already saved "message from newer event".
+            let session = make_session(Some("message from newer event"));
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_last_message_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "message-target",
+                Some("old message"),
+                Some("message from stale read".to_string()),
+            )
+            .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "message-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                reloaded.last_message,
+                Some("message from newer event".to_string())
+            );
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            update_session_last_message_if_unchanged_in(
+                &temp_session_dir.sessions_path,
+                "ghost",
+                None,
+                Some("new message".to_string()),
+            )
+            .expect("missing session should be ok");
+        }
+    }
+
     mod corrupted_file_recovery_tests {
         use super::*;
         use rstest::rstest;
