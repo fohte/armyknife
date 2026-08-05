@@ -6,7 +6,6 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::commands::cc::{store, window_status};
-use crate::infra::tmux;
 
 use super::app::{App, AppMode};
 use super::event::KeyEvent;
@@ -77,22 +76,10 @@ impl App {
     /// directory cannot be resolved -- this step is not allowed to fail the
     /// confirm.
     fn sync_tmux_window_title(&self, session_id: &str) {
-        let Some(pane_id) = self
-            .sessions
-            .iter()
-            .find(|s| s.session_id == session_id)
-            .and_then(|s| s.tmux_info.as_ref())
-            .map(|info| info.pane_id.as_str())
-        else {
+        let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id) else {
             return;
         };
-        let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
-            return;
-        };
-        let Ok(sessions_dir) = store::sessions_dir() else {
-            return;
-        };
-        let _ = window_status::sync_window_option(&window_id, &sessions_dir);
+        window_status::sync_window_title_for_session(session);
     }
 }
 

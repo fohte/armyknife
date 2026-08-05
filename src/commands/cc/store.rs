@@ -983,11 +983,13 @@ mod tests {
             )
             .expect("update should succeed");
 
-            assert!(applied);
             let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.label, new_label.map(str::to_string));
+            assert_eq!(
+                (applied, reloaded.label),
+                (true, new_label.map(str::to_string))
+            );
         }
 
         #[rstest]
@@ -1010,11 +1012,13 @@ mod tests {
             )
             .expect("update should succeed");
 
-            assert!(!applied);
             let reloaded = load_session_from(&temp_session_dir.sessions_path, "label-target")
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.label, initial.map(str::to_string));
+            assert_eq!(
+                (applied, reloaded.label),
+                (false, initial.map(str::to_string))
+            );
         }
 
         #[rstest]

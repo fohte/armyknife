@@ -44,6 +44,24 @@ pub fn run(args: &WindowStatusArgs) -> Result<()> {
 /// The status-bar refresh still runs at most once, if either option changed.
 /// This is what turns the per-redraw polling of `#(a cc window-status)` into
 /// an event-driven update fired only by `a cc hook`.
+/// Best-effort push of the tmux window title option after `session`'s
+/// `label` changed. Silently does nothing without a live tmux pane for
+/// `session`, an unresolvable window, or an unavailable sessions
+/// directory -- this must never fail the caller (a manual rename confirm,
+/// or a detached title-generation write).
+pub fn sync_window_title_for_session(session: &Session) {
+    let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str()) else {
+        return;
+    };
+    let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
+        return;
+    };
+    let Ok(sessions_dir) = store::sessions_dir() else {
+        return;
+    };
+    let _ = sync_window_option(&window_id, &sessions_dir);
+}
+
 pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
     let sessions = load_window_sessions(window_id, sessions_dir)?;
 

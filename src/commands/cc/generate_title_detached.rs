@@ -15,7 +15,6 @@ use clap::Args;
 
 use crate::commands::cc::{store, window_status};
 use crate::commands::name_branch::{Backend, detect_backend};
-use crate::infra::tmux;
 
 /// Tracing target for events emitted by this subcommand.
 const EVENT_TARGET: &str = "armyknife::commands::cc::generate_title";
@@ -38,8 +37,15 @@ pub struct GenerateTitleDetachedArgs {
 pub fn run(args: &GenerateTitleDetachedArgs) -> Result<()> {
     // All failures stay off the parent TTY: `cc watch` spawns this process
     // detached and the silent contract is documented at the top of this
-    // module.
-    let _ = run_inner(args);
+    // module. Still logged so a stuck-forever title has a trail to debug.
+    if let Err(e) = run_inner(args) {
+        tracing::warn!(
+            target: EVENT_TARGET,
+            event = "cc.generate_title.err",
+            session_id = %args.session_id,
+            msg = format!("{e:#}"),
+        );
+    }
     Ok(())
 }
 
@@ -57,6 +63,10 @@ fn run_inner(args: &GenerateTitleDetachedArgs) -> Result<()> {
 fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -> Result<()> {
     let prompt = fs::read_to_string(&args.prompt_file)
         .with_context(|| format!("failed to read prompt file: {}", args.prompt_file.display()))?;
+    // The prompt carries transcript excerpts (first user message, latest
+    // assistant message) -- best-effort delete right after reading so it
+    // doesn't linger in `/tmp` across repeated Ctrl+g presses.
+    let _ = fs::remove_file(&args.prompt_file);
 
     let title = backend.generate(&prompt).inspect_err(|e| {
         tracing::warn!(
@@ -87,30 +97,11 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
         event = "cc.generate_title.applied",
         session_id = %args.session_id,
     );
-    sync_tmux_window_title(&args.session_id);
+    if let Ok(Some(session)) = store::load_session(&args.session_id) {
+        window_status::sync_window_title_for_session(&session);
+    }
 
     Ok(())
-}
-
-/// Best-effort push of the tmux window title option after the label write.
-/// Mirrors `tui::title_edit`'s private `sync_tmux_window_title`, but reads
-/// the session fresh from disk (this process has no in-memory `App`
-/// state). Silently does nothing without a live tmux pane or an
-/// unresolvable window -- this step must never fail the generation.
-fn sync_tmux_window_title(session_id: &str) {
-    let Ok(Some(session)) = store::load_session(session_id) else {
-        return;
-    };
-    let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str()) else {
-        return;
-    };
-    let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
-        return;
-    };
-    let Ok(sessions_dir) = store::sessions_dir() else {
-        return;
-    };
-    let _ = window_status::sync_window_option(&window_id, &sessions_dir);
 }
 
 #[cfg(test)]
@@ -192,9 +183,10 @@ mod tests {
         store::save_session_to(&root.sessions_dir, &session).expect("save should succeed");
 
         let tmp = TempDir::new().expect("tempdir");
+        let prompt_path = prompt_file(tmp.path());
         let args = GenerateTitleDetachedArgs {
             session_id: "s1".to_string(),
-            prompt_file: prompt_file(tmp.path()),
+            prompt_file: prompt_path.clone(),
             previous_label: None,
         };
         let backend = StubBackend(Ok("Generated Title".to_string()));
@@ -206,7 +198,10 @@ mod tests {
         let reloaded = store::load_session_from(&root.sessions_dir, "s1")
             .expect("load should succeed")
             .expect("session exists");
-        assert_eq!(reloaded.label, Some("Generated Title".to_string()));
+        assert_eq!(
+            (reloaded.label, prompt_path.exists()),
+            (Some("Generated Title".to_string()), false)
+        );
     }
 
     #[rstest]
@@ -252,12 +247,11 @@ mod tests {
             temp_env::with_vars([("XDG_CACHE_HOME", Some(root.cache_home.as_str()))], || {
                 generate_and_apply(&args, &backend)
             });
-        assert!(result.is_err());
 
         let reloaded = store::load_session_from(&root.sessions_dir, "s1")
             .expect("load should succeed")
             .expect("session exists");
-        assert_eq!(reloaded.label, None);
+        assert_eq!((result.is_err(), reloaded.label), (true, None));
     }
 
     #[rstest]
