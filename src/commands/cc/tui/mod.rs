@@ -137,8 +137,17 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TitleGenerated { session_id, result } => {
-                    title_generate::apply_title_generated(&mut app, &session_id, result);
+                AppEvent::TitleGenerated {
+                    session_id,
+                    generation_id,
+                    result,
+                } => {
+                    title_generate::apply_title_generated(
+                        &mut app,
+                        &session_id,
+                        generation_id,
+                        result,
+                    );
                 }
             }
         }

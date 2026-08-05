@@ -18,7 +18,7 @@ use crate::commands::cc::tui::app::{App, AppMode};
 pub(super) fn render_edit_input(frame: &mut Frame, area: Rect, app: &App) {
     let is_generating = matches!(
         &app.mode,
-        AppMode::Edit { session_id } if app.title_generating.as_deref() == Some(session_id.as_str())
+        AppMode::Edit { session_id } if app.title_generating.as_ref().is_some_and(|(id, _)| id == session_id)
     );
 
     let mut spans = vec![
@@ -67,7 +67,7 @@ mod tests {
                 session_id: "s1".to_string(),
             };
             app.edit_title_query = "New Title".to_string();
-            app.title_generating = Some("s1".to_string());
+            app.title_generating = Some(("s1".to_string(), 1));
         });
 
         let bar_line = output.lines().nth(1).unwrap();

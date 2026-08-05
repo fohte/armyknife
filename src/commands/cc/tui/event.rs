@@ -1,5 +1,5 @@
 use crate::commands::cc::store;
-use crate::commands::name_branch::detect_backend;
+use crate::commands::name_branch::{Backend, detect_backend};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use notify::{
@@ -57,11 +57,14 @@ pub enum AppEvent {
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
     /// Background LLM title generation for `Ctrl+g` in title-edit mode
-    /// finished. `session_id` identifies which session's edit buffer the
-    /// result belongs to; `result` carries the generated title or a
-    /// human-readable failure message.
+    /// finished. `session_id` and `generation_id` identify which in-flight
+    /// request this is (see `App::title_generating`), so a stale result
+    /// from a superseded request can be told apart from the current one;
+    /// `result` carries the generated title or a human-readable failure
+    /// message.
     TitleGenerated {
         session_id: String,
+        generation_id: u64,
         result: std::result::Result<String, String>,
     },
 }
@@ -233,12 +236,24 @@ impl EventHandler {
         let tx = self.sender.clone();
         thread::spawn(move || {
             let backend = detect_backend();
-            let result = backend.generate(&request.prompt).map_err(|e| e.to_string());
-            let _ = tx.send(AppEvent::TitleGenerated {
-                session_id: request.session_id,
-                result,
-            });
+            let _ = tx.send(generate_title_event(request, backend.as_ref()));
         });
+    }
+}
+
+/// Runs one title-generation call against `backend` and packages the
+/// result as the event `start_title_generation` sends. Pulled out of the
+/// thread body so it's unit-testable with a fake `Backend` instead of a
+/// real `claude`/`opencode` subprocess.
+fn generate_title_event(
+    request: super::title_generate::GenerateTitleRequest,
+    backend: &dyn Backend,
+) -> AppEvent {
+    let result = backend.generate(&request.prompt).map_err(|e| e.to_string());
+    AppEvent::TitleGenerated {
+        session_id: request.session_id,
+        generation_id: request.generation_id,
+        result,
     }
 }
 
@@ -351,12 +366,56 @@ fn extract_session_changes(event: &notify::Event) -> Vec<SessionChange> {
         .collect()
 }
 
+/// Test double for `Backend` that returns a fixed result instead of
+/// spawning a real `claude`/`opencode` subprocess.
+#[cfg(test)]
+struct FakeBackend(std::result::Result<String, String>);
+
+#[cfg(test)]
+impl Backend for FakeBackend {
+    fn generate(&self, _prompt: &str) -> anyhow::Result<String> {
+        self.0.clone().map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use notify::event::{DataChange, ModifyKind};
     use rstest::rstest;
     use std::path::PathBuf;
+
+    fn generate_title_request(
+        generation_id: u64,
+    ) -> super::super::title_generate::GenerateTitleRequest {
+        super::super::title_generate::GenerateTitleRequest {
+            session_id: "s1".to_string(),
+            generation_id,
+            prompt: "irrelevant".to_string(),
+        }
+    }
+
+    #[rstest]
+    #[case::success(Ok("Generated Title".to_string()))]
+    #[case::failure(Err("claude exited with status 1".to_string()))]
+    fn test_generate_title_event(#[case] backend_response: std::result::Result<String, String>) {
+        let backend = FakeBackend(backend_response.clone());
+
+        let event = generate_title_event(generate_title_request(3), &backend);
+
+        let AppEvent::TitleGenerated {
+            session_id,
+            generation_id,
+            result,
+        } = event
+        else {
+            panic!("expected AppEvent::TitleGenerated");
+        };
+        assert_eq!(
+            (session_id, generation_id, result),
+            ("s1".to_string(), 3, backend_response)
+        );
+    }
 
     #[test]
     fn test_app_event_enum() {

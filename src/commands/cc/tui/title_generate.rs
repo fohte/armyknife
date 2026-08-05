@@ -11,20 +11,25 @@ use super::app::{App, AppMode};
 #[derive(Debug, PartialEq, Eq)]
 pub struct GenerateTitleRequest {
     pub session_id: String,
+    pub generation_id: u64,
     pub prompt: String,
 }
 
 /// Handles `Ctrl+g` from `AppMode::Edit`: reads the session's first user
 /// message and last assistant message from its `.jsonl`, builds the LLM
-/// prompt, and marks generation in flight. Returns `None` (after setting an
-/// error) when neither message is available -- there is nothing to
-/// summarize -- or when the app isn't in `AppMode::Edit` for a known
-/// session.
+/// prompt, and marks generation in flight. Returns `None` without spawning
+/// anything when a generation is already in flight -- each press is a
+/// billed LLM call, so repeats are ignored rather than piling up
+/// subprocesses -- or (after setting an error) when neither message is
+/// available, or when the app isn't in `AppMode::Edit` for a known session.
 pub(super) fn request_generate_title(app: &mut App) -> Option<GenerateTitleRequest> {
     let session_id = match &app.mode {
         AppMode::Edit { session_id } => session_id.clone(),
         _ => return None,
     };
+    if app.title_generating.is_some() {
+        return None;
+    }
     let cwd = app
         .sessions
         .iter()
@@ -45,9 +50,15 @@ pub(super) fn request_generate_title(app: &mut App) -> Option<GenerateTitleReque
         last_assistant_message.as_deref().unwrap_or(""),
     );
 
-    app.title_generating = Some(session_id.clone());
+    app.title_generation_seq += 1;
+    let generation_id = app.title_generation_seq;
+    app.title_generating = Some((session_id.clone(), generation_id));
 
-    Some(GenerateTitleRequest { session_id, prompt })
+    Some(GenerateTitleRequest {
+        session_id,
+        generation_id,
+        prompt,
+    })
 }
 
 /// Builds the LLM prompt for generating a session title from its transcript.
@@ -72,18 +83,23 @@ pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> S
         IMPORTANT: Output ONLY the title. Do not explain."#}
 }
 
-/// Applies a background title-generation result. No-ops if the user has
-/// since left edit mode for this session (Esc / Enter / different
-/// selection) -- the result has nowhere to land, and `label` must never be
-/// touched from here.
+/// Applies a background title-generation result. Drops it entirely if it
+/// doesn't match the currently tracked in-flight request -- either a stale
+/// result from a request that was superseded (cancelled and re-triggered
+/// for the same session), or the user has since left edit mode (Esc /
+/// Enter / different selection). `label` must never be touched from here.
 pub(super) fn apply_title_generated(
     app: &mut App,
     session_id: &str,
+    generation_id: u64,
     result: Result<String, String>,
 ) {
-    if app.title_generating.as_deref() == Some(session_id) {
-        app.title_generating = None;
+    let is_current_request =
+        app.title_generating.as_ref() == Some(&(session_id.to_string(), generation_id));
+    if !is_current_request {
+        return;
     }
+    app.title_generating = None;
 
     let is_editing_this_session = matches!(
         &app.mode,
@@ -156,7 +172,6 @@ mod tests {
     #[test]
     fn request_generate_title_is_noop_outside_edit_mode() {
         let mut app = App::with_sessions(vec![test_session("s1")]);
-        // app.mode defaults to Normal
 
         let request = request_generate_title(&mut app);
 
@@ -168,7 +183,6 @@ mod tests {
 
     #[test]
     fn request_generate_title_sets_error_without_transcript() {
-        // No real .jsonl on disk for this session id -> both messages are None.
         let mut app = App::with_sessions(vec![test_session("s1")]);
         app.enter_edit_title();
 
@@ -189,12 +203,26 @@ mod tests {
     }
 
     #[test]
+    fn request_generate_title_ignores_repeat_press_while_in_flight() {
+        let mut app = App::with_sessions(vec![test_session("s1")]);
+        app.enter_edit_title();
+        app.title_generating = Some(("s1".to_string(), 1));
+
+        let request = request_generate_title(&mut app);
+
+        assert_eq!(
+            (request.is_none(), app.title_generating.clone()),
+            (true, Some(("s1".to_string(), 1)))
+        );
+    }
+
+    #[test]
     fn apply_title_generated_updates_buffer_on_success_when_still_editing() {
         let mut app = App::with_sessions(vec![test_session("s1")]);
         app.enter_edit_title();
-        app.title_generating = Some("s1".to_string());
+        app.title_generating = Some(("s1".to_string(), 1));
 
-        apply_title_generated(&mut app, "s1", Ok("New Title".to_string()));
+        apply_title_generated(&mut app, "s1", 1, Ok("New Title".to_string()));
 
         assert_eq!(
             (app.edit_title_query.clone(), app.title_generating.clone()),
@@ -206,9 +234,9 @@ mod tests {
     fn apply_title_generated_sets_error_on_failure() {
         let mut app = App::with_sessions(vec![test_session("s1")]);
         app.enter_edit_title();
-        app.title_generating = Some("s1".to_string());
+        app.title_generating = Some(("s1".to_string(), 1));
 
-        apply_title_generated(&mut app, "s1", Err("boom".to_string()));
+        apply_title_generated(&mut app, "s1", 1, Err("boom".to_string()));
 
         assert_eq!(
             (app.title_generating.clone(), app.error_message.clone()),
@@ -220,15 +248,29 @@ mod tests {
     fn apply_title_generated_is_noop_after_leaving_edit_mode() {
         let mut app = App::with_sessions(vec![test_session("s1")]);
         app.enter_edit_title();
-        app.title_generating = Some("s1".to_string());
-        app.cancel_edit_title(); // back to Normal
-        // cancel_edit_title does not clear the buffer itself -- only the
-        // mode -- so the no-op check below is against whatever value was
-        // seeded on entry, not an empty string.
+        app.title_generating = Some(("s1".to_string(), 1));
+        app.cancel_edit_title(); // back to Normal; also clears title_generating
         let buffer_before = app.edit_title_query.clone();
 
-        apply_title_generated(&mut app, "s1", Ok("Should not apply".to_string()));
+        apply_title_generated(&mut app, "s1", 1, Ok("Should not apply".to_string()));
 
         assert_eq!(app.edit_title_query, buffer_before);
+    }
+
+    #[test]
+    fn apply_title_generated_ignores_stale_generation_id() {
+        // A newer request (id 2) is in flight; a late result from an
+        // earlier, superseded request (id 1) must not clobber it.
+        let mut app = App::with_sessions(vec![test_session("s1")]);
+        app.enter_edit_title();
+        app.title_generating = Some(("s1".to_string(), 2));
+        let buffer_before = app.edit_title_query.clone();
+
+        apply_title_generated(&mut app, "s1", 1, Ok("Stale title".to_string()));
+
+        assert_eq!(
+            (app.edit_title_query.clone(), app.title_generating.clone()),
+            (buffer_before, Some(("s1".to_string(), 2)))
+        );
     }
 }
