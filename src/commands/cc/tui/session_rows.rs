@@ -168,7 +168,10 @@ fn push_group<'a>(
 /// Finds the nearest living ancestor of a session among the displayed
 /// sessions. Walks `ancestor_session_ids` from the end (nearest ancestor) to
 /// the start (root).
-fn nearest_living_ancestor<'a>(
+///
+/// Shared with `App::select_parent`, so the "jump to parent" navigation
+/// always lands on the same session the breadcrumb prefix names.
+pub(super) fn nearest_living_ancestor<'a>(
     session: &Session,
     by_id: &HashMap<&str, &'a Session>,
     displayed_ids: &HashSet<&str>,

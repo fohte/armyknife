@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::clean_progress::{CleanLogEvent, CleanProgress};
 use super::clean_view::CleanView;
 use super::event::{SessionChange, SessionChangeType};
-use super::session_rows::build_session_rows;
+use super::session_rows::{build_session_rows, nearest_living_ancestor};
 use super::worktree_view::{
     WorktreeMode, WorktreeRow, WorktreeView, canonicalize_or_self, session_lives_under,
 };
@@ -429,6 +429,46 @@ impl App {
         if let Some(&pos) = selectable.get(num - 1) {
             self.list_state.select(Some(pos));
             self.persist_selection();
+        }
+    }
+
+    /// Moves the cursor to the selected session's nearest displayed
+    /// ancestor -- the same session named in its breadcrumb prefix (see
+    /// `session_rows::nearest_living_ancestor`), so the jump target and the
+    /// breadcrumb never disagree.
+    ///
+    /// No-op for a root session (no ancestors at all). If the session has
+    /// ancestors but none of them are currently displayed (filtered out by
+    /// search or a status filter), sets an error rather than doing nothing
+    /// silently, since a silent no-op would be indistinguishable from the
+    /// root case.
+    pub fn select_parent(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        if session.ancestor_session_ids.is_empty() {
+            return;
+        }
+
+        let filtered = self.filtered_sessions();
+        let by_id: HashMap<&str, &Session> = filtered
+            .iter()
+            .map(|s| (s.session_id.as_str(), *s))
+            .collect();
+        let displayed_ids: HashSet<&str> = by_id.keys().copied().collect();
+        let ancestor_id = nearest_living_ancestor(session, &by_id, &displayed_ids)
+            .map(|ancestor| ancestor.session_id.clone());
+
+        match ancestor_id {
+            Some(id) => {
+                if let Some(pos) = self.position_of_session_row(&id) {
+                    self.list_state.select(Some(pos));
+                    self.persist_selection();
+                }
+            }
+            None => {
+                self.set_error("Parent session is filtered out of the current view".to_string());
+            }
         }
     }
 
@@ -1366,6 +1406,104 @@ mod tests {
 
         app.select_by_number(num);
         assert_eq!(app.list_state.selected(), expected);
+    }
+
+    // =========================================================================
+    // select_parent tests
+    // =========================================================================
+
+    #[test]
+    fn test_select_parent_root_session_is_noop() {
+        let mut app = create_test_app(vec![create_test_session("root")]);
+        app.select_by_number(1);
+
+        app.select_parent();
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.error_message.clone()
+            ),
+            (Some("root"), None)
+        );
+    }
+
+    #[test]
+    fn test_select_parent_moves_to_displayed_ancestor() {
+        let root = create_test_session("root");
+        let mut child = create_test_session("child");
+        child.ancestor_session_ids = vec!["root".to_string()];
+
+        // Row 0 is the "RUNNING (2)" header; "root"/"child" are rows 1/2.
+        let mut app = create_test_app(vec![root, child]);
+        app.select_by_number(2);
+
+        app.select_parent();
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.error_message.clone()
+            ),
+            (Some("root"), None)
+        );
+    }
+
+    #[test]
+    fn test_select_parent_repeated_walks_up_to_root() {
+        let root = create_test_session("root");
+        let mut parent = create_test_session("parent");
+        parent.ancestor_session_ids = vec!["root".to_string()];
+        let mut child = create_test_session("child");
+        child.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
+
+        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/parent/child.
+        let mut app = create_test_app(vec![root, parent, child]);
+        app.select_by_number(3);
+
+        app.select_parent();
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.error_message.clone()
+            ),
+            (Some("parent"), None)
+        );
+
+        app.select_parent();
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.error_message.clone()
+            ),
+            (Some("root"), None)
+        );
+    }
+
+    #[test]
+    fn test_select_parent_ancestor_filtered_out_sets_error() {
+        let mut root = create_test_session("root");
+        root.status = SessionStatus::Paused;
+        let mut child = create_test_session("child");
+        child.ancestor_session_ids = vec!["root".to_string()];
+
+        let mut app = create_test_app(vec![root, child]);
+        // Filtering to Running hides the Paused root, leaving "child" as the
+        // only (and already selected) row.
+        app.toggle_status_filter(SessionStatus::Running);
+
+        app.select_parent();
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.error_message.clone()
+            ),
+            (
+                Some("child"),
+                Some("Parent session is filtered out of the current view".to_string())
+            )
+        );
     }
 
     #[test]
