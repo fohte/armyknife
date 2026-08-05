@@ -842,7 +842,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Kin highlighting: cursor-relative ancestor/descendant coloring
+    // Kin highlighting: cursor-relative ancestor/descendant/collateral coloring
     // =========================================================================
 
     #[rstest]
@@ -888,28 +888,68 @@ mod tests {
         assert_eq!(buffer[(col_x, row_y)].fg, expected_fg);
     }
 
-    #[test]
-    fn test_render_kin_highlight_does_not_color_siblings() {
+    #[rstest]
+    // `selected` is the cursor. `sibling` shares its immediate parent
+    // (distance 1); `cousin` shares its grandparent via a different parent
+    // (distance 2); `great_uncle` shares only the great-grandparent root,
+    // one generation past `MAX_COLLATERAL_KIN_DISTANCE`, and must render
+    // uncolored, same as the cursor row itself. Rows: chrome(y0),
+    // header(y1), root(y2) gp_a(y3) gp_b(y4) parent_a(y5) parent_a2(y6)
+    // selected(y7) sibling(y8) cousin(y9), in input order.
+    #[case::beyond_cap_great_uncle(4, 29, Color::Reset)]
+    #[case::cursor_row_selected(7, 29, Color::Reset)]
+    #[case::sibling(8, 29, Color::Indexed(129))]
+    #[case::cousin(9, 29, Color::Indexed(135))]
+    fn test_render_kin_highlight_collateral_ramp_and_cap(
+        #[case] row_y: u16,
+        #[case] col_x: u16,
+        #[case] expected_fg: Color,
+    ) {
         let now = Utc::now();
-        let mut parent = create_test_session("parent");
-        parent.updated_at = now;
-        let mut child_a = create_test_session("child_a");
-        child_a.updated_at = now;
-        child_a.ancestor_session_ids = vec!["parent".to_string()];
-        let mut child_b = create_test_session("child_b");
-        child_b.updated_at = now;
-        child_b.ancestor_session_ids = vec!["parent".to_string()];
+        let mut root = create_test_session("root");
+        root.updated_at = now;
+        let mut gp_a = create_test_session("gp_a");
+        gp_a.updated_at = now;
+        gp_a.ancestor_session_ids = vec!["root".to_string()];
+        let mut gp_b = create_test_session("gp_b");
+        gp_b.updated_at = now;
+        gp_b.ancestor_session_ids = vec!["root".to_string()];
+        let mut parent_a = create_test_session("parent_a");
+        parent_a.updated_at = now;
+        parent_a.ancestor_session_ids = vec!["root".to_string(), "gp_a".to_string()];
+        let mut parent_a2 = create_test_session("parent_a2");
+        parent_a2.updated_at = now;
+        parent_a2.ancestor_session_ids = vec!["root".to_string(), "gp_a".to_string()];
+        let mut selected = create_test_session("selected");
+        selected.updated_at = now;
+        selected.ancestor_session_ids = vec![
+            "root".to_string(),
+            "gp_a".to_string(),
+            "parent_a".to_string(),
+        ];
+        let mut sibling = create_test_session("sibling");
+        sibling.updated_at = now;
+        sibling.ancestor_session_ids = vec![
+            "root".to_string(),
+            "gp_a".to_string(),
+            "parent_a".to_string(),
+        ];
+        let mut cousin = create_test_session("cousin");
+        cousin.updated_at = now;
+        cousin.ancestor_session_ids = vec![
+            "root".to_string(),
+            "gp_a".to_string(),
+            "parent_a2".to_string(),
+        ];
 
-        let sessions = vec![parent, child_a, child_b];
-        // list_state index: header=0, parent=1, child_a=2, child_b=3 --
-        // select "child_b". Rows: chrome(y0), header(y1), parent(y2),
-        // child_a(y3), child_b(y4).
-        let buffer = render_buffer(&sessions, Some(3), now, 80, 10);
+        let sessions = vec![
+            root, gp_a, gp_b, parent_a, parent_a2, selected, sibling, cousin,
+        ];
+        // list_state index: header=0, root=1, gp_a=2, gp_b=3, parent_a=4,
+        // parent_a2=5, selected=6, sibling=7, cousin=8 -- select "selected".
+        let buffer = render_buffer(&sessions, Some(6), now, 80, 20);
 
-        // child_a's own title (after its "project › " breadcrumb) sits at
-        // column 29. Siblings share a parent but are not each other's kin,
-        // so it must render uncolored despite child_b being selected.
-        assert_eq!(buffer[(29, 3)].fg, Color::Reset);
+        assert_eq!(buffer[(col_x, row_y)].fg, expected_fg);
     }
 
     #[test]

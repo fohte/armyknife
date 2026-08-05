@@ -227,18 +227,22 @@ pub(super) fn nearest_living_ancestor<'a>(
 }
 
 /// Direction of a kin relationship relative to the cursor session: whether
-/// the other session sits above it (toward the root) or below it (toward
-/// the leaves) in the family tree.
+/// the other session sits above it (toward the root), below it (toward the
+/// leaves), or off to the side -- sharing a common ancestor with it without
+/// being either -- in the family tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum KinDirection {
     Ancestor,
     Descendant,
+    Collateral,
 }
 
 /// How many generations `session` sits from `selected`, and in which
-/// direction (1 = direct parent/child). `None` if the two are not in a
-/// direct lineage (siblings, cousins, unrelated sessions) or are the same
-/// session.
+/// direction: `Ancestor`/`Descendant` for a direct lineage (1 = direct
+/// parent/child), or `Collateral` for a shared-ancestor relationship that is
+/// neither (siblings, cousins, ...), measured by generations up to their
+/// nearest common ancestor (1 = sibling, 2 = cousin). `None` only when the
+/// two share no common ancestor at all, or are the same session.
 ///
 /// Distance is derived purely from `ancestor_session_ids`, so it does not
 /// depend on which intermediate ancestors happen to be displayed -- unlike
@@ -268,7 +272,32 @@ pub(super) fn kin_relation(selected: &Session, session: &Session) -> Option<(Kin
             selected.ancestor_session_ids.len() - pos,
         ));
     }
-    None
+    collateral_kin_relation(selected, session)
+}
+
+/// Collateral case of [`kin_relation`]: `selected` and `session` are
+/// neither's ancestor, so their kinship is measured by how many generations
+/// each sits below their nearest common ancestor. Siblings share a parent
+/// (1 generation below it on both sides); cousins share a grandparent (2
+/// generations below). When the two sit at different depths below the
+/// common ancestor (e.g. aunt/uncle vs. niece/nephew), the farther side sets
+/// the distance. `None` if the two share no common ancestor.
+fn collateral_kin_relation(selected: &Session, session: &Session) -> Option<(KinDirection, usize)> {
+    let common_ancestor_depth = selected
+        .ancestor_session_ids
+        .iter()
+        .zip(session.ancestor_session_ids.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common_ancestor_depth == 0 {
+        return None;
+    }
+    let selected_distance = selected.ancestor_session_ids.len() - common_ancestor_depth + 1;
+    let session_distance = session.ancestor_session_ids.len() - common_ancestor_depth + 1;
+    Some((
+        KinDirection::Collateral,
+        selected_distance.max(session_distance),
+    ))
 }
 
 #[cfg(test)]
@@ -630,13 +659,63 @@ mod tests {
     }
 
     #[test]
-    fn test_kin_relation_unrelated_siblings_is_none() {
-        let mut sibling_a = create_test_session("sibling_a", SessionStatus::Running);
-        sibling_a.ancestor_session_ids = vec!["parent".to_string()];
-        let mut sibling_b = create_test_session("sibling_b", SessionStatus::Running);
-        sibling_b.ancestor_session_ids = vec!["parent".to_string()];
+    fn test_kin_relation_completely_unrelated_sessions_is_none() {
+        // Two independent trees share no ancestor at all.
+        let mut a = create_test_session("a", SessionStatus::Running);
+        a.ancestor_session_ids = vec!["root_a".to_string()];
+        let mut b = create_test_session("b", SessionStatus::Running);
+        b.ancestor_session_ids = vec!["root_b".to_string()];
 
-        assert_eq!(kin_relation(&sibling_a, &sibling_b), None);
+        assert_eq!(kin_relation(&a, &b), None);
+    }
+
+    /// Builds an ancestor path of `generations` ids that shares only its
+    /// oldest (root) entry with any other path built from a different
+    /// `branch`, diverging immediately after -- e.g. `ancestor_path("a", 2)`
+    /// and `ancestor_path("b", 2)` share a grandparent but have different
+    /// parents (first cousins).
+    fn ancestor_path(branch: &str, generations: usize) -> Vec<String> {
+        let mut ids = vec!["shared_root".to_string()];
+        for i in 1..generations {
+            ids.push(format!("{branch}{i}"));
+        }
+        ids
+    }
+
+    #[rstest]
+    #[case::siblings(1)]
+    #[case::cousins(2)]
+    #[case::second_cousins(3)]
+    fn test_kin_relation_collateral_distance(#[case] generations: usize) {
+        // `selected` and `session` diverge onto separate branches right
+        // after their shared root ancestor, so their nearest common
+        // ancestor sits `generations` levels above each of them.
+        let mut selected = create_test_session("selected", SessionStatus::Running);
+        selected.ancestor_session_ids = ancestor_path("a", generations);
+        let mut session = create_test_session("session", SessionStatus::Running);
+        session.ancestor_session_ids = ancestor_path("b", generations);
+
+        assert_eq!(
+            kin_relation(&selected, &session),
+            Some((KinDirection::Collateral, generations))
+        );
+    }
+
+    #[test]
+    fn test_kin_relation_collateral_distance_uses_the_farther_side() {
+        // `aunt` is a direct child of the shared grandparent (1 generation
+        // below it); `niece` is her sibling's child (2 generations below
+        // it). The relationship is bounded by the farther side, so it
+        // reads as distance 2, not 1.
+        let mut aunt = create_test_session("aunt", SessionStatus::Running);
+        aunt.ancestor_session_ids = vec!["grandparent".to_string()];
+        let mut niece = create_test_session("niece", SessionStatus::Running);
+        niece.ancestor_session_ids = vec!["grandparent".to_string(), "parent".to_string()];
+
+        assert_eq!(
+            kin_relation(&niece, &aunt),
+            Some((KinDirection::Collateral, 2))
+        );
     }
 
     #[rstest]
