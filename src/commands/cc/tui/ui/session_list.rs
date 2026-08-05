@@ -284,10 +284,27 @@ fn build_session_item(
     ListItem::new(lines)
 }
 
+/// Descendant-count badge suffix (e.g. `" ▸3"`), or empty when the session
+/// has no displayed descendants -- per spec, a session with zero
+/// descendants gets no badge at all.
+fn descendant_badge_text(descendant_count: usize) -> String {
+    if descendant_count == 0 {
+        String::new()
+    } else {
+        format!(" \u{25b8}{descendant_count}")
+    }
+}
+
 /// Builds the title column's spans: an optional dim `"{parent} › "`
-/// breadcrumb followed by the session's own title, truncated together as
-/// one string (so the breadcrumb never pushes the title off-screen) and
-/// padded back out to `title_width` so the time column stays aligned.
+/// breadcrumb, the session's own title, and an optional dim descendant-count
+/// badge (e.g. `" ▸3"`) immediately after the title -- then padded out to
+/// `title_width` so the time column stays aligned.
+///
+/// The badge's width is carved out of `title_width` up front so the
+/// breadcrumb+title portion truncates to leave room for it; the badge
+/// itself is placed right after that (unpadded) content rather than
+/// flush against the time column, so it stays visually attached to the
+/// title it describes.
 fn build_title_spans(
     entry: &SessionRowEntry,
     app: &App,
@@ -303,9 +320,53 @@ fn build_title_spans(
     };
     let dim_style = Style::default().fg(DIM_FG);
 
+    let badge = descendant_badge_text(entry.descendant_count);
+    let badge = if badge.width() < title_width {
+        badge
+    } else {
+        String::new()
+    };
+    let content_width = title_width - badge.width();
+
+    let (mut spans, content_width_used) = build_breadcrumb_title_spans(
+        entry,
+        app,
+        own_title,
+        content_width,
+        query,
+        title_style,
+        dim_style,
+    );
+
+    let mut used_width = content_width_used;
+    if !badge.is_empty() {
+        used_width += badge.width();
+        spans.push(Span::styled(badge, dim_style));
+    }
+    if used_width < title_width {
+        spans.push(Span::raw(" ".repeat(title_width - used_width)));
+    }
+
+    spans
+}
+
+/// Builds the breadcrumb+title portion of the title column, truncated (but
+/// not padded) to at most `max_width`, alongside the display width it
+/// actually used. Split out of [`build_title_spans`] so the descendant-count
+/// badge can be placed right after this content instead of after padding.
+fn build_breadcrumb_title_spans(
+    entry: &SessionRowEntry,
+    app: &App,
+    own_title: &str,
+    max_width: usize,
+    query: &str,
+    title_style: Style,
+    dim_style: Style,
+) -> (Vec<Span<'static>>, usize) {
     let Some(parent) = entry.breadcrumb_ancestor else {
-        let padded = pad_to_width(&truncate(own_title, title_width), title_width);
-        return highlight_matches(&padded, query, title_style);
+        let truncated = truncate(own_title, max_width);
+        let width = truncated.width();
+        return (highlight_matches(&truncated, query, title_style), width);
     };
 
     let parent_title = app
@@ -314,23 +375,23 @@ fn build_title_spans(
         .unwrap_or_else(|| get_title_display_name_fallback(parent));
     let prefix = format!("{parent_title} \u{203a} ");
     let combined = format!("{prefix}{own_title}");
-    let truncated = truncate(&combined, title_width);
-    let padded = pad_to_width(&truncated, title_width);
+    let truncated = truncate(&combined, max_width);
+    let width = truncated.width();
 
     // `truncate` only ever cuts from the end, so the breadcrumb survives
     // intact unless the column is too narrow even for it -- in that rare
     // case, render the whole (truncated) row dim rather than splitting.
     let boundary_chars = prefix.chars().count();
-    let padded_chars: Vec<char> = padded.chars().collect();
-    if padded_chars.len() <= boundary_chars {
-        return highlight_matches(&padded, query, dim_style);
+    let truncated_chars: Vec<char> = truncated.chars().collect();
+    if truncated_chars.len() <= boundary_chars {
+        return (highlight_matches(&truncated, query, dim_style), width);
     }
 
     let breadcrumb_part: String = combined.chars().take(boundary_chars).collect();
-    let title_part: String = padded_chars[boundary_chars..].iter().collect();
+    let title_part: String = truncated_chars[boundary_chars..].iter().collect();
     let mut spans = highlight_matches(&breadcrumb_part, query, dim_style);
     spans.extend(highlight_matches(&title_part, query, title_style));
-    spans
+    (spans, width)
 }
 
 #[cfg(test)]
@@ -505,6 +566,50 @@ mod tests {
         assert_eq!(output, expected);
     }
 
+    #[rstest]
+    #[case::zero_shows_no_badge(0, "")]
+    #[case::one(1, " \u{25b8}1")]
+    #[case::two_digits(42, " \u{25b8}42")]
+    fn test_descendant_badge_text(#[case] descendant_count: usize, #[case] expected: &str) {
+        assert_eq!(descendant_badge_text(descendant_count), expected);
+    }
+
+    #[test]
+    fn test_render_session_with_descendants_shows_count_badge_after_title() {
+        let now = Utc::now();
+
+        let mut root = create_test_session("root");
+        root.updated_at = now;
+        root.status = SessionStatus::Running;
+
+        let mut child_a = create_test_session("child_a");
+        child_a.updated_at = now;
+        child_a.ancestor_session_ids = vec!["root".to_string()];
+        child_a.status = SessionStatus::Running;
+
+        let mut child_b = create_test_session("child_b");
+        child_b.updated_at = now;
+        child_b.ancestor_session_ids = vec!["root".to_string()];
+        child_b.status = SessionStatus::Running;
+
+        let sessions = vec![root, child_a, child_b];
+        let output = render_to_string(&sessions, Some(1), now, 80, 10);
+
+        let expected = indoc! {"
+             cc watch                                       0 needs you · 3 running · 0 idle
+             ── RUNNING (3) ────────────────────────────────────────────────────────────────
+            >● project         project ▸2                                           just now
+             ● project         project › project                                    just now
+             ● project         project › project                                    just now
+
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
     #[test]
     fn test_render_child_in_different_section_from_parent_shows_breadcrumb() {
         let now = Utc::now();
@@ -522,6 +627,9 @@ mod tests {
         let sessions = vec![parent, child];
         let output = render_to_string(&sessions, Some(1), now, 80, 12);
 
+        // Also exercises the descendant badge (parent's row carries "▸1"),
+        // since a parent with a displayed child is exactly the fixture this
+        // breadcrumb test already needs.
         let expected = indoc! {"
              cc watch                                       1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
@@ -529,7 +637,7 @@ mod tests {
                                “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project         project                                              just now
+             ● project         project ▸1                                           just now
 
 
 
