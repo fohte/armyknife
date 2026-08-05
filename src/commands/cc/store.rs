@@ -386,6 +386,21 @@ pub(crate) fn mark_session_read_in(
     })
 }
 
+/// Atomically overwrites a session's `last_message` field under a freshly
+/// acquired lock. Used by the hook handler to persist the transcript read
+/// that happens after releasing its own `SessionLock` -- see that struct's
+/// doc comment for why the read cannot happen while the lock is held.
+pub(crate) fn update_session_last_message_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    last_message: Option<String>,
+) -> Result<()> {
+    update_session_field_in(sessions_dir, session_id, |session| {
+        session.last_message = last_message;
+        true
+    })
+}
+
 /// Sets `label` on a session, resolving the default sessions directory.
 /// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
 /// about `sessions_dir()`.

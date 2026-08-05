@@ -345,12 +345,14 @@ fn process_hook_event_impl(
     // may still upgrade a `Stopped` verdict to `Running`.
     let mut status = determine_status(event, &input);
 
-    // Load existing session or create new one. The lock is held across this
-    // entire load-mutate-save round trip (see `store::SessionLock`) so a
+    // Load existing session or create new one. The lock is held across the
+    // load-mutate-save round trip below (see `store::SessionLock`) so a
     // concurrent hook process for the same session_id -- e.g. a sibling
     // subagent's own event firing at the same time -- cannot silently lose
     // this event's mutations, including a just-inserted
-    // `pending_permission_agent_ids` entry.
+    // `pending_permission_agent_ids` entry. `last_message` is deliberately
+    // saved separately, after this lock is released -- see the comment at
+    // its update below.
     let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| {
@@ -506,6 +508,22 @@ fn process_hook_event_impl(
         session.transcript_path.clone_from(&input.transcript_path);
     }
 
+    // Update current_tool based on event type
+    session.current_tool = match event {
+        HookEvent::PreToolUse => format_current_tool(&input),
+        HookEvent::PostToolUse | HookEvent::Stop => None,
+        _ => session.current_tool, // Keep existing value for other events
+    };
+
+    // Save the session, then release the lock before the two slow steps
+    // below (transcript read, tmux sync). Both can block for up to 500ms,
+    // and `sync_tmux` (via `window_status::sync_window_option`) re-reads
+    // this same session file -- holding the lock across either would starve
+    // a concurrent `a cc watch` reader, or self-deadlock against the read,
+    // for as long as `LOCK_TIMEOUT` (see `SessionLock`'s doc comment).
+    session_lock.save(&session)?;
+    drop(session_lock);
+
     // Update last_message from Claude Code's transcript.
     // For Stop events, retry if transcript hasn't been updated yet (race condition with
     // Claude Code's write). For other events, read once without retrying.
@@ -514,23 +532,21 @@ fn process_hook_event_impl(
     } else {
         0
     };
-    session.last_message = get_last_message_with_retry(
+    let last_message = get_last_message_with_retry(
         &session.cwd,
         &session.session_id,
         session.last_message.as_deref(),
         TRANSCRIPT_RETRY_DELAY,
         max_retries,
     );
-
-    // Update current_tool based on event type
-    session.current_tool = match event {
-        HookEvent::PreToolUse => format_current_tool(&input),
-        HookEvent::PostToolUse | HookEvent::Stop => None,
-        _ => session.current_tool, // Keep existing value for other events
-    };
-
-    // Save updated session
-    session_lock.save(&session)?;
+    if last_message != session.last_message {
+        store::update_session_last_message_in(
+            sessions_dir,
+            &session.session_id,
+            last_message.clone(),
+        )?;
+        session.last_message = last_message;
+    }
 
     // Push the window's aggregated Claude Code status into its
     // `@armyknife-cc-window-status` tmux option. The write and the status-bar refresh
