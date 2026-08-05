@@ -4,6 +4,7 @@ mod claude_sessions;
 mod clean_detached;
 mod error;
 mod focus;
+mod generate_title_detached;
 mod hook;
 mod list;
 mod mark_read;
@@ -24,6 +25,7 @@ use clap::Subcommand;
 pub use auto_compact::AutoCompactArgs;
 pub use clean_detached::CleanDetachedArgs;
 pub use focus::FocusArgs;
+pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
@@ -80,6 +82,10 @@ pub enum CcCommands {
     /// Internal: non-interactive batch worktree cleanup for `cc watch`.
     #[command(name = "clean-detached", hide = true)]
     CleanDetached(CleanDetachedArgs),
+
+    /// Internal: non-interactive title generation for `cc watch`'s Ctrl+g.
+    #[command(name = "generate-title-detached", hide = true)]
+    GenerateTitleDetached(GenerateTitleDetachedArgs),
 }
 
 impl CcCommands {
@@ -97,6 +103,7 @@ impl CcCommands {
             Self::WindowStatus(args) => window_status::run(args)?,
             Self::PaneHasPaused(args) => pane::status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args)?,
+            Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
         }
         Ok(())
     }
