@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.265](https://github.com/fohte/armyknife/compare/v0.1.264...v0.1.265) (2026-08-12)
+
+
+### Bug Fixes
+
+* **infra/tmux:** fix get_pane_pid resolving to the wrong pane ([#817](https://github.com/fohte/armyknife/issues/817)) ([37b0742](https://github.com/fohte/armyknife/commit/37b0742ae2e5a47787b99f4a7a92d4380ee1ebf4))
+
 ## [0.1.264](https://github.com/fohte/armyknife/compare/v0.1.263...v0.1.264) (2026-08-05)
 
 
