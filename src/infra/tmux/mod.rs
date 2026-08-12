@@ -170,6 +170,23 @@ fn query_tmux_value(format_string: &str) -> Option<String> {
     run_tmux_output(&["display-message", "-p", format_string]).ok()
 }
 
+/// Query a tmux value for a specific pane using display-message with a format string.
+///
+/// Unlike `query_tmux_value`, this targets an arbitrary pane by id rather than the
+/// caller's own pane, so it works from detached processes and doesn't require
+/// running inside tmux. `-t` here is a target-pane, unlike `list-panes -t`, which
+/// resolves to a target-window and would silently return another pane's value.
+///
+/// Returns None if the pane doesn't exist, the value is empty, or the command fails.
+fn query_pane_value(pane_id: &str, format_string: &str) -> Option<String> {
+    let output = run_tmux_output(&["display-message", "-p", "-t", pane_id, format_string]).ok()?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -268,12 +285,7 @@ pub fn current_window_id() -> Option<String> {
 ///
 /// Returns None if the pane no longer exists or tmux is unavailable.
 pub fn get_window_id_for_pane(pane_id: &str) -> Option<String> {
-    let output = run_tmux_output(&["display-message", "-p", "-t", pane_id, "#{window_id}"]).ok()?;
-    if output.is_empty() {
-        None
-    } else {
-        Some(output)
-    }
+    query_pane_value(pane_id, "#{window_id}")
 }
 
 /// Get the current window ID if the pane is inside the given path.
@@ -369,16 +381,7 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
 
 /// Returns the current command running in the pane (e.g., `zsh`, `nvim`).
 pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
-    let output = run_tmux_output(&[
-        "display-message",
-        "-p",
-        "-t",
-        pane_id,
-        "#{pane_current_command}",
-    ])
-    .ok()?;
-    let cmd = output.trim().to_string();
-    if cmd.is_empty() { None } else { Some(cmd) }
+    query_pane_value(pane_id, "#{pane_current_command}")
 }
 
 /// Kills the process in the pane and restarts it with `command`.
@@ -602,8 +605,9 @@ pub fn find_pane_id_by_position(
 /// Returns the PID of the process running in the given tmux pane.
 /// Returns None if the pane doesn't exist or the PID can't be parsed.
 pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
-    let output = run_tmux_output(&["list-panes", "-t", pane_id, "-F", "#{pane_pid}"]).ok()?;
-    output.lines().next()?.parse::<u32>().ok()
+    query_pane_value(pane_id, "#{pane_pid}")?
+        .parse::<u32>()
+        .ok()
 }
 
 /// Sends SIGTERM to the process running in the given tmux pane.
