@@ -322,6 +322,7 @@ Claude Code session monitoring with tmux integration.
 | `peer parent`                          |         | List the session that delegated to this one, if any (JSON)               |
 | `peer children`                        |         | List the sessions this one delegated to (JSON)                           |
 | `peer list [-R <repo>]`                |         | List tracked sessions, with their SendMessage names (JSON)               |
+| `wake <session_id>`                    |         | Resume a paused session and print its resolved SendMessage name          |
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
@@ -388,11 +389,13 @@ Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaq
 ```console
 $ a cc peer parent
 [{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running"}]
-$ a cc peer parent | jq -r '.[0].name'
+$ a cc peer parent | jq -r '.[0].name // empty'
 myproject-4f
 $ a cc peer list -R myproject
 [{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped"}]
 ```
+
+`.[0].name` is `null` both when the array is empty (no tracked peer) and when the tracked peer's process has exited without leaving a registry entry -- most commonly a session `a cc sweep` has paused. `// empty` collapses both cases to empty output, so a caller can tell "no usable name" apart from the literal string `"null"`. When the peer is merely paused (its `session_id` still resolves via `a cc peer`), `a cc wake <session_id>` resumes its tmux pane, waits for it to re-register, and prints the freshly resolved name -- the name changes on every resume, so re-run `a cc peer` (or use `wake`'s own output) rather than reusing a name seen before the pause.
 
 #### tmux-resurrect integration
 

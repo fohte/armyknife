@@ -19,6 +19,7 @@ mod sweep;
 pub(crate) mod tmux_sync;
 mod tui;
 pub(crate) mod types;
+mod wake;
 mod watch;
 mod window_status;
 
@@ -36,6 +37,7 @@ pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
+pub use wake::WakeArgs;
 pub use watch::WatchArgs;
 pub use window_status::WindowStatusArgs;
 
@@ -69,6 +71,11 @@ pub enum CcCommands {
     /// Resolve SendMessage target names for related Claude Code sessions
     #[command(subcommand)]
     Peer(PeerCommands),
+
+    /// Resume a paused session by session ID and print its resolved
+    /// SendMessage name, so it can be reached from another session even
+    /// after `a cc sweep` has paused it
+    Wake(WakeArgs),
 
     /// Pause long-stopped sessions by sending SIGTERM (run periodically)
     Sweep(SweepArgs),
@@ -106,6 +113,7 @@ impl CcCommands {
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
+            Self::Wake(args) => wake::run(args)?,
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
