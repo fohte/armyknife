@@ -397,6 +397,14 @@ $ a cc peer list -R myproject
 
 `.[0].name` is `null` both when the array is empty (no tracked peer) and when the tracked peer's process has exited without leaving a registry entry -- most commonly a session `a cc sweep` has paused. `// empty` collapses both cases to empty output, so a caller can tell "no usable name" apart from the literal string `"null"`. When the peer is merely paused (its `session_id` still resolves via `a cc peer`), `a cc wake <session_id>` resumes its tmux pane, waits for it to re-register, and prints the freshly resolved name -- the name changes on every resume, so re-run `a cc peer` (or use `wake`'s own output) rather than reusing a name seen before the pause.
 
+```console
+$ a cc peer parent | jq -r '.[0].name // empty'
+$ a cc peer parent | jq -r '.[0].session_id'
+1111...
+$ a cc wake 1111...
+myproject-7e
+```
+
 #### tmux-resurrect integration
 
 Pane user options are not preserved by tmux-resurrect, so `a cc resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a cc resurrect restore` re-applies them and types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.

@@ -84,6 +84,11 @@ pub(crate) enum RespawnError {
 /// themselves afterward, since a resume triggered from another session must
 /// not steal the user's tmux focus.
 ///
+/// The session actually resumed is whichever one is recorded on the pane's
+/// `TMUX_SESSION_OPTION`, not necessarily `session.session_id` -- callers
+/// that can't guarantee the two are in sync must verify this themselves
+/// (see `wake::check_pane_matches_target`).
+///
 /// Returns the pane ID that was respawned on success.
 pub(crate) fn respawn_paused_session(session: &Session) -> Result<String, RespawnError> {
     let tmux_info = session.tmux_info.as_ref().ok_or(RespawnError::NoTmuxPane)?;

@@ -24,7 +24,7 @@ use thiserror::Error;
 
 use super::claude_registry;
 use super::error::CcError;
-use super::resume::respawn_paused_session;
+use super::resume::{RespawnError, respawn_paused_session};
 use super::store;
 use super::types::{SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
@@ -69,7 +69,27 @@ fn wake(session_id: &str) -> Result<String> {
     let recorded = tmux::get_pane_option(&tmux_info.pane_id, TMUX_SESSION_OPTION);
     check_pane_matches_target(recorded.as_deref(), session_id)?;
 
-    respawn_paused_session(&session).context("failed to resume the session's tmux pane")?;
+    // Serialize concurrent wakes of the same paused session -- e.g. several
+    // delegated children reporting back to the same paused parent at once
+    // (the scenario `a wm new`'s envelope steers callers into). Without
+    // this, two callers can both observe the pane still idle and both
+    // respawn it, the second one killing the first one's freshly started
+    // `claude`.
+    let lock = store::lock_session_for_update(&store::sessions_dir()?, session_id)?;
+    if let Some(name) = resolve_name(session_id) {
+        return Ok(name);
+    }
+    match respawn_paused_session(&session) {
+        Ok(_pane_id) => {}
+        // The pane already moved past the shell prompt into `claude`
+        // itself -- another wake (racing just outside this lock) or the
+        // user beat us to it. Fall through to polling instead of
+        // erroring; an unrelated `claude` here would just make the poll
+        // below time out rather than silently succeed.
+        Err(RespawnError::PaneBusy(cmd)) if cmd == "claude" => {}
+        Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
+    }
+    drop(lock);
 
     wait_for_name(session_id)
 }
