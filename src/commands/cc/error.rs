@@ -32,12 +32,4 @@ pub enum CcError {
         "ARMYKNIFE_SESSION_ID is not set (not running inside an armyknife-tracked Claude Code session)"
     )]
     SelfSessionUnknown,
-
-    #[error("Session '{0}' has no parent (no ancestor_session_ids recorded)")]
-    NoParentSession(String),
-
-    #[error(
-        "Could not resolve a SendMessage name for session '{0}' (no matching ~/.claude/sessions entry; the process may have exited)"
-    )]
-    PeerNameUnresolved(String),
 }

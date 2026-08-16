@@ -21,7 +21,8 @@ use crate::shared::env_var::EnvVars;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum PeerCommands {
-    /// Print the SendMessage name of the session that delegated to this one
+    /// List the session that delegated to this one, if any (JSON, a subset
+    /// of `list`)
     Parent,
 
     /// List the SendMessage names of sessions this one delegated to
@@ -82,22 +83,15 @@ fn current_session_id() -> Result<String> {
         .ok_or_else(|| CcError::SelfSessionUnknown.into())
 }
 
-/// Prints the resolved name on its own on success so it can be used directly
-/// as `SendMessage`'s `to` argument (e.g. `to=$(a cc peer parent)`). Fails
-/// loudly instead -- there is no meaningful placeholder to print when no
-/// parent is tracked or its name can't be resolved.
 fn run_parent() -> Result<()> {
     let self_id = current_session_id()?;
-    let session =
-        store::load_session(&self_id)?.ok_or_else(|| CcError::SessionNotFound(self_id.clone()))?;
-    let parent_id = session
-        .ancestor_session_ids
-        .last()
-        .ok_or_else(|| CcError::NoParentSession(self_id.clone()))?;
-    let name = claude_registry::resolve_name(parent_id)
-        .ok_or_else(|| CcError::PeerNameUnresolved(parent_id.clone()))?;
-    println!("{name}");
-    Ok(())
+    store::cleanup_stale_sessions()?;
+    let sessions = store::list_sessions()?;
+    let session = sessions
+        .iter()
+        .find(|s| s.session_id == self_id)
+        .ok_or_else(|| CcError::SessionNotFound(self_id.clone()))?;
+    print_peers(&filter_parent(&sessions, session))
 }
 
 fn run_children() -> Result<()> {
@@ -111,6 +105,18 @@ fn run_list(args: &PeerListArgs) -> Result<()> {
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
     print_peers(&filter_by_repo(&sessions, args.repo.as_deref()))
+}
+
+/// The session that is `session`'s immediate parent -- a subset of `list`
+/// containing zero entries (no parent tracked) or one.
+fn filter_parent<'a>(sessions: &'a [Session], session: &Session) -> Vec<&'a Session> {
+    let Some(parent_id) = session.ancestor_session_ids.last() else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter(|s| &s.session_id == parent_id)
+        .collect()
 }
 
 /// Sessions whose nearest ancestor (immediate parent) is `self_id`.
@@ -196,6 +202,37 @@ mod tests {
                 label: Some("my-label".to_string()),
                 status: "running",
             }
+        );
+    }
+
+    #[rstest]
+    #[case::returns_the_matching_parent(
+        vec!["root".to_string(), "parent-1".to_string()],
+        vec!["parent-1"]
+    )]
+    #[case::empty_when_no_parent_is_tracked(vec![], vec![])]
+    #[case::empty_when_the_parent_is_no_longer_listed(
+        vec!["root".to_string(), "gone".to_string()],
+        vec![]
+    )]
+    fn filter_parent_cases(
+        #[case] ancestor_session_ids: Vec<String>,
+        #[case] expected_ids: Vec<&str>,
+    ) {
+        let sessions = vec![
+            session("parent-1", "/repo", vec!["root".to_string()]),
+            session("unrelated", "/repo", vec![]),
+        ];
+        let self_session = session("self", "/repo", ancestor_session_ids);
+
+        let parent = filter_parent(&sessions, &self_session);
+
+        assert_eq!(
+            parent
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_ids
         );
     }
 

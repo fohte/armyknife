@@ -79,11 +79,6 @@ fn load_name_map_in(home: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-/// Resolves a single Claude Code session ID to its `SendMessage` target name.
-pub fn resolve_name(session_id: &str) -> Option<String> {
-    load_name_map().remove(session_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
