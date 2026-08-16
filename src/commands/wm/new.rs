@@ -255,7 +255,7 @@ fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
         - Base: {base}
         - Delegator CWD: {delegator_cwd}
         - Worktree CWD: {worktree_cwd}
-        - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent` (do not use it to ask questions or send progress updates)
+        - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name'` (do not use it to ask questions or send progress updates)
         </context>
         <instructions>
         {prompt}
@@ -1154,7 +1154,7 @@ mod tests {
             - Base: origin/master
             - Delegator CWD: /home/user/repo
             - Worktree CWD: /home/user/repo/.worktrees/fix-auth-bug
-            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent` (do not use it to ask questions or send progress updates)
+            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name'` (do not use it to ask questions or send progress updates)
             </context>
             <instructions>
             Fix the auth bug
@@ -1180,7 +1180,7 @@ mod tests {
             - Base: origin/main
             - Delegator CWD: /tmp/repo
             - Worktree CWD: /tmp/repo/.worktrees/feature-x
-            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent` (do not use it to ask questions or send progress updates)
+            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name'` (do not use it to ask questions or send progress updates)
             </context>
             <instructions>
             ## Background

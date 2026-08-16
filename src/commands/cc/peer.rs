@@ -108,7 +108,8 @@ fn run_list(args: &PeerListArgs) -> Result<()> {
 }
 
 /// The session that is `session`'s immediate parent -- a subset of `list`
-/// containing zero entries (no parent tracked) or one.
+/// containing zero entries (no parent tracked, or the tracked parent is no
+/// longer in `sessions`) or one.
 fn filter_parent<'a>(sessions: &'a [Session], session: &Session) -> Vec<&'a Session> {
     let Some(parent_id) = session.ancestor_session_ids.last() else {
         return Vec::new();

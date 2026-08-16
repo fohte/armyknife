@@ -320,8 +320,8 @@ Claude Code session monitoring with tmux integration.
 | `resurrect save`                       |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
 | `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
 | `peer parent`                          |         | List the session that delegated to this one, if any (JSON)               |
-| `peer children`                        |         | List the SendMessage names of sessions this one delegated to (JSON)      |
-| `peer list [-R <repo>]`                |         | List tracked sessions with their SendMessage names (JSON)                |
+| `peer children`                        |         | List the sessions this one delegated to (JSON)                           |
+| `peer list [-R <repo>]`                |         | List tracked sessions, with their SendMessage names (JSON)               |
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
@@ -390,6 +390,8 @@ $ a cc peer parent
 [{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running"}]
 $ a cc peer parent | jq -r '.[0].name'
 myproject-4f
+$ a cc peer list -R myproject
+[{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped"}]
 ```
 
 #### tmux-resurrect integration
