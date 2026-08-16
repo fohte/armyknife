@@ -61,7 +61,7 @@ fn current_pane_id() -> Result<String> {
 const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
 
 /// Failure modes of [`respawn_paused_session`]. Both the TUI's resume key
-/// and `a cc wake` render these as user-facing messages.
+/// and `a cc peer wake` render these as user-facing messages.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum RespawnError {
     #[error("No tmux pane for this session")]

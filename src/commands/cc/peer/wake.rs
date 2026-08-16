@@ -1,4 +1,4 @@
-//! `a cc wake` -- resume a paused Claude Code session from another
+//! `a cc peer wake` -- resume a paused Claude Code session from another
 //! session's Bash tool, so its `SendMessage` name becomes resolvable.
 //!
 //! `a cc peer` can point at a session that `a cc sweep` has since paused:
@@ -14,6 +14,16 @@
 //! one before respawning -- `a cc resume` (which the respawned pane runs)
 //! resumes whatever session is recorded on the pane, not necessarily the
 //! one this command was asked to wake.
+//!
+//! This lives under `a cc peer` rather than as a flag on `a cc resume`
+//! because the two run in fundamentally different places: `a cc resume`
+//! replaces the calling process itself (`process::exec_replace`) and so only
+//! makes sense run from inside the target pane; this command runs from an
+//! unrelated caller, never touches the caller's own process, and returns
+//! data (a resolved name) instead of becoming a `claude` process. Grouping
+//! it with `peer parent`/`peer list` reflects what it actually does --
+//! resolve a `SendMessage` name for a related session -- rather than
+//! implying a resume variant.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,11 +32,11 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use thiserror::Error;
 
-use super::claude_registry;
-use super::error::CcError;
-use super::resume::{RespawnError, respawn_paused_session};
-use super::store;
-use super::types::{SessionStatus, TMUX_SESSION_OPTION};
+use crate::commands::cc::claude_registry;
+use crate::commands::cc::error::CcError;
+use crate::commands::cc::resume::{RespawnError, respawn_paused_session};
+use crate::commands::cc::store;
+use crate::commands::cc::types::{SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 /// How often to poll Claude Code's session registry for the resumed
