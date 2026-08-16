@@ -381,10 +381,21 @@ The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID
 
 #### Peer session name resolution
 
-Claude Code's `SendMessage`/`ListAgents` tools address other sessions by a `name` that Claude Code derives internally (from the working directory plus a random suffix, e.g. `armyknife-4f`) and exposes nowhere else. When several sessions share a working directory (e.g. many `a wm new --agent` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, set by `a wm new --agent`) against Claude Code's per-process session registry (`~/.claude/sessions/<pid>.json`), so a session doesn't have to guess which `ListAgents` row is its parent or child.
+Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a wm new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a wm new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
 - `a cc peer parent` prints the resolved name on its own, ready to use directly as `SendMessage`'s `to` argument. It exits non-zero (with a message on stderr) if this session has no tracked parent, or the parent's name can't be resolved (e.g. the process already exited).
+
+  ```console
+  $ a cc peer parent
+  myproject-4f
+  ```
+
 - `a cc peer children` and `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory) print a JSON array of `{name, session_id, cwd, label, status}`; `name` is `null` when Claude Code's registry has no matching entry.
+
+  ```console
+  $ a cc peer list -R myproject
+  [{"name":"myproject-9c","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running"}]
+  ```
 
 #### tmux-resurrect integration
 

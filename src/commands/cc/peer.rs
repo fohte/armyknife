@@ -5,7 +5,8 @@
 //! internally (see `claude_registry`); there is no way to address a session
 //! by its `session_id` directly. This joins armyknife's own session store
 //! (which tracks parent/child relationships via `ancestor_session_ids`,
-//! populated by `a wm new --agent`) against that name so a session can find
+//! populated whenever `a wm new` resolves a parent session -- see
+//! `wm::new::build_ancestor_chain`) against that name so a session can find
 //! the right `SendMessage` target for itself.
 
 use anyhow::Result;
@@ -103,24 +104,33 @@ fn run_children() -> Result<()> {
     let self_id = current_session_id()?;
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
-    let children: Vec<&Session> = sessions
-        .iter()
-        .filter(|s| s.ancestor_session_ids.last() == Some(&self_id))
-        .collect();
-    print_peers(&children)
+    print_peers(&filter_children(&sessions, &self_id))
 }
 
 fn run_list(args: &PeerListArgs) -> Result<()> {
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
-    let filtered: Vec<&Session> = sessions
+    print_peers(&filter_by_repo(&sessions, args.repo.as_deref()))
+}
+
+/// Sessions whose nearest ancestor (immediate parent) is `self_id`.
+fn filter_children<'a>(sessions: &'a [Session], self_id: &str) -> Vec<&'a Session> {
+    sessions
         .iter()
-        .filter(|s| match &args.repo {
-            Some(repo) => s.cwd.to_string_lossy().contains(repo.as_str()),
+        .filter(|s| s.ancestor_session_ids.last().map(String::as_str) == Some(self_id))
+        .collect()
+}
+
+/// Sessions whose working directory contains `repo` as a substring, or all
+/// sessions when `repo` is `None`.
+fn filter_by_repo<'a>(sessions: &'a [Session], repo: Option<&str>) -> Vec<&'a Session> {
+    sessions
+        .iter()
+        .filter(|s| match repo {
+            Some(repo) => s.cwd.to_string_lossy().contains(repo),
             None => true,
         })
-        .collect();
-    print_peers(&filtered)
+        .collect()
 }
 
 fn print_peers(sessions: &[&Session]) -> Result<()> {
@@ -137,15 +147,16 @@ fn print_peers(sessions: &[&Session]) -> Result<()> {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use rstest::rstest;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     use crate::commands::cc::types::SessionStatus;
 
-    fn session(session_id: &str, ancestor_session_ids: Vec<String>) -> Session {
+    fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
             session_id: session_id.to_string(),
-            cwd: PathBuf::from("/repo/.worktrees/child"),
+            cwd: PathBuf::from(cwd),
             transcript_path: None,
             tty: None,
             tmux_info: None,
@@ -164,15 +175,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn peer_from_session_resolves_name_from_map() {
-        let s = session("child-1", vec!["root".to_string(), "parent-1".to_string()]);
-        let name_map = HashMap::from([("child-1".to_string(), "repo-ab".to_string())]);
+    #[rstest]
+    #[case::resolved(
+        HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
+        Some("repo-ab".to_string())
+    )]
+    #[case::unresolved(HashMap::new(), None)]
+    fn peer_from_session_name(
+        #[case] name_map: HashMap<String, String>,
+        #[case] expected_name: Option<String>,
+    ) {
+        let s = session("child-1", "/repo/.worktrees/child", vec![]);
 
         assert_eq!(
             Peer::from_session(&s, &name_map),
             Peer {
-                name: Some("repo-ab".to_string()),
+                name: expected_name,
                 session_id: "child-1".to_string(),
                 cwd: "/repo/.worktrees/child".to_string(),
                 label: Some("my-label".to_string()),
@@ -182,19 +200,58 @@ mod tests {
     }
 
     #[test]
-    fn peer_from_session_leaves_name_none_when_unresolved() {
-        let s = session("child-1", vec![]);
-        let name_map = HashMap::new();
+    fn filter_children_matches_only_immediate_children() {
+        let sessions = vec![
+            session(
+                "child-1",
+                "/repo",
+                vec!["root".to_string(), "self".to_string()],
+            ),
+            session(
+                "grandchild-1",
+                "/repo",
+                vec![
+                    "root".to_string(),
+                    "self".to_string(),
+                    "child-1".to_string(),
+                ],
+            ),
+            session(
+                "unrelated",
+                "/repo",
+                vec!["root".to_string(), "other".to_string()],
+            ),
+        ];
+
+        let children = filter_children(&sessions, "self");
 
         assert_eq!(
-            Peer::from_session(&s, &name_map),
-            Peer {
-                name: None,
-                session_id: "child-1".to_string(),
-                cwd: "/repo/.worktrees/child".to_string(),
-                label: Some("my-label".to_string()),
-                status: "running",
-            }
+            children
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["child-1"]
+        );
+    }
+
+    #[rstest]
+    #[case::no_filter_returns_all(None, vec!["a", "b"])]
+    #[case::filters_by_cwd_substring(Some("armyknife"), vec!["a"])]
+    #[case::matches_nothing(Some("no-such-repo"), vec![])]
+    fn filter_by_repo_cases(#[case] repo: Option<&str>, #[case] expected_ids: Vec<&str>) {
+        let sessions = vec![
+            session("a", "/Users/x/ghq/github.com/fohte/armyknife", vec![]),
+            session("b", "/Users/x/ghq/github.com/fohte/dotfiles", vec![]),
+        ];
+
+        let filtered = filter_by_repo(&sessions, repo);
+
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_ids
         );
     }
 }
