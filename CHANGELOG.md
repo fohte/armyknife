@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.267](https://github.com/fohte/armyknife/compare/v0.1.266...v0.1.267) (2026-08-16)
+
+
+### Features
+
+* **cc:** add peer wake to resume paused sessions ([#821](https://github.com/fohte/armyknife/issues/821)) ([e53164a](https://github.com/fohte/armyknife/commit/e53164aad62398316681b506925af98d229d538a))
+
 ## [0.1.266](https://github.com/fohte/armyknife/compare/v0.1.265...v0.1.266) (2026-08-16)
 
 
