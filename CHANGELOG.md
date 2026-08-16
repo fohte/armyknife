@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.266](https://github.com/fohte/armyknife/compare/v0.1.265...v0.1.266) (2026-08-16)
+
+
+### Features
+
+* **cc:** add peer command to resolve SendMessage target names ([#819](https://github.com/fohte/armyknife/issues/819)) ([588907a](https://github.com/fohte/armyknife/commit/588907acbfb583808b4bdab0581f263902ef3efc))
+
 ## [0.1.265](https://github.com/fohte/armyknife/compare/v0.1.264...v0.1.265) (2026-08-12)
 
 
