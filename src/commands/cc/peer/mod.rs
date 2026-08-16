@@ -28,17 +28,16 @@ pub enum PeerCommands {
     /// of `list`)
     Parent,
 
-    /// List the SendMessage names of sessions this one delegated to
+    /// List sessions this one delegated to, with their SendMessage names
+    /// (JSON, a subset of `list`)
     Children,
 
     /// List tracked sessions with their SendMessage names
     List(PeerListArgs),
 
     /// Resume a paused peer session by session ID and print its resolved
-    /// SendMessage name. Unlike `a cc resume` (which replaces the calling
-    /// pane's own process and only makes sense run from inside the target
-    /// pane), this operates on another session's pane from outside without
-    /// touching the caller's own process.
+    /// SendMessage name (see the `wake` module doc for why this isn't a
+    /// flag on `a cc resume`)
     Wake(WakeArgs),
 }
 
