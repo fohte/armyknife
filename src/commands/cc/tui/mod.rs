@@ -25,6 +25,7 @@ use ratatui::DefaultTerminal;
 use self::app::{App, AppMode, View};
 use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChangeType};
 use self::worktree_view::WorktreeMode;
+use crate::commands::cc::resume;
 use crate::commands::cc::types::SessionStatus;
 use crate::infra::tmux;
 use crate::shared::command;
@@ -320,68 +321,18 @@ fn resume_terminal(terminal: &mut DefaultTerminal) -> io::Result<()> {
     Ok(())
 }
 
-const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
-
 fn resume_selected_session(app: &mut App) {
     let Some(session) = app.selected_session() else {
         return;
     };
-    let Some(ref tmux_info) = session.tmux_info else {
-        app.set_error("No tmux pane for this session".to_string());
-        return;
-    };
-    if session.status != SessionStatus::Paused {
-        app.set_error("Session is not paused".to_string());
-        return;
-    }
-    let pane_id = &tmux_info.pane_id;
 
-    // Only respawn if the pane is sitting at a shell prompt. If the user
-    // started another program in the pane we must not kill it silently.
-    match tmux::get_pane_current_command(pane_id) {
-        Some(cmd) if SHELL_COMMANDS.iter().any(|s| cmd == *s) => {}
-        Some(cmd) => {
-            app.set_error(format!("Pane is running `{cmd}`, cannot resume"));
-            return;
+    match resume::respawn_paused_session(session) {
+        Ok(pane_id) => {
+            if let Err(e) = tmux::focus_pane(&pane_id) {
+                app.set_error(format!("Failed to focus pane: {e}"));
+            }
         }
-        None => {
-            app.set_error("Cannot read pane state".to_string());
-            return;
-        }
-    }
-
-    // Wrap the resume command in the user's login shell so that when claude
-    // exits normally, control returns to a shell prompt instead of tmux
-    // closing the pane (respawn-pane replaces the pane's root process).
-    //
-    // `-i` is required on the outer shell: `a cc resume` looks up `claude`
-    // in $PATH via `find_command_path`, and many users only extend $PATH
-    // in their interactive rc file (e.g. `.zshrc`). Running without `-i`
-    // would inherit tmux's pre-rc $PATH and fail to locate `claude`.
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(String::from))
-        .unwrap_or_else(|| "a".to_string());
-    let Ok(inner) = shlex::try_join([exe.as_str(), "cc", "resume"]) else {
-        app.set_error("Failed to build resume command".to_string());
-        return;
-    };
-    let Ok(exec_shell) = shlex::try_join([shell.as_str(), "-i"]) else {
-        app.set_error("Failed to build shell exec command".to_string());
-        return;
-    };
-    let script = format!("{inner}; exec {exec_shell}");
-    let Ok(wrapped) = shlex::try_join([shell.as_str(), "-i", "-c", &script]) else {
-        app.set_error("Failed to build wrapped command".to_string());
-        return;
-    };
-    if let Err(e) = tmux::respawn_pane(pane_id, &wrapped) {
-        app.set_error(format!("Failed to respawn pane: {e}"));
-        return;
-    }
-    if let Err(e) = tmux::focus_pane(pane_id) {
-        app.set_error(format!("Failed to focus pane: {e}"));
+        Err(e) => app.set_error(e.to_string()),
     }
 }
 

@@ -19,17 +19,26 @@ use super::store;
 use super::types::Session;
 use crate::shared::env_var::EnvVars;
 
+mod wake;
+use wake::WakeArgs;
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum PeerCommands {
     /// List the session that delegated to this one, if any (JSON, a subset
     /// of `list`)
     Parent,
 
-    /// List the SendMessage names of sessions this one delegated to
+    /// List sessions this one delegated to, with their SendMessage names
+    /// (JSON, a subset of `list`)
     Children,
 
     /// List tracked sessions with their SendMessage names
     List(PeerListArgs),
+
+    /// Resume a paused peer session by session ID and print its resolved
+    /// SendMessage name (see the `wake` module doc for why this isn't a
+    /// flag on `a cc resume`)
+    Wake(WakeArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -74,6 +83,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
         PeerCommands::Parent => run_parent(),
         PeerCommands::Children => run_children(),
         PeerCommands::List(args) => run_list(args),
+        PeerCommands::Wake(args) => wake::run(args),
     }
 }
 
