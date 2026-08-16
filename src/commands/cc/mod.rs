@@ -1,5 +1,6 @@
 mod auto_compact;
 pub(crate) mod auto_pause;
+mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
 mod error;
@@ -9,6 +10,7 @@ mod hook;
 mod list;
 mod mark_read;
 pub(crate) mod pane;
+mod peer;
 mod resume;
 mod resurrect;
 mod signal;
@@ -30,6 +32,7 @@ pub use hook::HookArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
 pub use pane::status::HasPausedArgs;
+pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use sweep::SweepArgs;
@@ -62,6 +65,10 @@ pub enum CcCommands {
     /// Save/restore session IDs for tmux-resurrect integration
     #[command(subcommand)]
     Resurrect(ResurrectCommands),
+
+    /// Resolve SendMessage target names for related Claude Code sessions
+    #[command(subcommand)]
+    Peer(PeerCommands),
 
     /// Pause long-stopped sessions by sending SIGTERM (run periodically)
     Sweep(SweepArgs),
@@ -98,6 +105,7 @@ impl CcCommands {
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
+            Self::Peer(cmd) => peer::run(cmd)?,
             Self::Sweep(args) => sweep::run(args)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,

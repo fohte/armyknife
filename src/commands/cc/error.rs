@@ -27,4 +27,9 @@ pub enum CcError {
 
     #[error("Failed to acquire file lock within {0:?}")]
     LockTimeout(Duration),
+
+    #[error(
+        "ARMYKNIFE_SESSION_ID is not set (not running inside an armyknife-tracked Claude Code session)"
+    )]
+    SelfSessionUnknown,
 }

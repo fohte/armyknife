@@ -319,6 +319,9 @@ Claude Code session monitoring with tmux integration.
 | `resume [session_id]`                  | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
 | `resurrect save`                       |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
 | `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
+| `peer parent`                          |         | List the session that delegated to this one, if any (JSON)               |
+| `peer children`                        |         | List the sessions this one delegated to (JSON)                           |
+| `peer list [-R <repo>]`                |         | List tracked sessions, with their SendMessage names (JSON)               |
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
@@ -375,6 +378,21 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
 
 The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID in the tmux pane user option `@armyknife-last-claude-code-session-id`, so that `a cc resume` can relaunch `claude --resume <id>` inside that pane.
+
+#### Peer session name resolution
+
+Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a wm new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a wm new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
+
+`a cc peer parent`, `a cc peer children`, and `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory) all print a JSON array of `{name, session_id, cwd, label, status}`; `name` is `null` when Claude Code's registry has no matching entry. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+
+```console
+$ a cc peer parent
+[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running"}]
+$ a cc peer parent | jq -r '.[0].name'
+myproject-4f
+$ a cc peer list -R myproject
+[{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped"}]
+```
 
 #### tmux-resurrect integration
 
