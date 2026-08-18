@@ -255,7 +255,7 @@ fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
         - Base: {base}
         - Delegator CWD: {delegator_cwd}
         - Worktree CWD: {worktree_cwd}
-        - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name (do not use it to ask questions or send progress updates)
+        - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
         </context>
         <instructions>
         {prompt}
@@ -1154,7 +1154,7 @@ mod tests {
             - Base: origin/master
             - Delegator CWD: /home/user/repo
             - Worktree CWD: /home/user/repo/.worktrees/fix-auth-bug
-            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name (do not use it to ask questions or send progress updates)
+            - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
             </context>
             <instructions>
             Fix the auth bug
@@ -1180,7 +1180,7 @@ mod tests {
             - Base: origin/main
             - Delegator CWD: /tmp/repo
             - Worktree CWD: /tmp/repo/.worktrees/feature-x
-            - If a premise in these instructions turns out to be wrong, report it to the delegator via SendMessage; resolve its name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name (do not use it to ask questions or send progress updates)
+            - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
             </context>
             <instructions>
             ## Background
