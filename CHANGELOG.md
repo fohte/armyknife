@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.268](https://github.com/fohte/armyknife/compare/v0.1.267...v0.1.268) (2026-08-18)
+
+
+### Bug Fixes
+
+* **wm/new:** clarify when a delegated session may contact its delegator ([#824](https://github.com/fohte/armyknife/issues/824)) ([5b477b1](https://github.com/fohte/armyknife/commit/5b477b1ce8708f5ccc961af75f02bb515e7cbfae))
+
 ## [0.1.267](https://github.com/fohte/armyknife/compare/v0.1.266...v0.1.267) (2026-08-16)
 
 
