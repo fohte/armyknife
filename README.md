@@ -324,6 +324,7 @@ Claude Code session monitoring with tmux integration.
 | `peer children`                        |         | List the sessions this one delegated to (JSON)                           |
 | `peer list [-R <repo>]`                |         | List tracked sessions, with their SendMessage names (JSON)               |
 | `peer wake <session_id>`               |         | Resume a paused peer session and print its resolved SendMessage name     |
+| `peer notify <session_id> -m <text>`   |         | Send a message directly to another session's SendMessage socket          |
 | `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
@@ -418,6 +419,12 @@ $ a cc peer parent | jq -r '.[0].session_id'
 1111...
 $ a cc peer wake 1111...
 myproject-7e
+```
+
+`a cc peer notify <session_id> -m <text>` delivers a message to a session's `SendMessage` socket directly, without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
+
+```console
+$ a cc peer notify 1111... -m "PR merged, worktree cleaned up"
 ```
 
 #### tmux-resurrect integration

@@ -17,38 +17,35 @@ use serde::Deserialize;
 struct RegistryEntry {
     #[serde(rename = "sessionId")]
     session_id: String,
+    pid: u32,
     #[serde(default)]
     name: Option<String>,
     /// Unix-epoch milliseconds the process started. Used to break ties when
     /// the same `session_id` shows up in more than one file -- e.g. a
     /// crashed process's file lingering alongside the file of a later
-    /// `claude --resume` of the same session -- by keeping the name from
+    /// `claude --resume` of the same session -- by keeping the entry from
     /// the most recently started process instead of whichever `read_dir`
     /// happens to list last.
     #[serde(default, rename = "startedAt")]
     started_at: Option<u64>,
+    #[serde(default, rename = "messagingSocketPath")]
+    messaging_socket_path: Option<String>,
 }
 
-/// Reads every `~/.claude/sessions/*.json` file and returns a
-/// `session_id -> name` map. Entries with no name, and files that don't
-/// parse (unrelated `.lock`/`.key` companions, a corrupted or
-/// future/incompatible format), are silently skipped rather than failing the
-/// whole lookup -- callers treat a missing entry as "name unresolvable".
-pub fn load_name_map() -> HashMap<String, String> {
-    let Some(home) = crate::shared::dirs::home_dir() else {
-        return HashMap::new();
-    };
-    load_name_map_in(&home)
-}
-
-fn load_name_map_in(home: &Path) -> HashMap<String, String> {
+/// Reads every `~/.claude/sessions/*.json` file into a `session_id ->
+/// RegistryEntry` map, keeping only the most recently started entry per
+/// `session_id` (see `RegistryEntry::started_at`). Files that don't parse
+/// (unrelated `.lock`/`.key` companions, a corrupted or future/incompatible
+/// format) are silently skipped rather than failing the whole scan --
+/// callers treat a missing entry as "unresolvable".
+fn load_registry_entries_in(home: &Path) -> HashMap<String, RegistryEntry> {
     let dir = home.join(".claude").join("sessions");
 
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return HashMap::new();
     };
 
-    let mut best: HashMap<String, (String, Option<u64>)> = HashMap::new();
+    let mut best: HashMap<String, RegistryEntry> = HashMap::new();
     for entry in entries.flatten() {
         let path = entry.path();
 
@@ -62,20 +59,37 @@ fn load_name_map_in(home: &Path) -> HashMap<String, String> {
         let Ok(parsed) = serde_json::from_str::<RegistryEntry>(&content) else {
             continue;
         };
-        let Some(name) = parsed.name.filter(|n| !n.is_empty()) else {
-            continue;
-        };
 
         let is_older = best
             .get(&parsed.session_id)
-            .is_some_and(|(_, existing_started_at)| *existing_started_at >= parsed.started_at);
+            .is_some_and(|existing| existing.started_at >= parsed.started_at);
         if !is_older {
-            best.insert(parsed.session_id, (name, parsed.started_at));
+            best.insert(parsed.session_id.clone(), parsed);
         }
     }
 
-    best.into_iter()
-        .map(|(session_id, (name, _))| (session_id, name))
+    best
+}
+
+/// Reads every `~/.claude/sessions/*.json` file and returns a
+/// `session_id -> name` map. Entries with no name are skipped -- callers
+/// treat a missing entry as "name unresolvable".
+pub fn load_name_map() -> HashMap<String, String> {
+    let Some(home) = crate::shared::dirs::home_dir() else {
+        return HashMap::new();
+    };
+    load_name_map_in(&home)
+}
+
+fn load_name_map_in(home: &Path) -> HashMap<String, String> {
+    load_registry_entries_in(home)
+        .into_iter()
+        .filter_map(|(session_id, entry)| {
+            entry
+                .name
+                .filter(|n| !n.is_empty())
+                .map(|name| (session_id, name))
+        })
         .collect()
 }
 
@@ -91,17 +105,6 @@ pub struct PeerConnection {
     pub messaging_socket_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ConnectionRegistryEntry {
-    #[serde(rename = "sessionId")]
-    session_id: String,
-    pid: u32,
-    #[serde(default, rename = "startedAt")]
-    started_at: Option<u64>,
-    #[serde(default, rename = "messagingSocketPath")]
-    messaging_socket_path: Option<String>,
-}
-
 /// Looks up the `PeerConnection` for `session_id`, or `None` if Claude
 /// Code's session registry has no entry for it (process exited, or the
 /// session ID is unknown).
@@ -111,39 +114,12 @@ pub fn load_peer_connection(session_id: &str) -> Option<PeerConnection> {
 }
 
 fn load_peer_connection_in(home: &Path, session_id: &str) -> Option<PeerConnection> {
-    let dir = home.join(".claude").join("sessions");
-    let entries = std::fs::read_dir(&dir).ok()?;
-
-    let mut best: Option<ConnectionRegistryEntry> = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(parsed) = serde_json::from_str::<ConnectionRegistryEntry>(&content) else {
-            continue;
-        };
-        if parsed.session_id != session_id {
-            continue;
-        }
-
-        let is_older = best
-            .as_ref()
-            .is_some_and(|existing| existing.started_at >= parsed.started_at);
-        if !is_older {
-            best = Some(parsed);
-        }
-    }
-
-    best.map(|entry| PeerConnection {
-        pid: entry.pid,
-        messaging_socket_path: entry.messaging_socket_path,
-    })
+    load_registry_entries_in(home)
+        .remove(session_id)
+        .map(|entry| PeerConnection {
+            pid: entry.pid,
+            messaging_socket_path: entry.messaging_socket_path,
+        })
 }
 
 #[cfg(test)]

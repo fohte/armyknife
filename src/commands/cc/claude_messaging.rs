@@ -24,8 +24,7 @@ use serde::{Deserialize, Serialize};
 /// `socket_path`. `pid` is used to locate that session's peer-token key
 /// file (`~/.claude/sessions/<pid>.*.key`) for authentication; if the key
 /// file can't be found or read, the message is still sent without an auth
-/// frame -- Claude Code only requires auth on Windows (see module docs on
-/// the protocol page this was reverse-engineered from).
+/// frame -- Claude Code only requires auth on Windows.
 ///
 /// Sets neither `priority` nor `from`: this is a fire-and-forget
 /// notification queued behind the receiving session's current turn, and
@@ -132,6 +131,35 @@ fn is_key_file_for_pid(file_name: &str, pid_str: &str) -> bool {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn find_key_file_picks_the_entry_matching_pid_among_other_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("111.deadbeef0123456789.key"), "").unwrap();
+        fs::write(dir.path().join("222.deadbeef0123456789.key"), "").unwrap();
+
+        assert_eq!(
+            find_key_file(dir.path(), 111),
+            Some(dir.path().join("111.deadbeef0123456789.key"))
+        );
+    }
+
+    #[test]
+    fn find_key_file_returns_none_when_no_file_matches_pid() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("222.deadbeef0123456789.key"), "").unwrap();
+
+        assert_eq!(find_key_file(dir.path(), 111), None);
+    }
+
+    #[test]
+    fn find_key_file_returns_none_when_sessions_dir_is_missing() {
+        let dir = TempDir::new().unwrap().path().join("missing");
+
+        assert_eq!(find_key_file(&dir, 111), None);
+    }
 
     #[test]
     fn build_auth_line_produces_the_documented_frame_shape() {
