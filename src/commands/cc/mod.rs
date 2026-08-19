@@ -12,7 +12,7 @@ mod list;
 mod mark_read;
 pub(crate) mod new;
 pub(crate) mod pane;
-mod peer;
+pub(crate) mod peer;
 mod resume;
 mod resurrect;
 mod signal;

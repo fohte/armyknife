@@ -19,7 +19,7 @@ use super::store;
 use super::types::Session;
 use crate::shared::env_var::EnvVars;
 
-mod notify;
+pub(crate) mod notify;
 mod wake;
 use notify::NotifyArgs;
 use wake::WakeArgs;

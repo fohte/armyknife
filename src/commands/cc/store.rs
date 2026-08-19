@@ -499,9 +499,8 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Lists all active sessions from disk.
-/// Reads all .json files in the sessions directory, excluding ended sessions.
-pub fn list_sessions() -> Result<Vec<Session>> {
+/// Reads every session file from disk, regardless of status.
+fn read_all_sessions() -> Result<Vec<Session>> {
     let dir = sessions_dir()?;
 
     if !dir.exists() {
@@ -517,14 +516,29 @@ pub fn list_sessions() -> Result<Vec<Session>> {
         if path.extension().is_some_and(|ext| ext == "json")
             && let Ok(content) = fs::read_to_string(&path)
             && let Ok(session) = serde_json::from_str::<Session>(&content)
-            && session.status != SessionStatus::Ended
         {
             sessions.push(session);
         }
     }
 
-    sort_sessions(&mut sessions);
+    Ok(sessions)
+}
 
+/// Lists all active sessions from disk, excluding ended sessions.
+pub fn list_sessions() -> Result<Vec<Session>> {
+    let mut sessions = read_all_sessions()?;
+    sessions.retain(|s| s.status != SessionStatus::Ended);
+    sort_sessions(&mut sessions);
+    Ok(sessions)
+}
+
+/// Lists every session from disk, including ended ones. Unlike
+/// `list_sessions`, callers use this when a session must be resolvable
+/// after it ended -- e.g. reading `ancestor_session_ids` off a delegated
+/// session that already exited by the time its PR merged.
+pub fn list_all_sessions() -> Result<Vec<Session>> {
+    let mut sessions = read_all_sessions()?;
+    sort_sessions(&mut sessions);
     Ok(sessions)
 }
 
@@ -663,6 +677,48 @@ mod tests {
             read_at: None,
             sweep_signaled: false,
         }
+    }
+
+    #[test]
+    fn list_sessions_excludes_ended_but_list_all_sessions_includes_it() {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let cache_home = temp_dir.path().to_str().expect("utf8 path").to_string();
+        let sessions_path = temp_dir
+            .path()
+            .join("armyknife")
+            .join("cc")
+            .join("sessions");
+
+        let mut ended = create_test_session("ended-1");
+        ended.status = SessionStatus::Ended;
+        let running = create_test_session("running-1");
+        save_session_to(&sessions_path, &ended).expect("save should succeed");
+        save_session_to(&sessions_path, &running).expect("save should succeed");
+
+        let (mut active_ids, mut all_ids) =
+            temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home.as_str()))], || {
+                let active: Vec<String> = list_sessions()
+                    .expect("list_sessions should succeed")
+                    .into_iter()
+                    .map(|s| s.session_id)
+                    .collect();
+                let all: Vec<String> = list_all_sessions()
+                    .expect("list_all_sessions should succeed")
+                    .into_iter()
+                    .map(|s| s.session_id)
+                    .collect();
+                (active, all)
+            });
+        active_ids.sort();
+        all_ids.sort();
+
+        assert_eq!(
+            (active_ids, all_ids),
+            (
+                vec!["running-1".to_string()],
+                vec!["ended-1".to_string(), "running-1".to_string()],
+            )
+        );
     }
 
     #[test]
