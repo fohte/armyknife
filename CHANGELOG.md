@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.269](https://github.com/fohte/armyknife/compare/v0.1.268...v0.1.269) (2026-08-19)
+
+
+### Features
+
+* **cc,wm:** add `a cc new` and deprecate `a wm new` ([#827](https://github.com/fohte/armyknife/issues/827)) ([8cf1ef2](https://github.com/fohte/armyknife/commit/8cf1ef27b257db4b235bc5e2e06f06bff65f8a09))
+
 ## [0.1.268](https://github.com/fohte/armyknife/compare/v0.1.267...v0.1.268) (2026-08-18)
 
 
