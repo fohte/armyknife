@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.273](https://github.com/fohte/armyknife/compare/v0.1.272...v0.1.273) (2026-08-19)
+
+
+### Features
+
+* **wm:** remove deprecated `a wm new` command ([#835](https://github.com/fohte/armyknife/issues/835)) ([19e2675](https://github.com/fohte/armyknife/commit/19e2675b16dd0c2cd3eb8ccd19182c6d647e17c4))
+
 ## [0.1.272](https://github.com/fohte/armyknife/compare/v0.1.271...v0.1.272) (2026-08-19)
 
 
