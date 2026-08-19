@@ -61,7 +61,7 @@ pub struct NewArgs {
     /// created with fohte/ prefix). Branch name is optional: when omitted,
     /// it is auto-generated from --prompt. When the flag itself is omitted
     /// entirely, no worktree is created and the session runs in the current
-    /// directory instead.
+    /// directory (or the target repo root when -R is given) instead.
     #[arg(long, num_args = 0..=1, require_equals = true)]
     pub worktree: Option<Option<String>>,
 
@@ -154,11 +154,25 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     Ok(env_vars)
 }
 
+/// Build the env vars and background flag shared by both the worktree and
+/// no-worktree tmux launch paths.
+fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, bool)> {
+    let env_vars = build_env_vars(common)?;
+    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
+    let background = std::env::var("CLAUDECODE").is_ok();
+    Ok((env_vars, background))
+}
+
 /// Run `a cc new` without `--worktree`: start a session in the current
-/// directory (or the target repo root when `-R` is given) without touching
-/// git at all. The new session is a single claude pane in its own tmux
-/// window, addressed by a name unique to this invocation so it never
-/// collides with an existing window in the same tmux session.
+/// directory (or the target repo root when `-R` is given) without any
+/// git-mutating operation (no fetch, no `git worktree add`, no
+/// post-worktree-create hook, no rollback). `repo_root` is still resolved
+/// read-only by the caller to group the new tmux window into the same
+/// session as the invoking repo, so this still requires running inside a
+/// git repository (or pointing `-R` at one). The new session is a single
+/// claude pane in its own tmux window, addressed by a name unique to this
+/// invocation so it never collides with an existing window in the same
+/// tmux session.
 fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
@@ -186,14 +200,11 @@ fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<
         args.common.prompt.clone()
     };
 
-    let env_vars = build_env_vars(&args.common)?;
+    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-
-    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
-    let background = std::env::var("CLAUDECODE").is_ok();
 
     // Unique per-invocation so this window never collides with an existing
     // window in the same tmux session (e.g. the worktree window this command
@@ -385,14 +396,11 @@ fn run_worktree_creation(
         }
     }
 
-    let env_vars = build_env_vars(&args.common)?;
+    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-
-    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
-    let background = std::env::var("CLAUDECODE").is_ok();
 
     // Setup tmux window using config layout
     setup_tmux_window(

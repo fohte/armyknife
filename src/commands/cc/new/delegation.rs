@@ -92,8 +92,8 @@ mod tests {
 
     #[rstest]
     #[case::single_line(
-        "fohte/fix-auth-bug",
-        "origin/master",
+        Some("fohte/fix-auth-bug"),
+        Some("origin/master"),
         "/home/user/repo",
         "/home/user/repo/.worktrees/fix-auth-bug",
         "Fix the auth bug",
@@ -113,8 +113,8 @@ mod tests {
             </delegated-task>"},
     )]
     #[case::multiline_prompt(
-        "fohte/feature-x",
-        "origin/main",
+        Some("fohte/feature-x"),
+        Some("origin/main"),
         "/tmp/repo",
         "/tmp/repo/.worktrees/feature-x",
         indoc! {"
@@ -142,50 +142,42 @@ mod tests {
             </instructions>
             </delegated-task>"},
     )]
+    #[case::no_branch_or_base(
+        None,
+        None,
+        "/cwd",
+        "/cwd",
+        "do something",
+        indoc! {"
+            <delegated-task>
+            <context>
+            - Source: Delegated from another Claude Code session
+            - Delegator CWD: /cwd
+            - Worktree CWD: /cwd
+            - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
+            </context>
+            <instructions>
+            do something
+            </instructions>
+            </delegated-task>"},
+    )]
     fn build_delegated_prompt_wraps_with_xml(
-        #[case] branch: &str,
-        #[case] base: &str,
+        #[case] branch: Option<&str>,
+        #[case] base: Option<&str>,
         #[case] delegator_cwd: &str,
         #[case] worktree_cwd: &str,
         #[case] prompt: &str,
         #[case] expected: &str,
     ) {
         let ctx = DelegationContext {
-            branch: Some(branch),
-            base: Some(base),
+            branch,
+            base,
             delegator_cwd,
             worktree_cwd,
         };
         let result = build_delegated_prompt(prompt.trim_start(), &ctx);
 
         assert_eq!(result, expected.trim_start());
-    }
-
-    #[rstest]
-    fn build_delegated_prompt_omits_branch_and_base_when_absent() {
-        let ctx = DelegationContext {
-            branch: None,
-            base: None,
-            delegator_cwd: "/cwd",
-            worktree_cwd: "/cwd",
-        };
-        let result = build_delegated_prompt("do something", &ctx);
-
-        assert_eq!(
-            result,
-            indoc! {"
-                <delegated-task>
-                <context>
-                - Source: Delegated from another Claude Code session
-                - Delegator CWD: /cwd
-                - Worktree CWD: /cwd
-                - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
-                </context>
-                <instructions>
-                do something
-                </instructions>
-                </delegated-task>"}
-        );
     }
 
     #[rstest]
