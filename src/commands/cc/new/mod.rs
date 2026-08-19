@@ -43,6 +43,12 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub label: Option<String>,
 
+    /// Model for the new Claude Code session. Passed through to `claude --model`.
+    /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
+    /// (e.g. "claude-fable-5").
+    #[arg(long)]
+    pub model: Option<String>,
+
     /// Parent session ID for tree view hierarchy.
     /// Sets ARMYKNIFE_ANCESTOR_SESSION_IDS for the child session.
     #[arg(long)]
@@ -222,6 +228,7 @@ fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<
             cwd: &cwd,
             window_name: &window_name,
             layout: &layout,
+            model: args.common.model.as_deref(),
             prompt: prompt.as_deref(),
             env_vars: &env_refs,
             background,
@@ -409,6 +416,7 @@ fn run_worktree_creation(
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
             window_name: &worktree_name,
             layout: &config.wm.layout,
+            model: args.common.model.as_deref(),
             prompt: final_prompt.as_deref(),
             env_vars: &env_refs,
             background,
