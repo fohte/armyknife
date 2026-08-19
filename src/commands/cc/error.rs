@@ -4,6 +4,12 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum CcError {
+    #[error("Not in a git repository")]
+    NotInGitRepo,
+
+    #[error("Cancelled: no prompt provided")]
+    Cancelled,
+
     #[error("Unknown hook event: {0}")]
     UnknownHookEvent(String),
 

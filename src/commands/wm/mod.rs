@@ -1,14 +1,14 @@
 mod clean;
 mod delete;
 mod error;
-mod git;
+pub(crate) mod git;
 mod list;
-mod new;
 pub(crate) mod worktree;
 
 #[cfg(test)]
 mod tests;
 
+use crate::commands::cc::new;
 use clap::Subcommand;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]

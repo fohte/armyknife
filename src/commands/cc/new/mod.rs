@@ -1,11 +1,11 @@
-use anyhow::{Context, bail};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-use super::error::{Result, WmError};
-use super::git::branch_to_worktree_name;
+use super::error::CcError;
 use crate::commands::cc::store as cc_store;
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
+use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::GitRepo;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
@@ -328,7 +328,7 @@ where
         }
         (None, None) => {
             // Open editor to get prompt
-            let prompt = editor_fn()?.ok_or(WmError::Cancelled)?;
+            let prompt = editor_fn()?.ok_or(CcError::Cancelled)?;
             let backend = backend_factory();
             let generated = generate_branch_name(&prompt, backend.as_ref())?;
             Ok(ResolvedArgs {
@@ -379,7 +379,7 @@ fn run_worktree_creation(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let repo = open_repo_at(Path::new(repo_root)).map_err(|_| WmError::NotInGitRepo)?;
+    let repo = open_repo_at(Path::new(repo_root)).map_err(|_| CcError::NotInGitRepo)?;
     let branch_prefix = &config.wm.branch_prefix;
 
     // Determine worktree directory name from branch name
@@ -597,7 +597,7 @@ fn rollback_worktree(
 ) {
     eprintln!("post-worktree-create hook failed; rolling back worktree '{worktree_name}'");
 
-    let removed = match super::worktree::delete_worktree(repo, worktree_name) {
+    let removed = match crate::commands::wm::worktree::delete_worktree(repo, worktree_name) {
         Ok(true) => true,
         Ok(false) => {
             eprintln!(
@@ -631,7 +631,7 @@ fn rollback_worktree(
 
     match branch_rollback {
         BranchRollback::Delete => {
-            if super::worktree::delete_branch_if_exists(repo, branch) {
+            if crate::commands::wm::worktree::delete_branch_if_exists(repo, branch) {
                 eprintln!("Deleted branch '{branch}'");
             }
         }
@@ -1068,8 +1068,8 @@ mod tests {
             Err(_) => {
                 let err = result.unwrap_err();
                 assert!(
-                    err.downcast_ref::<WmError>()
-                        .is_some_and(|e| matches!(e, WmError::Cancelled))
+                    err.downcast_ref::<CcError>()
+                        .is_some_and(|e| matches!(e, CcError::Cancelled))
                 );
             }
         }
