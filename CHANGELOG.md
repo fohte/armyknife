@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.270](https://github.com/fohte/armyknife/compare/v0.1.269...v0.1.270) (2026-08-19)
+
+
+### Features
+
+* **cc/new:** support choosing the launched session's model via --model ([#829](https://github.com/fohte/armyknife/issues/829)) ([3b12c2b](https://github.com/fohte/armyknife/commit/3b12c2b99ff49f64a050b1a2037eba56a1016d23))
+
 ## [0.1.269](https://github.com/fohte/armyknife/compare/v0.1.268...v0.1.269) (2026-08-19)
 
 
