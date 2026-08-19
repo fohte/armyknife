@@ -22,6 +22,7 @@ use crate::shared::active_session::{
     ActivityProbe, NoActivityProbe, TmuxActivityProbe, contains_active_session,
 };
 use crate::shared::config::load_config;
+use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
 
@@ -92,7 +93,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_single_repo(&main_repo, &to_delete)?;
+    delete_worktrees_single_repo(&main_repo, &to_delete).await?;
 
     Ok(())
 }
@@ -264,7 +265,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_all_repos(&repos_root, &all_to_delete)?;
+    delete_worktrees_all_repos(&repos_root, &all_to_delete).await?;
 
     Ok(())
 }
@@ -482,10 +483,20 @@ fn confirm_deletion() -> bool {
 }
 
 /// Delete all worktrees and their branches for a single repository.
-fn delete_worktrees_single_repo(repo: &GitRepo, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
+async fn delete_worktrees_single_repo(
+    repo: &GitRepo,
+    worktrees: &[CleanWorktreeInfo],
+) -> Result<()> {
     let mut deleted_count = 0;
 
     for info in worktrees {
+        // Must run before cleanup_worktree_by_name below: notification looks
+        // up delegate sessions by worktree path, and cleanup deletes those
+        // same session files.
+        if info.status.is_merged() {
+            notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
+        }
+
         let result =
             crate::shared::cleanup::cleanup_worktree_by_name(repo, &info.wt.name, &info.wt.path)?;
 
@@ -513,7 +524,10 @@ fn delete_worktrees_single_repo(repo: &GitRepo, worktrees: &[CleanWorktreeInfo])
 
 /// Delete worktrees across multiple repositories (--all mode).
 /// Groups worktrees by repo_name to avoid reopening the same repository.
-fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]) -> Result<()> {
+async fn delete_worktrees_all_repos(
+    repos_root: &Path,
+    worktrees: &[CleanWorktreeInfo],
+) -> Result<()> {
     let mut deleted_count = 0;
 
     // Group worktrees by repository so input order doesn't matter
@@ -535,6 +549,13 @@ fn delete_worktrees_all_repos(repos_root: &Path, worktrees: &[CleanWorktreeInfo]
         };
 
         for info in infos {
+            // Must run before cleanup_worktree_by_name below: notification
+            // looks up delegate sessions by worktree path, and cleanup
+            // deletes those same session files.
+            if info.status.is_merged() {
+                notify_delegator_of_merge(&repo, &info.wt.branch, &info.wt.path).await;
+            }
+
             let result = crate::shared::cleanup::cleanup_worktree_by_name(
                 &repo,
                 &info.wt.name,
