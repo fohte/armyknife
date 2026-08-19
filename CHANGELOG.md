@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.271](https://github.com/fohte/armyknife/compare/v0.1.270...v0.1.271) (2026-08-19)
+
+
+### Features
+
+* **cc:** allow `--worktree` to be omitted ([#831](https://github.com/fohte/armyknife/issues/831)) ([7c76dfb](https://github.com/fohte/armyknife/commit/7c76dfb8b28505dc7c5c88d07155f97e41ba933b))
+
 ## [0.1.270](https://github.com/fohte/armyknife/compare/v0.1.269...v0.1.270) (2026-08-19)
 
 
