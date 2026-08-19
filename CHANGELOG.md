@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.274](https://github.com/fohte/armyknife/compare/v0.1.273...v0.1.274) (2026-08-19)
+
+
+### Bug Fixes
+
+* **cc:** recover `--prompt` even without `--worktree` ([#837](https://github.com/fohte/armyknife/issues/837)) ([959b180](https://github.com/fohte/armyknife/commit/959b180750ad004d36a7c0a5b28d1fce45032bca))
+
 ## [0.1.273](https://github.com/fohte/armyknife/compare/v0.1.272...v0.1.273) (2026-08-19)
 
 
