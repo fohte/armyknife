@@ -4,10 +4,15 @@ use crate::infra::tmux;
 use crate::shared::config::Config;
 
 /// Setup a tmux window using the configured layout.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "positional params mirror build_layout's public signature"
+)]
 pub(super) fn setup_tmux_window(
     repo_root: &str,
     worktree_dir: &str,
     worktree_name: &str,
+    model: Option<&str>,
     prompt: Option<&str>,
     config: &Config,
     env_vars: &[(&str, &str)],
@@ -22,6 +27,7 @@ pub(super) fn setup_tmux_window(
         worktree_dir,
         worktree_name,
         &config.wm.layout,
+        model,
         prompt,
         env_vars,
         background,

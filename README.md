@@ -341,6 +341,7 @@ Claude Code session monitoring with tmux integration.
 | `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                                                                                   |
 | `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                  |
 | `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                                                                                     |
+| `--model <model>`          | Model for the new Claude Code session (passed through to `claude --model`); accepts an alias (e.g. `opus`, `sonnet`) or a full model name (e.g. `claude-fable-5`)                       |
 | `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                               |
 
 #### Setup
