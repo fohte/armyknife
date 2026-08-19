@@ -5,7 +5,7 @@
 //! internally (see `claude_registry`); there is no way to address a session
 //! by its `session_id` directly. This joins armyknife's own session store
 //! (which tracks parent/child relationships via `ancestor_session_ids`,
-//! populated whenever `a wm new` resolves a parent session -- see
+//! populated whenever `a cc new` resolves a parent session -- see
 //! `cc::new::delegation::build_ancestor_chain`) against that name so a
 //! session can find the right `SendMessage` target for itself.
 

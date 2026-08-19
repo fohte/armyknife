@@ -24,7 +24,7 @@ use worktree::{
     rollback_worktree,
 };
 
-/// Args shared between `a cc new` and the deprecated `a wm new` adapter.
+/// CLI args shared by `a cc new`'s worktree and no-worktree modes.
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CommonNewArgs {
     /// Initial prompt to send to Claude Code.

@@ -1019,7 +1019,7 @@ mod tests {
     fn build_layout_commands_background_with_env_vars_places_new_window_at_expected_index() {
         // Documents that build_layout_commands emits exactly one set-environment
         // command per env_var before new-window, in the background + env_vars
-        // combination that `a wm new --agent` exercises in production.
+        // combination that `a cc new --worktree --agent` exercises in production.
         let layout = LayoutNode::Pane(PaneConfig {
             command: "claude".to_string(),
             focus: true,

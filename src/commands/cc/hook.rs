@@ -286,7 +286,7 @@ fn process_hook_event_impl(
     // or when source is absent (backward compatibility / other cases).
     if event == HookEvent::SessionStart {
         // Export session ID to CLAUDE_ENV_FILE so that subsequent Bash commands
-        // (e.g., `a wm new`) can automatically discover the parent session ID.
+        // (e.g., `a cc new`) can automatically discover the parent session ID.
         // This must run for ALL SessionStart events (including "startup") because
         // CLAUDE_ENV_FILE is only writable during SessionStart hooks.
         export_session_id_to_env_file(&input.session_id);
@@ -356,7 +356,7 @@ fn process_hook_event_impl(
     let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| {
-        // Read label and ancestor chain from environment variables (set by `wm new`)
+        // Read label and ancestor chain from environment variables (set by `a cc new`)
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()

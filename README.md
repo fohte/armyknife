@@ -48,9 +48,9 @@ For editor autocompletion, add the following to the top of your config file:
 
 wm:
   worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
-  branch_prefix: fohte/ # branch name prefix for `a wm new` (default: "fohte/")
+  branch_prefix: fohte/ # branch name prefix for `a cc new --worktree` (default: "fohte/")
   repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
-  layout: # tmux pane layout for `a wm new`
+  layout: # tmux pane layout for `a cc new --worktree`
     direction: horizontal
     first:
       command: nvim
@@ -399,7 +399,7 @@ The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID
 
 #### Peer session name resolution
 
-Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a wm new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a wm new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
+Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a cc new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a cc new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
 `a cc peer parent`, `a cc peer children`, and `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory) all print a JSON array of `{name, session_id, cwd, label, status}`; `name` is `null` when Claude Code's registry has no matching entry. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
@@ -511,7 +511,7 @@ Stopped sessions that have not been focused since their most recent Stop render 
 
 `a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
 
-The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a cc watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `cc watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a wm new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
+The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a cc watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `cc watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a cc new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
 
 Reference both options from tmux's `window-status-format` to surface per-window session state and title next to the window index. `#{?...}` falls back to `#W` (the tmux window name) when no session in the window has a title set:
 
@@ -541,14 +541,13 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 Git worktree management with tmux integration.
 
-| Action              | Aliases  | Description                                |
-| ------------------- | -------- | ------------------------------------------ |
-| `list`              | `ls`     | List all worktrees                         |
-| `new <branch>`      |          | Create a new worktree and open tmux window |
-| `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch           |
-| `clean`             | `c`      | Bulk delete merged or closed worktrees     |
+| Action              | Aliases  | Description                            |
+| ------------------- | -------- | -------------------------------------- |
+| `list`              | `ls`     | List all worktrees                     |
+| `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch       |
+| `clean`             | `c`      | Bulk delete merged or closed worktrees |
 
-> `a wm new` is deprecated; use `a cc new --worktree=<branch>` instead.
+Use `a cc new --worktree=<branch>` to create a new worktree and open a tmux window.
 
 `clean` options:
 

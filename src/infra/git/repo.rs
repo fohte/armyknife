@@ -216,7 +216,7 @@ pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
 ///
 /// Concurrent callers against the same repository are serialized through a
 /// per-repo file lock, and recent fetches are coalesced via a TTL so a burst
-/// of parallel `wm new` invocations only pays for a single network fetch.
+/// of parallel `a cc new` invocations only pays for a single network fetch.
 pub fn fetch_with_prune(repo: &GitRepo) -> Result<()> {
     let lock_path = repo.common_dir().join("armyknife-fetch.lock");
     fetch_with_coalescing(&lock_path, FETCH_TTL, || repo.fetch_origin_prune())

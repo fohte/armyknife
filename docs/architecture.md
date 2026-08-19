@@ -18,7 +18,7 @@ a [<scope>...] <action>
 | Command                | Scope         | Action            |
 | ---------------------- | ------------- | ----------------- |
 | `a update`             | (none)        | `update`          |
-| `a wm new`             | `wm`          | `new`             |
+| `a cc new`             | `cc`          | `new`             |
 | `a ai pr-draft submit` | `ai pr-draft` | `submit`          |
 | `a gh check-pr-review` | `gh`          | `check-pr-review` |
 
