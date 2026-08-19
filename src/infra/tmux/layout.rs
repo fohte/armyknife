@@ -34,15 +34,22 @@ fn background_pane_prefix(session: &str, window_name: &str) -> String {
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
 /// The first command creates a new window, subsequent commands split panes.
+/// If `model` is provided, claude pane commands get `--model <model>` inserted
+/// right after `claude`.
 /// If `prompt_file` is provided, claude pane commands will read the prompt
 /// from the file at shell execution time and delete it afterward.
 /// `env_vars` are set as tmux session-level environment variables so that
 /// all panes in the window inherit them.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "positional params mirror build_layout's public signature"
+)]
 pub fn build_layout_commands(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
+    model: Option<&str>,
     prompt_file: Option<&Path>,
     env_vars: &[(&str, &str)],
     background: bool,
@@ -110,7 +117,7 @@ pub fn build_layout_commands(
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{pane_prefix}{}", i + 1);
         let cleanup = last_claude_index == Some(i);
-        let cmd = apply_prompt_if_claude(&entry.command, prompt_file, cleanup);
+        let cmd = apply_prompt_if_claude(&entry.command, model, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -226,18 +233,38 @@ fn count_panes(node: &LayoutNode) -> usize {
     }
 }
 
-/// If the command starts with "claude", append the prompt file path.
+/// If the command starts with "claude", insert `--model <model>` right after
+/// `claude` and append the prompt file path.
 ///
 /// Uses `$(cat <path>)` to read the prompt at shell execution time.
 /// If `cleanup` is true, also deletes the temp file after reading.
 /// Only the last claude pane should set `cleanup = true` to avoid
 /// deleting the file before other panes have read it.
-fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>, cleanup: bool) -> String {
+fn apply_prompt_if_claude(
+    command: &str,
+    model: Option<&str>,
+    prompt_file: Option<&Path>,
+    cleanup: bool,
+) -> String {
+    if !command.starts_with("claude") {
+        return command.to_string();
+    }
+
+    let command = match model {
+        Some(model) => {
+            let escaped_model = shlex::try_quote(model)
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| model.to_string());
+            format!(
+                "claude --model {escaped_model}{}",
+                &command["claude".len()..]
+            )
+        }
+        None => command.to_string(),
+    };
+
     match prompt_file {
         Some(path) => {
-            if !command.starts_with("claude") {
-                return command.to_string();
-            }
             let path_str = path.display().to_string();
             let escaped_path = shlex::try_quote(&path_str)
                 .map(|c| c.into_owned())
@@ -248,23 +275,30 @@ fn apply_prompt_if_claude(command: &str, prompt_file: Option<&Path>, cleanup: bo
                 format!("{command} \"$(cat {escaped_path})\"")
             }
         }
-        _ => command.to_string(),
+        None => command,
     }
 }
 
 /// Build and execute tmux layout from a LayoutNode tree.
 ///
 /// Creates a new tmux window and configures panes according to the layout.
+/// If `model` is provided, claude pane commands get `--model <model>` inserted
+/// right after `claude`.
 /// If prompt is provided, writes it to a temp file and passes the path to
 /// claude pane commands. The temp file is read and deleted by the shell
 /// command at execution time.
 /// `env_vars` are forwarded to `build_layout_commands` as tmux session-level
 /// environment variables.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "positional params mirror build_layout_commands' public signature"
+)]
 pub fn build_layout(
     session: &str,
     cwd: &str,
     window_name: &str,
     layout: &LayoutNode,
+    model: Option<&str>,
     prompt: Option<&str>,
     env_vars: &[(&str, &str)],
     background: bool,
@@ -276,6 +310,7 @@ pub fn build_layout(
         cwd,
         window_name,
         layout,
+        model,
         prompt_path,
         env_vars,
         background,
@@ -415,7 +450,7 @@ mod tests {
     #[case::non_claude_without_prompt("bash", None)]
     fn test_apply_prompt_if_claude_no_expansion(#[case] command: &str, #[case] path: Option<&str>) {
         let path_buf = path.map(PathBuf::from);
-        let result = apply_prompt_if_claude(command, path_buf.as_deref(), true);
+        let result = apply_prompt_if_claude(command, None, path_buf.as_deref(), true);
         assert_eq!(result, command);
     }
 
@@ -445,7 +480,34 @@ mod tests {
         #[case] expected: &str,
     ) {
         let path_buf = PathBuf::from(path);
-        let result = apply_prompt_if_claude(command, Some(&path_buf), cleanup);
+        let result = apply_prompt_if_claude(command, None, Some(&path_buf), cleanup);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::claude_with_model_no_prompt("claude", Some("opus"), None, "claude --model opus")]
+    #[case::claude_with_extra_args_and_model(
+        "claude -p agent1",
+        Some("opus"),
+        None,
+        "claude --model opus -p agent1"
+    )]
+    #[case::claude_without_model_unchanged("claude", None, None, "claude")]
+    #[case::non_claude_with_model_unchanged("nvim", Some("opus"), None, "nvim")]
+    #[case::claude_with_model_and_prompt(
+        "claude",
+        Some("opus"),
+        Some("/tmp/prompt.txt"),
+        "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    fn test_apply_prompt_if_claude_with_model(
+        #[case] command: &str,
+        #[case] model: Option<&str>,
+        #[case] path: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let path_buf = path.map(PathBuf::from);
+        let result = apply_prompt_if_claude(command, model, path_buf.as_deref(), true);
         assert_eq!(result, expected);
     }
 
@@ -460,7 +522,8 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "editor", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "editor", &layout, None, None, &[], false);
 
         assert_eq!(
             commands,
@@ -492,7 +555,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         assert_eq!(
             commands,
@@ -528,7 +592,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "monitor", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "monitor", &layout, None, None, &[], false);
 
         assert_eq!(
             commands,
@@ -572,7 +637,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         assert_eq!(
             commands,
@@ -618,6 +684,7 @@ mod tests {
             "/tmp",
             "dev",
             &layout,
+            None,
             Some(&prompt_path),
             &[],
             false,
@@ -663,7 +730,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         // The last select-pane should target pane 2 (the last focused pane)
         let last_cmd = commands.last().unwrap();
@@ -685,7 +753,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
@@ -720,7 +789,8 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         assert_eq!(
             commands,
@@ -770,6 +840,7 @@ mod tests {
             "/tmp",
             "dev",
             &layout,
+            None,
             Some(&prompt_path),
             &[],
             false,
@@ -804,6 +875,51 @@ mod tests {
     }
 
     // =========================================================================
+    // build_layout_commands: --model applies to every claude pane
+    // =========================================================================
+
+    #[test]
+    fn model_applied_to_all_claude_panes() {
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: Box::new(LayoutNode::Pane(PaneConfig {
+                command: "claude -p agent1".to_string(),
+                focus: true,
+            })),
+            second: Box::new(LayoutNode::Pane(PaneConfig {
+                command: "claude -p agent2".to_string(),
+                focus: false,
+            })),
+        });
+
+        let commands = build_layout_commands(
+            "sess",
+            "/tmp",
+            "dev",
+            &layout,
+            Some("opus"),
+            None,
+            &[],
+            false,
+        );
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                cmd(&["send-keys", "-l", "--", "claude --model opus -p agent1"]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                cmd(&["send-keys", "-l", "--", "claude --model opus -p agent2"]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "1"]),
+            ]
+        );
+    }
+
+    // =========================================================================
     // build_layout_commands: env_vars inject set-environment before new-window
     // =========================================================================
 
@@ -821,7 +937,7 @@ mod tests {
             (ancestors_key, "parent-1,parent-2"),
         ];
         let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, false);
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &env_vars, false);
 
         // set-environment commands should come before new-window
         assert_eq!(
@@ -862,7 +978,7 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], true);
+        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], true);
 
         // new-window must be detached so the attached client's view does not flip.
         assert_eq!(
@@ -903,7 +1019,8 @@ mod tests {
         });
         let env_vars = [("KEY1", "v1"), ("KEY2", "v2")];
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &env_vars, true);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &env_vars, true);
 
         assert_eq!(commands[env_vars.len()].args[0], "new-window");
     }
@@ -915,7 +1032,8 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         // new-window is left attached (no `-d`).
         assert_eq!(
@@ -1021,7 +1139,8 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, &[], false);
+        let commands =
+            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
 
         // First command should be new-window, not set-environment
         assert_eq!(
