@@ -33,7 +33,7 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
     notify(&args.session_id, &args.message)
 }
 
-fn notify(session_id: &str, message: &str) -> Result<()> {
+pub fn notify(session_id: &str, message: &str) -> Result<()> {
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
