@@ -10,6 +10,7 @@ pub mod hex;
 pub mod hooks;
 pub mod human_in_the_loop;
 pub mod log;
+pub mod merge_notify;
 pub mod repos_root;
 pub mod table;
 #[cfg(test)]

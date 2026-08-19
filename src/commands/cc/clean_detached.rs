@@ -14,9 +14,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Args;
+use tracing::Instrument;
 
 use crate::shared::cleanup;
 use crate::shared::log::short_run_id;
+use crate::shared::merge_notify::notify_delegator_if_merged_worktree_at;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanDetachedArgs {
@@ -40,23 +42,22 @@ pub struct CleanDetachedArgs {
 /// string when tailing / summarising.
 pub const EVENT_TARGET: &str = "armyknife::commands::cc::clean";
 
-pub fn run(args: &CleanDetachedArgs) -> Result<()> {
+pub async fn run(args: &CleanDetachedArgs) -> Result<()> {
     // All failures stay off the parent TTY: `cc watch` spawns this process
     // detached and the silent contract is documented at the top of this
     // module. Failures that happen after the span is open are recorded
     // in the tracing log on a best-effort basis.
-    let _ = run_inner(args);
+    let _ = run_inner(args).await;
     Ok(())
 }
 
-fn run_inner(args: &CleanDetachedArgs) -> Result<()> {
+async fn run_inner(args: &CleanDetachedArgs) -> Result<()> {
     let run_id = args.run_id.clone().unwrap_or_else(short_run_id);
     let span = tracing::info_span!("cc.clean", run_id = %run_id);
-    let _entered = span.enter();
 
     let paths = collect_paths(args);
     let cleaner = RealCleaner;
-    run_with(&paths, &cleaner);
+    run_with(&paths, &cleaner).instrument(span).await;
     Ok(())
 }
 
@@ -90,13 +91,18 @@ fn collect_paths(args: &CleanDetachedArgs) -> Vec<PathBuf> {
 /// Abstracts the worktree cleanup boundary so tests can avoid invoking
 /// real git/tmux.
 trait Cleaner {
-    fn cleanup(&self, path: &Path) -> Result<()>;
+    async fn cleanup(&self, path: &Path) -> Result<()>;
 }
 
 struct RealCleaner;
 
 impl Cleaner for RealCleaner {
-    fn cleanup(&self, path: &Path) -> Result<()> {
+    async fn cleanup(&self, path: &Path) -> Result<()> {
+        // Must run before cleanup_worktree_resources below: notification
+        // looks up delegate sessions and branch info from the worktree,
+        // both of which cleanup deletes.
+        notify_delegator_if_merged_worktree_at(path).await;
+
         let result = cleanup::cleanup_worktree_resources(path)?;
         if !result.worktree_deleted {
             anyhow::bail!("worktree not deleted: {}", path.display());
@@ -105,7 +111,7 @@ impl Cleaner for RealCleaner {
     }
 }
 
-fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
+async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
     tracing::info!(
         target: EVENT_TARGET,
         event = "cc.clean.start",
@@ -116,7 +122,7 @@ fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
     let mut failed = 0usize;
     for path in paths {
         let path_str = path.to_string_lossy().into_owned();
-        match cleaner.cleanup(path) {
+        match cleaner.cleanup(path).await {
             Ok(()) => {
                 ok += 1;
                 tracing::info!(
@@ -160,7 +166,7 @@ mod tests {
     }
 
     impl Cleaner for FakeCleaner {
-        fn cleanup(&self, path: &Path) -> Result<()> {
+        async fn cleanup(&self, path: &Path) -> Result<()> {
             self.calls.borrow_mut().push(path.to_path_buf());
             let s = path.to_string_lossy().to_string();
             for (p, outcome) in &self.plan {
@@ -175,13 +181,13 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn run_with_continues_after_error() {
+    #[tokio::test]
+    async fn run_with_continues_after_error() {
         let cleaner = FakeCleaner {
             plan: vec![("/a".to_string(), Err("nope".to_string()))],
             calls: RefCell::new(Vec::new()),
         };
-        run_with(&[PathBuf::from("/a"), PathBuf::from("/b")], &cleaner);
+        run_with(&[PathBuf::from("/a"), PathBuf::from("/b")], &cleaner).await;
         assert_eq!(cleaner.calls.borrow().len(), 2);
     }
 

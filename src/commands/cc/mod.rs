@@ -117,7 +117,7 @@ impl CcCommands {
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
             Self::PaneHasPaused(args) => pane::status::run(args)?,
-            Self::CleanDetached(args) => clean_detached::run(args)?,
+            Self::CleanDetached(args) => clean_detached::run(args).await?,
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
         }
         Ok(())

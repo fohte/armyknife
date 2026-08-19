@@ -551,7 +551,7 @@ Git worktree management with tmux integration.
 
 Use `a cc new --worktree=<branch>` to create a new worktree and open a tmux window.
 
-When `delete` removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a cc new --worktree` from another session), it also notifies the delegator session via `a cc peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
+When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a cc new --worktree` from another session), it also notifies the delegator session via `a cc peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
 
 `clean` options:
 
