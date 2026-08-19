@@ -32,6 +32,7 @@ pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
+pub use new::NewArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
@@ -42,6 +43,9 @@ pub use window_status::WindowStatusArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CcCommands {
+    /// Start a Claude Code session in a new worktree
+    New(NewArgs),
+
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
 
@@ -99,6 +103,7 @@ pub enum CcCommands {
 impl CcCommands {
     pub async fn run(&self) -> anyhow::Result<()> {
         match self {
+            Self::New(args) => new::run(args)?,
             Self::Hook(args) => hook::run(args)?,
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,

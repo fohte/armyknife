@@ -3,12 +3,12 @@ mod delete;
 mod error;
 pub(crate) mod git;
 mod list;
+mod new;
 pub(crate) mod worktree;
 
 #[cfg(test)]
 mod tests;
 
-use crate::commands::cc::new;
 use clap::Subcommand;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -17,8 +17,8 @@ pub enum WmCommands {
     #[command(visible_alias = "ls")]
     List(list::ListArgs),
 
-    /// Create a new Git worktree for a branch
-    New(new::NewArgs),
+    /// [DEPRECATED] Create a new Git worktree for a branch. Use `a cc new --worktree` instead.
+    New(new::WmNewArgs),
 
     /// Delete a Git worktree and its branch
     #[command(visible_aliases = ["d", "rm"])]

@@ -103,7 +103,7 @@ where
     F: FnOnce() -> Box<dyn crate::commands::name_branch::Backend>,
     E: FnOnce() -> Result<Option<String>>,
 {
-    match (&args.name, &args.prompt) {
+    match (&args.worktree, &args.common.prompt) {
         (Some(name), prompt) => Ok(ResolvedArgs {
             branch_name: name.clone(),
             prompt: prompt.clone(),
@@ -132,6 +132,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::cc::new::CommonNewArgs;
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
     use rstest::rstest;
     use tempfile::TempDir;
@@ -174,14 +175,16 @@ mod tests {
         #[case] expected_prompt: Option<&str>,
     ) {
         let args = NewArgs {
-            name: name.map(String::from),
+            worktree: name.map(String::from),
             from: None,
             force: false,
-            prompt: prompt.map(String::from),
-            agent: false,
-            label: None,
-            parent_session_id: None,
-            repo: None,
+            common: CommonNewArgs {
+                prompt: prompt.map(String::from),
+                agent: false,
+                label: None,
+                parent_session_id: None,
+                repo: None,
+            },
             skip_hooks: false,
         };
         let result = resolve_args_with_deps(
@@ -206,14 +209,16 @@ mod tests {
         #[case] expected: std::result::Result<(&str, Option<&str>), bool>,
     ) {
         let args = NewArgs {
-            name: None,
+            worktree: None,
             from: None,
             force: false,
-            prompt: None,
-            agent: false,
-            label: None,
-            parent_session_id: None,
-            repo: None,
+            common: CommonNewArgs {
+                prompt: None,
+                agent: false,
+                label: None,
+                parent_session_id: None,
+                repo: None,
+            },
             skip_hooks: false,
         };
         let result = resolve_args_with_deps(
