@@ -19,7 +19,9 @@ use super::store;
 use super::types::Session;
 use crate::shared::env_var::EnvVars;
 
+mod notify;
 mod wake;
+use notify::NotifyArgs;
 use wake::WakeArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -39,6 +41,10 @@ pub enum PeerCommands {
     /// SendMessage name (see the `wake` module doc for why this isn't a
     /// flag on `a cc resume`)
     Wake(WakeArgs),
+
+    /// Send a message directly to another session's SendMessage socket,
+    /// without going through any session's own SendMessage tool call
+    Notify(NotifyArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -84,6 +90,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
         PeerCommands::Children => run_children(),
         PeerCommands::List(args) => run_list(args),
         PeerCommands::Wake(args) => wake::run(args),
+        PeerCommands::Notify(args) => notify::run(args),
     }
 }
 

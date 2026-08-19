@@ -38,4 +38,12 @@ pub enum CcError {
         "ARMYKNIFE_SESSION_ID is not set (not running inside an armyknife-tracked Claude Code session)"
     )]
     SelfSessionUnknown,
+
+    #[error("Session '{0}' has ended; refusing to notify (the user ended it intentionally)")]
+    SessionEnded(String),
+
+    #[error(
+        "Session '{0}' has no messaging socket (its Claude Code process predates peer messaging support); cannot notify"
+    )]
+    NoMessagingSocket(String),
 }

@@ -79,6 +79,73 @@ fn load_name_map_in(home: &Path) -> HashMap<String, String> {
         .collect()
 }
 
+/// Registry fields needed to open a `SendMessage` connection to a session:
+/// its pid (to locate the peer-token key file, `<pid>.*.key`) and the Unix
+/// domain socket Claude Code listens on for messaging.
+/// `messaging_socket_path` is `None` when the session was started by a
+/// Claude Code build that predates peer messaging -- callers must treat
+/// that as "cannot notify", not silently skip it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerConnection {
+    pub pid: u32,
+    pub messaging_socket_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionRegistryEntry {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    pid: u32,
+    #[serde(default, rename = "startedAt")]
+    started_at: Option<u64>,
+    #[serde(default, rename = "messagingSocketPath")]
+    messaging_socket_path: Option<String>,
+}
+
+/// Looks up the `PeerConnection` for `session_id`, or `None` if Claude
+/// Code's session registry has no entry for it (process exited, or the
+/// session ID is unknown).
+pub fn load_peer_connection(session_id: &str) -> Option<PeerConnection> {
+    let home = crate::shared::dirs::home_dir()?;
+    load_peer_connection_in(&home, session_id)
+}
+
+fn load_peer_connection_in(home: &Path, session_id: &str) -> Option<PeerConnection> {
+    let dir = home.join(".claude").join("sessions");
+    let entries = std::fs::read_dir(&dir).ok()?;
+
+    let mut best: Option<ConnectionRegistryEntry> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<ConnectionRegistryEntry>(&content) else {
+            continue;
+        };
+        if parsed.session_id != session_id {
+            continue;
+        }
+
+        let is_older = best
+            .as_ref()
+            .is_some_and(|existing| existing.started_at >= parsed.started_at);
+        if !is_older {
+            best = Some(parsed);
+        }
+    }
+
+    best.map(|entry| PeerConnection {
+        pid: entry.pid,
+        messaging_socket_path: entry.messaging_socket_path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +218,72 @@ mod tests {
         let map = load_name_map_in(home.path());
 
         assert_eq!(map, HashMap::new());
+    }
+
+    #[rstest]
+    #[case::finds_the_matching_entry(
+        &[
+            (
+                "111.json",
+                r#"{"pid":111,"sessionId":"aaa","messagingSocketPath":"/tmp/cc-socks/111.sock"}"#,
+            ),
+            ("222.json", r#"{"pid":222,"sessionId":"bbb"}"#),
+        ],
+        "aaa",
+        Some(PeerConnection {
+            pid: 111,
+            messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
+        })
+    )]
+    #[case::none_when_socket_path_is_absent_old_build(
+        &[("111.json", r#"{"pid":111,"sessionId":"aaa"}"#)],
+        "aaa",
+        Some(PeerConnection {
+            pid: 111,
+            messaging_socket_path: None,
+        })
+    )]
+    #[case::none_when_session_id_is_unknown(
+        &[("111.json", r#"{"pid":111,"sessionId":"aaa"}"#)],
+        "bbb",
+        None
+    )]
+    #[case::prefers_the_entry_with_the_later_started_at_on_session_id_collision(
+        &[
+            (
+                "111.json",
+                r#"{"pid":111,"sessionId":"aaa","startedAt":1000,"messagingSocketPath":"/tmp/cc-socks/111.sock"}"#,
+            ),
+            (
+                "222.json",
+                r#"{"pid":222,"sessionId":"aaa","startedAt":2000,"messagingSocketPath":"/tmp/cc-socks/222.sock"}"#,
+            ),
+        ],
+        "aaa",
+        Some(PeerConnection {
+            pid: 222,
+            messaging_socket_path: Some("/tmp/cc-socks/222.sock".to_string()),
+        })
+    )]
+    fn load_peer_connection_in_cases(
+        #[case] files: &[(&str, &str)],
+        #[case] session_id: &str,
+        #[case] expected: Option<PeerConnection>,
+    ) {
+        let home = TempDir::new().unwrap();
+        write_files(home.path(), files);
+
+        let connection = load_peer_connection_in(home.path(), session_id);
+
+        assert_eq!(connection, expected);
+    }
+
+    #[test]
+    fn load_peer_connection_in_returns_none_when_sessions_dir_is_missing() {
+        let home = TempDir::new().unwrap();
+
+        let connection = load_peer_connection_in(home.path(), "aaa");
+
+        assert_eq!(connection, None);
     }
 }

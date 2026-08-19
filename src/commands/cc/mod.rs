@@ -1,5 +1,6 @@
 mod auto_compact;
 pub(crate) mod auto_pause;
+mod claude_messaging;
 mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
