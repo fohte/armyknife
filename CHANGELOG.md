@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.272](https://github.com/fohte/armyknife/compare/v0.1.271...v0.1.272) (2026-08-19)
+
+
+### Features
+
+* **cc:** support notifying another session directly ([#833](https://github.com/fohte/armyknife/issues/833)) ([458b842](https://github.com/fohte/armyknife/commit/458b8425427e066565800552b3ab17b1bbbb60c8))
+
 ## [0.1.271](https://github.com/fohte/armyknife/compare/v0.1.270...v0.1.271) (2026-08-19)
 
 
