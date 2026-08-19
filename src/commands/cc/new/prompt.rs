@@ -103,7 +103,7 @@ where
     F: FnOnce() -> Box<dyn crate::commands::name_branch::Backend>,
     E: FnOnce() -> Result<Option<String>>,
 {
-    match (&args.name, &args.prompt) {
+    match (&args.worktree, &args.prompt) {
         (Some(name), prompt) => Ok(ResolvedArgs {
             branch_name: name.clone(),
             prompt: prompt.clone(),
@@ -174,7 +174,7 @@ mod tests {
         #[case] expected_prompt: Option<&str>,
     ) {
         let args = NewArgs {
-            name: name.map(String::from),
+            worktree: name.map(String::from),
             from: None,
             force: false,
             prompt: prompt.map(String::from),
@@ -206,7 +206,7 @@ mod tests {
         #[case] expected: std::result::Result<(&str, Option<&str>), bool>,
     ) {
         let args = NewArgs {
-            name: None,
+            worktree: None,
             from: None,
             force: false,
             prompt: None,

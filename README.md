@@ -312,6 +312,7 @@ Claude Code session monitoring with tmux integration.
 
 | Action                                 | Aliases | Description                                                              |
 | -------------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `new --worktree[=<branch>] [options]`  |         | Start a Claude Code session in a new worktree                            |
 | `hook <event>`                         |         | Record session events (called from Claude Code hooks)                    |
 | `list`                                 | `ls`    | List all Claude Code sessions with status                                |
 | `focus <session_id>`                   |         | Focus on a session's tmux pane                                           |
@@ -327,6 +328,20 @@ Claude Code session monitoring with tmux integration.
 | `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
 | `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
 | `pane-has-paused <pane_id>`            |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
+
+`new` options:
+
+| Option                     | Description                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--worktree[=<branch>]`    | Create a worktree for the branch and run the session there. Branch is auto-generated from `--prompt` when the value is omitted |
+| `--from <ref>`             | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                             |
+| `--force`                  | Force create new branch even if it already exists (requires `--worktree`)                                                      |
+| `--skip-hooks`             | Skip the post-worktree-create hook (requires `--worktree`)                                                                     |
+| `-R, --repo <path>`        | Target repository path (default: current directory)                                                                            |
+| `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                          |
+| `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                         |
+| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                            |
+| `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                      |
 
 #### Setup
 
@@ -524,6 +539,8 @@ Git worktree management with tmux integration.
 | `new <branch>`      |          | Create a new worktree and open tmux window |
 | `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch           |
 | `clean`             | `c`      | Bulk delete merged or closed worktrees     |
+
+> `a wm new` is deprecated; use `a cc new --worktree=<branch>` instead.
 
 `clean` options:
 

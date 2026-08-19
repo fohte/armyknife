@@ -26,17 +26,20 @@ use worktree::{
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
-    /// Branch name (existing branch will be checked out,
-    /// non-existing branch will be created with fohte/ prefix).
-    /// Optional when --prompt is provided (auto-generated from prompt).
-    pub name: Option<String>,
+    /// Create a worktree for the branch and run the session there
+    /// (existing branch will be checked out, non-existing branch will be
+    /// created with fohte/ prefix). Value is optional: when omitted, the
+    /// branch name is auto-generated from --prompt.
+    #[arg(long, required = true, num_args = 0..=1, require_equals = true)]
+    pub worktree: Option<String>,
 
-    /// Base branch for new branch creation (default: origin/main or origin/master)
-    #[arg(long)]
+    /// Base branch for new branch creation (requires --worktree;
+    /// default: origin/main or origin/master)
+    #[arg(long, requires = "worktree")]
     pub from: Option<String>,
 
-    /// Force create new branch even if it already exists
-    #[arg(long)]
+    /// Force create new branch even if it already exists (requires --worktree)
+    #[arg(long, requires = "worktree")]
     pub force: bool,
 
     /// Initial prompt to send to Claude Code.
@@ -65,9 +68,9 @@ pub struct NewArgs {
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
 
-    /// Skip the post-worktree-create hook.
+    /// Skip the post-worktree-create hook (requires --worktree).
     /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
-    #[arg(long)]
+    #[arg(long, requires = "worktree")]
     pub skip_hooks: bool,
 }
 
@@ -308,4 +311,34 @@ fn run_worktree_creation(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use rstest::rstest;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: NewArgs,
+    }
+
+    #[rstest]
+    #[case::explicit_value(&["a", "--worktree=my-branch"], Some("my-branch"))]
+    #[case::value_omitted(&["a", "--worktree"], None)]
+    fn worktree_value_parses(#[case] argv: &[&str], #[case] expected: Option<&str>) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        assert_eq!(cli.args.worktree.as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::worktree_missing(&["a"])]
+    #[case::from_without_worktree(&["a", "--from", "origin/master"])]
+    #[case::force_without_worktree(&["a", "--force"])]
+    #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
+    fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
+        assert!(TestCli::try_parse_from(argv).is_err());
+    }
 }
