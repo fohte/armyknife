@@ -9,6 +9,7 @@ mod generate_title_detached;
 mod hook;
 mod list;
 mod mark_read;
+pub(crate) mod new;
 pub(crate) mod pane;
 mod peer;
 mod resume;

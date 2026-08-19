@@ -6,8 +6,8 @@
 //! by its `session_id` directly. This joins armyknife's own session store
 //! (which tracks parent/child relationships via `ancestor_session_ids`,
 //! populated whenever `a wm new` resolves a parent session -- see
-//! `wm::new::build_ancestor_chain`) against that name so a session can find
-//! the right `SendMessage` target for itself.
+//! `cc::new::delegation::build_ancestor_chain`) against that name so a
+//! session can find the right `SendMessage` target for itself.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
