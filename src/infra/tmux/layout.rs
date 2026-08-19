@@ -250,8 +250,12 @@ fn apply_prompt_if_claude(
         return command.to_string();
     }
 
+    // Restrict to an exact "claude" command (optionally followed by a
+    // space-separated rest) so a differently-named pane command that merely
+    // starts with "claude" (e.g. a "claude-code" wrapper script) isn't
+    // mangled by splicing --model into the middle of its name.
     let command = match model {
-        Some(model) => {
+        Some(model) if command == "claude" || command.starts_with("claude ") => {
             let escaped_model = shlex::try_quote(model)
                 .map(|c| c.into_owned())
                 .unwrap_or_else(|_| model.to_string());
@@ -260,7 +264,7 @@ fn apply_prompt_if_claude(
                 &command["claude".len()..]
             )
         }
-        None => command.to_string(),
+        _ => command.to_string(),
     };
 
     match prompt_file {
@@ -432,7 +436,7 @@ mod tests {
     use super::*;
     use crate::shared::config::{PaneConfig, SplitConfig, SplitDirection};
     use crate::shared::env_var::EnvVars;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     /// Helper: create a TmuxCommand from a slice of string slices.
@@ -494,6 +498,12 @@ mod tests {
     )]
     #[case::claude_without_model_unchanged("claude", None, None, "claude")]
     #[case::non_claude_with_model_unchanged("nvim", Some("opus"), None, "nvim")]
+    #[case::claude_prefixed_other_command_unchanged(
+        "claude-code",
+        Some("opus"),
+        None,
+        "claude-code"
+    )]
     #[case::claude_with_model_and_prompt(
         "claude",
         Some("opus"),
@@ -815,15 +825,11 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // build_layout_commands: multiple claude panes with prompt file
-    // Only the last claude pane should delete the temp file.
-    // =========================================================================
-
-    #[test]
-    fn multiple_claude_panes_only_last_deletes_prompt_file() {
-        let prompt_path = PathBuf::from("/tmp/prompt.txt");
-        let layout = LayoutNode::Split(SplitConfig {
+    /// Two claude panes side by side, shared by tests that verify per-pane
+    /// command shaping (prompt file cleanup, --model) applies consistently.
+    #[fixture]
+    fn two_claude_pane_layout() -> LayoutNode {
+        LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: Box::new(LayoutNode::Pane(PaneConfig {
                 command: "claude -p agent1".to_string(),
@@ -833,7 +839,18 @@ mod tests {
                 command: "claude -p agent2".to_string(),
                 focus: false,
             })),
-        });
+        })
+    }
+
+    // =========================================================================
+    // build_layout_commands: multiple claude panes with prompt file
+    // Only the last claude pane should delete the temp file.
+    // =========================================================================
+
+    #[rstest]
+    fn multiple_claude_panes_only_last_deletes_prompt_file(two_claude_pane_layout: LayoutNode) {
+        let prompt_path = PathBuf::from("/tmp/prompt.txt");
+        let layout = two_claude_pane_layout;
 
         let commands = build_layout_commands(
             "sess",
@@ -878,19 +895,9 @@ mod tests {
     // build_layout_commands: --model applies to every claude pane
     // =========================================================================
 
-    #[test]
-    fn model_applied_to_all_claude_panes() {
-        let layout = LayoutNode::Split(SplitConfig {
-            direction: SplitDirection::Horizontal,
-            first: Box::new(LayoutNode::Pane(PaneConfig {
-                command: "claude -p agent1".to_string(),
-                focus: true,
-            })),
-            second: Box::new(LayoutNode::Pane(PaneConfig {
-                command: "claude -p agent2".to_string(),
-                focus: false,
-            })),
-        });
+    #[rstest]
+    fn model_applied_to_all_claude_panes(two_claude_pane_layout: LayoutNode) {
+        let layout = two_claude_pane_layout;
 
         let commands = build_layout_commands(
             "sess",
