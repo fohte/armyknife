@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.275](https://github.com/fohte/armyknife/compare/v0.1.274...v0.1.275) (2026-08-19)
+
+
+### Features
+
+* **wm:** notify delegator when a delegated worktree's PR merges ([#839](https://github.com/fohte/armyknife/issues/839)) ([ec6f9e4](https://github.com/fohte/armyknife/commit/ec6f9e49f1cdc7519f531427083d808cdd79af41))
+
 ## [0.1.274](https://github.com/fohte/armyknife/compare/v0.1.273...v0.1.274) (2026-08-19)
 
 
