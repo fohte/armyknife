@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.276](https://github.com/fohte/armyknife/compare/v0.1.275...v0.1.276) (2026-08-19)
+
+
+### Features
+
+* **wm, cc:** unify merge notification across worktree deletion paths ([#841](https://github.com/fohte/armyknife/issues/841)) ([4646e74](https://github.com/fohte/armyknife/commit/4646e741f9bbff9fbf9e444858bcd446a1c87cbf))
+
 ## [0.1.275](https://github.com/fohte/armyknife/compare/v0.1.274...v0.1.275) (2026-08-19)
 
 
