@@ -3,7 +3,6 @@ mod delete;
 mod error;
 pub(crate) mod git;
 mod list;
-mod new;
 pub(crate) mod worktree;
 
 #[cfg(test)]
@@ -16,9 +15,6 @@ pub enum WmCommands {
     /// List all worktrees
     #[command(visible_alias = "ls")]
     List(list::ListArgs),
-
-    /// [DEPRECATED] Create a new Git worktree for a branch. Use `a cc new --worktree` instead.
-    New(new::WmNewArgs),
 
     /// Delete a Git worktree and its branch
     #[command(visible_aliases = ["d", "rm"])]
@@ -33,7 +29,6 @@ impl WmCommands {
     pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::List(args) => list::run(args),
-            Self::New(args) => new::run(args),
             Self::Delete(args) => delete::run(args).await,
             Self::Clean(args) => clean::run(args).await,
         }

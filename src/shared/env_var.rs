@@ -30,7 +30,7 @@ pub struct EnvVars {
     /// Session ID of the current Claude Code session.
     pub session_id: Option<String>,
 
-    /// Session label set by `wm new --label` or auto-generated.
+    /// Session label set by `a cc new --label` or auto-generated.
     pub session_label: Option<String>,
 
     /// Comma-separated ancestor session IDs from root to immediate parent.

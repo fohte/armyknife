@@ -74,7 +74,7 @@ pub(super) fn wake(session_id: &str) -> Result<String> {
 
     // Serialize concurrent wakes of the same paused session -- e.g. several
     // delegated children reporting back to the same paused parent at once
-    // (the scenario `a wm new`'s envelope steers callers into). Without
+    // (the scenario `a cc new`'s envelope steers callers into). Without
     // this, two callers can both observe the pane still idle and both
     // respawn it, the second one killing the first one's freshly started
     // `claude`.

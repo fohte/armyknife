@@ -23,7 +23,7 @@ pub const FETCH_TTL: Duration = Duration::from_secs(30);
 /// releasing the lock.
 ///
 /// BSD flock semantics serialize concurrent _processes_, not concurrent
-/// threads within one process. The CLI use case (one `a wm new` per
+/// threads within one process. The CLI use case (one `a cc new` per
 /// process) only needs cross-process serialization.
 pub fn fetch_with_coalescing<F>(lock_path: &Path, ttl: Duration, fetch_fn: F) -> Result<()>
 where
