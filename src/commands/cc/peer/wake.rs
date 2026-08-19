@@ -49,7 +49,10 @@ pub fn run(args: &WakeArgs) -> Result<()> {
     Ok(())
 }
 
-fn wake(session_id: &str) -> Result<String> {
+/// Resumes `session_id` if paused and returns its resolved `SendMessage`
+/// name. `pub(super)` so `peer::notify` can drive the same resume-and-wait
+/// flow before delivering a message to a paused session.
+pub(super) fn wake(session_id: &str) -> Result<String> {
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
