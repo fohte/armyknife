@@ -529,8 +529,9 @@ mod tests {
             |_repo| deleted.set(true),
         );
 
-        assert_eq!(result.is_ok(), succeed);
-        assert_eq!(saved.get(), expect_save);
-        assert_eq!(deleted.get(), succeed);
+        assert_eq!(
+            (result.is_ok(), saved.get(), deleted.get()),
+            (succeed, expect_save, succeed),
+        );
     }
 }

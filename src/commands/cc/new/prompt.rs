@@ -7,6 +7,9 @@ use crate::shared::cache;
 use crate::shared::command;
 
 /// Get the cache path for prompt recovery.
+// ponytail: path is per-repo, not per-invocation, so concurrent `a cc new`
+// calls against the same repo can race on save/delete; add per-repo locking
+// (see infra::git::fetch_lock) if that becomes a real problem.
 fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
     let repo_name = Path::new(repo_root).file_name()?.to_str()?;
     cache::wm_prompt(repo_name)
