@@ -310,39 +310,40 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration.
 
-| Action                                 | Aliases | Description                                                              |
-| -------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `new --worktree[=<branch>] [options]`  |         | Start a Claude Code session in a new worktree                            |
-| `hook <event>`                         |         | Record session events (called from Claude Code hooks)                    |
-| `list`                                 | `ls`    | List all Claude Code sessions with status                                |
-| `focus <session_id>`                   |         | Focus on a session's tmux pane                                           |
-| `mark-read [-t <pane_id>]`             |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
-| `resume [session_id]`                  | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
-| `resurrect save`                       |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
-| `resurrect restore`                    |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
-| `peer parent`                          |         | List the session that delegated to this one, if any (JSON)               |
-| `peer children`                        |         | List the sessions this one delegated to (JSON)                           |
-| `peer list [-R <repo>]`                |         | List tracked sessions, with their SendMessage names (JSON)               |
-| `peer wake <session_id>`               |         | Resume a paused peer session and print its resolved SendMessage name     |
-| `peer notify <session_id> -m <text>`   |         | Send a message directly to another session's SendMessage socket          |
-| `sweep`                                |         | Pause long-stopped sessions (run periodically or manual)                 |
-| `auto-compact schedule --session <id>` |         | Detached worker spawned by the Stop hook (not for direct use)            |
-| `window-status <window_id>`            |         | Print status symbols for the sessions in a tmux window                   |
-| `pane-has-paused <pane_id>`            |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
+| Action                                  | Aliases | Description                                                              |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                |
+| `hook <event>`                          |         | Record session events (called from Claude Code hooks)                    |
+| `list`                                  | `ls`    | List all Claude Code sessions with status                                |
+| `focus <session_id>`                    |         | Focus on a session's tmux pane                                           |
+| `mark-read [-t <pane_id>]`              |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
+| `resume [session_id]`                   | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
+| `resurrect save`                        |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
+| `resurrect restore`                     |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
+| `peer parent`                           |         | List the session that delegated to this one, if any (JSON)               |
+| `peer children`                         |         | List the sessions this one delegated to (JSON)                           |
+| `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)               |
+| `peer wake <session_id>`                |         | Resume a paused peer session and print its resolved SendMessage name     |
+| `peer notify <session_id> -m <text>`    |         | Send a message directly to another session's SendMessage socket          |
+| `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                 |
+| `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)            |
+| `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                   |
+| `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
 
 `new` options:
 
-| Option                     | Description                                                                                                                                                                             |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--worktree[=<branch>]`    | Create a worktree for the branch and run the session there. Branch is auto-generated from `--prompt` when the value is omitted; opens `$EDITOR` to write a prompt when both are omitted |
-| `--from <ref>`             | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                      |
-| `--force`                  | Force create new branch even if it already exists (requires `--worktree`)                                                                                                               |
-| `--skip-hooks`             | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                              |
-| `-R, --repo <path>`        | Target repository path (default: current directory)                                                                                                                                     |
-| `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                                                                                   |
-| `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                  |
-| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                                                                                     |
-| `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                               |
+| Option                     | Description                                                                                                                                                                                                                                                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--worktree[=<branch>]`    | Create a worktree for the branch and run the session there. Branch is auto-generated from `--prompt` when the value is omitted; opens `$EDITOR` to write a prompt when both are omitted. When the flag itself is omitted, no worktree is created and the session runs in the current directory (or the repo root of `-R`) instead |
+| `--from <ref>`             | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                                                                                                                                                                |
+| `--force`                  | Force create new branch even if it already exists (requires `--worktree`)                                                                                                                                                                                                                                                         |
+| `--skip-hooks`             | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                                                                                                                                                                        |
+| `-R, --repo <path>`        | Target repository path (default: current directory)                                                                                                                                                                                                                                                                               |
+| `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                                                                                                                                                                                                                             |
+| `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                                                                                                                                                            |
+| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                                                                                                                                                                                                                               |
+| `--model <model>`          | Model for the new Claude Code session (passed through to `claude --model`); accepts an alias (e.g. `opus`, `sonnet`) or a full model name (e.g. `claude-fable-5`)                                                                                                                                                                 |
+| `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                                                                                                                                                                         |
 
 #### Setup
 

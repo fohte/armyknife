@@ -7,7 +7,7 @@ use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
-use crate::shared::config::{Config, load_config};
+use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
@@ -18,7 +18,7 @@ mod worktree;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
-use tmux::setup_tmux_window;
+use tmux::{TmuxWindowSpec, setup_tmux_window};
 use worktree::{
     BranchRollback, WorktreeAddMode, add_worktree_for_branch, git_worktree_add, repo_branch_exists,
     rollback_worktree,
@@ -43,6 +43,12 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub label: Option<String>,
 
+    /// Model for the new Claude Code session. Passed through to `claude --model`.
+    /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
+    /// (e.g. "claude-fable-5").
+    #[arg(long)]
+    pub model: Option<String>,
+
     /// Parent session ID for tree view hierarchy.
     /// Sets ARMYKNIFE_ANCESTOR_SESSION_IDS for the child session.
     #[arg(long)]
@@ -58,10 +64,12 @@ pub struct CommonNewArgs {
 pub struct NewArgs {
     /// Create a worktree for the branch and run the session there
     /// (existing branch will be checked out, non-existing branch will be
-    /// created with fohte/ prefix). Value is optional: when omitted, the
-    /// branch name is auto-generated from --prompt.
-    #[arg(long, required = true, num_args = 0..=1, require_equals = true)]
-    pub worktree: Option<String>,
+    /// created with fohte/ prefix). Branch name is optional: when omitted,
+    /// it is auto-generated from --prompt. When the flag itself is omitted
+    /// entirely, no worktree is created and the session runs in the current
+    /// directory (or the target repo root when -R is given) instead.
+    #[arg(long, num_args = 0..=1, require_equals = true)]
+    pub worktree: Option<Option<String>>,
 
     /// Base branch for new branch creation (requires --worktree;
     /// default: origin/main or origin/master)
@@ -87,31 +95,151 @@ pub fn run(args: &NewArgs) -> Result<()> {
 
 fn run_inner(args: &NewArgs) -> Result<()> {
     let config = load_config()?;
-    let resolved = resolve_args(args)?;
-    let name = resolved.branch_name;
-    let prompt = resolved.prompt;
 
     let repo_root = match &args.common.repo {
         Some(path) => get_repo_root_in(path)?,
         None => get_repo_root()?,
     };
 
+    match &args.worktree {
+        Some(worktree_value) => {
+            run_worktree_mode(args, worktree_value.as_deref(), &repo_root, &config)
+        }
+        None => run_session_only(args, &repo_root, &config),
+    }
+}
+
+fn run_worktree_mode(
+    args: &NewArgs,
+    worktree_value: Option<&str>,
+    repo_root: &str,
+    config: &Config,
+) -> Result<()> {
+    let resolved = resolve_args(worktree_value, args.common.prompt.as_deref())?;
+    let name = resolved.branch_name;
+    let prompt = resolved.prompt;
+
     // Save prompt to cache directory for recovery in case of failure
     let prompt_cache_path = prompt
         .as_ref()
-        .map(|p| save_prompt_cache(&repo_root, p))
+        .map(|p| save_prompt_cache(repo_root, p))
         .transpose()?;
 
     // Run the actual worktree creation, cleaning up prompt cache on success
-    let result = run_worktree_creation(args, &name, prompt.as_deref(), &repo_root, &config);
+    let result = run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config);
 
     if result.is_ok() {
-        delete_prompt_cache(&repo_root);
+        delete_prompt_cache(repo_root);
     } else if let Some(path) = prompt_cache_path {
         eprintln!("Prompt saved to: {}", path.display());
     }
 
     result
+}
+
+/// Build tmux session-level env vars for the child session's `--label` and
+/// ancestor-session-id chain. Shared between the worktree and no-worktree flows.
+fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
+    let mut env_vars: Vec<(String, String)> = Vec::new();
+    if let Some(ref label) = common.label {
+        env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
+    }
+    // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
+    // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
+    // so `a cc new` called from a Claude Code Bash tool automatically inherits
+    // the parent session ID without requiring --parent-session-id.
+    let env = EnvVars::load();
+    let parent_id = common.parent_session_id.clone().or(env.session_id);
+    if let Some(ref parent_id) = parent_id {
+        let ancestor_chain = build_ancestor_chain(parent_id)?;
+        env_vars.push((
+            EnvVars::ancestor_session_ids_name().to_string(),
+            ancestor_chain,
+        ));
+    }
+    Ok(env_vars)
+}
+
+/// Build the env vars and background flag shared by both the worktree and
+/// no-worktree tmux launch paths.
+fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, bool)> {
+    let env_vars = build_env_vars(common)?;
+    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
+    let background = std::env::var("CLAUDECODE").is_ok();
+    Ok((env_vars, background))
+}
+
+/// Run `a cc new` without `--worktree`: start a session in the current
+/// directory (or the target repo root when `-R` is given) without any
+/// git-mutating operation (no fetch, no `git worktree add`, no
+/// post-worktree-create hook, no rollback). `repo_root` is still resolved
+/// read-only by the caller to group the new tmux window into the same
+/// session as the invoking repo, so this still requires running inside a
+/// git repository (or pointing `-R` at one). The new session is a single
+/// claude pane in its own tmux window, addressed by a name unique to this
+/// invocation so it never collides with an existing window in the same
+/// tmux session.
+fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+    let current_dir = std::env::current_dir()
+        .context("Failed to get current directory")?
+        .to_string_lossy()
+        .to_string();
+
+    let cwd = if args.common.repo.is_some() {
+        repo_root.to_string()
+    } else {
+        current_dir.clone()
+    };
+
+    // No worktree exists for this session, so there is no branch/base to
+    // report in the delegation context.
+    let prompt = if args.common.agent {
+        resolve_prompt(
+            true,
+            args.common.prompt.as_deref(),
+            None,
+            None,
+            &current_dir,
+            &cwd,
+        )
+    } else {
+        args.common.prompt.clone()
+    };
+
+    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
+    let env_refs: Vec<(&str, &str)> = env_vars
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    // Unique per-invocation so this window never collides with an existing
+    // window in the same tmux session (e.g. the worktree window this command
+    // was run from, which shares the same cwd).
+    let window_name = format!("claude-{}", std::process::id());
+
+    let layout = LayoutNode::Pane(PaneConfig {
+        command: "claude".to_string(),
+        focus: true,
+    });
+
+    setup_tmux_window(
+        TmuxWindowSpec {
+            repo_root,
+            cwd: &cwd,
+            window_name: &window_name,
+            layout: &layout,
+            model: args.common.model.as_deref(),
+            prompt: prompt.as_deref(),
+            env_vars: &env_refs,
+            background,
+        },
+        config,
+    )?;
+
+    let suffix = if background { " (background)" } else { "" };
+    println!("Opened tmux window in '{cwd}'{suffix}");
+
+    Ok(())
 }
 
 fn run_worktree_creation(
@@ -140,7 +268,10 @@ fn run_worktree_creation(
 
     // Determine action based on branch existence and flags.
     // Track the resolved branch/base for --agent context injection.
-    let (actual_branch, actual_base);
+    // actual_base is only populated when --agent is set (except when a new
+    // branch is created, where it is always known).
+    let actual_branch;
+    let actual_base: Option<String>;
     let branch_rollback;
 
     if args.force {
@@ -175,19 +306,18 @@ fn run_worktree_creation(
         )?;
 
         actual_branch = branch;
-        actual_base = base_branch;
+        actual_base = Some(base_branch);
     } else if repo_branch_exists(&repo, name) {
         // Branch exists with the exact name provided
         add_worktree_for_branch(&repo, &worktree_dir, name)?;
 
         actual_branch = name.to_string();
         branch_rollback = BranchRollback::Keep;
-        // actual_base is only used when --agent is set
         actual_base = if args.common.agent {
             let main_branch = get_main_branch_for_repo(&repo)?;
-            format!("origin/{main_branch}")
+            Some(format!("origin/{main_branch}"))
         } else {
-            String::new()
+            None
         };
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
@@ -199,9 +329,9 @@ fn run_worktree_creation(
             branch_rollback = BranchRollback::Keep;
             actual_base = if args.common.agent {
                 let main_branch = get_main_branch_for_repo(&repo)?;
-                format!("origin/{main_branch}")
+                Some(format!("origin/{main_branch}"))
             } else {
-                String::new()
+                None
             };
         } else {
             // Branch doesn't exist, create new one with prefix
@@ -222,7 +352,7 @@ fn run_worktree_creation(
             )?;
 
             actual_branch = branch;
-            actual_base = base_branch;
+            actual_base = Some(base_branch);
             branch_rollback = BranchRollback::Delete;
         }
     }
@@ -241,8 +371,8 @@ fn run_worktree_creation(
         resolve_prompt(
             true,
             prompt,
-            &actual_branch,
-            &actual_base,
+            Some(&actual_branch),
+            actual_base.as_deref(),
             &delegator_cwd,
             &worktree_cwd_str,
         )
@@ -273,42 +403,25 @@ fn run_worktree_creation(
         }
     }
 
-    // Build environment variables for child session
-    let mut env_vars: Vec<(String, String)> = Vec::new();
-    if let Some(ref label) = args.common.label {
-        env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
-    }
-    // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
-    // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
-    // so `a cc new` called from a Claude Code Bash tool automatically inherits
-    // the parent session ID without requiring --parent-session-id.
-    let env = EnvVars::load();
-    let parent_id = args.common.parent_session_id.clone().or(env.session_id);
-    if let Some(ref parent_id) = parent_id {
-        let ancestor_chain = build_ancestor_chain(parent_id)?;
-        env_vars.push((
-            EnvVars::ancestor_session_ids_name().to_string(),
-            ancestor_chain,
-        ));
-    }
-
+    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
-    let background = std::env::var("CLAUDECODE").is_ok();
-
     // Setup tmux window using config layout
     setup_tmux_window(
-        repo_root,
-        worktree_dir.to_str().unwrap_or(&worktree_name),
-        &worktree_name,
-        final_prompt.as_deref(),
+        TmuxWindowSpec {
+            repo_root,
+            cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
+            window_name: &worktree_name,
+            layout: &config.wm.layout,
+            model: args.common.model.as_deref(),
+            prompt: final_prompt.as_deref(),
+            env_vars: &env_refs,
+            background,
+        },
         config,
-        &env_refs,
-        background,
     )?;
 
     let suffix = if background { " (background)" } else { "" };
@@ -333,15 +446,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_value(&["a", "--worktree=my-branch"], Some("my-branch"))]
-    #[case::value_omitted(&["a", "--worktree"], None)]
-    fn worktree_value_parses(#[case] argv: &[&str], #[case] expected: Option<&str>) {
+    #[case::explicit_value(&["a", "--worktree=my-branch"], Some(Some("my-branch")))]
+    #[case::value_omitted(&["a", "--worktree"], Some(None))]
+    #[case::flag_omitted(&["a"], None)]
+    fn worktree_value_parses(#[case] argv: &[&str], #[case] expected: Option<Option<&str>>) {
         let cli = TestCli::try_parse_from(argv).unwrap();
-        assert_eq!(cli.args.worktree.as_deref(), expected);
+        let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
-    #[case::worktree_missing(&["a"])]
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]

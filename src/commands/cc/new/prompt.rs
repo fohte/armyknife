@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-use super::NewArgs;
 use crate::commands::cc::error::CcError;
 use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::shared::cache;
@@ -89,13 +88,20 @@ pub(super) struct ResolvedArgs {
 
 /// Resolve branch name: use provided name or generate from prompt.
 /// If no name and no prompt provided, opens editor to get prompt.
-pub(super) fn resolve_args(args: &NewArgs) -> Result<ResolvedArgs> {
-    resolve_args_with_deps(args, || detect_backend(), open_editor_for_prompt)
+/// `worktree` is the value of `--worktree` (already known to be present).
+pub(super) fn resolve_args(worktree: Option<&str>, prompt: Option<&str>) -> Result<ResolvedArgs> {
+    resolve_args_with_deps(
+        worktree,
+        prompt,
+        || detect_backend(),
+        open_editor_for_prompt,
+    )
 }
 
 /// Internal implementation that accepts dependencies for testability.
 fn resolve_args_with_deps<F, E>(
-    args: &NewArgs,
+    worktree: Option<&str>,
+    prompt: Option<&str>,
     backend_factory: F,
     editor_fn: E,
 ) -> Result<ResolvedArgs>
@@ -103,17 +109,17 @@ where
     F: FnOnce() -> Box<dyn crate::commands::name_branch::Backend>,
     E: FnOnce() -> Result<Option<String>>,
 {
-    match (&args.worktree, &args.common.prompt) {
+    match (worktree, prompt) {
         (Some(name), prompt) => Ok(ResolvedArgs {
-            branch_name: name.clone(),
-            prompt: prompt.clone(),
+            branch_name: name.to_string(),
+            prompt: prompt.map(String::from),
         }),
         (None, Some(prompt)) => {
             let backend = backend_factory();
             let generated = generate_branch_name(prompt, backend.as_ref())?;
             Ok(ResolvedArgs {
                 branch_name: generated,
-                prompt: Some(prompt.clone()),
+                prompt: Some(prompt.to_string()),
             })
         }
         (None, None) => {
@@ -132,7 +138,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::cc::new::CommonNewArgs;
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
     use rstest::rstest;
     use tempfile::TempDir;
@@ -174,21 +179,9 @@ mod tests {
         #[case] expected_branch: &str,
         #[case] expected_prompt: Option<&str>,
     ) {
-        let args = NewArgs {
-            worktree: name.map(String::from),
-            from: None,
-            force: false,
-            common: CommonNewArgs {
-                prompt: prompt.map(String::from),
-                agent: false,
-                label: None,
-                parent_session_id: None,
-                repo: None,
-            },
-            skip_hooks: false,
-        };
         let result = resolve_args_with_deps(
-            &args,
+            name,
+            prompt,
             || mock_backend("fix-login-bug"),
             || panic!("editor should not be called"),
         )
@@ -208,21 +201,9 @@ mod tests {
         #[case] editor_input: Option<&str>,
         #[case] expected: std::result::Result<(&str, Option<&str>), bool>,
     ) {
-        let args = NewArgs {
-            worktree: None,
-            from: None,
-            force: false,
-            common: CommonNewArgs {
-                prompt: None,
-                agent: false,
-                label: None,
-                parent_session_id: None,
-                repo: None,
-            },
-            skip_hooks: false,
-        };
         let result = resolve_args_with_deps(
-            &args,
+            None,
+            None,
             || mock_backend("editor-branch"),
             || Ok(editor_input.map(String::from)),
         );
