@@ -119,17 +119,44 @@ fn run_worktree_mode(
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
 
-    // Save prompt to cache directory for recovery in case of failure
-    let prompt_cache_path = prompt
-        .as_ref()
-        .map(|p| save_prompt_cache(repo_root, p))
-        .transpose()?;
+    with_prompt_cache_recovery(repo_root, prompt.as_deref(), || {
+        run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config)
+    })
+}
 
-    // Run the actual worktree creation, cleaning up prompt cache on success
-    let result = run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config);
+/// Save `prompt` to the cache before running `f`, then clean it up on
+/// success or report its location on failure. Shared by the worktree and
+/// no-worktree paths so `--prompt` recovery doesn't diverge between them.
+fn with_prompt_cache_recovery(
+    repo_root: &str,
+    prompt: Option<&str>,
+    f: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    with_prompt_cache_recovery_with_deps(
+        repo_root,
+        prompt,
+        f,
+        save_prompt_cache,
+        delete_prompt_cache,
+    )
+}
+
+/// Internal implementation that accepts the cache save/delete functions as
+/// dependencies. Allows testing the recovery control flow without touching
+/// the real cache directory on disk.
+fn with_prompt_cache_recovery_with_deps(
+    repo_root: &str,
+    prompt: Option<&str>,
+    f: impl FnOnce() -> Result<()>,
+    save: impl FnOnce(&str, &str) -> Result<PathBuf>,
+    delete: impl FnOnce(&str),
+) -> Result<()> {
+    let prompt_cache_path = prompt.map(|p| save(repo_root, p)).transpose()?;
+
+    let result = f();
 
     if result.is_ok() {
-        delete_prompt_cache(repo_root);
+        delete(repo_root);
     } else if let Some(path) = prompt_cache_path {
         eprintln!("Prompt saved to: {}", path.display());
     }
@@ -180,6 +207,14 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
 /// invocation so it never collides with an existing window in the same
 /// tmux session.
 fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+    let raw_prompt = args.common.prompt.as_deref();
+
+    with_prompt_cache_recovery(repo_root, raw_prompt, || {
+        run_session_only_inner(args, repo_root, config)
+    })
+}
+
+fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_string_lossy()
@@ -461,5 +496,42 @@ mod tests {
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
+    }
+
+    #[rstest]
+    #[case::success_deletes_cache(true, true, true)]
+    #[case::failure_keeps_cache(false, true, true)]
+    #[case::no_prompt_skips_save(true, false, false)]
+    fn with_prompt_cache_recovery_saves_and_cleans_up(
+        #[case] succeed: bool,
+        #[case] has_prompt: bool,
+        #[case] expect_save: bool,
+    ) {
+        use std::cell::Cell;
+
+        let saved = Cell::new(false);
+        let deleted = Cell::new(false);
+
+        let result = with_prompt_cache_recovery_with_deps(
+            "repo",
+            has_prompt.then_some("my prompt"),
+            || {
+                if succeed {
+                    Ok(())
+                } else {
+                    anyhow::bail!("boom")
+                }
+            },
+            |_repo, prompt| {
+                saved.set(true);
+                Ok(PathBuf::from(format!("/cache/{prompt}")))
+            },
+            |_repo| deleted.set(true),
+        );
+
+        assert_eq!(
+            (result.is_ok(), saved.get(), deleted.get()),
+            (succeed, expect_save, succeed),
+        );
     }
 }
