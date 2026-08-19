@@ -33,7 +33,7 @@ pub struct WmNewArgs {
 pub fn run(args: &WmNewArgs) -> Result<()> {
     eprintln!("Warning: 'wm new' is deprecated. Use 'cc new --worktree' instead.");
     new::run(&new::NewArgs {
-        worktree: args.name.clone(),
+        worktree: Some(args.name.clone()),
         from: args.from.clone(),
         force: args.force,
         common: args.common.clone(),

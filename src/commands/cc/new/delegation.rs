@@ -2,10 +2,13 @@ use anyhow::Result;
 
 use crate::commands::cc::store as cc_store;
 
-/// Context information injected into the prompt when --agent is used
+/// Context information injected into the prompt when --agent is used.
+/// `branch`/`base` are `None` when the session has no associated worktree
+/// (e.g. `a cc new` without `--worktree`), in which case those lines are
+/// omitted from the rendered context.
 struct DelegationContext<'a> {
-    branch: &'a str,
-    base: &'a str,
+    branch: Option<&'a str>,
+    base: Option<&'a str>,
     delegator_cwd: &'a str,
     worktree_cwd: &'a str,
 }
@@ -15,8 +18,8 @@ struct DelegationContext<'a> {
 pub(super) fn resolve_prompt(
     agent: bool,
     prompt: Option<&str>,
-    branch: &str,
-    base: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
     delegator_cwd: &str,
     worktree_cwd: &str,
 ) -> Option<String> {
@@ -36,26 +39,28 @@ pub(super) fn resolve_prompt(
 
 /// Build a delegated prompt by wrapping the original prompt with context XML
 fn build_delegated_prompt(prompt: &str, ctx: &DelegationContext) -> String {
+    let mut context_lines =
+        vec!["- Source: Delegated from another Claude Code session".to_string()];
+    if let Some(branch) = ctx.branch {
+        context_lines.push(format!("- Branch: {branch}"));
+    }
+    if let Some(base) = ctx.base {
+        context_lines.push(format!("- Base: {base}"));
+    }
+    context_lines.push(format!("- Delegator CWD: {}", ctx.delegator_cwd));
+    context_lines.push(format!("- Worktree CWD: {}", ctx.worktree_cwd));
+    context_lines.push("- Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name".to_string());
+    let context = context_lines.join("\n");
+
     indoc::formatdoc! {"
         <delegated-task>
         <context>
-        - Source: Delegated from another Claude Code session
-        - Branch: {branch}
-        - Base: {base}
-        - Delegator CWD: {delegator_cwd}
-        - Worktree CWD: {worktree_cwd}
-        - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
+        {context}
         </context>
         <instructions>
         {prompt}
         </instructions>
-        </delegated-task>",
-        branch = ctx.branch,
-        base = ctx.base,
-        delegator_cwd = ctx.delegator_cwd,
-        worktree_cwd = ctx.worktree_cwd,
-        prompt = prompt,
-    }
+        </delegated-task>"}
     .trim_start()
     .to_string()
 }
@@ -146,14 +151,41 @@ mod tests {
         #[case] expected: &str,
     ) {
         let ctx = DelegationContext {
-            branch,
-            base,
+            branch: Some(branch),
+            base: Some(base),
             delegator_cwd,
             worktree_cwd,
         };
         let result = build_delegated_prompt(prompt.trim_start(), &ctx);
 
         assert_eq!(result, expected.trim_start());
+    }
+
+    #[rstest]
+    fn build_delegated_prompt_omits_branch_and_base_when_absent() {
+        let ctx = DelegationContext {
+            branch: None,
+            base: None,
+            delegator_cwd: "/cwd",
+            worktree_cwd: "/cwd",
+        };
+        let result = build_delegated_prompt("do something", &ctx);
+
+        assert_eq!(
+            result,
+            indoc! {"
+                <delegated-task>
+                <context>
+                - Source: Delegated from another Claude Code session
+                - Delegator CWD: /cwd
+                - Worktree CWD: /cwd
+                - Contact the delegator via SendMessage only for one of these two reasons, never for anything else -- not progress updates, not a completion or PR-ready report, not clarifying questions: (1) a premise in these instructions turns out to be wrong, or (2) you were blocked waiting on something under the delegator's control (another repo's fix, a package publish, a prior PR merge, etc.) and it just cleared. Resolve the delegator's name at runtime with `a cc peer parent | jq -r '.[0].name // empty'`. If that is empty, the delegator may be paused -- run `a cc peer wake $(a cc peer parent | jq -r '.[0].session_id')` to resume it and get back a usable name
+                </context>
+                <instructions>
+                do something
+                </instructions>
+                </delegated-task>"}
+        );
     }
 
     #[rstest]
@@ -169,8 +201,8 @@ mod tests {
         let result = resolve_prompt(
             agent,
             prompt,
-            "fohte/test",
-            "origin/main",
+            Some("fohte/test"),
+            Some("origin/main"),
             "/cwd",
             "/worktree",
         );
@@ -181,8 +213,8 @@ mod tests {
                 let expected = build_delegated_prompt(
                     p,
                     &DelegationContext {
-                        branch: "fohte/test",
-                        base: "origin/main",
+                        branch: Some("fohte/test"),
+                        base: Some("origin/main"),
                         delegator_cwd: "/cwd",
                         worktree_cwd: "/worktree",
                     },
