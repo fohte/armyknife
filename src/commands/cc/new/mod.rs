@@ -24,24 +24,9 @@ use worktree::{
     rollback_worktree,
 };
 
+/// Args shared between `a cc new` and the deprecated `a wm new` adapter.
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct NewArgs {
-    /// Create a worktree for the branch and run the session there
-    /// (existing branch will be checked out, non-existing branch will be
-    /// created with fohte/ prefix). Value is optional: when omitted, the
-    /// branch name is auto-generated from --prompt.
-    #[arg(long, required = true, num_args = 0..=1, require_equals = true)]
-    pub worktree: Option<String>,
-
-    /// Base branch for new branch creation (requires --worktree;
-    /// default: origin/main or origin/master)
-    #[arg(long, requires = "worktree")]
-    pub from: Option<String>,
-
-    /// Force create new branch even if it already exists (requires --worktree)
-    #[arg(long, requires = "worktree")]
-    pub force: bool,
-
+pub struct CommonNewArgs {
     /// Initial prompt to send to Claude Code.
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
@@ -67,6 +52,28 @@ pub struct NewArgs {
     /// When specified, operates on the given repository instead of the current directory.
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
+}
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct NewArgs {
+    /// Create a worktree for the branch and run the session there
+    /// (existing branch will be checked out, non-existing branch will be
+    /// created with fohte/ prefix). Value is optional: when omitted, the
+    /// branch name is auto-generated from --prompt.
+    #[arg(long, required = true, num_args = 0..=1, require_equals = true)]
+    pub worktree: Option<String>,
+
+    /// Base branch for new branch creation (requires --worktree;
+    /// default: origin/main or origin/master)
+    #[arg(long, requires = "worktree")]
+    pub from: Option<String>,
+
+    /// Force create new branch even if it already exists (requires --worktree)
+    #[arg(long, requires = "worktree")]
+    pub force: bool,
+
+    #[command(flatten)]
+    pub common: CommonNewArgs,
 
     /// Skip the post-worktree-create hook (requires --worktree).
     /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
@@ -84,7 +91,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
 
-    let repo_root = match &args.repo {
+    let repo_root = match &args.common.repo {
         Some(path) => get_repo_root_in(path)?,
         None => get_repo_root()?,
     };
@@ -176,7 +183,7 @@ fn run_worktree_creation(
         actual_branch = name.to_string();
         branch_rollback = BranchRollback::Keep;
         // actual_base is only used when --agent is set
-        actual_base = if args.agent {
+        actual_base = if args.common.agent {
             let main_branch = get_main_branch_for_repo(&repo)?;
             format!("origin/{main_branch}")
         } else {
@@ -190,7 +197,7 @@ fn run_worktree_creation(
 
             actual_branch = branch_with_prefix;
             branch_rollback = BranchRollback::Keep;
-            actual_base = if args.agent {
+            actual_base = if args.common.agent {
                 let main_branch = get_main_branch_for_repo(&repo)?;
                 format!("origin/{main_branch}")
             } else {
@@ -221,7 +228,7 @@ fn run_worktree_creation(
     }
 
     // Wrap prompt with delegation context when --agent is used
-    let final_prompt = if args.agent {
+    let final_prompt = if args.common.agent {
         let delegator_cwd = std::env::current_dir()
             .context("Failed to get current directory")?
             .to_string_lossy()
@@ -268,15 +275,15 @@ fn run_worktree_creation(
 
     // Build environment variables for child session
     let mut env_vars: Vec<(String, String)> = Vec::new();
-    if let Some(ref label) = args.label {
+    if let Some(ref label) = args.common.label {
         env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
     }
     // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
     // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
-    // so `a wm new` called from a Claude Code Bash tool automatically inherits
+    // so `a cc new` called from a Claude Code Bash tool automatically inherits
     // the parent session ID without requiring --parent-session-id.
     let env = EnvVars::load();
-    let parent_id = args.parent_session_id.clone().or(env.session_id);
+    let parent_id = args.common.parent_session_id.clone().or(env.session_id);
     if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;
         env_vars.push((

@@ -331,17 +331,17 @@ Claude Code session monitoring with tmux integration.
 
 `new` options:
 
-| Option                     | Description                                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `--worktree[=<branch>]`    | Create a worktree for the branch and run the session there. Branch is auto-generated from `--prompt` when the value is omitted |
-| `--from <ref>`             | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                             |
-| `--force`                  | Force create new branch even if it already exists (requires `--worktree`)                                                      |
-| `--skip-hooks`             | Skip the post-worktree-create hook (requires `--worktree`)                                                                     |
-| `-R, --repo <path>`        | Target repository path (default: current directory)                                                                            |
-| `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                          |
-| `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                         |
-| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                            |
-| `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                      |
+| Option                     | Description                                                                                                                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--worktree[=<branch>]`    | Create a worktree for the branch and run the session there. Branch is auto-generated from `--prompt` when the value is omitted; opens `$EDITOR` to write a prompt when both are omitted |
+| `--from <ref>`             | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                      |
+| `--force`                  | Force create new branch even if it already exists (requires `--worktree`)                                                                                                               |
+| `--skip-hooks`             | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                              |
+| `-R, --repo <path>`        | Target repository path (default: current directory)                                                                                                                                     |
+| `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                                                                                   |
+| `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                  |
+| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                                                                                     |
+| `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                               |
 
 #### Setup
 

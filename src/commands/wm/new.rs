@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Args;
-use std::path::PathBuf;
 
 use crate::commands::cc::new;
+use crate::commands::cc::new::CommonNewArgs;
 
 /// [DEPRECATED] Create a new Git worktree for a branch.
 /// Use `a cc new --worktree` instead.
@@ -21,31 +21,8 @@ pub struct WmNewArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Initial prompt to send to Claude Code.
-    /// When provided without a branch name, the branch name is auto-generated from this prompt.
-    #[arg(long)]
-    pub prompt: Option<String>,
-
-    /// Mark this invocation as coming from another Claude Code session.
-    /// Wraps the prompt with delegation context (branch, base, directories).
-    #[arg(long)]
-    pub agent: bool,
-
-    /// Label for the new session (displayed in cc watch).
-    /// When not specified, the session will get its label via the
-    /// user-prompt-submit hook (auto-generation from prompt).
-    #[arg(long)]
-    pub label: Option<String>,
-
-    /// Parent session ID for tree view hierarchy.
-    /// Sets ARMYKNIFE_ANCESTOR_SESSION_IDS for the child session.
-    #[arg(long)]
-    pub parent_session_id: Option<String>,
-
-    /// Path to the target repository.
-    /// When specified, operates on the given repository instead of the current directory.
-    #[arg(short = 'R', long)]
-    pub repo: Option<PathBuf>,
+    #[command(flatten)]
+    pub common: CommonNewArgs,
 
     /// Skip the post-worktree-create hook.
     /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
@@ -54,15 +31,12 @@ pub struct WmNewArgs {
 }
 
 pub fn run(args: &WmNewArgs) -> Result<()> {
+    eprintln!("Warning: 'wm new' is deprecated. Use 'cc new --worktree' instead.");
     new::run(&new::NewArgs {
         worktree: args.name.clone(),
         from: args.from.clone(),
         force: args.force,
-        prompt: args.prompt.clone(),
-        agent: args.agent,
-        label: args.label.clone(),
-        parent_session_id: args.parent_session_id.clone(),
-        repo: args.repo.clone(),
+        common: args.common.clone(),
         skip_hooks: args.skip_hooks,
     })
 }
