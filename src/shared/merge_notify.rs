@@ -23,11 +23,14 @@ use crate::infra::github::{GitHubClient, PrClient};
 const EVENT_TARGET: &str = "armyknife::shared::merge_notify";
 
 /// Notifies the delegator of this worktree's delegate session that the
-/// branch's PR has merged. No-op if no delegate session is tracked for this
-/// worktree. Otherwise best-effort: any failure (delegator already `Ended`,
-/// no PR URL resolvable, socket unreachable) is reported via
-/// [`warn_notify_failure`] and swallowed -- notification is a courtesy,
-/// never a precondition for worktree deletion to succeed.
+/// branch's PR has merged. Does not verify merge status itself -- callers
+/// must confirm the branch is merged (e.g. via `MergeStatus::is_merged`)
+/// before calling, or the notification will misreport whatever PR state is
+/// found. No-op if no delegate session is tracked for this worktree.
+/// Otherwise best-effort: any failure (delegator already `Ended`, no PR URL
+/// resolvable, socket unreachable) is reported via [`warn_notify_failure`]
+/// and swallowed -- notification is a courtesy, never a precondition for
+/// worktree deletion to succeed.
 pub async fn notify_delegator_of_merge(main_repo: &GitRepo, branch: &str, worktree_path: &Path) {
     let delegates = find_delegate_sessions(worktree_path);
     if delegates.is_empty() {
@@ -88,6 +91,14 @@ pub async fn notify_delegator_if_merged_worktree_at(path: &Path) {
         return;
     };
 
+    // Skip the network round trip entirely when there's no delegate to
+    // notify, mirroring notify_delegator_of_merge's own cheap-check-first
+    // ordering -- otherwise a batch clean of N worktrees with no delegates
+    // would cost N unnecessary GitHub API calls.
+    if find_delegate_sessions(&worktree_root).is_empty() {
+        return;
+    }
+
     if get_merge_status_for_repo(&main_repo, &branch)
         .await
         .is_merged()
@@ -131,13 +142,10 @@ fn find_delegate_sessions(worktree_path: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Re-fetches the PR for `branch` to get its URL. Callers typically already
-/// know the branch is merged (via `MergeStatus`) but discard the URL
-/// (`MergeStatus` only carries a formatted `reason` string). Re-running the
-/// lookup here -- rather than widening `MergeStatus` with a URL field, which
-/// would ripple into its several other construction sites -- costs one extra
-/// one-shot REST call per merge notification, which is negligible next to
-/// the worktree deletion it's attached to.
+/// Re-fetches the PR for `branch` to get its URL. `MergeStatus` only
+/// carries a formatted `reason` string, not the URL, so it can't be reused
+/// here. Costs one extra one-shot REST call per merge notification, which
+/// is negligible next to the worktree deletion it's attached to.
 async fn fetch_merged_pr_url(main_repo: &GitRepo, branch: &str) -> anyhow::Result<Option<String>> {
     let (owner, repo_name) = github_owner_and_repo(main_repo)?;
     let client = GitHubClient::get()?;
