@@ -29,17 +29,17 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     tmux::ensure_session(&target_session, spec.repo_root)
         .context("Failed to ensure tmux session")?;
 
-    tmux::layout::build_layout(
-        &target_session,
-        spec.cwd,
-        spec.window_name,
-        spec.layout,
-        spec.model,
-        spec.prompt,
-        spec.env_vars,
-        spec.background,
-        spec.restore_automatic_rename,
-    )
+    tmux::layout::build_layout(tmux::layout::LayoutSpec {
+        session: &target_session,
+        cwd: spec.cwd,
+        window_name: spec.window_name,
+        layout: spec.layout,
+        model: spec.model,
+        prompt: spec.prompt,
+        env_vars: spec.env_vars,
+        background: spec.background,
+        restore_automatic_rename: spec.restore_automatic_rename,
+    })
     .context("Failed to create tmux layout")?;
 
     if !spec.background {
