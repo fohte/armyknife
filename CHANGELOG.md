@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.277](https://github.com/fohte/armyknife/compare/v0.1.276...v0.1.277) (2026-08-20)
+
+
+### Bug Fixes
+
+* **cc:** restore automatic-rename for no-worktree windows ([#843](https://github.com/fohte/armyknife/issues/843)) ([81fff2b](https://github.com/fohte/armyknife/commit/81fff2b5432ff71524786a59bab9683de3c7d695))
+
 ## [0.1.276](https://github.com/fohte/armyknife/compare/v0.1.275...v0.1.276) (2026-08-19)
 
 
