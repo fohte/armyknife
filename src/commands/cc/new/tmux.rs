@@ -14,6 +14,12 @@ pub(super) struct TmuxWindowSpec<'a> {
     pub prompt: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
+    /// Turns `automatic-rename` back on right after window creation, undoing
+    /// tmux's default of disabling it whenever a window is created with an
+    /// explicit name (`-n`). Set for the no-worktree window, whose PID-based
+    /// name is a meaningless placeholder; left off for the worktree window,
+    /// whose name is the branch/worktree name and should stay displayed.
+    pub restore_automatic_rename: bool,
 }
 
 /// Setup a tmux window with the given layout.
@@ -32,6 +38,7 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
         spec.prompt,
         spec.env_vars,
         spec.background,
+        spec.restore_automatic_rename,
     )
     .context("Failed to create tmux layout")?;
 
