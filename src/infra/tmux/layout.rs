@@ -312,7 +312,8 @@ fn apply_prompt_if_claude(
 /// command at execution time.
 /// `env_vars` are forwarded to `build_layout_commands` as tmux session-level
 /// environment variables.
-/// `restore_automatic_rename` is forwarded to `build_layout_commands`.
+/// If `restore_automatic_rename` is true, `automatic-rename` is restored on
+/// the created window (see `build_layout_commands`).
 #[expect(
     clippy::too_many_arguments,
     reason = "positional params mirror build_layout_commands' public signature"
@@ -1265,6 +1266,12 @@ mod tests {
         "sess:=dev.",
         "@42.",
         vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])]
+    )]
+    #[case::leaves_window_level_restore_target_untouched(
+        vec![cmd(&["set-option", "-w", "-t", "sess:=dev", "automatic-rename", "on"])],
+        "sess:=dev.",
+        "@42.",
+        vec![cmd(&["set-option", "-w", "-t", "sess:=dev", "automatic-rename", "on"])]
     )]
     fn rewrite_pane_targets_cases(
         #[case] commands: Vec<TmuxCommand>,
