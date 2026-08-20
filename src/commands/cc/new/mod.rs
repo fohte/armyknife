@@ -267,6 +267,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
             prompt: prompt.as_deref(),
             env_vars: &env_refs,
             background,
+            restore_automatic_rename: true,
         },
         config,
     )?;
@@ -455,6 +456,7 @@ fn run_worktree_creation(
             prompt: final_prompt.as_deref(),
             env_vars: &env_refs,
             background,
+            restore_automatic_rename: false,
         },
         config,
     )?;

@@ -30,30 +30,45 @@ fn background_pane_prefix(session: &str, window_name: &str) -> String {
     format!("{session}:={window_name}.")
 }
 
+/// Inputs for `build_layout_commands`, grouped to keep its argument count in
+/// check.
+pub struct LayoutCommandsSpec<'a> {
+    pub session: &'a str,
+    pub cwd: &'a str,
+    pub window_name: &'a str,
+    pub layout: &'a LayoutNode,
+    /// Inserted right after `claude` in claude pane commands.
+    pub model: Option<&'a str>,
+    /// When set, claude pane commands read the prompt from this file at
+    /// shell execution time and delete it afterward.
+    pub prompt_file: Option<&'a Path>,
+    /// Set as tmux session-level environment variables so all panes in the
+    /// window inherit them.
+    pub env_vars: &'a [(&'a str, &'a str)],
+    pub background: bool,
+    /// Turns `automatic-rename` back on right after window creation, undoing
+    /// tmux's default of disabling it whenever a window is created with an
+    /// explicit name (`-n`).
+    pub restore_automatic_rename: bool,
+}
+
 /// Build tmux command sequence from a LayoutNode tree.
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
 /// The first command creates a new window, subsequent commands split panes.
-/// If `model` is provided, claude pane commands get `--model <model>` inserted
-/// right after `claude`.
-/// If `prompt_file` is provided, claude pane commands will read the prompt
-/// from the file at shell execution time and delete it afterward.
-/// `env_vars` are set as tmux session-level environment variables so that
-/// all panes in the window inherit them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "positional params mirror build_layout's public signature"
-)]
-pub fn build_layout_commands(
-    session: &str,
-    cwd: &str,
-    window_name: &str,
-    layout: &LayoutNode,
-    model: Option<&str>,
-    prompt_file: Option<&Path>,
-    env_vars: &[(&str, &str)],
-    background: bool,
-) -> Vec<TmuxCommand> {
+pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
+    let LayoutCommandsSpec {
+        session,
+        cwd,
+        window_name,
+        layout,
+        model,
+        prompt_file,
+        env_vars,
+        background,
+        restore_automatic_rename,
+    } = spec;
+
     let mut commands = Vec::new();
     let mut pane_entries: Vec<PaneEntry> = Vec::new();
 
@@ -88,6 +103,21 @@ pub fn build_layout_commands(
         vec!["new-window", "-t", session, "-c", cwd, "-n", window_name]
     };
     commands.push(TmuxCommand::new(&new_window_args));
+
+    // Placed right after `new-window`, before any pane targets get rewritten
+    // to a captured window ID (see `execute_background_layout`), so this can
+    // always address the window by its just-created, still-unrenamed name.
+    if restore_automatic_rename {
+        let window_target = format!("{session}:={window_name}");
+        commands.push(TmuxCommand::new(&[
+            "set-option",
+            "-w",
+            "-t",
+            &window_target,
+            "automatic-rename",
+            "on",
+        ]));
+    }
 
     let pane_prefix = if background {
         background_pane_prefix(session, window_name)
@@ -283,42 +313,53 @@ fn apply_prompt_if_claude(
     }
 }
 
+/// Inputs for `build_layout`, grouped to keep its argument count in check.
+pub struct LayoutSpec<'a> {
+    pub session: &'a str,
+    pub cwd: &'a str,
+    pub window_name: &'a str,
+    pub layout: &'a LayoutNode,
+    pub model: Option<&'a str>,
+    /// Written to a temp file and passed to claude pane commands; the temp
+    /// file is read and deleted by the shell command at execution time.
+    pub prompt: Option<&'a str>,
+    /// Set as tmux session-level environment variables so all panes in the
+    /// window inherit them.
+    pub env_vars: &'a [(&'a str, &'a str)],
+    pub background: bool,
+    /// Forwarded to `build_layout_commands` (see `LayoutCommandsSpec`).
+    pub restore_automatic_rename: bool,
+}
+
 /// Build and execute tmux layout from a LayoutNode tree.
 ///
 /// Creates a new tmux window and configures panes according to the layout.
-/// If `model` is provided, claude pane commands get `--model <model>` inserted
-/// right after `claude`.
-/// If prompt is provided, writes it to a temp file and passes the path to
-/// claude pane commands. The temp file is read and deleted by the shell
-/// command at execution time.
-/// `env_vars` are forwarded to `build_layout_commands` as tmux session-level
-/// environment variables.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "positional params mirror build_layout_commands' public signature"
-)]
-pub fn build_layout(
-    session: &str,
-    cwd: &str,
-    window_name: &str,
-    layout: &LayoutNode,
-    model: Option<&str>,
-    prompt: Option<&str>,
-    env_vars: &[(&str, &str)],
-    background: bool,
-) -> anyhow::Result<()> {
-    let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let prompt_path = prompt_file.as_deref();
-    let commands = build_layout_commands(
+pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
+    let LayoutSpec {
         session,
         cwd,
         window_name,
         layout,
         model,
-        prompt_path,
+        prompt,
         env_vars,
         background,
-    );
+        restore_automatic_rename,
+    } = spec;
+
+    let prompt_file = prompt.map(write_prompt_file).transpose()?;
+    let prompt_path = prompt_file.as_deref();
+    let commands = build_layout_commands(LayoutCommandsSpec {
+        session,
+        cwd,
+        window_name,
+        layout,
+        model,
+        prompt_file: prompt_path,
+        env_vars,
+        background,
+        restore_automatic_rename,
+    });
 
     if background {
         execute_background_layout(&commands, session, window_name)?;
@@ -532,8 +573,17 @@ mod tests {
             focus: true,
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "editor", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "editor",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -565,8 +615,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -602,8 +661,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "monitor", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "monitor",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -647,8 +715,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -689,16 +766,17 @@ mod tests {
             })),
         });
 
-        let commands = build_layout_commands(
-            "sess",
-            "/tmp",
-            "dev",
-            &layout,
-            None,
-            Some(&prompt_path),
-            &[],
-            false,
-        );
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: Some(&prompt_path),
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -740,8 +818,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         // The last select-pane should target pane 2 (the last focused pane)
         let last_cmd = commands.last().unwrap();
@@ -763,8 +850,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         // Last command should be a send-keys C-m, not select-pane for focus
         let last_cmd = commands.last().unwrap();
@@ -799,8 +895,17 @@ mod tests {
             })),
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -852,16 +957,17 @@ mod tests {
         let prompt_path = PathBuf::from("/tmp/prompt.txt");
         let layout = two_claude_pane_layout;
 
-        let commands = build_layout_commands(
-            "sess",
-            "/tmp",
-            "dev",
-            &layout,
-            None,
-            Some(&prompt_path),
-            &[],
-            false,
-        );
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: Some(&prompt_path),
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -899,16 +1005,17 @@ mod tests {
     fn model_applied_to_all_claude_panes(two_claude_pane_layout: LayoutNode) {
         let layout = two_claude_pane_layout;
 
-        let commands = build_layout_commands(
-            "sess",
-            "/tmp",
-            "dev",
-            &layout,
-            Some("opus"),
-            None,
-            &[],
-            false,
-        );
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: Some("opus"),
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(
             commands,
@@ -943,8 +1050,17 @@ mod tests {
             (label_key, "my-label"),
             (ancestors_key, "parent-1,parent-2"),
         ];
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &env_vars, false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &env_vars,
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         // set-environment commands should come before new-window
         assert_eq!(
@@ -985,7 +1101,17 @@ mod tests {
             focus: true,
         });
 
-        let commands = build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], true);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: true,
+            restore_automatic_rename: false,
+        });
 
         // new-window must be detached so the attached client's view does not flip.
         assert_eq!(
@@ -1026,8 +1152,17 @@ mod tests {
         });
         let env_vars = [("KEY1", "v1"), ("KEY2", "v2")];
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &env_vars, true);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &env_vars,
+            background: true,
+            restore_automatic_rename: false,
+        });
 
         assert_eq!(commands[env_vars.len()].args[0], "new-window");
     }
@@ -1039,8 +1174,17 @@ mod tests {
             focus: true,
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         // new-window is left attached (no `-d`).
         assert_eq!(
@@ -1052,6 +1196,92 @@ mod tests {
         for c in &commands {
             assert_ne!(c.args.first().map(String::as_str), Some("select-window"));
         }
+    }
+
+    // =========================================================================
+    // build_layout_commands: restore_automatic_rename
+    // =========================================================================
+
+    #[rstest]
+    #[case::disabled(false, vec![
+        cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+        cmd(&["select-pane", "-t", "1"]),
+        cmd(&["send-keys", "-l", "--", "claude"]),
+        cmd(&["send-keys", "C-m"]),
+        cmd(&["select-pane", "-t", "1"]),
+    ])]
+    #[case::enabled(true, vec![
+        cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+        cmd(&["set-option", "-w", "-t", "sess:=dev", "automatic-rename", "on"]),
+        cmd(&["select-pane", "-t", "1"]),
+        cmd(&["send-keys", "-l", "--", "claude"]),
+        cmd(&["send-keys", "C-m"]),
+        cmd(&["select-pane", "-t", "1"]),
+    ])]
+    fn restore_automatic_rename_inserts_set_option_right_after_new_window(
+        #[case] restore_automatic_rename: bool,
+        #[case] expected: Vec<TmuxCommand>,
+    ) {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename,
+        });
+
+        assert_eq!(commands, expected);
+    }
+
+    #[test]
+    fn restore_automatic_rename_lands_outside_background_window_id_capture() {
+        // execute_background_layout runs everything up to and including
+        // new-window with `-P -F "#{window_id}"` appended to capture the real
+        // window ID, so the restore command must come strictly after
+        // new-window or it would be swept into that capture invocation
+        // instead of running as its own command.
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: true,
+            restore_automatic_rename: true,
+        });
+
+        assert_eq!(
+            find_new_window_index(&commands),
+            Some(0),
+            "new-window must remain the first command"
+        );
+        assert_eq!(
+            commands[1],
+            cmd(&[
+                "set-option",
+                "-w",
+                "-t",
+                "sess:=dev",
+                "automatic-rename",
+                "on"
+            ])
+        );
     }
 
     // =========================================================================
@@ -1088,6 +1318,12 @@ mod tests {
         "sess:=dev.",
         "@42.",
         vec![cmd(&["set-environment", "-u", "-t", "sess", "MY_VAR"])]
+    )]
+    #[case::leaves_window_level_restore_target_untouched(
+        vec![cmd(&["set-option", "-w", "-t", "sess:=dev", "automatic-rename", "on"])],
+        "sess:=dev.",
+        "@42.",
+        vec![cmd(&["set-option", "-w", "-t", "sess:=dev", "automatic-rename", "on"])]
     )]
     fn rewrite_pane_targets_cases(
         #[case] commands: Vec<TmuxCommand>,
@@ -1146,8 +1382,17 @@ mod tests {
             focus: true,
         });
 
-        let commands =
-            build_layout_commands("sess", "/tmp", "dev", &layout, None, None, &[], false);
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            prompt_file: None,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
 
         // First command should be new-window, not set-environment
         assert_eq!(
