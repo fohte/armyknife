@@ -88,6 +88,23 @@ pub(super) fn add_worktree_for_branch(
     }
 }
 
+/// Set `git config branch.<branch>.<key> <value>` for each entry. The
+/// meaning of `key` is up to the caller; this just persists it.
+pub(super) fn apply_branch_config(
+    repo: &GitRepo,
+    branch: &str,
+    entries: &[(String, String)],
+) -> Result<()> {
+    for (key, value) in entries {
+        run_git(
+            repo.workdir(),
+            ["config", &format!("branch.{branch}.{key}"), value],
+        )
+        .with_context(|| format!("Failed to set branch.{branch}.{key}"))?;
+    }
+    Ok(())
+}
+
 /// How to roll back the branch associated with a worktree after a
 /// post-worktree-create hook failure.
 pub(super) enum BranchRollback {
@@ -324,6 +341,40 @@ mod tests {
         add_worktree_for_branch(&repo, &worktree_dir, "remote-branch").unwrap();
         assert!(worktree_dir.exists());
         assert!(repo.local_branch_exists("remote-branch"));
+    }
+
+    #[rstest]
+    fn apply_branch_config_sets_each_entry() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        git_in(&test_repo.path(), &["branch", "config-target"]);
+
+        apply_branch_config(
+            &repo,
+            "config-target",
+            &[
+                ("x-purpose".to_string(), "add widgets".to_string()),
+                ("x-source".to_string(), "session-42".to_string()),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            run_git(
+                &test_repo.path(),
+                ["config", "--get", "branch.config-target.x-purpose"],
+            )
+            .unwrap(),
+            "add widgets",
+        );
+        assert_eq!(
+            run_git(
+                &test_repo.path(),
+                ["config", "--get", "branch.config-target.x-source"],
+            )
+            .unwrap(),
+            "session-42",
+        );
     }
 
     struct RollbackEnv {

@@ -20,8 +20,8 @@ use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
 use worktree::{
-    BranchRollback, WorktreeAddMode, add_worktree_for_branch, git_worktree_add, repo_branch_exists,
-    rollback_worktree,
+    BranchRollback, WorktreeAddMode, add_worktree_for_branch, apply_branch_config,
+    git_worktree_add, repo_branch_exists, rollback_worktree,
 };
 
 /// CLI args shared by `a cc new`'s worktree and no-worktree modes.
@@ -89,6 +89,20 @@ pub struct NewArgs {
     /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
     #[arg(long, requires = "worktree")]
     pub skip_hooks: bool,
+
+    /// Set `git config branch.<branch>.<key> <value>` on the created/checked-out
+    /// branch (requires --worktree). Repeatable. armyknife does not interpret
+    /// `key`; its meaning (e.g. a naming convention like an `x-` prefix) is up
+    /// to the caller.
+    #[arg(long = "branch-config", value_name = "KEY=VALUE", value_parser = parse_branch_config, requires = "worktree")]
+    pub branch_config: Vec<(String, String)>,
+}
+
+/// Parse a `KEY=VALUE` CLI argument into a `(key, value)` pair.
+fn parse_branch_config(s: &str) -> std::result::Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
@@ -388,6 +402,8 @@ fn run_worktree_creation(
         }
     }
 
+    apply_branch_config(&repo, &actual_branch, &args.branch_config)?;
+
     // Wrap prompt with delegation context when --agent is used
     let final_prompt = if args.common.agent {
         let delegator_cwd = std::env::current_dir()
@@ -491,8 +507,42 @@ mod tests {
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
+    #[case::branch_config_without_worktree(&["a", "--branch-config", "x-purpose=fix bug"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
+    }
+
+    #[rstest]
+    #[case::valid("x-purpose=fix bug", Ok(("x-purpose".to_string(), "fix bug".to_string())))]
+    #[case::value_contains_equals("x-purpose=a=b", Ok(("x-purpose".to_string(), "a=b".to_string())))]
+    #[case::empty_value("x-purpose=", Ok(("x-purpose".to_string(), String::new())))]
+    #[case::no_equals_sign("x-purpose", Err("invalid KEY=VALUE: no `=` found in `x-purpose`".to_string()))]
+    fn parse_branch_config_cases(
+        #[case] input: &str,
+        #[case] expected: std::result::Result<(String, String), String>,
+    ) {
+        assert_eq!(parse_branch_config(input), expected);
+    }
+
+    #[test]
+    fn branch_config_flag_is_repeatable() {
+        let cli = TestCli::try_parse_from([
+            "a",
+            "--worktree=my-branch",
+            "--branch-config",
+            "x-purpose=fix bug",
+            "--branch-config",
+            "x-source=session-42",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.args.branch_config,
+            vec![
+                ("x-purpose".to_string(), "fix bug".to_string()),
+                ("x-source".to_string(), "session-42".to_string()),
+            ],
+        );
     }
 
     #[rstest]
