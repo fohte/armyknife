@@ -81,7 +81,7 @@ struct PrResponse {
 
 impl PrClient for GitHubClient {
     async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
-        // If base is not specified, find the base branch from local git info or GitHub API
+        // If base is not specified, resolve it via the GitHub API (see find_base_branch).
         let base = match &params.base {
             Some(b) => b.clone(),
             None => crate::infra::git::find_base_branch(&params.owner, &params.repo, self).await,
