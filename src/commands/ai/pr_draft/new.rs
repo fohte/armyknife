@@ -201,10 +201,7 @@ mod tests {
             &NewArgs {
                 title: Some("Test Title".to_string()),
                 force: false,
-                repo_branch: RepoBranchArgs {
-                    repo: None,
-                    branch: None,
-                },
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -236,10 +233,7 @@ mod tests {
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
-                repo_branch: RepoBranchArgs {
-                    repo: None,
-                    branch: None,
-                },
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -258,10 +252,7 @@ mod tests {
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: false,
-                repo_branch: RepoBranchArgs {
-                    repo: None,
-                    branch: None,
-                },
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -331,10 +322,7 @@ mod tests {
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
-                repo_branch: RepoBranchArgs {
-                    repo: None,
-                    branch: None,
-                },
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -346,10 +334,7 @@ mod tests {
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: true,
-                repo_branch: RepoBranchArgs {
-                    repo: None,
-                    branch: None,
-                },
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
