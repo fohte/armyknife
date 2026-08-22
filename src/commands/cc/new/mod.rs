@@ -62,12 +62,14 @@ pub struct CommonNewArgs {
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
-    /// Create a worktree for the branch and run the session there
-    /// (existing branch will be checked out, non-existing branch will be
-    /// created with fohte/ prefix). Branch name is optional: when omitted,
-    /// it is auto-generated from --prompt. When the flag itself is omitted
-    /// entirely, no worktree is created and the session runs in the current
-    /// directory (or the target repo root when -R is given) instead.
+    /// Create a worktree for the branch and run the session there in a new
+    /// tmux window (existing branch will be checked out, non-existing
+    /// branch will be created with fohte/ prefix). Branch name is optional:
+    /// when omitted, it is auto-generated from --prompt. When the flag
+    /// itself is omitted entirely, no worktree is created; instead the
+    /// session runs in the current directory (or the target repo root when
+    /// -R is given), splitting the tmux pane that invoked this command
+    /// (requires running inside tmux).
     #[arg(long, num_args = 0..=1, require_equals = true)]
     pub worktree: Option<Option<String>>,
 
@@ -201,10 +203,7 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
 /// `a cc new` without `--worktree` splits this pane rather than opening a
 /// new window, so it requires running inside one.
 fn current_pane_id() -> Result<String> {
-    std::env::var("TMUX_PANE")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| CcError::NotInTmux.into())
+    crate::infra::tmux::current_pane_id_from_env().ok_or_else(|| CcError::NotInTmux.into())
 }
 
 /// Run `a cc new` without `--worktree`: split the tmux pane the invoking

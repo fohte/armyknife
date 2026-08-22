@@ -49,10 +49,8 @@ fn resolve_session_id_from_pane() -> Result<String> {
 /// targets the pane that invoked the command even if the user switches focus
 /// before tmux can answer.
 fn current_pane_id() -> Result<String> {
-    match std::env::var("TMUX_PANE") {
-        Ok(value) if !value.is_empty() => Ok(value),
-        _ => bail!("Not running inside a tmux pane: $TMUX_PANE is not set"),
-    }
+    tmux::current_pane_id_from_env()
+        .ok_or_else(|| anyhow::anyhow!("Not running inside a tmux pane: $TMUX_PANE is not set"))
 }
 
 /// Programs a `Paused` session's pane may be sitting at for its respawn to
