@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.279](https://github.com/fohte/armyknife/compare/v0.1.278...v0.1.279) (2026-08-22)
+
+
+### Bug Fixes
+
+* **cc:** clean up orphaned sessions for deleted worktrees ([#846](https://github.com/fohte/armyknife/issues/846)) ([7d385b8](https://github.com/fohte/armyknife/commit/7d385b8ea0b3c7c86ce42ece2ff53245f163442b))
+
 ## [0.1.278](https://github.com/fohte/armyknife/compare/v0.1.277...v0.1.278) (2026-08-22)
 
 
