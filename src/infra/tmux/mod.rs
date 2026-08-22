@@ -196,6 +196,17 @@ pub fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
 }
 
+/// Returns the value of `$TMUX_PANE` — the id of the pane the calling
+/// process is running in, set by tmux at process spawn time.
+///
+/// Unlike `current_window_id`/`current_session` (which query the terminal's
+/// currently focused pane via `display-message`), this reads the env var
+/// directly, so it resolves to the pane that actually invoked the calling
+/// process even if the user has since switched focus elsewhere.
+pub fn current_pane_id_from_env() -> Option<String> {
+    std::env::var("TMUX_PANE").ok().filter(|v| !v.is_empty())
+}
+
 /// Get the tmux session name for a repository path.
 ///
 /// Returns `org/repo` format from the last two path components.
@@ -274,6 +285,16 @@ pub fn current_pane_path() -> Option<String> {
 /// Get the current window ID.
 pub fn current_window_id() -> Option<String> {
     query_tmux_value("#{window_id}")
+}
+
+/// Returns the name of the tmux session containing `pane_id`.
+///
+/// Unlike `current_session`, this targets a specific pane rather than the
+/// caller's own, so it works from a process whose own pane isn't the pane
+/// being acted on (e.g. resolving which session a new pane should be split
+/// into before creating it there).
+pub fn get_session_name_for_pane(pane_id: &str) -> Option<String> {
+    query_pane_value(pane_id, "#{session_name}")
 }
 
 /// Returns the window ID (e.g. `@3`) of the window containing `pane_id`.
@@ -738,6 +759,19 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "expected the timeout to cut the 5s sleep short, took {elapsed:?}"
         );
+    }
+
+    #[rstest]
+    #[case::returns_value_when_set(Some("%12"), Some("%12".to_string()))]
+    #[case::none_when_unset(None, None)]
+    #[case::none_when_empty(Some(""), None)]
+    fn current_pane_id_from_env_cases(
+        #[case] env_value: Option<&str>,
+        #[case] expected: Option<String>,
+    ) {
+        temp_env::with_vars([("TMUX_PANE", env_value)], || {
+            assert_eq!(current_pane_id_from_env(), expected);
+        });
     }
 
     #[rstest]
