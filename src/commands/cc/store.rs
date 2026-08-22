@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -560,7 +560,14 @@ pub fn cleanup_stale_sessions() -> Result<bool> {
         Ok(panes) => panes,
         Err(_) => return Ok(false),
     };
-    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), |cwd| cwd.exists())
+    // `Path::exists()` also returns false on ambiguous errors (e.g. permission
+    // denied, a transient mount issue), not just on confirmed deletion. Treat
+    // only a confirmed NotFound as "gone" so a live session's file is never
+    // deleted because of a stat() error that isn't really about the cwd
+    // being removed.
+    let cwd_exists =
+        |cwd: &Path| !matches!(fs::metadata(cwd), Err(e) if e.kind() == io::ErrorKind::NotFound);
+    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), cwd_exists)
 }
 
 fn cleanup_stale_sessions_impl<F, G>(is_pane_alive: F, cwd_exists: G) -> Result<bool>
@@ -611,16 +618,20 @@ where
                 .as_ref()
                 .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
-        // Orphaned Paused sessions: the worktree (cwd) is gone but the session
-        // file lingered because `wm delete` raced with `kill_window` or the
-        // worktree was removed by another tool. Resume would fail anyway, so
-        // drop them. Ended is handled by `expired_ended` below.
-        let orphaned_paused = session.status == SessionStatus::Paused && !cwd_exists(&session.cwd);
+        // Orphaned sessions: the worktree (cwd) is gone but the session file
+        // lingered, e.g. `wm delete` raced with `kill_window`, the worktree
+        // was removed by another tool, or a straggler hook (a Notification
+        // fired after `wm delete` already cleaned up the session file)
+        // recreated the file with no tmux_info. A deleted worktree means the
+        // session is done regardless of status, even if its tmux pane
+        // happens to still be attachable. Ended is handled by
+        // `expired_ended` below instead, since it has its own retention.
+        let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
 
         let expired_ended = matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
             && now - session.updated_at > retention;
 
-        if stale_pane || orphaned_paused || expired_ended {
+        if stale_pane || orphaned || expired_ended {
             if fs::remove_file(&path).is_ok() {
                 removed_any = true;
             }
@@ -981,19 +992,23 @@ mod tests {
         }
 
         #[rstest]
-        fn removes_paused_session_when_cwd_is_gone(temp_session_dir: TempSessionDir) {
-            let session_id = "orphan-paused";
+        #[case::running(SessionStatus::Running)]
+        #[case::waiting(SessionStatus::WaitingInput)]
+        #[case::stopped(SessionStatus::Stopped)]
+        #[case::paused(SessionStatus::Paused)]
+        fn removes_session_when_cwd_is_gone(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+        ) {
+            let session_id = "orphan-test";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
 
             let mut session = create_test_session(session_id);
-            session.status = SessionStatus::Paused;
-            session.tmux_info = Some(TmuxInfo {
-                session_name: "test".to_string(),
-                window_name: "test".to_string(),
-                window_index: 0,
-                pane_id: "%99999".to_string(),
-            });
+            session.status = status;
+            // tmux_info is None here to also cover the straggler-hook case:
+            // a Notification fired after `wm delete` recreates the file with
+            // no pane info, so `stale_pane` alone would never catch it.
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
@@ -1007,18 +1022,25 @@ mod tests {
 
             assert!(
                 !path.exists(),
-                "orphaned paused session (cwd gone) should be removed"
+                "orphaned session (cwd gone) should be removed"
             );
         }
 
         #[rstest]
-        fn keeps_paused_session_when_cwd_still_exists(temp_session_dir: TempSessionDir) {
-            let session_id = "live-paused";
+        #[case::running(SessionStatus::Running)]
+        #[case::waiting(SessionStatus::WaitingInput)]
+        #[case::stopped(SessionStatus::Stopped)]
+        #[case::paused(SessionStatus::Paused)]
+        fn keeps_session_when_cwd_still_exists(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+        ) {
+            let session_id = "live-test";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
 
             let mut session = create_test_session(session_id);
-            session.status = SessionStatus::Paused;
+            session.status = status;
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
 
@@ -1029,9 +1051,30 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
+            assert!(path.exists(), "session should be kept while its cwd exists");
+        }
+
+        #[rstest]
+        fn keeps_ended_session_when_cwd_is_gone_but_not_expired(temp_session_dir: TempSessionDir) {
+            let session_id = "ended-not-expired";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+
+            let mut session = create_test_session(session_id);
+            session.status = SessionStatus::Ended;
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+
+            cleanup_stale_sessions_in(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_dead,
+                mock_cwd_always_missing,
+            )
+            .expect("cleanup should succeed");
+
             assert!(
                 path.exists(),
-                "paused session should be kept while its cwd exists"
+                "ended session should rely on retention, not cwd existence"
             );
         }
     }
