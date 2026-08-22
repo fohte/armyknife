@@ -377,6 +377,25 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn apply_branch_config_errors_on_invalid_key() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        git_in(&test_repo.path(), &["branch", "config-target"]);
+
+        let err = apply_branch_config(
+            &repo,
+            "config-target",
+            &[("x purpose".to_string(), "value".to_string())],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Failed to set branch.config-target.x purpose",
+        );
+    }
+
     struct RollbackEnv {
         // hold the TempDir so files survive the test
         _test_repo: TestRepo,

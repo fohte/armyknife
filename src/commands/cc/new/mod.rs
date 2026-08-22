@@ -402,7 +402,13 @@ fn run_worktree_creation(
         }
     }
 
-    apply_branch_config(&repo, &actual_branch, &args.branch_config)?;
+    // A malformed --branch-config key (e.g. containing a space) makes `git
+    // config` fail here, after the worktree/branch above already exist;
+    // roll them back the same way a post-worktree-create hook failure does.
+    if let Err(e) = apply_branch_config(&repo, &actual_branch, &args.branch_config) {
+        rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback);
+        return Err(e);
+    }
 
     // Wrap prompt with delegation context when --agent is used
     let final_prompt = if args.common.agent {
