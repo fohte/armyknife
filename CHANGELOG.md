@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.278](https://github.com/fohte/armyknife/compare/v0.1.277...v0.1.278) (2026-08-22)
+
+
+### Features
+
+* **cc:** split the current pane instead of opening a window when worktree is omitted ([#845](https://github.com/fohte/armyknife/issues/845)) ([4650b7c](https://github.com/fohte/armyknife/commit/4650b7cf26ea05760d05a673fddba12544576b3f))
+
 ## [0.1.277](https://github.com/fohte/armyknife/compare/v0.1.276...v0.1.277) (2026-08-20)
 
 
