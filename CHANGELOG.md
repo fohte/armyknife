@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.280](https://github.com/fohte/armyknife/compare/v0.1.279...v0.1.280) (2026-08-22)
+
+
+### Features
+
+* **ai/pr-draft:** support -R/--branch to target a repo independent of cwd ([#849](https://github.com/fohte/armyknife/issues/849)) ([1bba29b](https://github.com/fohte/armyknife/commit/1bba29b4106fed0e01b0462bdc002acb5e0c1b72))
+
 ## [0.1.279](https://github.com/fohte/armyknife/compare/v0.1.278...v0.1.279) (2026-08-22)
 
 
