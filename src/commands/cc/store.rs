@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -560,7 +560,14 @@ pub fn cleanup_stale_sessions() -> Result<bool> {
         Ok(panes) => panes,
         Err(_) => return Ok(false),
     };
-    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), |cwd| cwd.exists())
+    // `Path::exists()` also returns false on ambiguous errors (e.g. permission
+    // denied, a transient mount issue), not just on confirmed deletion. Treat
+    // only a confirmed NotFound as "gone" so a live session's file is never
+    // deleted because of a stat() error that isn't really about the cwd
+    // being removed.
+    let cwd_exists =
+        |cwd: &Path| !matches!(fs::metadata(cwd), Err(e) if e.kind() == io::ErrorKind::NotFound);
+    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), cwd_exists)
 }
 
 fn cleanup_stale_sessions_impl<F, G>(is_pane_alive: F, cwd_exists: G) -> Result<bool>
@@ -615,8 +622,9 @@ where
         // lingered, e.g. `wm delete` raced with `kill_window`, the worktree
         // was removed by another tool, or a straggler hook (a Notification
         // fired after `wm delete` already cleaned up the session file)
-        // recreated the file with no tmux_info. Resume/attach would fail
-        // anyway, so drop them regardless of status. Ended is handled by
+        // recreated the file with no tmux_info. A deleted worktree means the
+        // session is done regardless of status, even if its tmux pane
+        // happens to still be attachable. Ended is handled by
         // `expired_ended` below instead, since it has its own retention.
         let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
 
@@ -985,6 +993,7 @@ mod tests {
 
         #[rstest]
         #[case::running(SessionStatus::Running)]
+        #[case::waiting(SessionStatus::WaitingInput)]
         #[case::stopped(SessionStatus::Stopped)]
         #[case::paused(SessionStatus::Paused)]
         fn removes_session_when_cwd_is_gone(
@@ -1019,6 +1028,7 @@ mod tests {
 
         #[rstest]
         #[case::running(SessionStatus::Running)]
+        #[case::waiting(SessionStatus::WaitingInput)]
         #[case::stopped(SessionStatus::Stopped)]
         #[case::paused(SessionStatus::Paused)]
         fn keeps_session_when_cwd_still_exists(
