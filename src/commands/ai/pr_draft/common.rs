@@ -57,7 +57,7 @@ pub type Result<T> = anyhow::Result<T>;
 /// of cwd. `-R` requires `--branch` (clap-enforced) so a repo can never be
 /// paired with cwd's branch by accident; `--branch` alone targets a
 /// different branch within cwd's repository.
-#[derive(Args, Clone, PartialEq, Eq)]
+#[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct RepoBranchArgs {
     /// Target repository (owner/repo). Requires --branch.
     #[arg(short = 'R', long, requires = "branch")]
@@ -68,6 +68,23 @@ pub struct RepoBranchArgs {
     /// current repository.
     #[arg(long)]
     pub branch: Option<String>,
+}
+
+/// Reject values that would let a path segment escape [`DraftFile::draft_dir`]
+/// when joined into a path (e.g. a `..` component). Real git branch names and
+/// GitHub owner/repo names can never contain these, so this only rejects
+/// input that could not have come from an actual git/GitHub-resolved value.
+fn reject_unsafe_path_component(value: &str) -> Result<()> {
+    if value
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(PrDraftError::CommandFailed(format!(
+            "Invalid value (must not contain empty, '.', or '..' path segments): {value}"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -82,32 +99,27 @@ impl RepoInfo {
     /// Resolve repo info from explicit CLI args, falling back to cwd.
     /// See [`RepoBranchArgs`] for the exact precedence rules.
     pub fn from_args(repo_arg: Option<&str>, branch_arg: Option<&str>) -> Result<Self> {
-        match (repo_arg, branch_arg) {
-            (Some(repo), Some(branch)) => {
-                let (owner, repo_name) = git::parse_repo(repo)?;
-                Ok(Self {
-                    owner,
-                    repo: repo_name,
-                    branch: branch.to_string(),
-                    is_private: false,
-                })
-            }
-            (Some(_), None) => Err(PrDraftError::CommandFailed(
+        if repo_arg.is_some() && branch_arg.is_none() {
+            return Err(PrDraftError::CommandFailed(
                 "--repo requires --branch to be specified".to_string(),
             )
-            .into()),
-            (None, Some(branch)) => {
-                let repo = git::open_repo()?;
-                let (owner, repo_name) = git::github_owner_and_repo(&repo)?;
-                Ok(Self {
-                    owner,
-                    repo: repo_name,
-                    branch: branch.to_string(),
-                    is_private: false,
-                })
-            }
-            (None, None) => Self::from_git_only(),
+            .into());
         }
+        let Some(branch) = branch_arg else {
+            return Self::from_git_only();
+        };
+        reject_unsafe_path_component(branch)?;
+
+        let (owner, repo_name) = git::get_repo_owner_and_name(repo_arg)?;
+        reject_unsafe_path_component(&owner)?;
+        reject_unsafe_path_component(&repo_name)?;
+
+        Ok(Self {
+            owner,
+            repo: repo_name,
+            branch: branch.to_string(),
+            is_private: false,
+        })
     }
 
     /// Get repo info with is_private check via GitHub API (async)
@@ -438,6 +450,20 @@ mod tests {
             err.downcast_ref::<PrDraftError>(),
             Some(PrDraftError::CommandFailed(msg)) if msg == "--repo requires --branch to be specified"
         ));
+    }
+
+    #[rstest]
+    #[case::branch_dotdot("owner/repo", "../../etc/passwd")]
+    #[case::branch_dotdot_nested("owner/repo", "feature/../../escape")]
+    #[case::branch_dot("owner/repo", ".")]
+    #[case::branch_empty_segment("owner/repo", "feature//x")]
+    #[case::repo_dotdot("../../etc/repo", "main")]
+    fn from_args_rejects_path_traversal(#[case] repo_arg: &str, #[case] branch_arg: &str) {
+        let result = RepoInfo::from_args(Some(repo_arg), Some(branch_arg));
+        assert!(
+            result.is_err(),
+            "expected rejection for repo={repo_arg:?} branch={branch_arg:?}"
+        );
     }
 
     #[rstest]
