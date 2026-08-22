@@ -276,6 +276,16 @@ pub fn current_window_id() -> Option<String> {
     query_tmux_value("#{window_id}")
 }
 
+/// Returns the name of the tmux session containing `pane_id`.
+///
+/// Unlike `current_session`, this targets a specific pane rather than the
+/// caller's own, so it works from a process whose own pane isn't the pane
+/// being acted on (e.g. resolving which session a new pane should be split
+/// into before creating it there).
+pub fn get_session_name_for_pane(pane_id: &str) -> Option<String> {
+    query_pane_value(pane_id, "#{session_name}")
+}
+
 /// Returns the window ID (e.g. `@3`) of the window containing `pane_id`.
 ///
 /// Unlike `current_window_id`, this targets a specific pane, so it resolves

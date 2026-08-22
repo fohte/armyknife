@@ -48,3 +48,42 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
 
     Ok(())
 }
+
+/// Inputs for `setup_split_pane`, grouped to keep its argument count in check.
+pub(super) struct TmuxSplitPaneSpec<'a> {
+    pub target_pane: &'a str,
+    pub cwd: &'a str,
+    pub model: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+    pub env_vars: &'a [(&'a str, &'a str)],
+    pub background: bool,
+}
+
+/// Splits `spec.target_pane` — the tmux pane the invoking process is running
+/// in — into a new pane in the same window and starts `claude` there.
+pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
+    let session = tmux::get_session_name_for_pane(spec.target_pane).with_context(|| {
+        format!(
+            "Failed to resolve tmux session for pane '{}'",
+            spec.target_pane
+        )
+    })?;
+
+    let new_pane_id = tmux::layout::split_pane(tmux::layout::SplitSpec {
+        session: &session,
+        target_pane: spec.target_pane,
+        cwd: spec.cwd,
+        command: "claude",
+        model: spec.model,
+        prompt: spec.prompt,
+        env_vars: spec.env_vars,
+        background: spec.background,
+    })
+    .context("Failed to split tmux pane")?;
+
+    if !spec.background {
+        tmux::focus_pane(&new_pane_id).context("Failed to focus new pane")?;
+    }
+
+    Ok(())
+}

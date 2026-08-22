@@ -7,6 +7,11 @@ pub enum CcError {
     #[error("Not in a git repository")]
     NotInGitRepo,
 
+    #[error(
+        "Not running inside a tmux pane ($TMUX_PANE is not set); `a cc new` without --worktree splits the current pane and requires one"
+    )]
+    NotInTmux,
+
     #[error("Cancelled: no prompt provided")]
     Cancelled,
 

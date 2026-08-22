@@ -7,7 +7,7 @@ use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
-use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
+use crate::shared::config::{Config, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
@@ -18,7 +18,7 @@ mod worktree;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
-use tmux::{TmuxWindowSpec, setup_tmux_window};
+use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
 use worktree::{
     BranchRollback, WorktreeAddMode, add_worktree_for_branch, git_worktree_add, repo_branch_exists,
     rollback_worktree,
@@ -105,7 +105,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         Some(worktree_value) => {
             run_worktree_mode(args, worktree_value.as_deref(), &repo_root, &config)
         }
-        None => run_session_only(args, &repo_root, &config),
+        None => run_session_only(args, &repo_root),
     }
 }
 
@@ -196,25 +196,35 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
     Ok((env_vars, background))
 }
 
-/// Run `a cc new` without `--worktree`: start a session in the current
-/// directory (or the target repo root when `-R` is given) without any
-/// git-mutating operation (no fetch, no `git worktree add`, no
-/// post-worktree-create hook, no rollback). `repo_root` is still resolved
-/// read-only by the caller to group the new tmux window into the same
-/// session as the invoking repo, so this still requires running inside a
-/// git repository (or pointing `-R` at one). The new session is a single
-/// claude pane in its own tmux window, addressed by a name unique to this
-/// invocation so it never collides with an existing window in the same
-/// tmux session.
-fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+/// Returns the tmux pane ID of the caller, read from `$TMUX_PANE`.
+///
+/// `a cc new` without `--worktree` splits this pane rather than opening a
+/// new window, so it requires running inside one.
+fn current_pane_id() -> Result<String> {
+    std::env::var("TMUX_PANE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| CcError::NotInTmux.into())
+}
+
+/// Run `a cc new` without `--worktree`: split the tmux pane the invoking
+/// process is running in (`$TMUX_PANE`) into a new pane in the same window
+/// and start `claude` there, without any git-mutating operation (no fetch,
+/// no `git worktree add`, no post-worktree-create hook, no rollback). This
+/// keeps a handoff session visually attached to the session it continues,
+/// instead of opening in a separate window. `repo_root` is still resolved
+/// read-only by the caller purely so `-R` can point this at another repo's
+/// root; it has no role in tmux session targeting, which is derived from
+/// the pane itself.
+fn run_session_only(args: &NewArgs, repo_root: &str) -> Result<()> {
     let raw_prompt = args.common.prompt.as_deref();
 
     with_prompt_cache_recovery(repo_root, raw_prompt, || {
-        run_session_only_inner(args, repo_root, config)
+        run_session_only_inner(args, repo_root)
     })
 }
 
-fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+fn run_session_only_inner(args: &NewArgs, repo_root: &str) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_string_lossy()
@@ -247,33 +257,19 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    // Unique per-invocation so this window never collides with an existing
-    // window in the same tmux session (e.g. the worktree window this command
-    // was run from, which shares the same cwd).
-    let window_name = format!("claude-{}", std::process::id());
+    let target_pane = current_pane_id()?;
 
-    let layout = LayoutNode::Pane(PaneConfig {
-        command: "claude".to_string(),
-        focus: true,
-    });
-
-    setup_tmux_window(
-        TmuxWindowSpec {
-            repo_root,
-            cwd: &cwd,
-            window_name: &window_name,
-            layout: &layout,
-            model: args.common.model.as_deref(),
-            prompt: prompt.as_deref(),
-            env_vars: &env_refs,
-            background,
-            restore_automatic_rename: true,
-        },
-        config,
-    )?;
+    setup_split_pane(TmuxSplitPaneSpec {
+        target_pane: &target_pane,
+        cwd: &cwd,
+        model: args.common.model.as_deref(),
+        prompt: prompt.as_deref(),
+        env_vars: &env_refs,
+        background,
+    })?;
 
     let suffix = if background { " (background)" } else { "" };
-    println!("Opened tmux window in '{cwd}'{suffix}");
+    println!("Split tmux pane in '{cwd}'{suffix}");
 
     Ok(())
 }
@@ -535,5 +531,18 @@ mod tests {
             (result.is_ok(), saved.get(), deleted.get()),
             (succeed, expect_save, succeed),
         );
+    }
+
+    #[rstest]
+    #[case::returns_value_when_set(Some("%12"), Ok("%12".to_string()))]
+    #[case::errors_when_unset(None, Err(CcError::NotInTmux.to_string()))]
+    #[case::errors_when_empty(Some(""), Err(CcError::NotInTmux.to_string()))]
+    fn current_pane_id_cases(
+        #[case] env_value: Option<&str>,
+        #[case] expected: std::result::Result<String, String>,
+    ) {
+        temp_env::with_vars([("TMUX_PANE", env_value)], || {
+            assert_eq!(current_pane_id().map_err(|e| e.to_string()), expected);
+        });
     }
 }

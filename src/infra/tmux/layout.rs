@@ -313,6 +313,40 @@ fn apply_prompt_if_claude(
     }
 }
 
+/// Inputs for `build_split_pane_setup_commands`: the `set-environment` +
+/// `split-window` commands that must run before the new pane's id is known
+/// (mirrors `execute_background_layout`'s new-window capture).
+struct SplitPaneSetupSpec<'a> {
+    session: &'a str,
+    target_pane: &'a str,
+    cwd: &'a str,
+    env_vars: &'a [(&'a str, &'a str)],
+    background: bool,
+}
+
+/// Builds the `set-environment` (if any) + `split-window` command sequence.
+/// Always splits horizontally (side-by-side): this path has no layout
+/// config, unlike `--worktree`'s `config.wm.layout`.
+fn build_split_pane_setup_commands(spec: SplitPaneSetupSpec) -> Vec<TmuxCommand> {
+    let mut commands = Vec::new();
+    for (key, value) in spec.env_vars {
+        commands.push(TmuxCommand::new(&[
+            "set-environment",
+            "-t",
+            spec.session,
+            key,
+            value,
+        ]));
+    }
+    let mut split_args = vec!["split-window"];
+    if spec.background {
+        split_args.push("-d");
+    }
+    split_args.extend(["-h", "-t", spec.target_pane, "-c", spec.cwd]);
+    commands.push(TmuxCommand::new(&split_args));
+    commands
+}
+
 /// Inputs for `build_layout`, grouped to keep its argument count in check.
 pub struct LayoutSpec<'a> {
     pub session: &'a str,
@@ -368,6 +402,67 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Inputs for `split_pane`.
+pub struct SplitSpec<'a> {
+    pub session: &'a str,
+    pub target_pane: &'a str,
+    pub cwd: &'a str,
+    pub command: &'a str,
+    pub model: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+    pub env_vars: &'a [(&'a str, &'a str)],
+    /// When true, the split does not steal the active pane (tmux `-d`),
+    /// avoiding a focus change when invoked from a Claude Code Bash tool.
+    pub background: bool,
+}
+
+/// Splits `target_pane` into a new pane within the same window and starts
+/// `command` there (typically `claude`). Returns the new pane's id.
+///
+/// Unlike `build_layout`, this never creates a window: `a cc new` without
+/// `--worktree` uses it to keep a handoff session visually attached to the
+/// pane it continues, instead of opening in a separate window.
+pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
+    let prompt_file = spec.prompt.map(write_prompt_file).transpose()?;
+    let cmd = apply_prompt_if_claude(spec.command, spec.model, prompt_file.as_deref(), true);
+
+    let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
+        session: spec.session,
+        target_pane: spec.target_pane,
+        cwd: spec.cwd,
+        env_vars: spec.env_vars,
+        background: spec.background,
+    });
+
+    let mut capture_args = flatten_commands(&setup);
+    capture_args.extend(["-P", "-F", "#{pane_id}"]);
+    let new_pane_id = super::run_tmux_output(&capture_args)?;
+
+    let mut remaining = vec![
+        TmuxCommand::new(&[
+            "send-keys",
+            "-t",
+            new_pane_id.as_str(),
+            "-l",
+            "--",
+            cmd.as_str(),
+        ]),
+        TmuxCommand::new(&["send-keys", "-t", new_pane_id.as_str(), "C-m"]),
+    ];
+    for (key, _) in spec.env_vars {
+        remaining.push(TmuxCommand::new(&[
+            "set-environment",
+            "-u",
+            "-t",
+            spec.session,
+            key,
+        ]));
+    }
+    execute_commands(&remaining)?;
+
+    Ok(new_pane_id)
 }
 
 /// Flattens a sequence of `TmuxCommand` into a single arg list joined by `;`,
@@ -1399,5 +1494,45 @@ mod tests {
             commands[0],
             cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"])
         );
+    }
+
+    // =========================================================================
+    // build_split_pane_setup_commands
+    // =========================================================================
+
+    #[rstest]
+    #[case::foreground_no_env(
+        false,
+        &[],
+        vec![cmd(&["split-window", "-h", "-t", "%3", "-c", "/tmp"])]
+    )]
+    #[case::background_no_env(
+        true,
+        &[],
+        vec![cmd(&["split-window", "-d", "-h", "-t", "%3", "-c", "/tmp"])]
+    )]
+    #[case::foreground_with_env(
+        false,
+        &[("KEY1", "v1"), ("KEY2", "v2")],
+        vec![
+            cmd(&["set-environment", "-t", "sess", "KEY1", "v1"]),
+            cmd(&["set-environment", "-t", "sess", "KEY2", "v2"]),
+            cmd(&["split-window", "-h", "-t", "%3", "-c", "/tmp"]),
+        ]
+    )]
+    fn build_split_pane_setup_commands_cases(
+        #[case] background: bool,
+        #[case] env_vars: &[(&str, &str)],
+        #[case] expected: Vec<TmuxCommand>,
+    ) {
+        let commands = build_split_pane_setup_commands(SplitPaneSetupSpec {
+            session: "sess",
+            target_pane: "%3",
+            cwd: "/tmp",
+            env_vars,
+            background,
+        });
+
+        assert_eq!(commands, expected);
     }
 }
