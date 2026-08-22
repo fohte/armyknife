@@ -1,3 +1,4 @@
+use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_is_match;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,23 @@ pub enum PrDraftError {
 
 pub type Result<T> = anyhow::Result<T>;
 
+/// Explicit repository/branch target, letting commands operate independently
+/// of cwd. `-R` requires `--branch` (clap-enforced) so a repo can never be
+/// paired with cwd's branch by accident; `--branch` alone targets a
+/// different branch within cwd's repository.
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct RepoBranchArgs {
+    /// Target repository (owner/repo). Requires --branch.
+    #[arg(short = 'R', long, requires = "branch")]
+    pub repo: Option<String>,
+
+    /// Target branch name. Combine with --repo to target a different
+    /// repository, or use alone to target a different branch in the
+    /// current repository.
+    #[arg(long)]
+    pub branch: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoInfo {
     pub owner: String,
@@ -61,6 +79,37 @@ pub struct RepoInfo {
 }
 
 impl RepoInfo {
+    /// Resolve repo info from explicit CLI args, falling back to cwd.
+    /// See [`RepoBranchArgs`] for the exact precedence rules.
+    pub fn from_args(repo_arg: Option<&str>, branch_arg: Option<&str>) -> Result<Self> {
+        match (repo_arg, branch_arg) {
+            (Some(repo), Some(branch)) => {
+                let (owner, repo_name) = git::parse_repo(repo)?;
+                Ok(Self {
+                    owner,
+                    repo: repo_name,
+                    branch: branch.to_string(),
+                    is_private: false,
+                })
+            }
+            (Some(_), None) => Err(PrDraftError::CommandFailed(
+                "--repo requires --branch to be specified".to_string(),
+            )
+            .into()),
+            (None, Some(branch)) => {
+                let repo = git::open_repo()?;
+                let (owner, repo_name) = git::github_owner_and_repo(&repo)?;
+                Ok(Self {
+                    owner,
+                    repo: repo_name,
+                    branch: branch.to_string(),
+                    is_private: false,
+                })
+            }
+            (None, None) => Self::from_git_only(),
+        }
+    }
+
     /// Get repo info with is_private check via GitHub API (async)
     pub async fn from_current_dir_async(gh_client: &impl RepoClient) -> Result<Self> {
         let repo = git::open_repo()?;
@@ -352,6 +401,44 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::repo_and_branch("owner/repo", "feature/x", "owner", "repo", "feature/x")]
+    #[case::repo_with_extra_slash("owner/repo/extra", "main", "owner", "repo/extra", "main")]
+    fn from_args_with_repo_and_branch(
+        #[case] repo_arg: &str,
+        #[case] branch_arg: &str,
+        #[case] expected_owner: &str,
+        #[case] expected_repo: &str,
+        #[case] expected_branch: &str,
+    ) {
+        let info = RepoInfo::from_args(Some(repo_arg), Some(branch_arg)).unwrap();
+        assert_eq!(
+            (info.owner, info.repo, info.branch, info.is_private),
+            (
+                expected_owner.to_string(),
+                expected_repo.to_string(),
+                expected_branch.to_string(),
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn from_args_rejects_invalid_repo_format() {
+        let result = RepoInfo::from_args(Some("no-slash"), Some("main"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_args_rejects_repo_without_branch() {
+        let result = RepoInfo::from_args(Some("owner/repo"), None);
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PrDraftError>(),
+            Some(PrDraftError::CommandFailed(msg)) if msg == "--repo requires --branch to be specified"
+        ));
+    }
 
     #[rstest]
     #[case::basic(
