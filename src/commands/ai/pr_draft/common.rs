@@ -1,3 +1,4 @@
+use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_is_match;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,40 @@ pub enum PrDraftError {
 
 pub type Result<T> = anyhow::Result<T>;
 
+/// Explicit repository/branch target, letting commands operate independently
+/// of cwd. `-R` requires `--branch` (clap-enforced) so a repo can never be
+/// paired with cwd's branch by accident; `--branch` alone targets a
+/// different branch within cwd's repository.
+#[derive(Args, Clone, Default, PartialEq, Eq)]
+pub struct RepoBranchArgs {
+    /// Target repository (owner/repo). Requires --branch.
+    #[arg(short = 'R', long, requires = "branch")]
+    pub repo: Option<String>,
+
+    /// Target branch name. Combine with --repo to target a different
+    /// repository, or use alone to target a different branch in the
+    /// current repository.
+    #[arg(long)]
+    pub branch: Option<String>,
+}
+
+/// Reject values that would let a path segment escape [`DraftFile::draft_dir`]
+/// when joined into a path (e.g. a `..` component). Real git branch names and
+/// GitHub owner/repo names can never contain these, so this only rejects
+/// input that could not have come from an actual git/GitHub-resolved value.
+fn reject_unsafe_path_component(value: &str) -> Result<()> {
+    if value
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(PrDraftError::CommandFailed(format!(
+            "Invalid value (must not contain empty, '.', or '..' path segments): {value}"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoInfo {
     pub owner: String,
@@ -61,6 +96,32 @@ pub struct RepoInfo {
 }
 
 impl RepoInfo {
+    /// Resolve repo info from explicit CLI args, falling back to cwd.
+    /// See [`RepoBranchArgs`] for the exact precedence rules.
+    pub fn from_args(repo_arg: Option<&str>, branch_arg: Option<&str>) -> Result<Self> {
+        if repo_arg.is_some() && branch_arg.is_none() {
+            return Err(PrDraftError::CommandFailed(
+                "--repo requires --branch to be specified".to_string(),
+            )
+            .into());
+        }
+        let Some(branch) = branch_arg else {
+            return Self::from_git_only();
+        };
+        reject_unsafe_path_component(branch)?;
+
+        let (owner, repo_name) = git::get_repo_owner_and_name(repo_arg)?;
+        reject_unsafe_path_component(&owner)?;
+        reject_unsafe_path_component(&repo_name)?;
+
+        Ok(Self {
+            owner,
+            repo: repo_name,
+            branch: branch.to_string(),
+            is_private: false,
+        })
+    }
+
     /// Get repo info with is_private check via GitHub API (async)
     pub async fn from_current_dir_async(gh_client: &impl RepoClient) -> Result<Self> {
         let repo = git::open_repo()?;
@@ -352,6 +413,58 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::repo_and_branch("owner/repo", "feature/x", "owner", "repo", "feature/x")]
+    #[case::repo_with_extra_slash("owner/repo/extra", "main", "owner", "repo/extra", "main")]
+    fn from_args_with_repo_and_branch(
+        #[case] repo_arg: &str,
+        #[case] branch_arg: &str,
+        #[case] expected_owner: &str,
+        #[case] expected_repo: &str,
+        #[case] expected_branch: &str,
+    ) {
+        let info = RepoInfo::from_args(Some(repo_arg), Some(branch_arg)).unwrap();
+        assert_eq!(
+            (info.owner, info.repo, info.branch, info.is_private),
+            (
+                expected_owner.to_string(),
+                expected_repo.to_string(),
+                expected_branch.to_string(),
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn from_args_rejects_invalid_repo_format() {
+        let result = RepoInfo::from_args(Some("no-slash"), Some("main"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_args_rejects_repo_without_branch() {
+        let result = RepoInfo::from_args(Some("owner/repo"), None);
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PrDraftError>(),
+            Some(PrDraftError::CommandFailed(msg)) if msg == "--repo requires --branch to be specified"
+        ));
+    }
+
+    #[rstest]
+    #[case::branch_dotdot("owner/repo", "../../etc/passwd")]
+    #[case::branch_dotdot_nested("owner/repo", "feature/../../escape")]
+    #[case::branch_dot("owner/repo", ".")]
+    #[case::branch_empty_segment("owner/repo", "feature//x")]
+    #[case::repo_dotdot("../../etc/repo", "main")]
+    fn from_args_rejects_path_traversal(#[case] repo_arg: &str, #[case] branch_arg: &str) {
+        let result = RepoInfo::from_args(Some(repo_arg), Some(branch_arg));
+        assert!(
+            result.is_err(),
+            "expected rejection for repo={repo_arg:?} branch={branch_arg:?}"
+        );
+    }
 
     #[rstest]
     #[case::basic(

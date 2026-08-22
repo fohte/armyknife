@@ -1,6 +1,6 @@
 //! Branch operations.
 
-use super::repo::{GitRepo, get_main_branch, open_repo};
+use super::repo::{GitRepo, open_repo};
 use crate::infra::github::{PrInfo, PrState};
 
 /// Check if a local branch exists
@@ -11,35 +11,16 @@ pub fn local_branch_exists(branch: &str) -> bool {
     repo.local_branch_exists(branch)
 }
 
-/// Find the base branch for PR creation.
+/// Find the base branch for PR creation via the GitHub API's default branch.
 ///
-/// Priority:
-/// 1. If `origin/main` exists locally, return "main"
-/// 2. If `origin/master` exists locally, return "master"
-/// 3. Fallback to GitHub API to get the repository's default branch
-///
-/// This avoids unnecessary API calls when the base branch can be determined locally.
+/// This intentionally does not consult the local git checkout (e.g. cwd's
+/// `origin/main`/`origin/master`), since the target `owner`/`repo_name` may
+/// differ from the repository checked out at cwd.
 pub async fn find_base_branch<C: crate::infra::github::RepoClient>(
     owner: &str,
     repo_name: &str,
     client: &C,
 ) -> String {
-    find_base_branch_impl(owner, repo_name, get_main_branch().ok(), client).await
-}
-
-/// Internal implementation that accepts optional local branch for testability.
-async fn find_base_branch_impl<C: crate::infra::github::RepoClient>(
-    owner: &str,
-    repo_name: &str,
-    local_branch: Option<String>,
-    client: &C,
-) -> String {
-    // Try to use local git info first
-    if let Some(branch) = local_branch {
-        return branch;
-    }
-
-    // Fallback to GitHub API
     if let Ok(default_branch) = client.get_default_branch(owner, repo_name).await {
         return default_branch;
     }
@@ -261,26 +242,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_base_branch_uses_local_branch_when_provided() {
+    async fn test_find_base_branch_uses_github_api() {
         let client = MockRepoClient::with_default_branch("develop");
-        let result =
-            find_base_branch_impl("owner", "repo", Some("master".to_string()), &client).await;
-        // Local branch takes priority over GitHub API
-        assert_eq!(result, "master");
-    }
-
-    #[tokio::test]
-    async fn test_find_base_branch_uses_github_api_when_no_local_branch() {
-        let client = MockRepoClient::with_default_branch("develop");
-        let result = find_base_branch_impl("owner", "repo", None, &client).await;
-        // Falls back to GitHub API
+        let result = find_base_branch("owner", "repo", &client).await;
         assert_eq!(result, "develop");
     }
 
     #[tokio::test]
     async fn test_find_base_branch_fallback_to_main_when_api_fails() {
         let client = MockRepoClient::failing();
-        let result = find_base_branch_impl("owner", "repo", None, &client).await;
+        let result = find_base_branch("owner", "repo", &client).await;
         // Falls back to "main" when API call fails
         assert_eq!(result, "main");
     }

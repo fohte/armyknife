@@ -2,8 +2,8 @@ use clap::Args;
 use std::fs;
 
 use super::common::{
-    DraftFile, PrDraftError, RepoInfo, generate_frontmatter, read_stdin_if_available,
-    repo_allows_japanese,
+    DraftFile, PrDraftError, RepoBranchArgs, RepoInfo, generate_frontmatter,
+    read_stdin_if_available, repo_allows_japanese,
 };
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::diff::eprint_diff;
@@ -17,6 +17,9 @@ pub struct NewArgs {
     /// Overwrite existing draft file if it exists
     #[arg(long)]
     pub force: bool,
+
+    #[command(flatten)]
+    pub repo_branch: RepoBranchArgs,
 }
 
 pub async fn run(args: &NewArgs) -> anyhow::Result<()> {
@@ -25,7 +28,10 @@ pub async fn run(args: &NewArgs) -> anyhow::Result<()> {
 }
 
 async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result<()> {
-    let repo_info = RepoInfo::from_git_only()?;
+    let repo_info = RepoInfo::from_args(
+        args.repo_branch.repo.as_deref(),
+        args.repo_branch.branch.as_deref(),
+    )?;
     let draft_path = DraftFile::path_for(&repo_info);
 
     // Check if the draft file already exists
@@ -195,6 +201,7 @@ mod tests {
             &NewArgs {
                 title: Some("Test Title".to_string()),
                 force: false,
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -226,6 +233,7 @@ mod tests {
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -244,6 +252,7 @@ mod tests {
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: false,
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -313,6 +322,7 @@ mod tests {
             &NewArgs {
                 title: Some("First Title".to_string()),
                 force: false,
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -324,6 +334,7 @@ mod tests {
             &NewArgs {
                 title: Some("Second Title".to_string()),
                 force: true,
+                repo_branch: RepoBranchArgs::default(),
             },
             &env.temp_repo.path(),
             &client,
@@ -335,5 +346,68 @@ mod tests {
         let draft_path = DraftFile::path_for(&repo_info);
         let draft = DraftFile::from_path(draft_path).expect("read draft");
         assert_eq!(draft.frontmatter.title, "Second Title");
+    }
+
+    #[tokio::test]
+    async fn new_with_explicit_repo_and_branch_does_not_require_git_repo() {
+        let owner = "owner";
+        let repo = "repo_explicit_args";
+        let branch = "feature/explicit";
+
+        let mock = GitHubMockServer::start().await;
+        mock.repo(owner, repo).repo_info().private(true).get().await;
+
+        let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
+        if draft_dir.exists() {
+            let _ = fs::remove_dir_all(&draft_dir);
+        }
+
+        let args = NewArgs {
+            title: Some("Explicit Title".to_string()),
+            force: false,
+            repo_branch: RepoBranchArgs {
+                repo: Some(format!("{owner}/{repo}")),
+                branch: Some(branch.to_string()),
+            },
+        };
+
+        let client = mock.client();
+        run_impl(&args, &client)
+            .await
+            .expect("run_impl should succeed with explicit -R/--branch");
+
+        let repo_info = RepoInfo {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            branch: branch.to_string(),
+            is_private: true,
+        };
+        let draft_path = DraftFile::path_for(&repo_info);
+        let draft = DraftFile::from_path(draft_path).expect("read draft");
+        assert_eq!(draft.frontmatter.title, "Explicit Title");
+
+        let _ = fs::remove_dir_all(&draft_dir);
+    }
+
+    #[derive(clap::Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: NewArgs,
+    }
+
+    #[rstest]
+    #[case::repo_without_branch(&["a", "-R", "owner/repo"])]
+    fn rejects_repo_without_branch(#[case] argv: &[&str]) {
+        use clap::Parser;
+        assert!(TestCli::try_parse_from(argv).is_err());
+    }
+
+    #[rstest]
+    #[case::repo_and_branch(&["a", "-R", "owner/repo", "--branch", "feature/x"])]
+    #[case::branch_only(&["a", "--branch", "feature/x"])]
+    #[case::neither(&["a"])]
+    fn accepts_valid_repo_branch_combinations(#[case] argv: &[&str]) {
+        use clap::Parser;
+        assert!(TestCli::try_parse_from(argv).is_ok());
     }
 }

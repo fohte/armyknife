@@ -145,6 +145,15 @@ Manage PR body drafts with human-in-the-loop review.
 | `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open) |
 | `submit` | Create a PR from the approved draft (updates existing PR if found)                                                             |
 
+`new` options:
+
+| Option              | Description                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `--title <title>`   | PR title                                                                                                 |
+| `--force`           | Overwrite existing draft file if it exists                                                               |
+| `-R, --repo <repo>` | Target repository (owner/repo) instead of cwd's. Requires `--branch`                                     |
+| `--branch <name>`   | Target branch instead of cwd's current branch (can be used alone to target another branch in cwd's repo) |
+
 `submit` options:
 
 | Option         | Description            |

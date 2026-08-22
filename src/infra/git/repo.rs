@@ -195,12 +195,6 @@ pub fn current_branch(repo: &GitRepo) -> Result<String> {
     repo.current_branch()
 }
 
-/// Get the main branch name (main or master).
-pub fn get_main_branch() -> Result<String> {
-    let repo = open_repo()?;
-    get_main_branch_for_repo(&repo)
-}
-
 /// Get the main branch name for a specific repository.
 pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
     if repo.remote_branch_exists("origin/main") {
