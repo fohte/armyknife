@@ -338,12 +338,13 @@ fn build_split_pane_setup_commands(spec: SplitPaneSetupSpec) -> Vec<TmuxCommand>
     commands
 }
 
-/// Inputs for `build_layout`, grouped to keep its argument count in check.
-pub struct LayoutSpec<'a> {
+/// Tmux session config shared by both `build_layout` and `split_pane`.
+pub struct TmuxSessionSpec<'a> {
+    /// Target tmux session name.
     pub session: &'a str,
+    /// Working directory for the new pane(s).
     pub cwd: &'a str,
-    pub window_name: &'a str,
-    pub layout: &'a LayoutNode,
+    /// Inserted right after `claude` in claude pane commands.
     pub model: Option<&'a str>,
     /// Written to a temp file and passed to claude pane commands; the temp
     /// file is read and deleted by the shell command at execution time.
@@ -351,7 +352,15 @@ pub struct LayoutSpec<'a> {
     /// Set as tmux session-level environment variables so all panes in the
     /// window inherit them.
     pub env_vars: &'a [(&'a str, &'a str)],
+    /// When true, avoids stealing focus from the currently attached client.
     pub background: bool,
+}
+
+/// Inputs for `build_layout`, grouped to keep its argument count in check.
+pub struct LayoutSpec<'a> {
+    pub common: TmuxSessionSpec<'a>,
+    pub window_name: &'a str,
+    pub layout: &'a LayoutNode,
     /// Forwarded to `build_layout_commands` (see `LayoutCommandsSpec`).
     pub restore_automatic_rename: bool,
 }
@@ -361,16 +370,19 @@ pub struct LayoutSpec<'a> {
 /// Creates a new tmux window and configures panes according to the layout.
 pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
     let LayoutSpec {
-        session,
-        cwd,
+        common,
         window_name,
         layout,
+        restore_automatic_rename,
+    } = spec;
+    let TmuxSessionSpec {
+        session,
+        cwd,
         model,
         prompt,
         env_vars,
         background,
-        restore_automatic_rename,
-    } = spec;
+    } = common;
 
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
@@ -397,16 +409,9 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
 
 /// Inputs for `split_pane`.
 pub struct SplitSpec<'a> {
-    pub session: &'a str,
+    pub common: TmuxSessionSpec<'a>,
     pub target_pane: &'a str,
-    pub cwd: &'a str,
     pub command: &'a str,
-    pub model: Option<&'a str>,
-    pub prompt: Option<&'a str>,
-    pub env_vars: &'a [(&'a str, &'a str)],
-    /// When true, the split does not steal the active pane (tmux `-d`),
-    /// avoiding a focus change when invoked from a Claude Code Bash tool.
-    pub background: bool,
 }
 
 /// Splits `target_pane` into a new pane within the same window and starts
@@ -416,15 +421,29 @@ pub struct SplitSpec<'a> {
 /// `--worktree` uses it to keep a handoff session visually attached to the
 /// pane it continues, instead of opening in a separate window.
 pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
-    let prompt_file = spec.prompt.map(write_prompt_file).transpose()?;
-    let cmd = apply_prompt_if_claude(spec.command, spec.model, prompt_file.as_deref(), true);
+    let SplitSpec {
+        common:
+            TmuxSessionSpec {
+                session,
+                cwd,
+                model,
+                prompt,
+                env_vars,
+                background,
+            },
+        target_pane,
+        command,
+    } = spec;
+
+    let prompt_file = prompt.map(write_prompt_file).transpose()?;
+    let cmd = apply_prompt_if_claude(command, model, prompt_file.as_deref(), true);
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
-        session: spec.session,
-        target_pane: spec.target_pane,
-        cwd: spec.cwd,
-        env_vars: spec.env_vars,
-        background: spec.background,
+        session,
+        target_pane,
+        cwd,
+        env_vars,
+        background,
     });
 
     let mut capture_args = flatten_commands(&setup);
@@ -442,12 +461,12 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
         ]),
         TmuxCommand::new(&["send-keys", "-t", new_pane_id.as_str(), "C-m"]),
     ];
-    remaining.extend(unset_environment_commands(spec.session, spec.env_vars));
+    remaining.extend(unset_environment_commands(session, env_vars));
     execute_commands(&remaining).inspect_err(|_| {
         // Best-effort: if send-keys/unset itself failed partway, don't
         // leave session-level env vars leaked past this call's lifetime.
-        for (key, _) in spec.env_vars {
-            let _ = super::run_tmux(&["set-environment", "-u", "-t", spec.session, key]);
+        for (key, _) in env_vars {
+            let _ = super::run_tmux(&["set-environment", "-u", "-t", session, key]);
         }
     })?;
 

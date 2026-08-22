@@ -30,14 +30,16 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
         .context("Failed to ensure tmux session")?;
 
     tmux::layout::build_layout(tmux::layout::LayoutSpec {
-        session: &target_session,
-        cwd: spec.cwd,
+        common: tmux::layout::TmuxSessionSpec {
+            session: &target_session,
+            cwd: spec.cwd,
+            model: spec.model,
+            prompt: spec.prompt,
+            env_vars: spec.env_vars,
+            background: spec.background,
+        },
         window_name: spec.window_name,
         layout: spec.layout,
-        model: spec.model,
-        prompt: spec.prompt,
-        env_vars: spec.env_vars,
-        background: spec.background,
         restore_automatic_rename: spec.restore_automatic_rename,
     })
     .context("Failed to create tmux layout")?;
@@ -70,14 +72,16 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
     })?;
 
     let new_pane_id = tmux::layout::split_pane(tmux::layout::SplitSpec {
-        session: &session,
+        common: tmux::layout::TmuxSessionSpec {
+            session: &session,
+            cwd: spec.cwd,
+            model: spec.model,
+            prompt: spec.prompt,
+            env_vars: spec.env_vars,
+            background: spec.background,
+        },
         target_pane: spec.target_pane,
-        cwd: spec.cwd,
         command: "claude",
-        model: spec.model,
-        prompt: spec.prompt,
-        env_vars: spec.env_vars,
-        background: spec.background,
     })
     .context("Failed to split tmux pane")?;
 
