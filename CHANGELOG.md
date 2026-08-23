@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.281](https://github.com/fohte/armyknife/compare/v0.1.280...v0.1.281) (2026-08-23)
+
+
+### Features
+
+* **cc/peer:** add peer me command and pane_id ([#851](https://github.com/fohte/armyknife/issues/851)) ([7a0d785](https://github.com/fohte/armyknife/commit/7a0d785f3d735b52e4438f99eb311ecd95efe6b8))
+
 ## [0.1.280](https://github.com/fohte/armyknife/compare/v0.1.279...v0.1.280) (2026-08-22)
 
 
