@@ -29,10 +29,21 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     bail!("Failed to exec claude: {}", err)
 }
 
-fn resolve_session_id_from_pane() -> Result<String> {
+/// Also used by `peer::me` to resolve the session running in the caller's
+/// own pane, mirroring what `resume` does to find the session to relaunch.
+pub(crate) fn resolve_session_id_from_pane() -> Result<String> {
     let pane_id = current_pane_id()?;
-    tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION)
+    let pane_option = tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION);
+    session_id_from_pane_option(&pane_id, pane_option.as_deref())
+}
+
+/// Pure decision half of [`resolve_session_id_from_pane`], split out so the
+/// "pane option not set or empty" failure is testable without a live tmux
+/// server (unlike `tmux::get_pane_option`, which shells out).
+fn session_id_from_pane_option(pane_id: &str, pane_option: Option<&str>) -> Result<String> {
+    pane_option
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "No Claude Code session ID found for pane {} (option '{}' not set or empty)",
@@ -156,6 +167,36 @@ mod tests {
         temp_env::with_vars([("TMUX_PANE", env_value)], || {
             assert_eq!(current_pane_id().map_err(|e| e.to_string()), expected);
         });
+    }
+
+    mod session_id_from_pane_option_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::returns_the_value_when_set(Some("abc123"), Ok("abc123".to_string()))]
+        #[case::errors_when_unset(
+            None,
+            Err(
+                "No Claude Code session ID found for pane %5 (option '@armyknife-last-claude-code-session-id' not set or empty)"
+                    .to_string()
+            )
+        )]
+        #[case::errors_when_empty(
+            Some(""),
+            Err(
+                "No Claude Code session ID found for pane %5 (option '@armyknife-last-claude-code-session-id' not set or empty)"
+                    .to_string()
+            )
+        )]
+        fn cases(
+            #[case] pane_option: Option<&str>,
+            #[case] expected: std::result::Result<String, String>,
+        ) {
+            assert_eq!(
+                session_id_from_pane_option("%5", pane_option).map_err(|e| e.to_string()),
+                expected
+            );
+        }
     }
 
     mod check_idle_at_shell_prompt_tests {

@@ -8,6 +8,12 @@
 //! populated whenever `a cc new` resolves a parent session -- see
 //! `cc::new::delegation::build_ancestor_chain`) against that name so a
 //! session can find the right `SendMessage` target for itself.
+//!
+//! `me` covers the case with no tracked parent/child relationship to join
+//! on: a human names an unrelated session by running `a cc peer me` in the
+//! pane it's running in, resolving it the same way `a cc resume` does (via
+//! the pane's tmux user option, not any session's own env var -- see
+//! `resume::resolve_session_id_from_pane`).
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -15,6 +21,7 @@ use serde::Serialize;
 
 use super::claude_registry;
 use super::error::CcError;
+use super::resume;
 use super::store;
 use super::types::Session;
 use crate::shared::env_var::EnvVars;
@@ -36,6 +43,11 @@ pub enum PeerCommands {
 
     /// List tracked sessions with their SendMessage names
     List(PeerListArgs),
+
+    /// Print the Claude Code session running in the caller's own tmux pane
+    /// (JSON, a subset of `list`) -- for a human to point at "this session"
+    /// from inside it, e.g. via bash mode (`!a cc peer me`)
+    Me,
 
     /// Resume a paused peer session by session ID and print its resolved
     /// SendMessage name (see the `wake` module doc for why this isn't a
@@ -67,6 +79,10 @@ struct Peer {
     cwd: String,
     label: Option<String>,
     status: &'static str,
+    /// The tmux pane hosting this session, `None` when it wasn't started
+    /// inside tmux. Lets a human match a JSON row against the pane they're
+    /// looking at, which `name`/`session_id`/`cwd` alone don't convey.
+    pane_id: Option<String>,
 }
 
 impl Peer {
@@ -80,6 +96,7 @@ impl Peer {
             cwd: session.cwd.to_string_lossy().into_owned(),
             label: session.label.clone(),
             status: session.status.display_name(),
+            pane_id: session.tmux_info.as_ref().map(|t| t.pane_id.clone()),
         }
     }
 }
@@ -89,6 +106,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
         PeerCommands::Parent => run_parent(),
         PeerCommands::Children => run_children(),
         PeerCommands::List(args) => run_list(args),
+        PeerCommands::Me => run_me(),
         PeerCommands::Wake(args) => wake::run(args),
         PeerCommands::Notify(args) => notify::run(args),
     }
@@ -122,6 +140,22 @@ fn run_list(args: &PeerListArgs) -> Result<()> {
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
     print_peers(&filter_by_repo(&sessions, args.repo.as_deref()))
+}
+
+/// Resolves the session running in the caller's own tmux pane, via the
+/// pane's `TMUX_SESSION_OPTION` (see `resume::resolve_session_id_from_pane`)
+/// rather than `current_session_id`'s `ARMYKNIFE_SESSION_ID` env var --
+/// `me` is meant to be run from a human-typed shell command (e.g. bash mode
+/// in the target session's own prompt), which doesn't carry that env var.
+fn run_me() -> Result<()> {
+    let self_id = resume::resolve_session_id_from_pane()?;
+    store::cleanup_stale_sessions()?;
+    let sessions = store::list_sessions()?;
+    let session = sessions
+        .iter()
+        .find(|s| s.session_id == self_id)
+        .ok_or_else(|| CcError::SessionNotFound(self_id.clone()))?;
+    print_peers(&[session])
 }
 
 /// The session that is `session`'s immediate parent -- a subset of `list`
@@ -175,7 +209,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use crate::commands::cc::types::SessionStatus;
+    use crate::commands::cc::types::{SessionStatus, TmuxInfo};
 
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
@@ -200,16 +234,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::resolved(
+    #[case::resolved_no_tmux(
         HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
-        Some("repo-ab".to_string())
+        None,
+        Some("repo-ab".to_string()),
+        None
     )]
-    #[case::unresolved(HashMap::new(), None)]
-    fn peer_from_session_name(
+    #[case::unresolved_no_tmux(HashMap::new(), None, None, None)]
+    #[case::resolved_in_tmux(
+        HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
+        Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%3".to_string(),
+        }),
+        Some("repo-ab".to_string()),
+        Some("%3".to_string())
+    )]
+    fn peer_from_session(
         #[case] name_map: HashMap<String, String>,
+        #[case] tmux_info: Option<TmuxInfo>,
         #[case] expected_name: Option<String>,
+        #[case] expected_pane_id: Option<String>,
     ) {
-        let s = session("child-1", "/repo/.worktrees/child", vec![]);
+        let s = Session {
+            tmux_info,
+            ..session("child-1", "/repo/.worktrees/child", vec![])
+        };
 
         assert_eq!(
             Peer::from_session(&s, &name_map),
@@ -219,6 +271,7 @@ mod tests {
                 cwd: "/repo/.worktrees/child".to_string(),
                 label: Some("my-label".to_string()),
                 status: "running",
+                pane_id: expected_pane_id,
             }
         );
     }

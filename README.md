@@ -332,6 +332,7 @@ Claude Code session monitoring with tmux integration.
 | `peer parent`                           |         | List the session that delegated to this one, if any (JSON)               |
 | `peer children`                         |         | List the sessions this one delegated to (JSON)                           |
 | `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)               |
+| `peer me`                               |         | Print the session running in the caller's own tmux pane (JSON)           |
 | `peer wake <session_id>`                |         | Resume a paused peer session and print its resolved SendMessage name     |
 | `peer notify <session_id> -m <text>`    |         | Send a message directly to another session's SendMessage socket          |
 | `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                 |
@@ -414,15 +415,22 @@ The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID
 
 Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a cc new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a cc new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
-`a cc peer parent`, `a cc peer children`, and `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory) all print a JSON array of `{name, session_id, cwd, label, status}`; `name` is `null` when Claude Code's registry has no matching entry. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+`a cc peer parent`, `a cc peer children`, `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a cc peer me` all print a JSON array of `{name, session_id, cwd, label, status, pane_id}`; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
 ```console
 $ a cc peer parent
-[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running"}]
+[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","pane_id":"%3"}]
 $ a cc peer parent | jq -r '.[0].name // empty'
 myproject-4f
 $ a cc peer list -R myproject
-[{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped"}]
+[{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running","pane_id":"%7"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped","pane_id":null}]
+```
+
+`a cc peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-claude-code-session-id` user option, the same mechanism `a cc resume` uses (see below), not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a cc peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It errors distinctly when run outside tmux (`$TMUX_PANE` unset) versus when the pane has no recorded session.
+
+```console
+$ a cc peer me
+[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","pane_id":"%3"}]
 ```
 
 `.[0].name` is `null` both when the array is empty (no tracked peer) and when the tracked peer's process has exited without leaving a registry entry -- most commonly a session `a cc sweep` has paused. `// empty` collapses both cases to empty output, so a caller can tell "no usable name" apart from the literal string `"null"`. When the peer is merely paused (its `session_id` still resolves via `a cc peer`), `a cc peer wake <session_id>` resumes its tmux pane, waits for it to re-register, and prints the freshly resolved name -- the name changes on every resume, so re-run `a cc peer` (or use `peer wake`'s own output) rather than reusing a name seen before the pause. `peer wake` is separate from `a cc resume`: `resume` replaces the calling pane's own process and only makes sense run from inside the target pane, while `peer wake` runs from an unrelated caller and never touches its own process.
