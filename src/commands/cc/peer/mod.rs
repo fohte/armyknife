@@ -122,10 +122,7 @@ fn run_parent() -> Result<()> {
     let self_id = current_session_id()?;
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
-    let session = sessions
-        .iter()
-        .find(|s| s.session_id == self_id)
-        .ok_or_else(|| CcError::SessionNotFound(self_id.clone()))?;
+    let session = find_session_by_id(&sessions, &self_id)?;
     print_peers(&filter_parent(&sessions, session))
 }
 
@@ -151,11 +148,18 @@ fn run_me() -> Result<()> {
     let self_id = resume::resolve_session_id_from_pane()?;
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
-    let session = sessions
+    let session = find_session_by_id(&sessions, &self_id)?;
+    print_peers(&[session])
+}
+
+/// Looks up `self_id` among `sessions`, the "self" lookup shared by
+/// `run_parent` and `run_me` -- they differ only in how `self_id` is
+/// resolved (env var vs. tmux pane).
+fn find_session_by_id<'a>(sessions: &'a [Session], self_id: &str) -> Result<&'a Session> {
+    sessions
         .iter()
         .find(|s| s.session_id == self_id)
-        .ok_or_else(|| CcError::SessionNotFound(self_id.clone()))?;
-    print_peers(&[session])
+        .ok_or_else(|| CcError::SessionNotFound(self_id.to_string()).into())
 }
 
 /// The session that is `session`'s immediate parent -- a subset of `list`
