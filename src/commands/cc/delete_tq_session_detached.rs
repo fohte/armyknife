@@ -1,11 +1,14 @@
 //! `a cc delete-tq-session-detached` (hidden) subcommand.
 //!
-//! Spawned by the SessionEnd hook once a session is confirmed `Ended` (never
-//! `Paused` — a paused session must stay resumable). tq lives behind
-//! Cloudflare Access and can hang or answer slowly, so the hook never waits
-//! on it directly: deletion happens in this separate detached process
-//! instead. Best-effort — tq's own 30-day retention is the fallback if this
-//! never runs or fails.
+//! Spawned once a session is confirmed `Ended` (never `Paused` — a paused
+//! session must stay resumable), either by a genuine `SessionEnd`, or by
+//! `evict_paused_sessions_on_pane_takeover` (see `cc::hook`) evicting a
+//! stale `Paused` session whose tmux pane was taken over by a different
+//! session. tq lives behind Cloudflare Access and can hang or answer
+//! slowly, so the hook never waits on it directly: deletion happens in this
+//! separate detached process instead. Best-effort — tq performs its own
+//! periodic cleanup of stale sessions regardless, so a failed or skipped
+//! deletion here is never the only cleanup path.
 
 use anyhow::Result;
 use clap::Args;
@@ -24,32 +27,12 @@ pub struct DeleteTqSessionDetachedArgs {
 /// hook can return immediately. Errors are logged, not surfaced — failing
 /// the hook over an opportunistic cleanup is the wrong trade.
 pub fn spawn_in_background(session_id: &str) {
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                event = "cc.tq_delete.spawn_failed",
-                session = session_id,
-                reason = "current_exe",
-                error = %e,
-            );
-            return;
-        }
-    };
-    let result = process::spawn_detached(
-        exe,
-        ["cc", "delete-tq-session-detached", "--session", session_id],
-        None,
-        &[],
+    process::spawn_self_detached(
+        "cc.tq_delete.spawn",
+        "cc.tq_delete.spawn_failed",
+        session_id,
+        &["cc", "delete-tq-session-detached", "--session", session_id],
     );
-    if let Err(e) = result {
-        tracing::warn!(
-            event = "cc.tq_delete.spawn_failed",
-            session = session_id,
-            reason = "spawn_detached",
-            error = %e,
-        );
-    }
 }
 
 pub fn run(args: &DeleteTqSessionDetachedArgs) -> Result<()> {

@@ -102,9 +102,10 @@ pub enum CcCommands {
     #[command(name = "generate-title-detached", hide = true)]
     GenerateTitleDetached(GenerateTitleDetachedArgs),
 
-    /// Internal: best-effort tq session deletion, spawned detached by the
-    /// SessionEnd hook so a slow/unreachable tq never blocks Claude Code's
-    /// exit.
+    /// Internal: best-effort tq session deletion, spawned detached when a
+    /// session is confirmed Ended (a genuine SessionEnd, or eviction on
+    /// tmux pane takeover) so a slow/unreachable tq never blocks Claude
+    /// Code's exit.
     #[command(name = "delete-tq-session-detached", hide = true)]
     DeleteTqSessionDetached(DeleteTqSessionDetachedArgs),
 }
