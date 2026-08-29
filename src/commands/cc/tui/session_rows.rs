@@ -183,7 +183,7 @@ pub(super) fn build_session_rows_by_task<'a>(
 }
 
 /// Buckets `sessions` into the 4 fixed status sections (see
-/// `build_session_rows`'s doc). `lookup` should be computed from the full
+/// `build_session_rows_by_task`'s doc). `lookup` should be computed from the full
 /// displayed session set, not just `sessions`, when this is called on a
 /// leftover subset -- see `SessionLookup`.
 fn build_status_section_rows<'a>(
@@ -698,8 +698,8 @@ mod tests {
     #[test]
     fn test_build_session_rows_descendant_count_ignores_sessions_outside_current_view() {
         // "child" is a real descendant of "root" but was filtered out of the
-        // current view before `build_session_rows` was called (e.g. by
-        // search/status filtering), so it must not be reflected in the count.
+        // current view before `build_session_rows_by_task` was called (e.g.
+        // by search/status filtering), so it must not be reflected in the count.
         let root = create_test_session("root", SessionStatus::Running);
 
         let sessions: Vec<&Session> = vec![&root];
@@ -747,10 +747,6 @@ mod tests {
         let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
         assert_eq!(session_ids, vec!["running_b", "running_a"]);
     }
-
-    // =========================================================================
-    // build_session_rows_by_task
-    // =========================================================================
 
     #[test]
     fn test_build_session_rows_by_task_one_group_then_leftover_status_section() {

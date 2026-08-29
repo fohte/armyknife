@@ -67,10 +67,8 @@ impl TqClient {
             .ok()
             .filter(|v| !v.is_empty());
 
-        // Only attach Cloudflare Access headers if both are present; if building
-        // the client with them fails for any reason, fall back to a plain client
-        // rather than erroring -- requests will simply fail downstream (302 from
-        // Cloudflare), which callers already treat as "tq unreachable".
+        // Falls back to a plain client if headers are missing or invalid;
+        // requests then fail downstream as an ordinary "tq unreachable" error.
         let http = match (client_id, client_secret) {
             (Some(id), Some(secret)) => cf_access_client(&id, &secret).unwrap_or_default(),
             _ => reqwest::Client::new(),

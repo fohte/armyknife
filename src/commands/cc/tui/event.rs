@@ -59,8 +59,9 @@ pub enum AppEvent {
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
     /// tq task-group fetch completed (grouping sessions under their linked
-    /// tq tasks). `Err` (including "tq not configured") leaves the session
-    /// list in its flat status-sectioned form.
+    /// tq tasks). `Ok(vec![])` (tq not configured or nothing linked) and
+    /// `Err` (tq unreachable) both leave the session list in its flat
+    /// status-sectioned form.
     TqTaskGroupsFetched(std::result::Result<Vec<TaskGroup>, String>),
 }
 

@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::session_rows::TaskGroup;
+use crate::commands::cc::claude_sessions::normalize_title;
 use crate::infra::tq::TqClient;
 
 /// Fetches tq task links for `local_session_ids` and groups them into one
@@ -56,7 +57,7 @@ pub async fn fetch_task_groups(
         let session_ids = members.remove(&task_id).unwrap_or_default();
         groups.push(TaskGroup {
             task_number: task.number,
-            task_title: task.title,
+            task_title: normalize_title(&task.title),
             session_ids,
         });
     }
