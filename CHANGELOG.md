@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.286](https://github.com/fohte/armyknife/compare/v0.1.285...v0.1.286) (2026-08-29)
+
+
+### Features
+
+* **cc:** display associated tq tasks for sessions in cc watch ([#868](https://github.com/fohte/armyknife/issues/868)) ([40b7f70](https://github.com/fohte/armyknife/commit/40b7f70f368328823a3b973e7f91092a12f497ca))
+
 ## [0.1.285](https://github.com/fohte/armyknife/compare/v0.1.284...v0.1.285) (2026-08-29)
 
 
