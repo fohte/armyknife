@@ -552,6 +552,8 @@ When the `tq` CLI is on `PATH`, a session linked to a tq task gets a `#<number> 
 
 When `tq` isn't on `PATH`, or the command fails, every row simply renders with no task prefix; local operations (focus, resume) are never blocked by it being down.
 
+armyknife is the only place that distinguishes a `Paused` session (auto-paused by `a cc sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. So whenever a session transitions to `Ended`, the `SessionEnd` hook also spawns a detached `a cc delete-tq-session-detached --session <id>` to delete tq's record of that session via `tq session delete claude_code <id>`. This is best-effort and never blocks the hook: `tq` sits behind Cloudflare Access and can be slow or unreachable, and tq independently deletes rows after 30 days regardless, so a failed or skipped deletion here is never the only cleanup path.
+
 #### Environment Variables
 
 | Variable                | Values                            | Description                 |
