@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.283](https://github.com/fohte/armyknife/compare/v0.1.282...v0.1.283) (2026-08-29)
+
+
+### Bug Fixes
+
+* **cc:** show Running instead of Background for active sessions ([#862](https://github.com/fohte/armyknife/issues/862)) ([8ed9003](https://github.com/fohte/armyknife/commit/8ed90035ecf10ad5e483f3a9398a32493ed4a402))
+
 ## [0.1.282](https://github.com/fohte/armyknife/compare/v0.1.281...v0.1.282) (2026-08-29)
 
 
