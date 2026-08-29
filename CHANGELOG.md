@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.285](https://github.com/fohte/armyknife/compare/v0.1.284...v0.1.285) (2026-08-29)
+
+
+### Features
+
+* **cc:** pass parent tq session ID to derived sessions ([#866](https://github.com/fohte/armyknife/issues/866)) ([4883cd5](https://github.com/fohte/armyknife/commit/4883cd517590eee596b41e2a75fefdc60e09fb46))
+
 ## [0.1.284](https://github.com/fohte/armyknife/compare/v0.1.283...v0.1.284) (2026-08-29)
 
 
