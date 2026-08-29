@@ -513,6 +513,9 @@ async fn delete_worktrees_single_repo(
             if result.sessions_cleaned > 0 {
                 println!("  Sessions cleaned: {}", result.sessions_cleaned);
             }
+            if result.process_groups_killed > 0 {
+                println!("  Process groups killed: {}", result.process_groups_killed);
+            }
         }
     }
 
@@ -574,6 +577,9 @@ async fn delete_worktrees_all_repos(
                 }
                 if result.sessions_cleaned > 0 {
                     println!("  Sessions cleaned: {}", result.sessions_cleaned);
+                }
+                if result.process_groups_killed > 0 {
+                    println!("  Process groups killed: {}", result.process_groups_killed);
                 }
             }
         }

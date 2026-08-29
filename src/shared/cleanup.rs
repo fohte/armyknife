@@ -13,6 +13,7 @@ use crate::commands::wm::worktree::{
     get_worktree_branch,
 };
 use crate::infra::git::GitRepo;
+use crate::infra::process;
 use crate::infra::tmux;
 
 /// Result of worktree resource cleanup.
@@ -26,6 +27,9 @@ pub struct WorktreeCleanupResult {
     pub windows_closed: usize,
     /// Number of Claude Code sessions cleaned up.
     pub sessions_cleaned: usize,
+    /// Number of process groups killed that were rooted in the worktree
+    /// (identified by a member process whose cwd was inside it).
+    pub process_groups_killed: usize,
     /// The resolved worktree root path (set when worktree_deleted is true).
     /// Use this instead of raw cwd for path matching, since cwd may be a
     /// subdirectory.
@@ -76,13 +80,16 @@ pub fn cleanup_worktree_by_name(
     worktree_name: &str,
     worktree_path: &Path,
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    // Collect tmux window IDs before deleting the worktree (paths still exist)
+    // Collect tmux window IDs and process groups rooted in the worktree
+    // before deleting it (the path must still exist to match against).
     let path_str = worktree_path.to_string_lossy();
     let window_ids = tmux::get_window_ids_in_path(&path_str);
+    let orphan_pgids = process::find_pgids_in_path(worktree_path);
 
     let mut result = delete_worktree_and_branch(repo, worktree_name);
 
-    // Only clean up tmux windows and sessions if worktree deletion succeeded.
+    // Only clean up tmux windows, sessions, and processes if worktree
+    // deletion succeeded.
     //
     // Clean up sessions BEFORE killing tmux windows: if the caller is running
     // inside one of those windows (e.g. `a wm delete` invoked from the
@@ -90,6 +97,7 @@ pub fn cleanup_worktree_by_name(
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
+        result.process_groups_killed = process::kill_process_groups(&orphan_pgids);
 
         for window_id in &window_ids {
             if tmux::kill_window(window_id).is_ok() {
@@ -208,6 +216,7 @@ mod tests {
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
+        assert_eq!(result.process_groups_killed, 0);
 
         // After deletion, the worktree should no longer be listed.
         let list =
@@ -239,6 +248,7 @@ mod tests {
         assert!(result.branch_deleted.is_none());
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
+        assert_eq!(result.process_groups_killed, 0);
     }
 
     #[test]
@@ -251,5 +261,6 @@ mod tests {
         assert!(result.branch_deleted.is_none());
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
+        assert_eq!(result.process_groups_killed, 0);
     }
 }
