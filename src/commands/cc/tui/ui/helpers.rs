@@ -317,11 +317,7 @@ mod tests {
         background.status = SessionStatus::Stopped;
         background.pending_bg_task_ids.insert("bg-1".to_string());
 
-        let (running, waiting, stopped, paused) = count_statuses(&[background]);
-        assert_eq!(running, 1);
-        assert_eq!(waiting, 0);
-        assert_eq!(stopped, 0);
-        assert_eq!(paused, 0);
+        assert_eq!(count_statuses(&[background]), (1, 0, 0, 0));
     }
 
     #[test]
