@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.284](https://github.com/fohte/armyknife/compare/v0.1.283...v0.1.284) (2026-08-29)
+
+
+### Features
+
+* **wm:** terminate lingering process groups in deleted worktrees ([#864](https://github.com/fohte/armyknife/issues/864)) ([ad07882](https://github.com/fohte/armyknife/commit/ad078827f0a1934598308f3e2c3711d841836fb3))
+
 ## [0.1.283](https://github.com/fohte/armyknife/compare/v0.1.282...v0.1.283) (2026-08-29)
 
 
