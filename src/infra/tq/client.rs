@@ -5,12 +5,21 @@
 //! credentials (see the dotfiles `tq` wrapper), so this module never touches
 //! either.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use super::error::{Result, TqError};
 use crate::infra::external_tool::ExternalTool;
+use crate::infra::process;
 
 const SESSION_LIST_ARGS: &[&str] = &["session", "list"];
+
+/// Upper bound on how long a single `tq` invocation may run. `tq` talks to a
+/// Cloudflare-Access-gated backend over the network, so an unresponsive
+/// backend must not leak a blocking-pool thread and child process on every
+/// session-creation-triggered refetch.
+const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One tq task linked to an agent session.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -63,10 +72,10 @@ impl TqClient {
 /// Runs `tq session list` to completion and parses its stdout. Blocking, so
 /// callers must run it via [`tokio::task::spawn_blocking`].
 fn run_session_list() -> Result<Vec<SessionTasks>> {
-    let output = ExternalTool::Tq
-        .command()
-        .args(SESSION_LIST_ARGS)
-        .output()
+    let mut command = ExternalTool::Tq.command();
+    command.args(SESSION_LIST_ARGS);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
         .map_err(|e| TqError::command_failed(SESSION_LIST_ARGS, e.to_string(), None))?;
 
     if !output.status.success() {

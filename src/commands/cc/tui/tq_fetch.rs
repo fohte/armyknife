@@ -33,8 +33,7 @@ pub async fn fetch_session_tasks(
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. A session linked to multiple tasks keeps only the
-/// first (tq's own ordering) -- the title-prefix has room for exactly one
-/// task, and this PR has no UI for showing more.
+/// first (tq's own ordering) -- the title-prefix only has room for one.
 fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,

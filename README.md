@@ -548,7 +548,7 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc
 
 #### Task linking (tq)
 
-When the [`tq`](https://tq.fohte.net) CLI is on `PATH`, a session linked to a tq task gets a `#<number> <title> ›` prefix ahead of its usual breadcrumb/title, so its task is visible without leaving the usual NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED sections. The prefix dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
+When the `tq` CLI is on `PATH`, a session linked to a tq task gets a `#<number> <title> ›` prefix ahead of its usual breadcrumb/title, so its task is visible without leaving the usual NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED sections. The prefix dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
 
 When `tq` isn't on `PATH`, or the command fails, every row simply renders with no task prefix; local operations (focus, resume) are never blocked by it being down.
 

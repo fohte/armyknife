@@ -155,7 +155,7 @@ impl ExternalTool {
             Self::Tq => Metadata {
                 name: "tq",
                 binary: "tq",
-                purpose: "task grouping for `a cc watch`",
+                purpose: "task linking for `a cc watch`",
                 // tq has no `--version` flag; `--help` at least confirms the
                 // binary runs, even though doctor will report `FoundNoVersion`.
                 version_args: &["--help"],

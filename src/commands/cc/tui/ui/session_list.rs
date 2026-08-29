@@ -447,24 +447,18 @@ fn build_breadcrumb_title_spans(
 
     let mut spans = Vec::new();
     let mut cursor = 0usize;
-
-    if task_boundary > cursor {
-        let end = task_boundary.min(truncated_chars.len());
-        let text: String = truncated_chars[cursor..end].iter().collect();
-        spans.extend(highlight_matches(&text, query, task_prefix_style));
-        cursor = end;
-    }
-
-    if breadcrumb_boundary > cursor {
-        let end = breadcrumb_boundary.min(truncated_chars.len());
-        let text: String = truncated_chars[cursor..end].iter().collect();
-        spans.extend(highlight_matches(&text, query, dim_style));
-        cursor = end;
-    }
-
-    if truncated_chars.len() > cursor {
-        let text: String = truncated_chars[cursor..].iter().collect();
-        spans.extend(highlight_matches(&text, query, title_style));
+    let regions = [
+        (task_boundary, task_prefix_style),
+        (breadcrumb_boundary, dim_style),
+        (truncated_chars.len(), title_style),
+    ];
+    for (end, style) in regions {
+        let end = end.min(truncated_chars.len());
+        if end > cursor {
+            let text: String = truncated_chars[cursor..end].iter().collect();
+            spans.extend(highlight_matches(&text, query, style));
+            cursor = end;
+        }
     }
 
     (spans, width)
