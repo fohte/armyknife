@@ -23,6 +23,7 @@ pub enum ExternalTool {
     Opencode,
     Hammerspoon,
     Tq,
+    Lsof,
 }
 
 pub struct Metadata {
@@ -58,6 +59,7 @@ impl ExternalTool {
         Self::Opencode,
         Self::Hammerspoon,
         Self::Tq,
+        Self::Lsof,
     ];
 
     pub const fn metadata(self) -> Metadata {
@@ -163,6 +165,15 @@ impl ExternalTool {
                 brew_pkg: None,
                 macos_app_path: None,
             },
+            Self::Lsof => Metadata {
+                name: "lsof",
+                binary: "lsof",
+                purpose: "find processes left running in a deleted worktree",
+                version_args: &["-v"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
         }
     }
 
@@ -247,6 +258,7 @@ mod tests {
             "opencode",
             "hammerspoon",
             "tq",
+            "lsof",
         ];
         want.sort_unstable();
 

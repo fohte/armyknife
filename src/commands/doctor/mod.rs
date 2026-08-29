@@ -207,7 +207,7 @@ mod tests {
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
-            ExternalTool::Tq,
+            ExternalTool::Tq, ExternalTool::Lsof,
         ],
     )]
     #[case::ghostty_terminal(
@@ -220,7 +220,7 @@ mod tests {
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Ghostty, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
-            ExternalTool::Tq,
+            ExternalTool::Tq, ExternalTool::Lsof,
         ],
     )]
     #[case::custom_editor(
@@ -233,7 +233,7 @@ mod tests {
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
-            ExternalTool::Tq,
+            ExternalTool::Tq, ExternalTool::Lsof,
         ],
     )]
     #[case::notifications_disabled(
@@ -245,7 +245,8 @@ mod tests {
         &[
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Tq,
+            ExternalTool::Claude, ExternalTool::Opencode,
+            ExternalTool::Tq, ExternalTool::Lsof,
         ],
     )]
     fn selected_tools_cases(#[case] config: Config, #[case] expected: &[ExternalTool]) {

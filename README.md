@@ -578,6 +578,8 @@ Use `a cc new --worktree=<branch>` to create a new worktree and open a tmux wind
 
 When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a cc new --worktree` from another session), it also notifies the delegator session via `a cc peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
 
+Deletion also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
+
 `clean` options:
 
 | Option          | Description                                                                             |
@@ -598,7 +600,7 @@ armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log
 
 ### `a doctor`
 
-Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
+Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
 
 ```sh
 a doctor
