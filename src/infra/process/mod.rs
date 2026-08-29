@@ -4,13 +4,14 @@
 //! module so that production code elsewhere can call pure functions and tests
 //! can stub at the module boundary.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
 
 /// Replaces the current process image with `program args...` via `execve(2)`.
@@ -82,6 +83,7 @@ pub fn get_parent_pid(pid: u32) -> Option<u32> {
 /// without forking `ps` for every lookup.
 pub struct ProcessSnapshot {
     children: HashMap<u32, Vec<(u32, String)>>,
+    parents: HashMap<u32, u32>,
     comms: HashMap<u32, String>,
 }
 
@@ -102,6 +104,7 @@ impl ProcessSnapshot {
 
     fn from_ps_output(text: &str) -> Self {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+        let mut parents: HashMap<u32, u32> = HashMap::new();
         let mut comms: HashMap<u32, String> = HashMap::new();
         for line in text.lines() {
             let mut it = line.split_whitespace();
@@ -116,9 +119,33 @@ impl ProcessSnapshot {
                 continue;
             }
             children.entry(ppid).or_default().push((pid, comm.clone()));
+            parents.insert(pid, ppid);
             comms.insert(pid, comm);
         }
-        Self { children, comms }
+        Self {
+            children,
+            parents,
+            comms,
+        }
+    }
+
+    /// Returns `pid` and every ancestor up to (but not including) the point
+    /// where the parent is unknown or a cycle is detected.
+    ///
+    /// Used to protect the calling process and the shell/tmux chain that
+    /// invoked it from being killed when cleaning up processes still rooted
+    /// in a worktree being deleted (e.g. `a wm delete` run from inside it).
+    pub fn ancestors(&self, pid: u32) -> HashSet<u32> {
+        let mut result = HashSet::new();
+        result.insert(pid);
+        let mut current = pid;
+        while let Some(&parent) = self.parents.get(&current) {
+            if !result.insert(parent) {
+                break;
+            }
+            current = parent;
+        }
+        result
     }
 
     /// Returns the basename of the comm for `pid`, if known.
@@ -175,6 +202,121 @@ impl ProcessSnapshot {
         }
         None
     }
+}
+
+/// Captures the current working directory of every process visible to the
+/// caller via `lsof -a -d cwd -Fpn`, keyed by pid.
+///
+/// Returns `None` if `lsof` is unavailable or fails.
+fn list_process_cwds() -> Option<HashMap<u32, PathBuf>> {
+    let output = ExternalTool::Lsof
+        .command()
+        .args(["-a", "-d", "cwd", "-Fpn"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_lsof_cwd_output(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+/// Parses `lsof -Fpn` output, where each line is a single field prefixed
+/// with its identifier letter (`p` for pid, `n` for file name; other
+/// identifiers such as `f` for file descriptor are ignored).
+fn parse_lsof_cwd_output(text: &str) -> HashMap<u32, PathBuf> {
+    let mut result = HashMap::new();
+    let mut current_pid: Option<u32> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix('p') {
+            current_pid = rest.parse().ok();
+        } else if let Some(rest) = line.strip_prefix('n')
+            && let Some(pid) = current_pid
+        {
+            result.insert(pid, PathBuf::from(rest));
+        }
+    }
+    result
+}
+
+/// Returns the pids in `cwds` whose value is inside `path`, excluding any
+/// pid in `exclude`.
+fn filter_pids_in_path(
+    cwds: &HashMap<u32, PathBuf>,
+    path: &Path,
+    exclude: &HashSet<u32>,
+) -> Vec<u32> {
+    cwds.iter()
+        .filter(|(pid, cwd)| !exclude.contains(pid) && cwd.starts_with(path))
+        .map(|(&pid, _)| pid)
+        .collect()
+}
+
+/// Returns the pgid of `pid` via `getpgid(2)`. `None` if the process is gone
+/// or otherwise inaccessible.
+fn get_pgid(pid: u32) -> Option<libc::pid_t> {
+    // SAFETY: getpgid with any pid is safe to call; it returns -1 on error
+    // (e.g. ESRCH for a gone process), which is treated as "unknown".
+    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    if pgid == -1 { None } else { Some(pgid) }
+}
+
+/// Finds the process-group ids (pgid) of processes rooted in `path`,
+/// excluding any pgid the calling process or one of its ancestors belongs
+/// to -- the shell/tmux chain that may have invoked `a wm delete` from
+/// inside the worktree being deleted.
+///
+/// A pid's cwd is used only to *locate* a candidate group: once one member
+/// is found inside `path`, the whole pgid is returned so the caller can kill
+/// the entire tree, including members whose own cwd has since moved
+/// elsewhere (e.g. a package-manager wrapper that cd'd into a subdirectory
+/// before exec'ing its target). This relies on Claude Code's
+/// background-spawn boundary putting the whole detached subtree into one
+/// process group; it doesn't hold if a member calls `setpgid` itself.
+///
+/// Returns an empty vec if `lsof` or `ps` is unavailable, since without a
+/// full process snapshot the ancestor chain can't be computed safely.
+pub fn find_pgids_in_path(path: &Path) -> Vec<libc::pid_t> {
+    let Some(cwds) = list_process_cwds() else {
+        return Vec::new();
+    };
+    let Some(snapshot) = ProcessSnapshot::capture() else {
+        return Vec::new();
+    };
+    let exclude_pids = snapshot.ancestors(std::process::id());
+    // lsof reports each process's cwd fully resolved (e.g. macOS's
+    // /tmp -> /private/tmp), so `path` must be resolved the same way or a
+    // symlinked worktree root would never match.
+    let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let candidate_pids = filter_pids_in_path(&cwds, &resolved_path, &exclude_pids);
+
+    let exclude_pgids: HashSet<libc::pid_t> = exclude_pids
+        .iter()
+        .filter_map(|&pid| get_pgid(pid))
+        .collect();
+
+    candidate_pids
+        .iter()
+        .filter_map(|&pid| get_pgid(pid))
+        // Guard against special pgids (0 = caller's group, -1 = broadcast) in kill(2).
+        .filter(|&pgid| pgid > 1 && !exclude_pgids.contains(&pgid))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Sends SIGTERM to every process in each group via `kill(-pgid, ...)`.
+/// Returns the number of process groups signaled successfully.
+pub fn kill_process_groups(pgids: &[libc::pid_t]) -> usize {
+    pgids
+        .iter()
+        .filter(|&&pgid| {
+            // SAFETY: libc::kill with SIGTERM on a pgid validated by
+            // find_pgids_in_path (pgid > 1) is safe.
+            unsafe { libc::kill(-pgid, libc::SIGTERM) == 0 }
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -251,5 +393,88 @@ mod tests {
         let ps_output = format!("200 100 {comm}\n");
         let snapshot = ProcessSnapshot::from_ps_output(&ps_output);
         assert_eq!(snapshot.comm_basename(query_pid), expected);
+    }
+
+    #[rstest]
+    #[case::walks_up_to_root(
+        indoc! {"
+            1 0 launchd
+            100 1 tmux
+            200 100 zsh
+            300 200 a
+        "},
+        300,
+        &[0, 1, 100, 200, 300],
+    )]
+    #[case::stops_at_unknown_parent(
+        indoc! {"
+            200 100 zsh
+            300 200 a
+        "},
+        300,
+        &[100, 200, 300],
+    )]
+    #[case::single_process(
+        indoc! {"
+            1 0 launchd
+        "},
+        1,
+        &[0, 1],
+    )]
+    fn ancestors_cases(#[case] ps_output: &str, #[case] pid: u32, #[case] expected: &[u32]) {
+        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
+        let mut got: Vec<u32> = snapshot.ancestors(pid).into_iter().collect();
+        got.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(got, expected);
+    }
+
+    #[rstest]
+    #[case::single_process(
+        indoc! {"
+            p100
+            fcwd
+            n/repo/.worktrees/feature
+        "},
+        &[(100, "/repo/.worktrees/feature")],
+    )]
+    #[case::multiple_processes(
+        indoc! {"
+            p100
+            fcwd
+            n/repo/.worktrees/feature
+            p200
+            fcwd
+            n/
+        "},
+        &[(100, "/repo/.worktrees/feature"), (200, "/")],
+    )]
+    #[case::empty_output("", &[])]
+    fn parse_lsof_cwd_output_cases(#[case] text: &str, #[case] expected: &[(u32, &str)]) {
+        let got = parse_lsof_cwd_output(text);
+        let expected: HashMap<u32, PathBuf> = expected
+            .iter()
+            .map(|&(pid, path)| (pid, PathBuf::from(path)))
+            .collect();
+        assert_eq!(got, expected);
+    }
+
+    #[rstest]
+    fn filter_pids_in_path_excludes_outside_path_and_excluded_pids() {
+        let cwds: HashMap<u32, PathBuf> = [
+            (100, PathBuf::from("/repo/.worktrees/feature")),
+            (200, PathBuf::from("/repo/.worktrees/feature/web")),
+            (300, PathBuf::from("/repo/.worktrees/other")),
+            (400, PathBuf::from("/repo/.worktrees/feature")),
+        ]
+        .into_iter()
+        .collect();
+        let exclude: HashSet<u32> = [400].into_iter().collect();
+
+        let mut got = filter_pids_in_path(&cwds, Path::new("/repo/.worktrees/feature"), &exclude);
+        got.sort_unstable();
+
+        assert_eq!(got, vec![100, 200]);
     }
 }
