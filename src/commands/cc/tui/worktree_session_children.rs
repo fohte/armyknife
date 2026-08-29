@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[rstest]
-    fn sessions_under_worktree_reports_background_for_running_session_with_pending_bg_task(
+    fn sessions_under_worktree_reports_background_for_stopped_session_with_pending_bg_task(
         tmpdir: tempfile::TempDir,
     ) {
         let wt = tmpdir.path().join("wt");
@@ -254,6 +254,7 @@ mod tests {
 
         let t0 = Utc::now();
         let mut s = session("s", &wt, t0, Some("%1"));
+        s.status = SessionStatus::Stopped;
         s.pending_bg_task_ids.insert("bg-1".to_string());
 
         let result = sessions_under_worktree_from_canonical(

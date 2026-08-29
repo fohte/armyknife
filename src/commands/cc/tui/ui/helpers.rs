@@ -1,5 +1,5 @@
 use crate::commands::cc::tui::session_rows::KinDirection;
-use crate::commands::cc::types::{DisplayStatus, Session, SessionStatus};
+use crate::commands::cc::types::{DisplayStatus, Session};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -81,7 +81,10 @@ pub(super) fn status_color(status: DisplayStatus) -> Color {
     }
 }
 
-/// Counts sessions by status.
+/// Counts sessions by status. `Background` folds into `running`: it means
+/// the main loop is idle but a task is still in flight, which reads as
+/// "running" from the user's perspective -- the same grouping `section_of`
+/// uses to place these sessions in the RUNNING section.
 pub(super) fn count_statuses(sessions: &[Session]) -> (usize, usize, usize, usize) {
     let mut running = 0;
     let mut waiting = 0;
@@ -89,11 +92,13 @@ pub(super) fn count_statuses(sessions: &[Session]) -> (usize, usize, usize, usiz
     let mut paused = 0;
 
     for session in sessions {
-        match session.status {
-            SessionStatus::Running => running += 1,
-            SessionStatus::WaitingInput => waiting += 1,
-            SessionStatus::Paused => paused += 1,
-            SessionStatus::Stopped | SessionStatus::Ended => stopped += 1,
+        match session.display_status() {
+            DisplayStatus::Running | DisplayStatus::Background => running += 1,
+            DisplayStatus::WaitingInput => waiting += 1,
+            DisplayStatus::Paused => paused += 1,
+            DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
+                stopped += 1
+            }
         }
     }
 
@@ -271,7 +276,7 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 mod tests {
     use super::*;
     use crate::commands::cc::tui::ui::test_support::create_test_session;
-    use crate::commands::cc::types::TmuxInfo;
+    use crate::commands::cc::types::{SessionStatus, TmuxInfo};
     use rstest::rstest;
 
     #[test]
@@ -303,6 +308,19 @@ mod tests {
         assert_eq!(running, 2);
         assert_eq!(waiting, 1);
         assert_eq!(stopped, 1);
+        assert_eq!(paused, 0);
+    }
+
+    #[test]
+    fn test_count_statuses_background_counts_as_running() {
+        let mut background = create_test_session("1");
+        background.status = SessionStatus::Stopped;
+        background.pending_bg_task_ids.insert("bg-1".to_string());
+
+        let (running, waiting, stopped, paused) = count_statuses(&[background]);
+        assert_eq!(running, 1);
+        assert_eq!(waiting, 0);
+        assert_eq!(stopped, 0);
         assert_eq!(paused, 0);
     }
 
