@@ -1,300 +1,237 @@
-//! tq API client implementation using reqwest.
+//! tq CLI client.
 //!
-//! tq (<https://tq.fohte.net>) is the user's personal task manager and sits
-//! behind Cloudflare Access, so `from_env` optionally attaches Cloudflare
-//! Access service-token headers on top of the base HTTP client.
+//! Shells out to the `tq` binary rather than speaking to the tq API
+//! directly: `tq` already resolves its own base URL and Cloudflare Access
+//! credentials (see the dotfiles `tq` wrapper), so this module never touches
+//! either.
 
 use serde::Deserialize;
 
 use super::error::{Result, TqError};
+use crate::infra::external_tool::ExternalTool;
 
-/// Header names for Cloudflare Access service tokens.
-/// See <https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/>.
-const CF_ACCESS_CLIENT_ID_HEADER: &str = "CF-Access-Client-Id";
-const CF_ACCESS_CLIENT_SECRET_HEADER: &str = "CF-Access-Client-Secret";
+const SESSION_LIST_ARGS: &[&str] = &["session", "list"];
 
-/// tq API client using reqwest.
-pub struct TqClient {
-    http: reqwest::Client,
-    base_url: String,
-}
-
-/// A tq task with an associated agent session, as returned by
-/// `GET /api/agent-sessions/by-task`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct TaskSessionLink {
-    pub task_id: String,
-    pub session_id: String,
-}
-
-/// Wire format for one item of `GET /api/agent-sessions/by-task`.
-/// The response carries many more fields than this; unknown fields are ignored.
-#[derive(Debug, Deserialize)]
+/// One tq task linked to an agent session.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TaskSessionLinkResponse {
-    task_id: String,
-    session_id: String,
-}
-
-/// A tq task, as returned by `GET /api/tasks/{task_id}`.
-#[derive(Debug, PartialEq, Eq)]
 pub struct TqTask {
+    pub id: String,
     pub number: u32,
     pub title: String,
+    /// The id of this task's direct parent, if any. Absent on older `tq`
+    /// binaries that predate this field, so it must default to `None`
+    /// rather than fail deserialization.
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
-/// Wire format for `GET /api/tasks/{task_id}`.
-/// The response carries many more fields than this; unknown fields are ignored.
-#[derive(Debug, Deserialize)]
-struct TaskResponse {
-    number: u32,
-    title: String,
+/// The tq tasks linked to a single agent session, as returned by
+/// `tq session list`. A session with no linked tasks still appears, with an
+/// empty `tasks` list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTasks {
+    pub session_id: String,
+    pub tasks: Vec<TqTask>,
 }
+
+pub struct TqClient;
 
 impl TqClient {
-    /// Build a client from environment configuration.
-    ///
-    /// Returns `None` when `TQ_API_URL` is unset or empty, which means the tq
-    /// integration is simply not configured -- callers should skip the feature
-    /// silently rather than treat this as an error.
-    pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var("TQ_API_URL").ok().filter(|v| !v.is_empty())?;
-
-        let client_id = std::env::var("CF_ACCESS_CLIENT_ID")
-            .ok()
-            .filter(|v| !v.is_empty());
-        let client_secret = std::env::var("CF_ACCESS_CLIENT_SECRET")
-            .ok()
-            .filter(|v| !v.is_empty());
-
-        // Falls back to a plain client if headers are missing or invalid;
-        // requests then fail downstream as an ordinary "tq unreachable" error.
-        let http = match (client_id, client_secret) {
-            (Some(id), Some(secret)) => cf_access_client(&id, &secret).unwrap_or_default(),
-            _ => reqwest::Client::new(),
-        };
-
-        Some(Self { http, base_url })
+    /// Returns `None` when the `tq` binary isn't on `PATH` -- the tq
+    /// integration is then simply skipped, not treated as an error.
+    pub fn detect() -> Option<Self> {
+        ExternalTool::Tq.is_available().then_some(Self)
     }
 
-    /// Test-only constructor pointing at an arbitrary base URL (e.g. a wiremock
-    /// server), with no Cloudflare Access headers attached.
-    #[cfg(test)]
-    pub(crate) fn with_base_url(base_url: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            base_url,
+    /// Lists every Claude Code agent session tq knows about, each with the
+    /// tasks it's linked to.
+    pub async fn list_session_tasks(&self) -> Result<Vec<SessionTasks>> {
+        let join_result = tokio::task::spawn_blocking(run_session_list).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                SESSION_LIST_ARGS,
+                format!("task panicked: {e}"),
+                None,
+            )),
         }
     }
-
-    fn url(&self, route: &str) -> String {
-        format!("{}{route}", self.base_url)
-    }
-
-    /// List all tq tasks that currently have an associated agent session.
-    pub async fn list_task_session_links(&self) -> Result<Vec<TaskSessionLink>> {
-        let response = self
-            .http
-            .get(self.url("/api/agent-sessions/by-task"))
-            .send()
-            .await?;
-        let links: Vec<TaskSessionLinkResponse> = check_response(response).await?;
-
-        Ok(links
-            .into_iter()
-            .map(|l| TaskSessionLink {
-                task_id: l.task_id,
-                session_id: l.session_id,
-            })
-            .collect())
-    }
-
-    /// Get a tq task by its UUID.
-    pub async fn get_task(&self, task_id: &str) -> Result<TqTask> {
-        let route = format!("/api/tasks/{task_id}");
-        let response = self.http.get(self.url(&route)).send().await?;
-        let task: TaskResponse = check_response(response).await?;
-
-        Ok(TqTask {
-            number: task.number,
-            title: task.title,
-        })
-    }
 }
 
-/// Build a reqwest client with Cloudflare Access service-token headers attached.
-/// Returns `None` if the header values are invalid; the caller falls back to a
-/// plain client in that case.
-fn cf_access_client(client_id: &str, client_secret: &str) -> Option<reqwest::Client> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        CF_ACCESS_CLIENT_ID_HEADER,
-        reqwest::header::HeaderValue::from_str(client_id).ok()?,
-    );
-    headers.insert(
-        CF_ACCESS_CLIENT_SECRET_HEADER,
-        reqwest::header::HeaderValue::from_str(client_secret).ok()?,
-    );
-    reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .ok()
+/// Runs `tq session list` to completion and parses its stdout. Blocking, so
+/// callers must run it via [`tokio::task::spawn_blocking`].
+fn run_session_list() -> Result<Vec<SessionTasks>> {
+    let output = ExternalTool::Tq
+        .command()
+        .args(SESSION_LIST_ARGS)
+        .output()
+        .map_err(|e| TqError::command_failed(SESSION_LIST_ARGS, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            SESSION_LIST_ARGS,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    parse_session_list(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Check HTTP response status and deserialize the JSON body, or return an error.
-///
-/// tq sits behind Cloudflare Access, so an unauthenticated request comes back
-/// as a 302 redirect rather than 401/403; any non-2xx status is treated the
-/// same way here.
-async fn check_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
-    let status = response.status();
-    if !status.is_success() {
-        return Err(TqError::ApiError(status.as_u16()).into());
-    }
-    let body = response.json().await?;
-    Ok(body)
+/// Pure parse step, isolated from the process spawn so it can be unit tested
+/// with literal JSON fixtures instead of invoking the real `tq` binary.
+fn parse_session_list(stdout: &str) -> Result<Vec<SessionTasks>> {
+    Ok(serde_json::from_str(stdout)?)
 }
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
-    use crate::infra::tq::mock::TqMockServer;
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_list_task_session_links_ignores_unknown_fields() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links(&[("task-1", "session-1"), ("task-2", "session-2")])
-            .await;
+    #[test]
+    fn parses_sessions_with_and_without_linked_tasks() {
+        let json = indoc! {r#"
+            [
+              {
+                "sessionId": "session-1",
+                "tasks": [
+                  {
+                    "id": "task-uuid-1",
+                    "number": 42,
+                    "title": "Fix the bug",
+                    "parentId": "task-uuid-parent"
+                  },
+                  { "id": "task-uuid-2", "number": 43, "title": "Parent task" }
+                ]
+              },
+              {
+                "sessionId": "session-2",
+                "tasks": []
+              }
+            ]
+        "#};
 
-        let client = mock.client();
-        let result = client.list_task_session_links().await.unwrap();
+        let result = parse_session_list(json).unwrap();
 
         assert_eq!(
             result,
             vec![
-                TaskSessionLink {
-                    task_id: "task-1".to_string(),
+                SessionTasks {
                     session_id: "session-1".to_string(),
+                    tasks: vec![
+                        TqTask {
+                            id: "task-uuid-1".to_string(),
+                            number: 42,
+                            title: "Fix the bug".to_string(),
+                            parent_id: Some("task-uuid-parent".to_string()),
+                        },
+                        TqTask {
+                            id: "task-uuid-2".to_string(),
+                            number: 43,
+                            title: "Parent task".to_string(),
+                            parent_id: None,
+                        },
+                    ],
                 },
-                TaskSessionLink {
-                    task_id: "task-2".to_string(),
+                SessionTasks {
                     session_id: "session-2".to_string(),
+                    tasks: vec![],
                 },
             ]
         );
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn test_list_task_session_links_error() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links_error(401).await;
-
-        let client = mock.client();
-        let result = client.list_task_session_links().await;
-
-        assert!(result.is_err());
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_task_ignores_unknown_fields() {
-        let mock = TqMockServer::start().await;
-        mock.task("task-1", 42, "Fix the bug").await;
-
-        let client = mock.client();
-        let result = client.get_task("task-1").await.unwrap();
+    #[case::explicit_null(indoc! {r#"
+        [
+          {
+            "sessionId": "session-1",
+            "tasks": [
+              { "id": "task-uuid-1", "number": 1, "title": "Task", "parentId": null }
+            ]
+          }
+        ]
+    "#})]
+    #[case::key_absent(indoc! {r#"
+        [
+          {
+            "sessionId": "session-1",
+            "tasks": [
+              { "id": "task-uuid-1", "number": 1, "title": "Task" }
+            ]
+          }
+        ]
+    "#})]
+    fn parent_id_defaults_to_none(#[case] json: &str) {
+        let result = parse_session_list(json).unwrap();
 
         assert_eq!(
             result,
-            TqTask {
-                number: 42,
-                title: "Fix the bug".to_string(),
-            }
+            vec![SessionTasks {
+                session_id: "session-1".to_string(),
+                tasks: vec![TqTask {
+                    id: "task-uuid-1".to_string(),
+                    number: 1,
+                    title: "Task".to_string(),
+                    parent_id: None,
+                }],
+            }]
         );
-    }
-
-    #[rstest]
-    #[case::unauthorized(401)]
-    #[case::cloudflare_access_redirect(302)]
-    #[tokio::test]
-    async fn test_get_task_error(#[case] status: u16) {
-        let mock = TqMockServer::start().await;
-        mock.task_error("task-1", status).await;
-
-        let client = mock.client();
-        let result = client.get_task("task-1").await;
-
-        assert!(result.is_err());
     }
 
     #[test]
-    fn test_from_env_returns_none_when_url_unset() {
-        temp_env::with_vars(
+    fn ignores_unknown_fields() {
+        // Mirrors the full shape of a real `tq session list` element: every
+        // field besides `sessionId`/`tasks` (and `tasks[].id/number/title`)
+        // is ignored.
+        let json = indoc! {r#"
             [
-                ("TQ_API_URL", None::<&str>),
-                ("CF_ACCESS_CLIENT_ID", None::<&str>),
-                ("CF_ACCESS_CLIENT_SECRET", None::<&str>),
-            ],
-            || {
-                assert!(TqClient::from_env().is_none());
-            },
-        );
-    }
+              {
+                "id": "agent-session-uuid",
+                "provider": "claude_code",
+                "sessionId": "session-1",
+                "parentSessionId": null,
+                "context": "work",
+                "cwd": "/path/to/project",
+                "label": "Example label",
+                "lastMessage": "Example last message",
+                "customLabel": null,
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "lastActiveAt": "2026-01-01T01:00:00.000Z",
+                "endedAt": null,
+                "tasks": [
+                  { "id": "task-uuid-1", "number": 1, "title": "Task", "status": "in_progress" }
+                ]
+              }
+            ]
+        "#};
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_from_env_attaches_cf_access_headers() {
-        let mock = TqMockServer::start().await;
-        mock.task_requiring_cf_headers("task-1", 1, "Task", "test-id", "test-secret")
-            .await;
-
-        let client = temp_env::with_vars(
-            [
-                ("TQ_API_URL", Some(mock.uri().as_str())),
-                ("CF_ACCESS_CLIENT_ID", Some("test-id")),
-                ("CF_ACCESS_CLIENT_SECRET", Some("test-secret")),
-            ],
-            TqClient::from_env,
-        );
-
-        let result = client.unwrap().get_task("task-1").await.unwrap();
+        let result = parse_session_list(json).unwrap();
 
         assert_eq!(
             result,
-            TqTask {
-                number: 1,
-                title: "Task".to_string(),
-            }
+            vec![SessionTasks {
+                session_id: "session-1".to_string(),
+                tasks: vec![TqTask {
+                    id: "task-uuid-1".to_string(),
+                    number: 1,
+                    title: "Task".to_string(),
+                    parent_id: None,
+                }],
+            }]
         );
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_from_env_without_cf_headers_still_builds_working_client() {
-        let mock = TqMockServer::start().await;
-        mock.task("task-1", 1, "Task").await;
+    #[test]
+    fn invalid_json_is_an_error() {
+        let result = parse_session_list("not json");
 
-        let client = temp_env::with_vars(
-            [
-                ("TQ_API_URL", Some(mock.uri().as_str())),
-                ("CF_ACCESS_CLIENT_ID", None),
-                ("CF_ACCESS_CLIENT_SECRET", None),
-            ],
-            TqClient::from_env,
-        );
-
-        let result = client.unwrap().get_task("task-1").await.unwrap();
-
-        assert_eq!(
-            result,
-            TqTask {
-                number: 1,
-                title: "Task".to_string(),
-            }
-        );
+        assert!(result.is_err());
     }
 }

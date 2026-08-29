@@ -1,194 +1,176 @@
-//! Fetches which locally known Claude Code sessions are linked to tq tasks,
-//! and groups them into [`TaskGroup`]s for the session list to render as a
-//! tree. Pure read-only against tq; never touches local session state.
+//! Fetches which locally known Claude Code sessions are linked to a tq
+//! task, keyed by session_id, for the session list's title-prefix renderer.
+//! Pure read-only against tq; never touches local session state.
 
 use std::collections::{HashMap, HashSet};
 
-use super::session_rows::TaskGroup;
+use super::session_rows::SessionTask;
 use crate::commands::cc::claude_sessions::normalize_title;
-use crate::infra::tq::TqClient;
+use crate::infra::tq::{SessionTasks, TqClient};
 
-/// Fetches tq task links for `local_session_ids` and groups them into one
-/// [`TaskGroup`] per distinct task, ordered by the by-task API's own
-/// most-recently-active-first order (session_id -> task_id links outside
-/// `local_session_ids`, e.g. sessions running on another machine, are
-/// dropped -- only sessions this TUI can display or act on are relevant).
+/// Fetches tq's session -> tasks listing and reduces it to one
+/// [`SessionTask`] per locally known session_id.
 ///
-/// Returns `Ok(vec![])`, not an error, when tq integration isn't configured
-/// (`client` is `None`, i.e. `TqClient::from_env()` returned `None`) -- the
-/// caller treats "not configured" and "fetched, nothing linked" identically:
-/// render the flat status-sectioned list.
-pub async fn fetch_task_groups(
+/// Returns `Ok(HashMap::new())`, not an error, when tq integration isn't
+/// available (`client` is `None`, i.e. [`TqClient::detect`] found no `tq`
+/// binary on `PATH`) -- the caller treats "not available" and "fetched,
+/// nothing linked" identically: sessions render with no title-prefix.
+pub async fn fetch_session_tasks(
     client: Option<TqClient>,
     local_session_ids: HashSet<String>,
-) -> Result<Vec<TaskGroup>, String> {
+) -> Result<HashMap<String, SessionTask>, String> {
     let Some(client) = client else {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     };
 
-    let links = client
-        .list_task_session_links()
+    let sessions = client
+        .list_session_tasks()
         .await
         .map_err(|e| e.to_string())?;
 
-    // task_id -> member session_ids, insertion-ordered by first appearance
-    // (the API sorts by lastActiveAt desc, so this preserves that order).
-    let mut order: Vec<String> = Vec::new();
-    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
-    for link in links {
-        if !local_session_ids.contains(&link.session_id) {
-            continue;
-        }
-        if !members.contains_key(&link.task_id) {
-            order.push(link.task_id.clone());
-        }
-        members
-            .entry(link.task_id)
-            .or_default()
-            .insert(link.session_id);
-    }
+    Ok(build_task_by_session(sessions, &local_session_ids))
+}
 
-    let mut groups = Vec::with_capacity(order.len());
-    for task_id in order {
-        // One task's detail fetch failing shouldn't drop every other group.
-        let Ok(task) = client.get_task(&task_id).await else {
-            continue;
-        };
-        let session_ids = members.remove(&task_id).unwrap_or_default();
-        groups.push(TaskGroup {
-            task_number: task.number,
-            task_title: normalize_title(&task.title),
-            session_ids,
-        });
-    }
-
-    Ok(groups)
+/// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
+/// known session_id. A session linked to multiple tasks keeps only the
+/// first (tq's own ordering) -- the title-prefix has room for exactly one
+/// task, and this PR has no UI for showing more.
+fn build_task_by_session(
+    sessions: Vec<SessionTasks>,
+    local_session_ids: &HashSet<String>,
+) -> HashMap<String, SessionTask> {
+    sessions
+        .into_iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .filter_map(|session| {
+            let task = session.tasks.into_iter().next()?;
+            Some((
+                session.session_id,
+                SessionTask {
+                    task_id: task.id,
+                    task_number: task.number,
+                    task_title: normalize_title(&task.title),
+                    parent_task_id: task.parent_id,
+                },
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
-    use crate::infra::tq::mock::TqMockServer;
+    use crate::infra::tq::TqTask;
 
     fn ids(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| s.to_string()).collect()
     }
 
-    #[tokio::test]
-    async fn client_none_returns_empty_without_network() {
-        let result = fetch_task_groups(None, ids(&["session-1"])).await;
+    fn task(id: &str, number: u32, title: &str, parent_id: Option<&str>) -> TqTask {
+        TqTask {
+            id: id.to_string(),
+            number,
+            title: title.to_string(),
+            parent_id: parent_id.map(String::from),
+        }
+    }
 
-        assert_eq!(result, Ok(Vec::new()));
+    fn session(session_id: &str, tasks: Vec<TqTask>) -> SessionTasks {
+        SessionTasks {
+            session_id: session_id.to_string(),
+            tasks,
+        }
     }
 
     #[tokio::test]
-    async fn groups_local_sessions_by_task_in_first_seen_order() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links(&[
-            ("task-2", "session-a"),
-            ("task-1", "session-b"),
-            ("task-2", "session-c"),
-        ])
-        .await;
-        mock.task("task-2", 20, "Second task").await;
-        mock.task("task-1", 10, "First task").await;
+    async fn client_none_returns_empty_without_spawning_tq() {
+        let result = fetch_session_tasks(None, ids(&["session-1"])).await;
 
-        let result = fetch_task_groups(
-            Some(mock.client()),
-            ids(&["session-a", "session-b", "session-c"]),
-        )
-        .await;
-
-        assert_eq!(
-            result,
-            Ok(vec![
-                TaskGroup {
-                    task_number: 20,
-                    task_title: "Second task".to_string(),
-                    session_ids: ids(&["session-a", "session-c"]),
-                },
-                TaskGroup {
-                    task_number: 10,
-                    task_title: "First task".to_string(),
-                    session_ids: ids(&["session-b"]),
-                },
-            ])
-        );
+        assert_eq!(result, Ok(HashMap::new()));
     }
 
-    #[tokio::test]
-    async fn drops_links_for_sessions_outside_the_local_set() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links(&[("task-1", "session-a"), ("task-1", "remote-session")])
-            .await;
-        mock.task("task-1", 1, "Task").await;
-
-        let result = fetch_task_groups(Some(mock.client()), ids(&["session-a"])).await;
-
-        assert_eq!(
-            result,
-            Ok(vec![TaskGroup {
+    #[rstest]
+    #[case::maps_linked_sessions_to_their_task(
+        vec![
+            session("session-a", vec![task("task-1", 10, "First task", None)]),
+            session("session-b", vec![]),
+        ],
+        &["session-a", "session-b"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 10,
+                task_title: "First task".to_string(),
+                parent_task_id: None,
+            },
+        )]),
+    )]
+    #[case::drops_sessions_outside_the_local_set(
+        vec![
+            session("session-a", vec![task("task-1", 1, "Task", None)]),
+            session("remote-session", vec![task("task-1", 1, "Task", None)]),
+        ],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
                 task_number: 1,
                 task_title: "Task".to_string(),
-                session_ids: ids(&["session-a"]),
-            }])
-        );
-    }
-
-    #[tokio::test]
-    async fn session_linked_to_multiple_tasks_appears_in_each_group() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links(&[("task-1", "session-a"), ("task-2", "session-a")])
-            .await;
-        mock.task("task-1", 1, "Task one").await;
-        mock.task("task-2", 2, "Task two").await;
-
-        let result = fetch_task_groups(Some(mock.client()), ids(&["session-a"])).await;
-
-        assert_eq!(
-            result,
-            Ok(vec![
-                TaskGroup {
-                    task_number: 1,
-                    task_title: "Task one".to_string(),
-                    session_ids: ids(&["session-a"]),
-                },
-                TaskGroup {
-                    task_number: 2,
-                    task_title: "Task two".to_string(),
-                    session_ids: ids(&["session-a"]),
-                },
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn skips_task_whose_detail_fetch_fails_without_dropping_others() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links(&[("task-1", "session-a"), ("task-2", "session-b")])
-            .await;
-        mock.task_error("task-1", 404).await;
-        mock.task("task-2", 2, "Task two").await;
-
-        let result = fetch_task_groups(Some(mock.client()), ids(&["session-a", "session-b"])).await;
-
-        assert_eq!(
-            result,
-            Ok(vec![TaskGroup {
+                parent_task_id: None,
+            },
+        )]),
+    )]
+    #[case::session_linked_to_multiple_tasks_keeps_only_the_first(
+        vec![session(
+            "session-a",
+            vec![
+                task("task-1", 1, "Task one", None),
+                task("task-2", 2, "Task two", None),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "Task one".to_string(),
+                parent_task_id: None,
+            },
+        )]),
+    )]
+    #[case::preserves_parent_task_id(
+        vec![session(
+            "session-a",
+            vec![task("task-2", 2, "Child task", Some("task-1"))],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-2".to_string(),
                 task_number: 2,
-                task_title: "Task two".to_string(),
-                session_ids: ids(&["session-b"]),
-            }])
-        );
-    }
+                task_title: "Child task".to_string(),
+                parent_task_id: Some("task-1".to_string()),
+            },
+        )]),
+    )]
+    #[case::session_with_no_linked_tasks_is_absent(
+        vec![session("session-a", vec![])],
+        &["session-a"],
+        HashMap::new(),
+    )]
+    fn build_task_by_session_cases(
+        #[case] sessions: Vec<SessionTasks>,
+        #[case] local_session_ids: &[&str],
+        #[case] expected: HashMap<String, SessionTask>,
+    ) {
+        let result = build_task_by_session(sessions, &ids(local_session_ids));
 
-    #[tokio::test]
-    async fn list_links_error_propagates() {
-        let mock = TqMockServer::start().await;
-        mock.task_session_links_error(500).await;
-
-        let result = fetch_task_groups(Some(mock.client()), ids(&["session-a"])).await;
-
-        assert_eq!(result, Err("tq API error: HTTP 500".to_string()));
+        assert_eq!(result, expected);
     }
 }

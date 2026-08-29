@@ -22,6 +22,7 @@ pub enum ExternalTool {
     Claude,
     Opencode,
     Hammerspoon,
+    Tq,
 }
 
 pub struct Metadata {
@@ -56,6 +57,7 @@ impl ExternalTool {
         Self::Claude,
         Self::Opencode,
         Self::Hammerspoon,
+        Self::Tq,
     ];
 
     pub const fn metadata(self) -> Metadata {
@@ -150,6 +152,17 @@ impl ExternalTool {
                 brew_pkg: Some("--cask hammerspoon"),
                 macos_app_path: Some("/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"),
             },
+            Self::Tq => Metadata {
+                name: "tq",
+                binary: "tq",
+                purpose: "task grouping for `a cc watch`",
+                // tq has no `--version` flag; `--help` at least confirms the
+                // binary runs, even though doctor will report `FoundNoVersion`.
+                version_args: &["--help"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
         }
     }
 
@@ -233,6 +246,7 @@ mod tests {
             "claude",
             "opencode",
             "hammerspoon",
+            "tq",
         ];
         want.sort_unstable();
 

@@ -91,7 +91,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
-    event_handler.start_tq_task_groups_fetch(local_session_ids);
+    event_handler.start_tq_session_tasks_fetch(local_session_ids);
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -143,11 +143,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TqTaskGroupsFetched(Ok(groups)) => {
-                    app.set_task_groups(groups);
+                AppEvent::TqSessionTasksFetched(Ok(task_by_session)) => {
+                    app.set_session_tasks(task_by_session);
                 }
-                AppEvent::TqTaskGroupsFetched(Err(e)) => {
-                    tracing::warn!("tq task group fetch failed: {e}");
+                AppEvent::TqSessionTasksFetched(Err(e)) => {
+                    tracing::warn!("tq session-task fetch failed: {e}");
                 }
             }
         }
@@ -211,11 +211,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
 
             // A newly created session may already be tq-linked (or an
             // existing one may have just been linked); re-fetch so it picks
-            // up a task group instead of staying in the flat view forever.
+            // up its title-prefix instead of staying unlinked forever.
             if new_session_created {
                 let local_session_ids: HashSet<String> =
                     snapshot.iter().map(|s| s.session_id.clone()).collect();
-                event_handler.start_tq_task_groups_fetch(local_session_ids);
+                event_handler.start_tq_session_tasks_fetch(local_session_ids);
             }
         }
 

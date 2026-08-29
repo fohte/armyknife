@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use super::super::event::{SessionChange, SessionChangeType};
-use super::super::session_rows::build_session_rows_by_task;
+use super::super::session_rows::build_session_rows;
 use super::App;
 
 impl App {
@@ -128,7 +128,7 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let rows = build_session_rows_by_task(&filtered, &self.task_groups);
+        let rows = build_session_rows(&filtered, &self.task_by_session);
         self.row_sessions = rows
             .iter()
             .map(|r| {

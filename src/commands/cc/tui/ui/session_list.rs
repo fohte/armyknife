@@ -11,8 +11,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::cc::tui::app::{App, AppMode};
 use crate::commands::cc::tui::session_rows::{
-    Section, SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows_by_task,
-    is_idle_session, kin_relation,
+    Section, SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows, is_idle_session,
+    is_related_task, kin_relation,
 };
 
 use super::helpers::{
@@ -44,11 +44,13 @@ const WAITING_QUESTION_INDENT: usize = MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO
 /// color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 
-/// Renders the session list, grouped under linked tq tasks first (when
-/// `app.task_groups` is non-empty) and then into fixed status sections
-/// (NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED) for the rest, each
-/// session as one row (two for `WaitingInput`), with fixed-width columns so
-/// the time column aligns vertically across every row regardless of group.
+/// Renders the session list, grouped into fixed status sections (NEEDS YOU /
+/// RUNNING / UNREAD / PAUSED-STOPPED), each session as one row (two for
+/// `WaitingInput`), with fixed-width columns so the time column aligns
+/// vertically across every row regardless of section. A session linked to a
+/// tq task (`app.task_by_session`) gets a `#<number> <title> › ` prefix
+/// ahead of its usual breadcrumb/title, dimmed unless its task is related to
+/// the cursor row's task (see [`is_related_task`]).
 pub(super) fn render_session_list(
     frame: &mut Frame,
     area: Rect,
@@ -87,7 +89,7 @@ pub(super) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows_by_task(&filtered_sessions, &app.task_groups);
+    let rows = build_session_rows(&filtered_sessions, &app.task_by_session);
 
     // Build list items and owned row ids from the same `rows`, then drop
     // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
@@ -175,16 +177,13 @@ fn format_compact_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
 /// Section header color: NEEDS YOU and RUNNING echo their status color
 /// (amber / green) since they demand attention; UNREAD and the idle
 /// (Paused/Stopped) section have no dedicated status color and keep the
-/// neutral header look. Task headers get their own color (Magenta) so a
-/// tq-grouped section reads as distinct from both status headers and the
-/// Cyan `Background` status glyph.
+/// neutral header look.
 fn header_style(kind: Section) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match kind {
         Section::NeedsYou => base.fg(Color::Yellow),
         Section::Running => base.fg(Color::Green),
         Section::Unread | Section::Idle => base.fg(DIM_FG),
-        Section::Task => base.fg(Color::Magenta),
     }
 }
 
@@ -206,6 +205,18 @@ fn own_title_style(is_idle: bool, kin_color: Option<Color>) -> Style {
         Some(color) => style.fg(color),
         None if is_idle => style.fg(DIM_FG),
         None => style,
+    }
+}
+
+/// Task title-prefix style: plain/default when the row's task is related to
+/// the cursor row's task (see [`is_related_task`]), `DIM_FG` otherwise. A
+/// channel separate from `own_title_style`'s `kin_color` -- session kinship
+/// colors the title, task kinship only ever dims or un-dims this prefix.
+fn task_prefix_style(is_related: bool) -> Style {
+    if is_related {
+        Style::default()
+    } else {
+        Style::default().fg(DIM_FG)
     }
 }
 
@@ -270,15 +281,27 @@ fn build_session_item(
         .and_then(|selected| kin_relation(selected, session))
         .and_then(|(direction, distance)| kin_color(direction, distance));
 
+    let cursor_task = app
+        .selected_session()
+        .and_then(|selected| app.task_by_session.get(selected.session_id.as_str()));
+    let task_prefix = entry.task.as_ref().map(|task| {
+        let related = is_related_task(cursor_task, Some(task));
+        (
+            format!("#{} {} \u{203a} ", task.task_number, task.task_title),
+            task_prefix_style(related),
+        )
+    });
+
     let title_width = title_column_width(term_width);
+    let title_style = own_title_style(is_idle, title_kin_color);
     let title_spans = build_title_spans(
         entry,
         app,
         &own_title,
         title_width,
         query,
-        is_idle,
-        title_kin_color,
+        title_style,
+        task_prefix,
     );
 
     let time_text = format_compact_time(session.updated_at, now);
@@ -343,12 +366,10 @@ fn build_title_spans(
     own_title: &str,
     title_width: usize,
     query: &str,
-    is_idle: bool,
-    kin_color: Option<Color>,
+    title_style: Style,
+    task_prefix: Option<(String, Style)>,
 ) -> Vec<Span<'static>> {
-    let title_style = own_title_style(is_idle, kin_color);
     let dim_style = Style::default().fg(DIM_FG);
-
     let badge = descendant_badge_text(entry.descendant_count);
     let badge = if badge.width() < title_width {
         badge
@@ -364,7 +385,7 @@ fn build_title_spans(
         content_width,
         query,
         title_style,
-        dim_style,
+        task_prefix,
     );
 
     let mut used_width = content_width_used;
@@ -382,6 +403,14 @@ fn build_title_spans(
 /// Returns the display width actually used (not padded) so the caller can
 /// append the descendant-count badge directly after this content and pad
 /// only once both are known.
+///
+/// Builds up to three style regions, left to right: `task_prefix` (kinship
+/// brightness, see [`task_prefix_style`]), the session breadcrumb prefix
+/// (always `dim_style`, unrelated to task kinship), then `own_title`
+/// (`title_style`, carrying session-kinship `kin_color`). `truncate` only
+/// ever cuts from the end, so an earlier region survives intact whenever the
+/// cut lands in a later one -- only the region the cut actually lands in
+/// (and none after it) loses content.
 fn build_breadcrumb_title_spans(
     entry: &SessionRowEntry,
     app: &App,
@@ -389,42 +418,62 @@ fn build_breadcrumb_title_spans(
     max_width: usize,
     query: &str,
     title_style: Style,
-    dim_style: Style,
+    task_prefix: Option<(String, Style)>,
 ) -> (Vec<Span<'static>>, usize) {
-    let Some(parent) = entry.breadcrumb_ancestor else {
-        let truncated = truncate(own_title, max_width);
-        let width = truncated.width();
-        return (highlight_matches(&truncated, query, title_style), width);
-    };
+    let dim_style = Style::default().fg(DIM_FG);
+    let (task_prefix_text, task_prefix_style) =
+        task_prefix.unwrap_or_else(|| (String::new(), dim_style));
+    let breadcrumb_prefix = entry.breadcrumb_ancestor.map(|parent| {
+        let parent_title = app
+            .get_cached_title(&parent.session_id)
+            .map(String::from)
+            .unwrap_or_else(|| get_title_display_name_fallback(parent));
+        format!("{parent_title} \u{203a} ")
+    });
 
-    let parent_title = app
-        .get_cached_title(&parent.session_id)
-        .map(String::from)
-        .unwrap_or_else(|| get_title_display_name_fallback(parent));
-    let prefix = format!("{parent_title} \u{203a} ");
-    let combined = format!("{prefix}{own_title}");
+    let combined = format!(
+        "{task_prefix_text}{}{own_title}",
+        breadcrumb_prefix.as_deref().unwrap_or("")
+    );
     let truncated = truncate(&combined, max_width);
     let width = truncated.width();
-
-    // `truncate` only ever cuts from the end, so the breadcrumb survives
-    // intact unless the column is too narrow even for it -- in that rare
-    // case, render the whole (truncated) row dim rather than splitting.
-    let boundary_chars = prefix.chars().count();
     let truncated_chars: Vec<char> = truncated.chars().collect();
-    if truncated_chars.len() <= boundary_chars {
-        return (highlight_matches(&truncated, query, dim_style), width);
+
+    let task_boundary = task_prefix_text.chars().count();
+    let breadcrumb_boundary = task_boundary
+        + breadcrumb_prefix
+            .as_deref()
+            .map_or(0, |p| p.chars().count());
+
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+
+    if task_boundary > cursor {
+        let end = task_boundary.min(truncated_chars.len());
+        let text: String = truncated_chars[cursor..end].iter().collect();
+        spans.extend(highlight_matches(&text, query, task_prefix_style));
+        cursor = end;
     }
 
-    let breadcrumb_part: String = combined.chars().take(boundary_chars).collect();
-    let title_part: String = truncated_chars[boundary_chars..].iter().collect();
-    let mut spans = highlight_matches(&breadcrumb_part, query, dim_style);
-    spans.extend(highlight_matches(&title_part, query, title_style));
+    if breadcrumb_boundary > cursor {
+        let end = breadcrumb_boundary.min(truncated_chars.len());
+        let text: String = truncated_chars[cursor..end].iter().collect();
+        spans.extend(highlight_matches(&text, query, dim_style));
+        cursor = end;
+    }
+
+    if truncated_chars.len() > cursor {
+        let text: String = truncated_chars[cursor..].iter().collect();
+        spans.extend(highlight_matches(&text, query, title_style));
+    }
+
     (spans, width)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::cc::tui::session_rows::SessionTask;
     use crate::commands::cc::tui::ui::test_support::{
         create_test_session, render_buffer, render_buffer_with, render_to_string,
         render_to_string_with,
@@ -459,10 +508,6 @@ mod tests {
     #[case::idle(
         Section::Idle,
         Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
-    )]
-    #[case::task(
-        Section::Task,
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
@@ -563,6 +608,87 @@ mod tests {
              ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
+    }
+
+    fn linked_task(
+        task_number: u32,
+        task_title: &str,
+        parent_task_id: Option<&str>,
+    ) -> SessionTask {
+        SessionTask {
+            task_id: format!("task-{task_number}"),
+            task_number,
+            task_title: task_title.to_string(),
+            parent_task_id: parent_task_id.map(String::from),
+        }
+    }
+
+    #[test]
+    fn test_render_task_prefix_appears_before_breadcrumb_and_title() {
+        let now = Utc::now();
+
+        let mut session = create_test_session("s1");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+
+        let sessions = vec![session];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.task_by_session
+                .insert("s1".to_string(), linked_task(42, "Fix the bug", None));
+        });
+
+        let expected = indoc! {"
+             cc watch                                       0 needs you · 1 running · 0 idle
+             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+            >● project         #42 Fix the bug › project                            just now
+
+
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_task_kin_highlight_dims_unrelated_task_prefix() {
+        let now = Utc::now();
+
+        // "cursor" and "same_task" share task #42; "other_task" is linked to
+        // a distinct, unrelated task #57.
+        let mut cursor = create_test_session("cursor");
+        cursor.updated_at = now;
+        cursor.status = SessionStatus::Running;
+        let mut same_task = create_test_session("same_task");
+        same_task.updated_at = now;
+        same_task.status = SessionStatus::Running;
+        let mut other_task = create_test_session("other_task");
+        other_task.updated_at = now;
+        other_task.status = SessionStatus::Running;
+
+        let sessions = vec![cursor, same_task, other_task];
+        // Row y: chrome(y0), "RUNNING (3)" header(y1), cursor(y2),
+        // same_task(y3), other_task(y4). list_state index 1 (cursor) is
+        // the first *selectable* row, i.e. the row right after the header.
+        let buffer = render_buffer_with(&sessions, Some(1), now, 80, 12, |app| {
+            app.task_by_session
+                .insert("cursor".to_string(), linked_task(42, "Fix the bug", None));
+            app.task_by_session.insert(
+                "same_task".to_string(),
+                linked_task(42, "Fix the bug", None),
+            );
+            app.task_by_session.insert(
+                "other_task".to_string(),
+                linked_task(57, "Unrelated bug", None),
+            );
+        });
+
+        // Column 19 is where the title column (and so the task-prefix, when
+        // present) starts on every row -- see `WAITING_QUESTION_INDENT`.
+        assert_ne!(buffer[(19, 2)].fg, DIM_FG);
+        assert_ne!(buffer[(19, 3)].fg, DIM_FG);
+        assert_eq!(buffer[(19, 4)].fg, DIM_FG);
     }
 
     #[test]

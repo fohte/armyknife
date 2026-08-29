@@ -546,22 +546,17 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc
 
 `a cc hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a cc pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.
 
-#### Task grouping (tq)
+#### Task linking (tq)
 
-When `TQ_API_URL` points at a tq-compatible task-tracking API, `a cc watch` groups sessions under the tasks they're linked to instead of showing a flat status-sectioned list: each linked task becomes a header row (`#<number> <title>`) with its linked sessions nested underneath. Unlinked sessions still fall into the usual NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED sections. Linking a session to a task happens on the task tracker's side, keyed by Claude Code session ID; armyknife only reads the resulting association.
+When the [`tq`](https://tq.fohte.net) CLI is on `PATH`, a session linked to a tq task gets a `#<number> <title> ›` prefix ahead of its usual breadcrumb/title, so its task is visible without leaving the usual NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED sections. The prefix dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
 
-`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` attach [Cloudflare Access service-token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/) headers to every request, for a task API deployment that sits behind Cloudflare Access.
-
-When `TQ_API_URL` is unset, or the API is unreachable, `a cc watch` falls back to its flat status-grouped session list; local operations (focus, resume) are never blocked by it being down.
+When `tq` isn't on `PATH`, or the command fails, every row simply renders with no task prefix; local operations (focus, resume) are never blocked by it being down.
 
 #### Environment Variables
 
-| Variable                  | Values                                        | Description                                                             |
-| ------------------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `ARMYKNIFE_CC_HOOK_LOG`   | `error` (default), `debug`, `off`             | Controls hook logging level                                             |
-| `TQ_API_URL`              | URL                                           | Base URL of a tq-compatible task-tracking API (see Task grouping above) |
-| `CF_ACCESS_CLIENT_ID`     | Cloudflare Access service token client ID     | Optional; see Task grouping above                                       |
-| `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token client secret | Optional; see Task grouping above                                       |
+| Variable                | Values                            | Description                 |
+| ----------------------- | --------------------------------- | --------------------------- |
+| `ARMYKNIFE_CC_HOOK_LOG` | `error` (default), `debug`, `off` | Controls hook logging level |
 
 - `error`: Log only when JSON parsing fails (default)
 - `debug`: Log all hook invocations including successful ones
