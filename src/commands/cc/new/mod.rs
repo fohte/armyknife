@@ -166,8 +166,20 @@ fn with_prompt_cache_recovery_with_deps(
     result
 }
 
-/// Build tmux session-level env vars for the child session's `--label` and
-/// ancestor-session-id chain. Shared between the worktree and no-worktree flows.
+/// Reads the parent process's `TQ_SESSION_ID` (exported by tq's own
+/// SessionStart hook into `CLAUDE_ENV_FILE`, mirroring how armyknife exports
+/// `ARMYKNIFE_SESSION_ID`) and returns it as the `TQ_PARENT_SESSION_ID` pair
+/// for the child session. `None` when the parent has no tq hook installed.
+fn tq_parent_session_env_var() -> Option<(String, String)> {
+    std::env::var("TQ_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|id| ("TQ_PARENT_SESSION_ID".to_string(), id))
+}
+
+/// Build tmux session-level env vars for the child session's `--label`,
+/// ancestor-session-id chain, and tq parent session ID. Shared between the
+/// worktree and no-worktree flows.
 fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     let mut env_vars: Vec<(String, String)> = Vec::new();
     if let Some(ref label) = common.label {
@@ -185,6 +197,9 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
             EnvVars::ancestor_session_ids_name().to_string(),
             ancestor_chain,
         ));
+    }
+    if let Some(pair) = tq_parent_session_env_var() {
+        env_vars.push(pair);
     }
     Ok(env_vars)
 }
@@ -530,6 +545,19 @@ mod tests {
             (result.is_ok(), saved.get(), deleted.get()),
             (succeed, expect_save, succeed),
         );
+    }
+
+    #[rstest]
+    #[case::forwards_when_set(Some("tq-session-1"), Some(("TQ_PARENT_SESSION_ID".to_string(), "tq-session-1".to_string())))]
+    #[case::none_when_unset(None, None)]
+    #[case::none_when_empty(Some(""), None)]
+    fn tq_parent_session_env_var_cases(
+        #[case] env_value: Option<&str>,
+        #[case] expected: Option<(String, String)>,
+    ) {
+        temp_env::with_vars([("TQ_SESSION_ID", env_value)], || {
+            assert_eq!(tq_parent_session_env_var(), expected);
+        });
     }
 
     #[rstest]
