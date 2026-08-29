@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.282](https://github.com/fohte/armyknife/compare/v0.1.281...v0.1.282) (2026-08-29)
+
+
+### Features
+
+* **cc:** distinguish display of sessions running background tasks ([#860](https://github.com/fohte/armyknife/issues/860)) ([b0d435c](https://github.com/fohte/armyknife/commit/b0d435cf0d8c99e8fe111f36940cbf27c0dda678))
+
 ## [0.1.281](https://github.com/fohte/armyknife/compare/v0.1.280...v0.1.281) (2026-08-23)
 
 
