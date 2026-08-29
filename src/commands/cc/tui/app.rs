@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
+use super::session_rows::TaskGroup;
 use super::worktree_view::WorktreeView;
 
 mod clean;
@@ -127,6 +128,11 @@ pub struct App {
     /// user confirms `y` in the clean view; cleared once the bottom-bar
     /// summary has been on screen long enough for the user to read it.
     pub clean_progress: Option<CleanProgress>,
+    /// tq tasks with currently-displayed sessions linked to them. Empty
+    /// when tq integration isn't configured, tq is unreachable, or no
+    /// displayed session is linked to any task -- the session list falls
+    /// back to its flat status-sectioned form in all of those cases.
+    pub task_groups: Vec<TaskGroup>,
 }
 
 impl App {
@@ -190,6 +196,7 @@ impl App {
             worktree_view: WorktreeView::new(),
             clean_view: CleanView::new(),
             clean_progress: None,
+            task_groups: Vec::new(),
         };
         app.rebuild_row_order();
         app.list_state
@@ -264,6 +271,16 @@ impl App {
         session.label = label;
         let title = get_title_display_name(session);
         self.title_cache.insert(session_id.to_string(), title);
+    }
+
+    /// Sets the tq task groups and rebuilds row order so the list re-renders
+    /// grouped by task, preserving the current selection the same way a
+    /// reload does.
+    pub fn set_task_groups(&mut self, task_groups: Vec<TaskGroup>) {
+        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let old_pos = self.list_state.selected();
+        self.task_groups = task_groups;
+        self.restore_selection(old_pos, selected_session_id.as_deref());
     }
 }
 

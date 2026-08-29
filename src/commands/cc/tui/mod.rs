@@ -6,11 +6,12 @@ mod pr_fetch;
 mod session_rows;
 mod title_edit;
 mod title_generate;
+mod tq_fetch;
 mod ui;
 mod worktree_session_children;
 mod worktree_view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -88,6 +89,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
+    let local_session_ids: HashSet<String> =
+        app.sessions.iter().map(|s| s.session_id.clone()).collect();
+    event_handler.start_tq_task_groups_fetch(local_session_ids);
+
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
         if !unresolved.is_empty() {
@@ -137,6 +142,15 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
+                }
+                AppEvent::TqTaskGroupsFetched(Ok(groups)) => {
+                    app.set_task_groups(groups);
+                }
+                AppEvent::TqTaskGroupsFetched(Err(_)) => {
+                    // tq is optional and best-effort: unreachable or
+                    // unconfigured just leaves the flat status-sectioned
+                    // view in place, silently -- not worth an error banner
+                    // for what is normal for most sessions.
                 }
             }
         }

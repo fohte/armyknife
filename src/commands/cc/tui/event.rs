@@ -12,8 +12,11 @@ use std::time::Duration;
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
+use super::session_rows::TaskGroup;
 use super::worktree_view::WorktreeRow;
 use crate::commands::cc::types::Session;
+use crate::infra::tq::TqClient;
+use std::collections::HashSet;
 
 /// Key event with code and modifiers.
 #[derive(Debug, Clone, Copy)]
@@ -55,6 +58,10 @@ pub enum AppEvent {
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
+    /// tq task-group fetch completed (grouping sessions under their linked
+    /// tq tasks). `Err` (including "tq not configured") leaves the session
+    /// list in its flat status-sectioned form.
+    TqTaskGroupsFetched(std::result::Result<Vec<TaskGroup>, String>),
 }
 
 /// Event handler that combines keyboard input and file system events.
@@ -153,6 +160,25 @@ impl EventHandler {
         rt.spawn(async move {
             let result = super::pr_fetch::fetch_clean_inputs(rows, sessions).await;
             let _ = tx.send(AppEvent::CleanPrFetched(result));
+        });
+    }
+
+    /// Kick off a one-shot fetch grouping `local_session_ids` under their
+    /// linked tq tasks. Returns immediately; the result arrives as
+    /// [`AppEvent::TqTaskGroupsFetched`]. Same runtime-unavailable fallback
+    /// as [`Self::start_clean_pr_fetch`].
+    pub fn start_tq_task_groups_fetch(&self, local_session_ids: HashSet<String>) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::TqTaskGroupsFetched(Err(
+                "tokio runtime is not available".to_string(),
+            )));
+            return;
+        };
+        let client = TqClient::from_env();
+        rt.spawn(async move {
+            let result = super::tq_fetch::fetch_task_groups(client, local_session_ids).await;
+            let _ = tx.send(AppEvent::TqTaskGroupsFetched(result));
         });
     }
 

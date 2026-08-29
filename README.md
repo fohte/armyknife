@@ -548,15 +548,20 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc
 
 #### Environment Variables
 
-| Variable                | Values                            | Description                 |
-| ----------------------- | --------------------------------- | --------------------------- |
-| `ARMYKNIFE_CC_HOOK_LOG` | `error` (default), `debug`, `off` | Controls hook logging level |
+| Variable                  | Values                                        | Description                                                                                                             |
+| ------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `ARMYKNIFE_CC_HOOK_LOG`   | `error` (default), `debug`, `off`             | Controls hook logging level                                                                                             |
+| `TQ_API_URL`              | URL                                           | Base URL of a [tq](https://tq.fohte.net) deployment; when set, `a cc watch` groups sessions under their linked tq tasks |
+| `CF_ACCESS_CLIENT_ID`     | Cloudflare Access service token client ID     | Optional; sent with `CF_ACCESS_CLIENT_SECRET` when tq sits behind Cloudflare Access                                     |
+| `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token client secret | Optional; see above                                                                                                     |
 
 - `error`: Log only when JSON parsing fails (default)
 - `debug`: Log all hook invocations including successful ones
 - `off`: Disable all logging
 
 Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
+
+When `TQ_API_URL` is unset, or tq is unreachable, `a cc watch` falls back to its flat status-grouped session list; local operations (focus, resume) are never blocked by tq being down.
 
 ### `a wm`
 

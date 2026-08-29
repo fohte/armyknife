@@ -11,8 +11,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::cc::tui::app::{App, AppMode};
 use crate::commands::cc::tui::session_rows::{
-    Section, SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows, is_idle_session,
-    kin_relation,
+    Section, SectionHeaderRow, SessionRow, SessionRowEntry, build_session_rows_by_task,
+    is_idle_session, kin_relation,
 };
 
 use super::helpers::{
@@ -44,10 +44,11 @@ const WAITING_QUESTION_INDENT: usize = MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO
 /// color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 
-/// Renders the session list grouped into fixed status sections (NEEDS YOU /
-/// RUNNING / UNREAD / PAUSED-STOPPED), each session as one row (two for
-/// `WaitingInput`), with fixed-width columns so the time column aligns
-/// vertically across every row regardless of section.
+/// Renders the session list, grouped under linked tq tasks first (when
+/// `app.task_groups` is non-empty) and then into fixed status sections
+/// (NEEDS YOU / RUNNING / UNREAD / PAUSED-STOPPED) for the rest, each
+/// session as one row (two for `WaitingInput`), with fixed-width columns so
+/// the time column aligns vertically across every row regardless of group.
 pub(super) fn render_session_list(
     frame: &mut Frame,
     area: Rect,
@@ -86,7 +87,7 @@ pub(super) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows(&filtered_sessions);
+    let rows = build_session_rows_by_task(&filtered_sessions, &app.task_groups);
 
     // Build list items and owned row ids from the same `rows`, then drop
     // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
@@ -174,13 +175,16 @@ fn format_compact_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
 /// Section header color: NEEDS YOU and RUNNING echo their status color
 /// (amber / green) since they demand attention; UNREAD and the idle
 /// (Paused/Stopped) section have no dedicated status color and keep the
-/// neutral header look.
+/// neutral header look. Task headers get their own color (Magenta) so a
+/// tq-grouped section reads as distinct from both status headers and the
+/// Cyan `Background` status glyph.
 fn header_style(kind: Section) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match kind {
         Section::NeedsYou => base.fg(Color::Yellow),
         Section::Running => base.fg(Color::Green),
         Section::Unread | Section::Idle => base.fg(DIM_FG),
+        Section::Task => base.fg(Color::Magenta),
     }
 }
 
@@ -455,6 +459,10 @@ mod tests {
     #[case::idle(
         Section::Idle,
         Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
+    )]
+    #[case::task(
+        Section::Task,
+        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
