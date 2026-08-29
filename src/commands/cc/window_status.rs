@@ -167,7 +167,7 @@ fn tmux_option_changed(current: Option<&str>, rendered: &str) -> bool {
 /// become a *background* color whenever the surrounding context has the
 /// `reverse` attribute (a common idiom for `window-status-activity-style`),
 /// painting the icon's cell with a color block that breaks out of the rest
-/// of the tab. Shape alone (●/◐/○/⏸) carries the status well enough.
+/// of the tab. Shape alone (●/◐/○/⏸/◎) carries the status well enough.
 fn format_window_symbol(session: &Session) -> Option<&'static str> {
     if session.status == SessionStatus::Ended {
         return None;
@@ -222,6 +222,17 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(format_window_symbol(&session(status, read_at)), expected);
+    }
+
+    #[test]
+    fn test_format_window_symbol_background() {
+        // Persisted `status` stays `Running` (the clamp in
+        // `hook::process_hook_event_impl`), but a pending background task
+        // must still render distinctly from a session whose main loop is
+        // actually active.
+        let mut s = session(SessionStatus::Running, None);
+        s.pending_bg_task_ids.insert("bg-1".to_string());
+        assert_eq!(format_window_symbol(&s), Some("\u{25ce}"));
     }
 
     #[rstest]

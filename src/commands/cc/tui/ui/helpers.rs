@@ -1,5 +1,5 @@
 use crate::commands::cc::tui::session_rows::KinDirection;
-use crate::commands::cc::types::{Session, SessionStatus};
+use crate::commands::cc::types::{DisplayStatus, Session, SessionStatus};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -66,13 +66,18 @@ pub(super) fn kin_color(direction: KinDirection, distance: usize) -> Option<Colo
 
 /// Returns the color for a session status icon.
 ///
-/// Only 3 colors are used: amber for waiting-for-user, green for running,
-/// and a single neutral color for every idle status (paused/stopped/ended).
-pub(super) fn status_color(status: SessionStatus) -> Color {
+/// Amber for waiting-for-user, green for running, cyan for a session whose
+/// main loop is idle but a background task is still in flight, and a single
+/// neutral color for every idle status (paused/stopped/ended).
+pub(super) fn status_color(status: DisplayStatus) -> Color {
     match status {
-        SessionStatus::Running => Color::Green,
-        SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Paused | SessionStatus::Stopped | SessionStatus::Ended => DIM_FG,
+        DisplayStatus::Running => Color::Green,
+        DisplayStatus::WaitingInput => Color::Yellow,
+        DisplayStatus::Background => Color::Cyan,
+        DisplayStatus::Paused
+        | DisplayStatus::Stopped
+        | DisplayStatus::UnreadStopped
+        | DisplayStatus::Ended => DIM_FG,
     }
 }
 
@@ -370,12 +375,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, Color::Green)]
-    #[case::waiting_input(SessionStatus::WaitingInput, Color::Yellow)]
-    #[case::paused(SessionStatus::Paused, DIM_FG)]
-    #[case::stopped(SessionStatus::Stopped, DIM_FG)]
-    #[case::ended(SessionStatus::Ended, DIM_FG)]
-    fn test_status_color(#[case] status: SessionStatus, #[case] expected: Color) {
+    #[case::running(DisplayStatus::Running, Color::Green)]
+    #[case::waiting_input(DisplayStatus::WaitingInput, Color::Yellow)]
+    #[case::background(DisplayStatus::Background, Color::Cyan)]
+    #[case::paused(DisplayStatus::Paused, DIM_FG)]
+    #[case::stopped(DisplayStatus::Stopped, DIM_FG)]
+    #[case::unread_stopped(DisplayStatus::UnreadStopped, DIM_FG)]
+    #[case::ended(DisplayStatus::Ended, DIM_FG)]
+    fn test_status_color(#[case] status: DisplayStatus, #[case] expected: Color) {
         assert_eq!(status_color(status), expected);
     }
 

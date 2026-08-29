@@ -8,18 +8,19 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::ListItem;
 
-use crate::commands::cc::types::{Session, SessionStatus};
+use crate::commands::cc::types::{DisplayStatus, Session};
 
 #[cfg(test)]
 use super::worktree_view::canonicalize_or_self;
+#[cfg(test)]
+use crate::commands::cc::types::SessionStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionChild {
     pub session_id: String,
     /// `None` when the session has no tmux pane (e.g. resurrect-only state).
     pub pane_id: Option<String>,
-    pub status: SessionStatus,
-    pub read_at: Option<DateTime<Utc>>,
+    pub display_status: DisplayStatus,
     pub updated_at: DateTime<Utc>,
     /// `label` if present, otherwise the cwd basename.
     pub label: String,
@@ -29,13 +30,8 @@ pub struct SessionChild {
 }
 
 impl SessionChild {
-    /// Same rule as `Session::display_symbol`: unread Stopped → `✱`.
     pub fn display_symbol(&self) -> &'static str {
-        if self.status == SessionStatus::Stopped && self.read_at.is_none() {
-            "✱"
-        } else {
-            self.status.display_symbol()
-        }
+        self.display_status.display_symbol()
     }
 }
 
@@ -63,8 +59,7 @@ pub fn sessions_under_worktree_from_canonical(
         .map(|(i, s)| SessionChild {
             session_id: s.session_id.clone(),
             pane_id: s.tmux_info.as_ref().map(|t| t.pane_id.clone()),
-            status: s.status,
-            read_at: s.read_at,
+            display_status: s.display_status(),
             updated_at: s.updated_at,
             label: short_label(s),
             is_last: i == last_idx,
@@ -86,12 +81,15 @@ fn short_label(session: &Session) -> String {
         .unwrap_or_else(|| session.cwd.display().to_string())
 }
 
-fn status_color(status: SessionStatus) -> Color {
+fn status_color(status: DisplayStatus) -> Color {
     match status {
-        SessionStatus::Running => Color::Green,
-        SessionStatus::WaitingInput => Color::Yellow,
-        SessionStatus::Paused => Color::Indexed(245),
-        SessionStatus::Stopped | SessionStatus::Ended => Color::DarkGray,
+        DisplayStatus::Running => Color::Green,
+        DisplayStatus::WaitingInput => Color::Yellow,
+        DisplayStatus::Background => Color::Cyan,
+        DisplayStatus::Paused => Color::Indexed(245),
+        DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
+            Color::DarkGray
+        }
     }
 }
 
@@ -104,7 +102,7 @@ pub fn create_session_child_list_item(
 ) -> ListItem<'static> {
     let connector = if child.is_last { "└─" } else { "├─" };
     let symbol = child.display_symbol();
-    let s_style = Style::default().fg(status_color(child.status));
+    let s_style = Style::default().fg(status_color(child.display_status));
     let dim = Style::default().fg(Color::DarkGray);
     let time_ago = format_relative_time(child.updated_at, now);
 
@@ -215,8 +213,7 @@ mod tests {
                 SessionChild {
                     session_id: "new".to_string(),
                     pane_id: Some("%2".to_string()),
-                    status: SessionStatus::Running,
-                    read_at: None,
+                    display_status: DisplayStatus::Running,
                     updated_at: t0,
                     label: "wt".to_string(),
                     is_last: false,
@@ -224,8 +221,7 @@ mod tests {
                 SessionChild {
                     session_id: "old".to_string(),
                     pane_id: Some("%1".to_string()),
-                    status: SessionStatus::Running,
-                    read_at: None,
+                    display_status: DisplayStatus::Running,
                     updated_at: t0 - chrono::Duration::seconds(120),
                     label: "wt".to_string(),
                     is_last: true,
@@ -246,6 +242,35 @@ mod tests {
                 &canonical_pairs(&sessions),
             ),
             Vec::<SessionChild>::new(),
+        );
+    }
+
+    #[rstest]
+    fn sessions_under_worktree_reports_background_for_running_session_with_pending_bg_task(
+        tmpdir: tempfile::TempDir,
+    ) {
+        let wt = tmpdir.path().join("wt");
+        std::fs::create_dir_all(&wt).expect("mkdir wt");
+
+        let t0 = Utc::now();
+        let mut s = session("s", &wt, t0, Some("%1"));
+        s.pending_bg_task_ids.insert("bg-1".to_string());
+
+        let result = sessions_under_worktree_from_canonical(
+            &canonicalize_or_self(&wt),
+            &canonical_pairs(&[s]),
+        );
+
+        assert_eq!(
+            result,
+            vec![SessionChild {
+                session_id: "s".to_string(),
+                pane_id: Some("%1".to_string()),
+                display_status: DisplayStatus::Background,
+                updated_at: t0,
+                label: "wt".to_string(),
+                is_last: true,
+            }],
         );
     }
 
