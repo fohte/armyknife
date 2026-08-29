@@ -1,5 +1,5 @@
 use crate::commands::cc::claude_sessions;
-use crate::commands::cc::types::{Session, SessionStatus};
+use crate::commands::cc::types::{DisplayStatus, Session, SessionStatus};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -113,11 +113,28 @@ impl App {
                     return false;
                 }
 
-                // Status filter (AND with text search)
-                if let Some(status) = status_filter
-                    && session.status != status
-                {
-                    return false;
+                // Status filter (AND with text search). Matches against
+                // `display_status()`, not the raw `status`, so this stays in
+                // sync with the RUNNING/STOPPED section grouping the list
+                // itself uses (see `session_rows::section_of`): a session
+                // whose main loop is idle but has a pending bg task is
+                // `Stopped` in `status` yet renders in the RUNNING section as
+                // `Background`.
+                if let Some(status) = status_filter {
+                    let matches = match status {
+                        SessionStatus::Running => matches!(
+                            session.display_status(),
+                            DisplayStatus::Running | DisplayStatus::Background
+                        ),
+                        SessionStatus::Stopped => matches!(
+                            session.display_status(),
+                            DisplayStatus::Stopped | DisplayStatus::UnreadStopped
+                        ),
+                        _ => session.status == status,
+                    };
+                    if !matches {
+                        return false;
+                    }
                 }
 
                 // Text search filter
@@ -472,6 +489,38 @@ mod tests {
         app_with_mixed_statuses.toggle_status_filter(status);
 
         let filtered: Vec<&str> = app_with_mixed_statuses
+            .filtered_sessions()
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(filtered, expected_ids);
+    }
+
+    #[rstest]
+    // A Stopped session with a pending bg task renders as `Background`,
+    // which groups with `Running` in the section list (see
+    // `session_rows::section_of`) -- the `Running` filter must match it
+    // too, not just a raw-`Running` session.
+    #[case::running_filter_matches_background(SessionStatus::Running, vec!["running-1", "bg-1"])]
+    // The same session must NOT match the `Stopped` filter, even though its
+    // raw `status` is `Stopped`.
+    #[case::stopped_filter_excludes_background(SessionStatus::Stopped, vec!["stopped-1"])]
+    fn test_status_filter_matches_display_status_not_raw_status(
+        #[case] status: SessionStatus,
+        #[case] expected_ids: Vec<&str>,
+    ) {
+        let mut bg_session = create_session_with_status("bg-1", SessionStatus::Stopped);
+        bg_session.pending_bg_task_ids.insert("task-1".to_string());
+
+        let mut app = create_test_app(vec![
+            create_session_with_status("running-1", SessionStatus::Running),
+            create_session_with_status("stopped-1", SessionStatus::Stopped),
+            bg_session,
+        ]);
+
+        app.toggle_status_filter(status);
+
+        let filtered: Vec<&str> = app
             .filtered_sessions()
             .iter()
             .map(|s| s.session_id.as_str())

@@ -341,8 +341,6 @@ fn process_hook_event_impl(
         None
     };
 
-    // Determine the event's "raw" status; the pending-bg-task clamp below
-    // may still upgrade a `Stopped` verdict to `Running`.
     let mut status = determine_status(event, &input);
 
     // Load existing session or create new one. The lock is held across the
@@ -433,9 +431,9 @@ fn process_hook_event_impl(
     // when it finishes -- so a non-empty set here means "the user is still
     // mid-task even though Claude's main loop went idle":
     //
-    // - The status clamp directly below reports `Running` instead of
-    //   `Stopped` while any id is pending, so `cc list` / `cc watch` / tmux
-    //   don't show the session as idle.
+    // - `display_status` reports `Background` instead of `Stopped` while any
+    //   id is pending, so `cc list` / `cc watch` / tmux don't show the
+    //   session as fully idle.
     // - `auto_compact` skips the synthetic Stop while any id is pending.
     // - `sweep` does not SIGTERM the session while any id is pending
     //   (otherwise a long-running task gets killed mid-flight).
@@ -456,19 +454,6 @@ fn process_hook_event_impl(
             .retain(|key| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
     }
 
-    // Claude Code resolves both `Stop` and `Notification(idle_prompt)` to
-    // "the main loop / user went idle" independent of whether a launched
-    // Bash bg shell or Task-tool subagent has actually finished -- Claude
-    // Code only attaches `background_tasks` (the source of the refresh
-    // above) to `Stop`/`SubagentStop` input, never to `Notification`.
-    // Re-check the session's own persisted pending sets here instead of
-    // re-deriving "pending" per event, so a bg task launched on an earlier
-    // `Stop` keeps reporting `Running` through a later
-    // `Notification(idle_prompt)` too.
-    if status == SessionStatus::Stopped && session.has_pending_bg_tasks() {
-        status = SessionStatus::Running;
-    }
-
     // At least one agent (main thread or subagent) is still blocked on a
     // permission prompt: keep the session `WaitingInput` regardless of what
     // this event's own status resolved to, so a sibling agent's unrelated
@@ -479,19 +464,15 @@ fn process_hook_event_impl(
 
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
     // Claude, its shutdown may fire Stop hooks that would overwrite Paused →
-    // Stopped (or, now, → Running via the pending-bg-task clamp above, if
-    // the dying process's final Stop payload still lists a task Claude Code
-    // hasn't pruned yet), and then SessionEnd would see that status instead
-    // of Paused. However, when the user resumes (SessionStart(resume) →
-    // Stopped, same value a Stop hook would produce), the status must still
-    // transition out of Paused so the TUI shows the session as active and
-    // `a cc sweep` can re-arm its idle timeout. Excluding SessionStart here
-    // is what distinguishes "sweep's own shutdown Stop" from "the user
-    // resumed".
+    // Stopped, and then SessionEnd would see that status instead of Paused.
+    // However, when the user resumes (SessionStart(resume) → Stopped, same
+    // value a Stop hook would produce), the status must still transition out
+    // of Paused so the TUI shows the session as active and `a cc sweep` can
+    // re-arm its idle timeout. Excluding SessionStart here is what
+    // distinguishes "sweep's own shutdown Stop" from "the user resumed".
     let keep_paused = session.status == SessionStatus::Paused
         && event != HookEvent::SessionStart
-        && (matches!(status, SessionStatus::Stopped | SessionStatus::Ended)
-            || (event == HookEvent::Stop && status == SessionStatus::Running));
+        && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
     if !keep_paused {
         session.status = status;
     }
@@ -882,16 +863,14 @@ fn export_session_id_to_env_file(session_id: &str) {
     }
 }
 
-/// Determines the event's "raw" session status, not yet accounting for
-/// in-flight background tasks.
+/// Determines the event's session status.
 /// Note: SessionEnd is handled separately in run() before this function is called.
 ///
-/// `process_hook_event_impl` clamps a `Stopped` result from here back to
-/// `Running` whenever the session has a pending Bash bg shell or Task-tool
-/// subagent (see `Session::has_pending_bg_tasks`), since both `Stop` and
-/// `Notification(idle_prompt)` below resolve to `Stopped` whenever Claude
-/// Code's main loop or the user goes idle, independent of whether such a
-/// task has actually finished.
+/// A `Stop` (or `Notification(idle_prompt)`) while a Bash bg shell or
+/// Task-tool subagent is still pending (see `Session::has_pending_bg_tasks`)
+/// still resolves to `Stopped` here: the main loop really did go idle.
+/// `Session::display_status` is what surfaces the distinction (`Background`
+/// instead of `Stopped`) for `cc list` / `cc watch` / tmux.
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     match event {
         HookEvent::Stop => SessionStatus::Stopped,
@@ -945,7 +924,7 @@ fn should_notify(event: HookEvent, has_pending_bg_tasks: bool, config: &Config) 
 /// Accepted trade-off: a bg shell that never exits (e.g. a dev server
 /// started with `run_in_background: true`) keeps `has_pending_bg_tasks` true
 /// for as long as it runs, suppressing every Stop notification for that
-/// session until the process ends -- consistent with how the status clamp,
+/// session until the process ends -- consistent with how `display_status`,
 /// `auto_pause`, and `auto_compact` all treat the same field.
 fn is_notifiable_event(event: HookEvent, has_pending_bg_tasks: bool) -> bool {
     match event {
@@ -1287,10 +1266,10 @@ mod tests {
 
     #[test]
     fn test_build_notification_stop_event_with_pending_bg_task_does_not_claim_stopped() {
-        // event == Stop but session.status == Running (the pending-bg-task
-        // clamp kept it that way) and there's no last_message to fall back
-        // on. The body must not contradict the "Running" title by claiming
-        // "Session stopped".
+        // `session.status` (not `event`) drives the body text: a session
+        // whose status is `Running` must not get the "Session stopped"
+        // fallback, even on a `Stop` event, and there's no last_message to
+        // fall back on either.
         let input = create_test_input(None);
         let mut session = create_test_session(None);
         session.status = SessionStatus::Running;
@@ -1601,11 +1580,10 @@ mod tests {
     fn stop_with_pending_bg_task_keeps_paused_session_paused() {
         // A session already confirmed Paused (its process is dead) can still
         // receive one last `Stop` fired by that process's own SIGTERM
-        // shutdown. Without the pending-bg-task clamp this would map to
-        // `Stopped`; the clamp instead maps it to `Running` if the payload
-        // still lists a task -- either way, `keep_paused` must hold the line
-        // and not let a dead session's shutdown noise knock it out of
-        // `Paused`, since no further hook will ever arrive to correct it.
+        // shutdown, which maps to `Stopped` regardless of the still-listed
+        // task. `keep_paused` must hold the line and not let a dead
+        // session's shutdown noise knock it out of `Paused`, since no
+        // further hook will ever arrive to correct it.
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
@@ -1777,16 +1755,17 @@ mod tests {
 
     #[rstest]
     // A shell task and a subagent task both reported running -- each id
-    // lands in the field matching its own `type`, not the other's, and the
-    // session stays Running instead of transitioning to Stopped.
+    // lands in the field matching its own `type`, not the other's. The
+    // session still transitions to Stopped: `status` reflects the main loop
+    // going idle, not whether a bg task is pending (see
+    // `Session::has_pending_bg_tasks` / `display_status`).
     #[case::mixed_types_split_by_field(
         &[], &[],
         r#","background_tasks":[{"id":"shell-1","type":"shell","status":"running"},{"id":"task-1","type":"subagent","status":"running"}]"#,
-        &["shell-1"], &["task-1"], SessionStatus::Running,
+        &["shell-1"], &["task-1"], SessionStatus::Stopped,
     )]
     // Other task-registry entry types (monitor, workflow, teammate, cloud
-    // session, MCP task) are not acted on by armyknife, and do not keep the
-    // session Running either.
+    // session, MCP task) are not acted on by armyknife.
     #[case::other_registry_types_are_ignored(
         &[], &[],
         r#","background_tasks":[{"id":"mon-1","type":"monitor","status":"running"}]"#,
@@ -1845,13 +1824,13 @@ mod tests {
     }
 
     #[test]
-    fn notification_idle_prompt_does_not_hide_pending_bg_task() {
+    fn notification_idle_prompt_does_not_touch_pending_bg_task_ids() {
         // Claude Code fires `Notification(idle_prompt)` whenever the user
         // goes idle, independent of whether a bg task launched on an
         // earlier `Stop` has finished -- `background_tasks` is only ever
         // attached to `Stop`/`SubagentStop` input, so this event can't
-        // refresh the pending sets itself and must fall back to what the
-        // last `Stop` already persisted.
+        // refresh the pending sets and must leave what the last `Stop`
+        // already persisted untouched.
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 
@@ -1876,7 +1855,10 @@ mod tests {
         let reloaded = store::load_session_from(sessions_dir, "idle-bg-sess")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Running);
+        assert_eq!(
+            (reloaded.status, reloaded.pending_bg_task_ids),
+            (SessionStatus::Stopped, set_of(&["bg-1"])),
+        );
     }
 
     #[test]
@@ -2055,12 +2037,13 @@ mod tests {
     // `background_tasks` present but agent-x's subagent already finished.
     #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
     // A different subagent (agent-y) is still live; agent-x's stale key is
-    // still dropped, but the session stays Running per the pre-existing
-    // `has_pending_bg_tasks` clamp on agent-y's own still-pending task.
+    // still dropped. The session still transitions to Stopped: `status`
+    // reflects the main loop going idle, not agent-y's still-pending task
+    // (see `Session::has_pending_bg_tasks` / `display_status`).
     #[case::different_live_subagent_still_pending(
         r#","background_tasks":[{"id":"agent-y","type":"subagent","status":"running"}]"#,
         &["agent-y"],
-        SessionStatus::Running
+        SessionStatus::Stopped
     )]
     fn stop_drops_stale_agent_permission_key_not_in_live_registry(
         #[case] background_tasks_json: &str,

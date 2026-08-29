@@ -159,10 +159,8 @@ pub enum StatusColor {
 /// that must never be persisted (unread, in-flight background tasks). See
 /// `Session::display_status`.
 ///
-/// Deliberately not `Serialize`/`Deserialize`: nothing computed here may
-/// leak into the on-disk `Session` (that would defeat the clamp in
-/// `hook::process_hook_event_impl`, which keeps the persisted `status` at
-/// `Running` on purpose -- see `Session::has_pending_bg_tasks`).
+/// Deliberately not `Serialize`/`Deserialize`: this is a derived, presentation-only
+/// view and must never leak into the on-disk `Session`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayStatus {
     Running,
@@ -173,9 +171,9 @@ pub enum DisplayStatus {
     UnreadStopped,
     Paused,
     Ended,
-    /// Persisted `status` is `Running` (clamped there by the hook handler)
-    /// but the main loop is actually idle -- only a Bash background task or
-    /// Task-tool subagent is still in flight. See `Session::has_pending_bg_tasks`.
+    /// Persisted `status` is `Stopped` (the main loop is idle) but a Bash
+    /// background task or Task-tool subagent is still in flight. See
+    /// `Session::has_pending_bg_tasks`.
     Background,
 }
 
@@ -191,8 +189,7 @@ impl Session {
     /// `pending_agent_task_ids`). Shared by every consumer that must treat
     /// such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
-    /// the status clamp in `hook::process_hook_event_impl` (turn a
-    /// `determine_status`-computed `Stopped` back into `Running`).
+    /// `display_status` (report `Background` instead of `Stopped`).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
@@ -205,13 +202,13 @@ impl Session {
     }
 
     /// Presentation status for this session. Distinguishes `Background`
-    /// (persisted `Running`, but only a background task keeps it that way)
-    /// from a session whose main loop is actually active -- notification,
-    /// `auto_pause`, `auto_compact`, and `sweep` all keep reading the
-    /// persisted `status` / `has_pending_bg_tasks` directly and must not
-    /// switch to this.
+    /// (persisted `Stopped`, i.e. the main loop is idle, but a background
+    /// task keeps the user mid-task) from a session whose main loop is
+    /// actually active -- notification, `auto_pause`, `auto_compact`, and
+    /// `sweep` all keep reading the persisted `status` / `has_pending_bg_tasks`
+    /// directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
-        if self.status == SessionStatus::Running && self.has_pending_bg_tasks() {
+        if self.status == SessionStatus::Stopped && self.has_pending_bg_tasks() {
             return DisplayStatus::Background;
         }
         if self.is_unread_stopped() {
@@ -441,7 +438,10 @@ mod tests {
     #[rstest]
     #[case::running_unread(SessionStatus::Running, None, false, "\u{25cf}")]
     #[case::running_read(SessionStatus::Running, Some(()), false, "\u{25cf}")]
-    #[case::running_with_bg_task(SessionStatus::Running, None, true, "\u{25ce}")]
+    // A session actually running is `Running` regardless of a bg task -- only
+    // an idle main loop with a pending bg task renders as `Background`.
+    #[case::running_with_bg_task(SessionStatus::Running, None, true, "\u{25cf}")]
+    #[case::stopped_with_bg_task(SessionStatus::Stopped, None, true, "\u{25ce}")]
     #[case::waiting_unread(SessionStatus::WaitingInput, None, false, "\u{25d0}")]
     #[case::stopped_unread(SessionStatus::Stopped, None, false, "\u{2731}")]
     #[case::stopped_read(SessionStatus::Stopped, Some(()), false, "\u{25cb}")]

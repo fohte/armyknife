@@ -559,15 +559,15 @@ mod tests {
 
     #[test]
     fn test_render_background_session_shows_distinct_symbol_and_color() {
-        // Persisted `status` stays `Running` (the clamp in
-        // `hook::process_hook_event_impl`), so this still lands in the
-        // RUNNING section, but the glyph/color must distinguish "main loop
-        // idle, background task in flight" from a session actually running.
+        // Persisted `status` is `Stopped` (main loop idle), but `section_of`
+        // still groups a pending background task into RUNNING, so the
+        // glyph/color must distinguish "main loop idle, background task in
+        // flight" from a session actually running.
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
         session.updated_at = now;
-        session.status = SessionStatus::Running;
+        session.status = SessionStatus::Stopped;
         session.pending_bg_task_ids.insert("bg-1".to_string());
 
         let sessions = vec![session];

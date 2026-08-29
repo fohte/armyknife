@@ -6,7 +6,7 @@ use clap::Args;
 
 use super::claude_sessions;
 use super::store;
-use super::types::{DisplayStatus, Session, SessionStatus, StatusColor};
+use super::types::{DisplayStatus, Session, StatusColor};
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -76,9 +76,9 @@ fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<
     let (waiting_count, stopped_count) =
         sessions
             .iter()
-            .fold((0, 0), |(waiting, stopped), s| match s.status {
-                SessionStatus::WaitingInput => (waiting + 1, stopped),
-                SessionStatus::Stopped => (waiting, stopped + 1),
+            .fold((0, 0), |(waiting, stopped), s| match s.display_status() {
+                DisplayStatus::WaitingInput => (waiting + 1, stopped),
+                DisplayStatus::Stopped | DisplayStatus::UnreadStopped => (waiting, stopped + 1),
                 _ => (waiting, stopped),
             });
 
@@ -237,7 +237,7 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::cc::types::TmuxInfo;
+    use crate::commands::cc::types::{SessionStatus, TmuxInfo};
     use chrono::Duration;
     use indoc::indoc;
     use rstest::rstest;
@@ -453,7 +453,7 @@ mod tests {
                 transcript_path: None,
                 tty: None,
                 tmux_info: None,
-                status: SessionStatus::Running,
+                status: SessionStatus::Stopped,
                 created_at: now,
                 updated_at: now,
                 last_message: None,
@@ -607,6 +607,27 @@ mod tests {
         let mut output = Vec::new();
         render_tmux_status(&mut output, &sessions).expect("render should succeed");
         assert_eq!(String::from_utf8(output).expect("valid utf8"), "\u{25cb} 1");
+    }
+
+    #[test]
+    fn test_render_tmux_status_excludes_background_sessions() {
+        // A Stopped session with a pending bg task displays as `Background`
+        // (main loop is actually idle in this scenario), not `Stopped`, so it
+        // must not inflate the tmux status bar's stopped count.
+        let sessions = vec![
+            Session {
+                status: SessionStatus::Stopped,
+                pending_bg_task_ids: std::collections::BTreeSet::from(["bg-1".to_string()]),
+                ..create_test_session()
+            },
+            Session {
+                status: SessionStatus::Running,
+                ..create_test_session()
+            },
+        ];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
     }
 
     #[test]

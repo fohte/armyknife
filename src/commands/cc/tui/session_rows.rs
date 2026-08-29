@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::commands::cc::types::{Session, SessionStatus};
+use crate::commands::cc::types::{DisplayStatus, Session, SessionStatus};
 
 /// One row in the session list's selection/render order.
 ///
@@ -52,14 +52,11 @@ pub(super) enum Section {
 }
 
 fn section_of(session: &Session) -> Section {
-    if session.status == SessionStatus::WaitingInput {
-        Section::NeedsYou
-    } else if session.status == SessionStatus::Running {
-        Section::Running
-    } else if session.is_unread_stopped() {
-        Section::Unread
-    } else {
-        Section::Idle
+    match session.display_status() {
+        DisplayStatus::WaitingInput => Section::NeedsYou,
+        DisplayStatus::Running | DisplayStatus::Background => Section::Running,
+        DisplayStatus::UnreadStopped => Section::Unread,
+        _ => Section::Idle,
     }
 }
 
@@ -421,6 +418,16 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_section_of_stopped_with_pending_bg_task_is_running() {
+        // `display_status()` reports `Background` for a Stopped session with
+        // a pending bg task, and Background must group with Running -- the
+        // user's mental model is "still mid-task", not "idle".
+        let mut session = create_test_session("s1", SessionStatus::Stopped);
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        assert_eq!(section_of(&session), Section::Running);
     }
 
     #[test]
