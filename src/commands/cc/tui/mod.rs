@@ -6,11 +6,12 @@ mod pr_fetch;
 mod session_rows;
 mod title_edit;
 mod title_generate;
+mod tq_fetch;
 mod ui;
 mod worktree_session_children;
 mod worktree_view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -88,6 +89,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
 
+    let local_session_ids: HashSet<String> =
+        app.sessions.iter().map(|s| s.session_id.clone()).collect();
+    event_handler.start_tq_session_tasks_fetch(local_session_ids);
+
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
         if !unresolved.is_empty() {
@@ -138,6 +143,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
+                AppEvent::TqSessionTasksFetched(Ok(task_by_session)) => {
+                    app.set_session_tasks(task_by_session);
+                }
+                AppEvent::TqSessionTasksFetched(Err(e)) => {
+                    tracing::warn!("tq session-task fetch failed: {e}");
+                }
             }
         }
 
@@ -179,8 +190,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
 
         // Apply merged session changes in a single reload
         let mut sessions_changed = false;
+        let mut new_session_created = needs_full_reload;
         if let Some(merged) = merge_session_changes(change_map, needs_full_reload) {
             if !merged.is_empty() {
+                new_session_created |= merged
+                    .iter()
+                    .any(|c| c.change_type == SessionChangeType::Created);
                 app.reload_sessions(Some(&merged))?;
                 sessions_changed = true;
             }
@@ -193,6 +208,15 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             // sync without re-running git discovery.
             let snapshot = app.sessions.clone();
             app.worktree_view.refresh_session_overlay(&snapshot);
+
+            // A newly created session may already be tq-linked (or an
+            // existing one may have just been linked); re-fetch so it picks
+            // up its title-prefix instead of staying unlinked forever.
+            if new_session_created {
+                let local_session_ids: HashSet<String> =
+                    snapshot.iter().map(|s| s.session_id.clone()).collect();
+                event_handler.start_tq_session_tasks_fetch(local_session_ids);
+            }
         }
 
         if app.should_quit {

@@ -9,10 +9,55 @@ use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
+
+/// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
+const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Starting sleep between exit checks, doubled after each check up to `MAX_POLL_INTERVAL`.
+const INITIAL_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// Runs `command` to completion, killing it if it does not exit within `timeout`.
+///
+/// Callers that shell out to a service that can itself hang (a tmux server
+/// stuck processing its own job queue, a CLI blocked on a gated backend) use
+/// this instead of `Command::output` so a hung child fails fast with a
+/// reported error instead of leaking a thread and process indefinitely.
+pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
+    // stdin is closed (not inherited) to match `Command::output`'s behavior, which
+    // this replaces.
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let deadline = Instant::now() + timeout;
+    let mut poll_interval = INITIAL_POLL_INTERVAL;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= deadline {
+            // `Child::kill` is a no-op if the child was already reaped by a prior
+            // `try_wait`/`wait` call, so this never targets a pid the OS has since
+            // recycled for an unrelated process.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("command timed out after {timeout:?}"),
+            ));
+        }
+        thread::sleep(poll_interval);
+        poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
+    }
+}
 
 /// Replaces the current process image with `program args...` via `execve(2)`.
 /// Returns only on failure; the returned `io::Error` describes why `exec` could not start the program.
@@ -325,6 +370,43 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    // These two tests spawn a real `sh` process rather than mocking the spawn/kill
+    // boundary. `run_with_timeout` wraps that exact boundary (spawn a `Command`, kill
+    // it if it overruns), so there is no logic to exercise without a real process on
+    // the other end; `sh` is a POSIX-guaranteed shell primitive, not an optional
+    // external tool like tmux/git/ps that may be absent or blocked in a sandbox.
+
+    #[test]
+    fn run_with_timeout_returns_output_when_command_finishes_in_time() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf ok"]);
+
+        let output =
+            run_with_timeout(command, Duration::from_secs(5)).expect("command should not time out");
+
+        assert_eq!(
+            (output.status.success(), output.stdout, output.stderr),
+            (true, b"ok".to_vec(), Vec::new()),
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_kills_and_errors_when_command_exceeds_timeout() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+
+        let start = Instant::now();
+        let result = run_with_timeout(command, Duration::from_millis(100));
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err("command should time out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected the timeout to cut the 5s sleep short, took {elapsed:?}"
+        );
+    }
 
     #[rstest]
     #[case::pane_pid_is_claude_basename(

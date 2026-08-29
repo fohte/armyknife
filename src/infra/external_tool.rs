@@ -22,6 +22,7 @@ pub enum ExternalTool {
     Claude,
     Opencode,
     Hammerspoon,
+    Tq,
     Lsof,
 }
 
@@ -57,6 +58,7 @@ impl ExternalTool {
         Self::Claude,
         Self::Opencode,
         Self::Hammerspoon,
+        Self::Tq,
         Self::Lsof,
     ];
 
@@ -152,6 +154,17 @@ impl ExternalTool {
                 brew_pkg: Some("--cask hammerspoon"),
                 macos_app_path: Some("/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"),
             },
+            Self::Tq => Metadata {
+                name: "tq",
+                binary: "tq",
+                purpose: "task linking for `a cc watch`",
+                // tq has no `--version` flag; `--help` at least confirms the
+                // binary runs, even though doctor will report `FoundNoVersion`.
+                version_args: &["--help"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
             Self::Lsof => Metadata {
                 name: "lsof",
                 binary: "lsof",
@@ -244,6 +257,7 @@ mod tests {
             "claude",
             "opencode",
             "hammerspoon",
+            "tq",
             "lsof",
         ];
         want.sort_unstable();
