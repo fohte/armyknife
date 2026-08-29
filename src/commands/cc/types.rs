@@ -150,8 +150,33 @@ pub enum SessionStatus {
 pub enum StatusColor {
     Green,
     Yellow,
+    Cyan,
     Gray,
     Dim,
+}
+
+/// Presentation-only status derived from `SessionStatus` plus session state
+/// that must never be persisted (unread, in-flight background tasks). See
+/// `Session::display_status`.
+///
+/// Deliberately not `Serialize`/`Deserialize`: nothing computed here may
+/// leak into the on-disk `Session` (that would defeat the clamp in
+/// `hook::process_hook_event_impl`, which keeps the persisted `status` at
+/// `Running` on purpose -- see `Session::has_pending_bg_tasks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayStatus {
+    Running,
+    WaitingInput,
+    Stopped,
+    /// `Stopped` session that hasn't been focused since its most recent
+    /// transition into `Stopped`. See `Session::is_unread_stopped`.
+    UnreadStopped,
+    Paused,
+    Ended,
+    /// Persisted `status` is `Running` (clamped there by the hook handler)
+    /// but the main loop is actually idle -- only a Bash background task or
+    /// Task-tool subagent is still in flight. See `Session::has_pending_bg_tasks`.
+    Background,
 }
 
 impl Session {
@@ -179,26 +204,36 @@ impl Session {
         !self.pending_permission_agent_ids.is_empty()
     }
 
-    /// Status symbol that also reflects unread state.
-    pub fn display_symbol(&self) -> &'static str {
-        if self.is_unread_stopped() {
-            "✱"
-        } else {
-            self.status.display_symbol()
+    /// Presentation status for this session. Distinguishes `Background`
+    /// (persisted `Running`, but only a background task keeps it that way)
+    /// from a session whose main loop is actually active -- notification,
+    /// `auto_pause`, `auto_compact`, and `sweep` all keep reading the
+    /// persisted `status` / `has_pending_bg_tasks` directly and must not
+    /// switch to this.
+    pub fn display_status(&self) -> DisplayStatus {
+        if self.status == SessionStatus::Running && self.has_pending_bg_tasks() {
+            return DisplayStatus::Background;
         }
+        if self.is_unread_stopped() {
+            return DisplayStatus::UnreadStopped;
+        }
+        match self.status {
+            SessionStatus::Running => DisplayStatus::Running,
+            SessionStatus::WaitingInput => DisplayStatus::WaitingInput,
+            SessionStatus::Stopped => DisplayStatus::Stopped,
+            SessionStatus::Paused => DisplayStatus::Paused,
+            SessionStatus::Ended => DisplayStatus::Ended,
+        }
+    }
+
+    /// Status symbol that also reflects unread state and in-flight
+    /// background tasks. See `display_status`.
+    pub fn display_symbol(&self) -> &'static str {
+        self.display_status().display_symbol()
     }
 }
 
 impl SessionStatus {
-    pub fn display_symbol(&self) -> &'static str {
-        match self {
-            Self::Running => "●",
-            Self::WaitingInput => "◐",
-            Self::Stopped | Self::Ended => "○",
-            Self::Paused => "⏸",
-        }
-    }
-
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -208,13 +243,38 @@ impl SessionStatus {
             Self::Ended => "ended",
         }
     }
+}
+
+impl DisplayStatus {
+    pub fn display_symbol(&self) -> &'static str {
+        match self {
+            Self::Running => "●",
+            Self::WaitingInput => "◐",
+            Self::Stopped | Self::Ended => "○",
+            Self::UnreadStopped => "✱",
+            Self::Paused => "⏸",
+            Self::Background => "◎",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Background => "bg",
+            Self::WaitingInput => "waiting",
+            Self::Stopped | Self::UnreadStopped => "stopped",
+            Self::Paused => "paused",
+            Self::Ended => "ended",
+        }
+    }
 
     pub fn color(&self) -> StatusColor {
         match self {
             Self::Running => StatusColor::Green,
             Self::WaitingInput => StatusColor::Yellow,
+            Self::Background => StatusColor::Cyan,
             Self::Paused => StatusColor::Dim,
-            Self::Stopped | Self::Ended => StatusColor::Gray,
+            Self::Stopped | Self::UnreadStopped | Self::Ended => StatusColor::Gray,
         }
     }
 }
@@ -379,22 +439,28 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running_unread(SessionStatus::Running, None, "\u{25cf}")]
-    #[case::running_read(SessionStatus::Running, Some(()), "\u{25cf}")]
-    #[case::waiting_unread(SessionStatus::WaitingInput, None, "\u{25d0}")]
-    #[case::stopped_unread(SessionStatus::Stopped, None, "\u{2731}")]
-    #[case::stopped_read(SessionStatus::Stopped, Some(()), "\u{25cb}")]
-    #[case::paused_unread(SessionStatus::Paused, None, "\u{23f8}")]
-    #[case::paused_read(SessionStatus::Paused, Some(()), "\u{23f8}")]
-    #[case::ended_unread(SessionStatus::Ended, None, "\u{25cb}")]
-    #[case::ended_read(SessionStatus::Ended, Some(()), "\u{25cb}")]
+    #[case::running_unread(SessionStatus::Running, None, false, "\u{25cf}")]
+    #[case::running_read(SessionStatus::Running, Some(()), false, "\u{25cf}")]
+    #[case::running_with_bg_task(SessionStatus::Running, None, true, "\u{25ce}")]
+    #[case::waiting_unread(SessionStatus::WaitingInput, None, false, "\u{25d0}")]
+    #[case::stopped_unread(SessionStatus::Stopped, None, false, "\u{2731}")]
+    #[case::stopped_read(SessionStatus::Stopped, Some(()), false, "\u{25cb}")]
+    #[case::paused_unread(SessionStatus::Paused, None, false, "\u{23f8}")]
+    #[case::paused_read(SessionStatus::Paused, Some(()), false, "\u{23f8}")]
+    #[case::ended_unread(SessionStatus::Ended, None, false, "\u{25cb}")]
+    #[case::ended_read(SessionStatus::Ended, Some(()), false, "\u{25cb}")]
     fn session_display_symbol_table(
         #[case] status: SessionStatus,
         #[case] read_marker: Option<()>,
+        #[case] has_bg_task: bool,
         #[case] expected: &str,
     ) {
         let read_at = read_marker.map(|()| Utc::now());
-        assert_eq!(session(status, read_at).display_symbol(), expected);
+        let mut s = session(status, read_at);
+        if has_bg_task {
+            s.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+        assert_eq!(s.display_symbol(), expected);
     }
 
     #[test]

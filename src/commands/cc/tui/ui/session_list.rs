@@ -246,8 +246,9 @@ fn build_session_item(
     let session = entry.session;
     let is_idle = is_idle_session(session);
 
-    let symbol = session.display_symbol();
-    let status_style = Style::default().fg(status_color(session.status));
+    let display_status = session.display_status();
+    let symbol = display_status.display_symbol();
+    let status_style = Style::default().fg(status_color(display_status));
 
     let repo_name = app
         .get_cached_worktree_labels(&session.cwd)
@@ -554,6 +555,39 @@ mod tests {
              ?: keys   /: search   Tab: worktree   q: quit"};
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_background_session_shows_distinct_symbol_and_color() {
+        // Persisted `status` stays `Running` (the clamp in
+        // `hook::process_hook_event_impl`), so this still lands in the
+        // RUNNING section, but the glyph/color must distinguish "main loop
+        // idle, background task in flight" from a session actually running.
+        let now = Utc::now();
+
+        let mut session = create_test_session("s1");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+
+        let sessions = vec![session];
+        let output = render_to_string(&sessions, Some(1), now, 80, 9);
+
+        let expected = indoc! {"
+             cc watch                                       0 needs you · 1 running · 0 idle
+             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+            >◎ project         project                                              just now
+
+
+
+
+
+             ?: keys   /: search   Tab: worktree   q: quit"};
+
+        assert_eq!(output, expected);
+
+        let buffer = render_buffer(&sessions, Some(1), now, 80, 9);
+        assert_eq!(buffer[(1, 2)].fg, Color::Cyan);
     }
 
     #[test]

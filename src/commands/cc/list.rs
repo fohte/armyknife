@@ -6,7 +6,7 @@ use clap::Args;
 
 use super::claude_sessions;
 use super::store;
-use super::types::{Session, SessionStatus, StatusColor};
+use super::types::{DisplayStatus, Session, SessionStatus, StatusColor};
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -139,7 +139,8 @@ fn render_session_row<W: Write>(
     let title = get_title_display_name(session);
     let session_name = get_session_display_name(session);
     let window_name = get_window_display_name(session);
-    let status_display = format_status(session.status);
+    let display_status = session.display_status();
+    let status_display = format_status(display_status);
     let updated_display = format_relative_time(session.updated_at, now);
 
     writeln!(
@@ -148,7 +149,7 @@ fn render_session_row<W: Write>(
         pad_or_truncate(&title, title_width),
         pad_or_truncate(&session_name, SESSION_WIDTH),
         pad_or_truncate(&window_name, WINDOW_WIDTH),
-        session.display_symbol(),
+        display_status.display_symbol(),
         status_display,
         updated_display
     )?;
@@ -195,13 +196,14 @@ fn get_window_display_name(session: &Session) -> String {
 
 /// Formats the status with color codes.
 /// Padding is applied inside color codes to ensure correct column alignment.
-fn format_status(status: SessionStatus) -> String {
+fn format_status(status: DisplayStatus) -> String {
     let name = status.display_name();
 
     // Apply padding inside ANSI codes to avoid column misalignment
     let col = match status.color() {
         StatusColor::Green => color::GREEN,
         StatusColor::Yellow => color::YELLOW,
+        StatusColor::Cyan => color::CYAN,
         StatusColor::Gray => color::GRAY,
         StatusColor::Dim => color::DIM,
     };
@@ -316,9 +318,9 @@ mod tests {
 
     #[test]
     fn test_status_display() {
-        assert_eq!(SessionStatus::Running.display_symbol(), "●");
-        assert_eq!(SessionStatus::WaitingInput.display_symbol(), "◐");
-        assert_eq!(SessionStatus::Stopped.display_symbol(), "○");
+        assert_eq!(DisplayStatus::Running.display_symbol(), "●");
+        assert_eq!(DisplayStatus::WaitingInput.display_symbol(), "◐");
+        assert_eq!(DisplayStatus::Stopped.display_symbol(), "○");
 
         assert_eq!(SessionStatus::Running.display_name(), "running");
         assert_eq!(SessionStatus::WaitingInput.display_name(), "waiting");
@@ -445,6 +447,25 @@ mod tests {
                 read_at: None,
                 sweep_signaled: false,
             },
+            Session {
+                session_id: "s4".to_string(),
+                cwd: PathBuf::from("/project/background"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: std::collections::BTreeSet::from(["bg-1".to_string()]),
+                pending_agent_task_ids: std::collections::BTreeSet::new(),
+                pending_permission_agent_ids: std::collections::BTreeSet::new(),
+                read_at: None,
+                sweep_signaled: false,
+            },
         ];
 
         let mut output = Vec::new();
@@ -460,6 +481,7 @@ mod tests {
                 -                              running          -            ● \x1b[32mrunning \x1b[0m just now
                 -                              waiting          -            ◐ \x1b[33mwaiting \x1b[0m just now
                 -                              stopped          -            ✱ \x1b[90mstopped \x1b[0m just now
+                -                              background       -            ◎ \x1b[36mbg      \x1b[0m just now
             "}
         );
     }
