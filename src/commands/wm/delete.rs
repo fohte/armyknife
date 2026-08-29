@@ -86,8 +86,11 @@ pub async fn run(args: &DeleteArgs) -> Result<()> {
     if result.sessions_cleaned > 0 {
         println!("Sessions cleaned: {}", result.sessions_cleaned);
     }
-    if result.process_groups_killed > 0 {
-        println!("Process groups killed: {}", result.process_groups_killed);
+    if result.process_groups_signaled > 0 {
+        println!(
+            "Process groups signaled: {}",
+            result.process_groups_signaled
+        );
     }
 
     // Close the current tmux window if we're inside the deleted worktree.

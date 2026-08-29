@@ -208,7 +208,7 @@ impl ProcessSnapshot {
 /// caller via `lsof -a -d cwd -Fpn`, keyed by pid.
 ///
 /// Returns `None` if `lsof` is unavailable or fails.
-pub fn list_process_cwds() -> Option<HashMap<u32, PathBuf>> {
+fn list_process_cwds() -> Option<HashMap<u32, PathBuf>> {
     let output = ExternalTool::Lsof
         .command()
         .args(["-a", "-d", "cwd", "-Fpn"])
@@ -299,10 +299,7 @@ pub fn find_pgids_in_path(path: &Path) -> Vec<libc::pid_t> {
     candidate_pids
         .iter()
         .filter_map(|&pid| get_pgid(pid))
-        // pgid <= 1 would make kill(-pgid, ...) below target either the
-        // caller's own group (0) or broadcast to every signalable process
-        // (-1); neither is a group a worktree's cwd can legitimately
-        // resolve to.
+        // Guard against special pgids (0 = caller's group, -1 = broadcast) in kill(2).
         .filter(|&pgid| pgid > 1 && !exclude_pgids.contains(&pgid))
         .collect::<HashSet<_>>()
         .into_iter()

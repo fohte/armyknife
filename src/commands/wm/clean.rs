@@ -482,6 +482,27 @@ fn confirm_deletion() -> bool {
     input.trim().eq_ignore_ascii_case("y")
 }
 
+/// Prints the indented detail lines for a successful worktree cleanup
+/// (branch/tmux/session/process results), shared by the single-repo and
+/// all-repos deletion loops.
+fn print_cleanup_result(result: &crate::shared::cleanup::WorktreeCleanupResult) {
+    if let Some(branch) = &result.branch_deleted {
+        println!("  Branch deleted: {branch}");
+    }
+    if result.windows_closed > 0 {
+        println!("  Tmux windows closed: {}", result.windows_closed);
+    }
+    if result.sessions_cleaned > 0 {
+        println!("  Sessions cleaned: {}", result.sessions_cleaned);
+    }
+    if result.process_groups_signaled > 0 {
+        println!(
+            "  Process groups signaled: {}",
+            result.process_groups_signaled
+        );
+    }
+}
+
 /// Delete all worktrees and their branches for a single repository.
 async fn delete_worktrees_single_repo(
     repo: &GitRepo,
@@ -503,19 +524,7 @@ async fn delete_worktrees_single_repo(
         if result.worktree_deleted {
             println!("Deleted: {}", info.wt.name);
             deleted_count += 1;
-
-            if let Some(branch) = &result.branch_deleted {
-                println!("  Branch deleted: {branch}");
-            }
-            if result.windows_closed > 0 {
-                println!("  Tmux windows closed: {}", result.windows_closed);
-            }
-            if result.sessions_cleaned > 0 {
-                println!("  Sessions cleaned: {}", result.sessions_cleaned);
-            }
-            if result.process_groups_killed > 0 {
-                println!("  Process groups killed: {}", result.process_groups_killed);
-            }
+            print_cleanup_result(&result);
         }
     }
 
@@ -568,19 +577,7 @@ async fn delete_worktrees_all_repos(
             if result.worktree_deleted {
                 println!("Deleted: {repo_name}/{}", info.wt.name);
                 deleted_count += 1;
-
-                if let Some(branch) = &result.branch_deleted {
-                    println!("  Branch deleted: {branch}");
-                }
-                if result.windows_closed > 0 {
-                    println!("  Tmux windows closed: {}", result.windows_closed);
-                }
-                if result.sessions_cleaned > 0 {
-                    println!("  Sessions cleaned: {}", result.sessions_cleaned);
-                }
-                if result.process_groups_killed > 0 {
-                    println!("  Process groups killed: {}", result.process_groups_killed);
-                }
+                print_cleanup_result(&result);
             }
         }
     }

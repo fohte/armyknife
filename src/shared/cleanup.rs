@@ -29,7 +29,7 @@ pub struct WorktreeCleanupResult {
     pub sessions_cleaned: usize,
     /// Number of process groups killed that were rooted in the worktree
     /// (identified by a member process whose cwd was inside it).
-    pub process_groups_killed: usize,
+    pub process_groups_signaled: usize,
     /// The resolved worktree root path (set when worktree_deleted is true).
     /// Use this instead of raw cwd for path matching, since cwd may be a
     /// subdirectory.
@@ -97,7 +97,7 @@ pub fn cleanup_worktree_by_name(
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
-        result.process_groups_killed = process::kill_process_groups(&orphan_pgids);
+        result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 
         for window_id in &window_ids {
             if tmux::kill_window(window_id).is_ok() {
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_killed, 0);
+        assert_eq!(result.process_groups_signaled, 0);
 
         // After deletion, the worktree should no longer be listed.
         let list =
@@ -248,7 +248,7 @@ mod tests {
         assert!(result.branch_deleted.is_none());
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_killed, 0);
+        assert_eq!(result.process_groups_signaled, 0);
     }
 
     #[test]
@@ -261,6 +261,6 @@ mod tests {
         assert!(result.branch_deleted.is_none());
         assert_eq!(result.windows_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_killed, 0);
+        assert_eq!(result.process_groups_signaled, 0);
     }
 }
