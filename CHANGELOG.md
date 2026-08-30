@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.288](https://github.com/fohte/armyknife/compare/v0.1.287...v0.1.288) (2026-08-30)
+
+
+### Features
+
+* **cc:** allow opening associated tq task in browser in cc watch ([#872](https://github.com/fohte/armyknife/issues/872)) ([51b66bf](https://github.com/fohte/armyknife/commit/51b66bf494ce77a895b09cc7829ecefd889035dd))
+
+
+### Bug Fixes
+
+* **infra/process:** prevent deadlocks from command output exceeding 64KB ([#873](https://github.com/fohte/armyknife/issues/873)) ([c8377f3](https://github.com/fohte/armyknife/commit/c8377f3baa043649f450389a7fceb15161dd9de4))
+
 ## [0.1.287](https://github.com/fohte/armyknife/compare/v0.1.286...v0.1.287) (2026-08-30)
 
 
