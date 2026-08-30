@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.287](https://github.com/fohte/armyknife/compare/v0.1.286...v0.1.287) (2026-08-30)
+
+
+### Features
+
+* **cc:** Delete Ended sessions from tq ([#870](https://github.com/fohte/armyknife/issues/870)) ([12a70a5](https://github.com/fohte/armyknife/commit/12a70a55ee979d5d36764ccf0ea136fe97d8480a))
+
 ## [0.1.286](https://github.com/fohte/armyknife/compare/v0.1.285...v0.1.286) (2026-08-29)
 
 
