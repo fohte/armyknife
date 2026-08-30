@@ -554,6 +554,8 @@ When `tq` isn't on `PATH`, or the command fails, every row simply renders with n
 
 Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
 
+armyknife is the only place that distinguishes a `Paused` session (auto-paused by `a cc sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. So whenever a session transitions to `Ended` -- via a genuine `SessionEnd`, or via a `Paused` session getting evicted because its tmux pane was taken over by a different session -- `a cc hook` also spawns a detached `a cc delete-tq-session-detached --session <id>` to delete tq's record of that session via `tq session delete claude_code <id>`. This is best-effort and never blocks the hook: `tq` sits behind Cloudflare Access and can be slow or unreachable, and tq performs its own periodic cleanup of stale sessions regardless, so a failed or skipped deletion here is never the only cleanup path.
+
 #### Environment Variables
 
 | Variable                | Values                            | Description                 |

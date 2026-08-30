@@ -106,6 +106,39 @@ where
     cmd.spawn().map(|_| ())
 }
 
+/// Spawns a detached invocation of the current binary (`std::env::current_exe`)
+/// with `args`, logging an info event before the spawn and a warn event if
+/// either resolving the current executable or the spawn itself fails.
+///
+/// Shared by hook-triggered background workers (e.g. the auto-compact
+/// schedule worker, tq session deletion) that must let the hook return
+/// immediately instead of waiting on a slow or optional side effect.
+/// `spawn_event`/`failed_event` are the two callers' own tracing event names,
+/// so each keeps its own log identity.
+pub fn spawn_self_detached(spawn_event: &str, failed_event: &str, session_id: &str, args: &[&str]) {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                event = failed_event,
+                session = session_id,
+                reason = "current_exe",
+                error = %e,
+            );
+            return;
+        }
+    };
+    tracing::info!(event = spawn_event, session = session_id);
+    if let Err(e) = spawn_detached(exe, args.iter().copied(), None, &[]) {
+        tracing::warn!(
+            event = failed_event,
+            session = session_id,
+            reason = "spawn_detached",
+            error = %e,
+        );
+    }
+}
+
 /// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
 /// Returns `None` if the process is gone or `ps` fails.
 pub fn get_parent_pid(pid: u32) -> Option<u32> {

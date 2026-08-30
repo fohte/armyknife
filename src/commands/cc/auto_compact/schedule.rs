@@ -66,33 +66,12 @@ pub struct ScheduleArgs {
 /// hook can return immediately. Errors are swallowed (logged to stderr) —
 /// failing the hook for an opportunistic optimization is the wrong trade.
 pub fn spawn_in_background(session_id: &str) {
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                event = "cc.auto_compact.spawn_failed",
-                session = session_id,
-                reason = "current_exe",
-                error = %e,
-            );
-            return;
-        }
-    };
-    tracing::info!(event = "cc.auto_compact.spawn", session = session_id,);
-    let result = process::spawn_detached(
-        exe,
-        ["cc", "auto-compact", "schedule", "--session", session_id],
-        None,
-        &[],
+    process::spawn_self_detached(
+        "cc.auto_compact.spawn",
+        "cc.auto_compact.spawn_failed",
+        session_id,
+        &["cc", "auto-compact", "schedule", "--session", session_id],
     );
-    if let Err(e) = result {
-        tracing::warn!(
-            event = "cc.auto_compact.spawn_failed",
-            session = session_id,
-            reason = "spawn_detached",
-            error = %e,
-        );
-    }
 }
 
 pub async fn run(args: &ScheduleArgs) -> Result<()> {

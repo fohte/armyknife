@@ -15,6 +15,10 @@ use crate::infra::process;
 
 const SESSION_LIST_ARGS: &[&str] = &["session", "list"];
 
+/// Claude Code's provider identifier in tq's agent-session schema. Always
+/// this literal value for sessions armyknife manages.
+const CLAUDE_CODE_PROVIDER: &str = "claude_code";
+
 /// Upper bound on how long a single `tq` invocation may run. `tq` talks to a
 /// Cloudflare-Access-gated backend over the network, so an unresponsive
 /// backend must not leak a blocking-pool thread and child process on every
@@ -82,6 +86,30 @@ impl TqClient {
                 None,
             )),
         }
+    }
+
+    /// Deletes tq's record of a Claude Code agent session by session_id.
+    /// Best-effort: the caller (see `cc::delete_tq_session_detached`) treats
+    /// any error here as non-fatal, since tq's own periodic cleanup of stale
+    /// sessions is the fallback if this never runs.
+    pub fn delete_session(&self, session_id: &str) -> Result<()> {
+        let args = ["session", "delete", CLAUDE_CODE_PROVIDER, session_id];
+        let mut command = ExternalTool::Tq.command();
+        command.args(args);
+
+        let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+            .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(TqError::command_failed(
+                &args,
+                "command exited with non-zero status",
+                Some(stderr),
+            ));
+        }
+
+        Ok(())
     }
 }
 
