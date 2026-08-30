@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -37,11 +37,30 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<O
         .stderr(Stdio::piped())
         .spawn()?;
 
+    // Drain stdout/stderr on background threads while polling for exit below.
+    // The pipe buffer is finite (64KiB on macOS/Linux); a child that fills it
+    // blocks on its next write until someone reads, so reading only after
+    // exit (as `wait_with_output` does) deadlocks against the exit poll for
+    // any child that writes more than one buffer's worth of output.
+    let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(io::Error::other(
+            "child spawned without piped stdout/stderr",
+        ));
+    };
+    let stdout_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        stdout.read_to_end(&mut buf).map(|_| buf)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        stderr.read_to_end(&mut buf).map(|_| buf)
+    });
+
     let deadline = Instant::now() + timeout;
     let mut poll_interval = INITIAL_POLL_INTERVAL;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if Instant::now() >= deadline {
             // `Child::kill` is a no-op if the child was already reaped by a prior
@@ -49,6 +68,11 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<O
             // recycled for an unrelated process.
             let _ = child.kill();
             let _ = child.wait();
+            // The child's fds are closed by now, so these are already at (or
+            // imminently at) EOF; joined only to avoid returning while they
+            // still hold a reference to the killed child's pipes.
+            let _ = join_reader(stdout_reader);
+            let _ = join_reader(stderr_reader);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command timed out after {timeout:?}"),
@@ -56,7 +80,21 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<O
         }
         thread::sleep(poll_interval);
         poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
-    }
+    };
+
+    Ok(Output {
+        status,
+        stdout: join_reader(stdout_reader)?,
+        stderr: join_reader(stderr_reader)?,
+    })
+}
+
+/// Joins a pipe-reading thread spawned by [`run_with_timeout`], collapsing a
+/// thread panic into an `io::Error` since callers only propagate `io::Result`.
+fn join_reader(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    handle
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("pipe reader thread panicked")))
 }
 
 /// Replaces the current process image with `program args...` via `execve(2)`.
@@ -421,6 +459,29 @@ mod tests {
         assert_eq!(
             (output.status.success(), output.stdout, output.stderr),
             (true, b"ok".to_vec(), Vec::new()),
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_reads_output_larger_than_pipe_buffer_without_deadlocking() {
+        // 200_000 bytes comfortably exceeds the 64KiB pipe buffer that a child
+        // fills before the parent has read anything; a parent that reads only
+        // after the child exits would deadlock here instead of returning.
+        let mut command = Command::new("sh");
+        command.args(["-c", "head -c 200000 /dev/zero"]);
+
+        let start = Instant::now();
+        let output = run_with_timeout(command, Duration::from_secs(10))
+            .expect("command should not time out");
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            (output.status.success(), output.stdout.len(), output.stderr),
+            (true, 200_000, Vec::new()),
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected large output to return promptly instead of blocking until timeout, took {elapsed:?}"
         );
     }
 
