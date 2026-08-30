@@ -37,11 +37,8 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<O
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // Drain stdout/stderr on background threads while polling for exit below.
-    // The pipe buffer is finite (64KiB on macOS/Linux); a child that fills it
-    // blocks on its next write until someone reads, so reading only after
-    // exit (as `wait_with_output` does) deadlocks against the exit poll for
-    // any child that writes more than one buffer's worth of output.
+    // Drain pipes concurrently so the child does not block on a full OS pipe
+    // buffer before exiting.
     let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(io::Error::other(
             "child spawned without piped stdout/stderr",
@@ -68,11 +65,11 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<O
             // recycled for an unrelated process.
             let _ = child.kill();
             let _ = child.wait();
-            // The child's fds are closed by now, so these are already at (or
-            // imminently at) EOF; joined only to avoid returning while they
-            // still hold a reference to the killed child's pipes.
-            let _ = join_reader(stdout_reader);
-            let _ = join_reader(stderr_reader);
+            // Not joined: a descendant the child spawned (e.g. a backgrounded
+            // shell job) can keep a pipe's write end open past the child's
+            // own exit, and joining would then block past `timeout` waiting
+            // for EOF that may never come. Dropping a `JoinHandle` detaches
+            // the thread instead of blocking on it.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command timed out after {timeout:?}"),
@@ -476,8 +473,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert_eq!(
-            (output.status.success(), output.stdout.len(), output.stderr),
-            (true, 200_000, Vec::new()),
+            (output.status.success(), output.stdout, output.stderr),
+            (true, vec![0u8; 200_000], Vec::new()),
         );
         assert!(
             elapsed < Duration::from_secs(2),
@@ -499,6 +496,27 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "expected the timeout to cut the 5s sleep short, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_returns_promptly_when_descendant_holds_pipe_open() {
+        // The backgrounded `sleep 3` is reparented but keeps the stdout/stderr
+        // fds it inherited from `sh`, so the pipes stay open for ~3s after `sh`
+        // itself is killed. Returning promptly here (instead of blocking on
+        // that descendant's EOF) is what makes this function fail fast.
+        let mut command = Command::new("sh");
+        command.args(["-c", "(sleep 3 &) ; sleep 3"]);
+
+        let start = Instant::now();
+        let result = run_with_timeout(command, Duration::from_millis(100));
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err("command should time out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected the timeout to return promptly instead of blocking on the descendant's pipe, took {elapsed:?}"
         );
     }
 
