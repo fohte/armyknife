@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.289](https://github.com/fohte/armyknife/compare/v0.1.288...v0.1.289) (2026-08-30)
+
+
+### Performance Improvements
+
+* **cc:** fetch only required sessions in tq session list ([#875](https://github.com/fohte/armyknife/issues/875)) ([be5df88](https://github.com/fohte/armyknife/commit/be5df88785e82585ed3afae3a258d74c48d3b175))
+
 ## [0.1.288](https://github.com/fohte/armyknife/compare/v0.1.287...v0.1.288) (2026-08-30)
 
 
