@@ -24,7 +24,7 @@ pub async fn fetch_session_tasks(
     };
 
     let sessions = client
-        .list_session_tasks()
+        .list_session_tasks(&local_session_ids)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -34,6 +34,10 @@ pub async fn fetch_session_tasks(
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. A session linked to multiple tasks keeps only the
 /// first (tq's own ordering) -- the title-prefix only has room for one.
+///
+/// The `local_session_ids` filter here is also the fallback for a `tq`
+/// binary predating `--session-id`, which silently ignores the flag and
+/// returns every session it knows about.
 fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
