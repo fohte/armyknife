@@ -59,20 +59,19 @@ impl TqClient {
         ExternalTool::Tq.is_available().then_some(Self)
     }
 
-    /// Lists the tq-linked tasks for the given `session_ids` -- only those
-    /// sessions come back, so armyknife never pulls tq's full session
-    /// history (which grows unboundedly and is unrelated to armyknife's
-    /// concerns) just to discard most of it locally.
+    /// Lists the tq-linked tasks for the given `session_ids`; only those
+    /// sessions come back.
     pub async fn list_session_tasks(
         &self,
         session_ids: &HashSet<String>,
     ) -> Result<Vec<SessionTasks>> {
         let ids: Vec<String> = session_ids.iter().cloned().collect();
+        let args = build_session_list_args(&ids);
         let join_result = tokio::task::spawn_blocking(move || run_session_list(&ids)).await;
         match join_result {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
-                SESSION_LIST_ARGS,
+                &args,
                 format!("task panicked: {e}"),
                 None,
             )),

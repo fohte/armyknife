@@ -22,6 +22,11 @@ pub async fn fetch_session_tasks(
     let Some(client) = client else {
         return Ok(HashMap::new());
     };
+    if local_session_ids.is_empty() {
+        // Skip the round trip: tq's --session-id filter needs at least one
+        // id, and an empty request would otherwise return its full history.
+        return Ok(HashMap::new());
+    }
 
     let sessions = client
         .list_session_tasks(&local_session_ids)
@@ -90,6 +95,13 @@ mod tests {
     #[tokio::test]
     async fn client_none_returns_empty_without_spawning_tq() {
         let result = fetch_session_tasks(None, ids(&["session-1"])).await;
+
+        assert_eq!(result, Ok(HashMap::new()));
+    }
+
+    #[tokio::test]
+    async fn empty_local_session_ids_returns_empty_without_spawning_tq() {
+        let result = fetch_session_tasks(Some(TqClient), HashSet::new()).await;
 
         assert_eq!(result, Ok(HashMap::new()));
     }
