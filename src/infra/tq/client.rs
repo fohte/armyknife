@@ -5,6 +5,7 @@
 //! credentials (see the dotfiles `tq` wrapper), so this module never touches
 //! either.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -58,14 +59,19 @@ impl TqClient {
         ExternalTool::Tq.is_available().then_some(Self)
     }
 
-    /// Lists every Claude Code agent session tq knows about, each with the
-    /// tasks it's linked to.
-    pub async fn list_session_tasks(&self) -> Result<Vec<SessionTasks>> {
-        let join_result = tokio::task::spawn_blocking(run_session_list).await;
+    /// Lists the tq-linked tasks for the given `session_ids`; only those
+    /// sessions come back.
+    pub async fn list_session_tasks(
+        &self,
+        session_ids: &HashSet<String>,
+    ) -> Result<Vec<SessionTasks>> {
+        let ids: Vec<String> = session_ids.iter().cloned().collect();
+        let args = build_session_list_args(&ids);
+        let join_result = tokio::task::spawn_blocking(move || run_session_list(&ids)).await;
         match join_result {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
-                SESSION_LIST_ARGS,
+                &args,
                 format!("task panicked: {e}"),
                 None,
             )),
@@ -113,25 +119,39 @@ impl TqClient {
     }
 }
 
-/// Runs `tq session list` to completion and parses its stdout. Blocking, so
-/// callers must run it via [`tokio::task::spawn_blocking`].
-fn run_session_list() -> Result<Vec<SessionTasks>> {
+/// Runs `tq session list --session-id <id> ...` (one flag per id in
+/// `session_ids`) to completion and parses its stdout. Blocking, so callers
+/// must run it via [`tokio::task::spawn_blocking`].
+fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
+    let args = build_session_list_args(session_ids);
+
     let mut command = ExternalTool::Tq.command();
-    command.args(SESSION_LIST_ARGS);
+    command.args(&args);
 
     let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
-        .map_err(|e| TqError::command_failed(SESSION_LIST_ARGS, e.to_string(), None))?;
+        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(TqError::command_failed(
-            SESSION_LIST_ARGS,
+            &args,
             "command exited with non-zero status",
             Some(stderr),
         ));
     }
 
     parse_session_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Builds the argv for [`run_session_list`]. Isolated from the process spawn
+/// so it can be unit tested without invoking the real `tq` binary.
+fn build_session_list_args(session_ids: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = SESSION_LIST_ARGS.iter().map(|s| s.to_string()).collect();
+    for id in session_ids {
+        args.push("--session-id".to_string());
+        args.push(id.clone());
+    }
+    args
 }
 
 /// Runs `tq task url <task_id>` to completion and returns its trimmed
@@ -309,5 +329,23 @@ mod tests {
         let result = parse_session_list("not json");
 
         assert!(result.is_err());
+    }
+
+    #[rstest]
+    #[case::no_ids(&[], vec!["session", "list"])]
+    #[case::single_id(
+        &["session-1".to_string()],
+        vec!["session", "list", "--session-id", "session-1"],
+    )]
+    #[case::multiple_ids(
+        &["session-1".to_string(), "session-2".to_string()],
+        vec![
+            "session", "list",
+            "--session-id", "session-1",
+            "--session-id", "session-2",
+        ],
+    )]
+    fn build_session_list_args_cases(#[case] session_ids: &[String], #[case] expected: Vec<&str>) {
+        assert_eq!(build_session_list_args(session_ids), expected);
     }
 }

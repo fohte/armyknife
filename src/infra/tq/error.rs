@@ -36,13 +36,13 @@ impl fmt::Display for CommandFailedError {
 }
 
 impl TqError {
-    pub(crate) fn command_failed(
-        args: &[&str],
+    pub(crate) fn command_failed<S: AsRef<str>>(
+        args: &[S],
         message: impl Into<String>,
         stderr: Option<String>,
     ) -> Self {
         Self::CommandFailed(CommandFailedError {
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args.iter().map(|s| s.as_ref().to_string()).collect(),
             message: message.into(),
             stderr,
         })

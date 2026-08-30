@@ -22,9 +22,14 @@ pub async fn fetch_session_tasks(
     let Some(client) = client else {
         return Ok(HashMap::new());
     };
+    if local_session_ids.is_empty() {
+        // Skip the round trip: tq's --session-id filter needs at least one
+        // id, and an empty request would otherwise return its full history.
+        return Ok(HashMap::new());
+    }
 
     let sessions = client
-        .list_session_tasks()
+        .list_session_tasks(&local_session_ids)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -34,6 +39,10 @@ pub async fn fetch_session_tasks(
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. A session linked to multiple tasks keeps only the
 /// first (tq's own ordering) -- the title-prefix only has room for one.
+///
+/// The `local_session_ids` filter here is also the fallback for a `tq`
+/// binary predating `--session-id`, which silently ignores the flag and
+/// returns every session it knows about.
 fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
@@ -86,6 +95,13 @@ mod tests {
     #[tokio::test]
     async fn client_none_returns_empty_without_spawning_tq() {
         let result = fetch_session_tasks(None, ids(&["session-1"])).await;
+
+        assert_eq!(result, Ok(HashMap::new()));
+    }
+
+    #[tokio::test]
+    async fn empty_local_session_ids_returns_empty_without_spawning_tq() {
+        let result = fetch_session_tasks(Some(TqClient), HashSet::new()).await;
 
         assert_eq!(result, Ok(HashMap::new()));
     }
