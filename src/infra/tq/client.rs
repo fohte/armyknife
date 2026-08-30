@@ -72,6 +72,22 @@ impl TqClient {
         }
     }
 
+    /// Resolves `task_id`'s web page URL via `tq task url` -- tq's own base
+    /// URL stays inside `tq` (see module docs); this module only ever sees
+    /// the finished URL string.
+    pub async fn task_url(&self, task_id: &str) -> Result<String> {
+        let id = task_id.to_string();
+        let join_result = tokio::task::spawn_blocking(move || run_task_url(&id)).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                &["task", "url", task_id],
+                format!("task panicked: {e}"),
+                None,
+            )),
+        }
+    }
+
     /// Deletes tq's record of a Claude Code agent session by session_id.
     /// Best-effort: the caller (see `cc::delete_tq_session_detached`) treats
     /// any error here as non-fatal, since tq's own periodic cleanup of stale
@@ -116,6 +132,29 @@ fn run_session_list() -> Result<Vec<SessionTasks>> {
     }
 
     parse_session_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Runs `tq task url <task_id>` to completion and returns its trimmed
+/// stdout (the task's web page URL). Blocking, so callers must run it via
+/// [`tokio::task::spawn_blocking`].
+fn run_task_url(task_id: &str) -> Result<String> {
+    let args = ["task", "url", task_id];
+    let mut command = ExternalTool::Tq.command();
+    command.args(args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            &args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Pure parse step, isolated from the process spawn so it can be unit tested

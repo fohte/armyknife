@@ -63,6 +63,11 @@ pub enum AppEvent {
     /// (tq not configured or nothing linked) and `Err` (tq unreachable) both
     /// leave every row's title-prefix empty.
     TqSessionTasksFetched(std::result::Result<HashMap<String, SessionTask>, String>),
+    /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
+    /// is opened in the browser; `Err` (tq missing/unreachable) is logged
+    /// and otherwise ignored -- the same silent degrade as every other tq
+    /// integration point when `tq` can't run.
+    TaskUrlFetched(std::result::Result<String, String>),
 }
 
 /// Event handler that combines keyboard input and file system events.
@@ -180,6 +185,27 @@ impl EventHandler {
         rt.spawn(async move {
             let result = super::tq_fetch::fetch_session_tasks(client, local_session_ids).await;
             let _ = tx.send(AppEvent::TqSessionTasksFetched(result));
+        });
+    }
+
+    /// Kick off a one-shot fetch of `task_id`'s web URL via `tq`. Returns
+    /// immediately; the result arrives as [`AppEvent::TaskUrlFetched`].
+    /// Same runtime-unavailable fallback as [`Self::start_clean_pr_fetch`].
+    pub fn start_task_url_fetch(&self, task_id: String) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::TaskUrlFetched(Err(
+                "tokio runtime is not available".to_string(),
+            )));
+            return;
+        };
+        let client = TqClient::detect();
+        rt.spawn(async move {
+            let result = match client {
+                Some(client) => client.task_url(&task_id).await.map_err(|e| e.to_string()),
+                None => Err("tq is not on PATH".to_string()),
+            };
+            let _ = tx.send(AppEvent::TaskUrlFetched(result));
         });
     }
 
