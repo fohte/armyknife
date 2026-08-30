@@ -4,6 +4,7 @@ mod claude_messaging;
 mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
+mod delete_tq_session_detached;
 mod error;
 mod focus;
 mod generate_title_detached;
@@ -28,6 +29,7 @@ use clap::Subcommand;
 
 pub use auto_compact::AutoCompactArgs;
 pub use clean_detached::CleanDetachedArgs;
+pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
@@ -99,6 +101,13 @@ pub enum CcCommands {
     /// Internal: non-interactive title generation for `cc watch`'s Ctrl+g.
     #[command(name = "generate-title-detached", hide = true)]
     GenerateTitleDetached(GenerateTitleDetachedArgs),
+
+    /// Internal: best-effort tq session deletion, spawned detached when a
+    /// session is confirmed Ended (a genuine SessionEnd, or eviction on
+    /// tmux pane takeover) so a slow/unreachable tq never blocks Claude
+    /// Code's exit.
+    #[command(name = "delete-tq-session-detached", hide = true)]
+    DeleteTqSessionDetached(DeleteTqSessionDetachedArgs),
 }
 
 impl CcCommands {
@@ -119,6 +128,7 @@ impl CcCommands {
             Self::PaneHasPaused(args) => pane::status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args).await?,
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
+            Self::DeleteTqSessionDetached(args) => delete_tq_session_detached::run(args)?,
         }
         Ok(())
     }

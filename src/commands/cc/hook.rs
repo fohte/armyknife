@@ -14,6 +14,7 @@ use lazy_regex::regex_replace_all;
 
 use super::auto_compact;
 use super::claude_sessions;
+use super::delete_tq_session_detached;
 use super::error::CcError;
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
@@ -103,6 +104,9 @@ struct SideEffects {
     /// Spawn the detached `a cc auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     auto_compact: bool,
+    /// Spawn the detached `a cc delete-tq-session-detached` worker on a
+    /// genuine Ended transition. Off in tests (would fork a real process).
+    tq_delete: bool,
     /// Test-only sink that records the group ids passed to
     /// `remove_notification_group`. Lets tests assert the call happened
     /// without invoking hammerspoon.
@@ -126,6 +130,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            tq_delete: true,
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
@@ -139,6 +144,7 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            tq_delete: false,
             removed_notification_groups: None,
             tmux_sync_calls: None,
         }
@@ -186,11 +192,13 @@ fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
 /// session auto-paused by `a cc sweep` lingers in `a cc watch` after another
 /// `claude` (or `claude -c <other-id>`) starts on the same pane. Resuming the
 /// same paused session with `claude -c <same-id>` is unaffected because
-/// `session_id` matches and the entry is skipped.
+/// `session_id` matches and the entry is skipped. This eviction is a genuine
+/// Ended transition too, so it also triggers a best-effort tq deletion.
 fn evict_paused_sessions_on_pane_takeover(
     sessions_dir: &Path,
     pane_id: &str,
     current_session_id: &str,
+    side_effects: &SideEffects,
 ) {
     let Ok(entries) = fs::read_dir(sessions_dir) else {
         return;
@@ -220,6 +228,9 @@ fn evict_paused_sessions_on_pane_takeover(
         session.status = SessionStatus::Ended;
         session.updated_at = now;
         let _ = store::save_session_to(sessions_dir, &session);
+        if side_effects.tq_delete {
+            delete_tq_session_detached::spawn_in_background(&session.session_id);
+        }
     }
 }
 
@@ -269,6 +280,9 @@ fn process_hook_event_impl(
                 // it here. Paused sessions keep their notification so the
                 // user still sees it after `a cc resume`.
                 side_effects.remove_notification_group(&input.session_id);
+                if side_effects.tq_delete {
+                    delete_tq_session_detached::spawn_in_background(&input.session_id);
+                }
             }
             // Push the preserved status into the pane option so that sweep's
             // Paused isn't clobbered back to "" by this SessionEnd: Paused
@@ -306,6 +320,7 @@ fn process_hook_event_impl(
                 sessions_dir,
                 &pane_info.pane_id,
                 &input.session_id,
+                side_effects,
             );
         }
     }
@@ -326,7 +341,12 @@ fn process_hook_event_impl(
         && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-        evict_paused_sessions_on_pane_takeover(sessions_dir, &pane_info.pane_id, &input.session_id);
+        evict_paused_sessions_on_pane_takeover(
+            sessions_dir,
+            &pane_info.pane_id,
+            &input.session_id,
+            side_effects,
+        );
     }
 
     // Get tmux info by finding the pane that contains this process
@@ -1674,6 +1694,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            tq_delete: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };
@@ -1727,6 +1748,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            tq_delete: false,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
         };
@@ -2110,6 +2132,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            tq_delete: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };
@@ -2574,6 +2597,7 @@ mod tests {
                 temp_dir.path(),
                 takeover_pane,
                 takeover_session_id,
+                &SideEffects::none(),
             );
 
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
@@ -2585,7 +2609,7 @@ mod tests {
         #[rstest]
         fn missing_sessions_dir_is_noop(temp_dir: TempDir) {
             let missing = temp_dir.path().join("does-not-exist");
-            evict_paused_sessions_on_pane_takeover(&missing, "%42", "new");
+            evict_paused_sessions_on_pane_takeover(&missing, "%42", "new", &SideEffects::none());
         }
     }
 
