@@ -552,6 +552,8 @@ When the `tq` CLI is on `PATH`, a session linked to a tq task gets a `#<number> 
 
 When `tq` isn't on `PATH`, or the command fails, every row simply renders with no task prefix; local operations (focus, resume) are never blocked by it being down.
 
+Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
+
 #### Environment Variables
 
 | Variable                | Values                            | Description                 |

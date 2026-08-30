@@ -55,6 +55,9 @@ struct KeyEffects {
     /// User pressed Ctrl+g in title-edit mode: spawn the detached
     /// title-generation process for this request.
     spawn_title_generation: Option<title_generate::SpawnTitleGenerationRequest>,
+    /// User pressed `t`: fetch this task's web URL from `tq` (its result
+    /// opens the browser once `AppEvent::TaskUrlFetched` arrives).
+    fetch_task_url: Option<String>,
 }
 
 impl KeyEffects {
@@ -70,6 +73,9 @@ impl KeyEffects {
         }
         if other.spawn_title_generation.is_some() {
             self.spawn_title_generation = other.spawn_title_generation;
+        }
+        if other.fetch_task_url.is_some() {
+            self.fetch_task_url = other.fetch_task_url;
         }
     }
 }
@@ -149,6 +155,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::TqSessionTasksFetched(Err(e)) => {
                     tracing::warn!("tq session-task fetch failed: {e}");
                 }
+                AppEvent::TaskUrlFetched(Ok(url)) => {
+                    open_url(&mut app, &url);
+                }
+                AppEvent::TaskUrlFetched(Err(e)) => {
+                    tracing::warn!("tq task-url fetch failed: {e}");
+                }
             }
         }
 
@@ -186,6 +198,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             && let Err(e) = title_generate::spawn_detached_title_generation(request)
         {
             app.set_error(format!("Failed to start title generation: {e}"));
+        }
+        if let Some(task_id) = effects.fetch_task_url {
+            event_handler.start_task_url_fetch(task_id);
         }
 
         // Apply merged session changes in a single reload
@@ -343,6 +358,20 @@ fn resume_terminal(terminal: &mut DefaultTerminal) -> io::Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
+}
+
+/// Opens `url` in the browser via the platform's default opener. Unlike a
+/// failed `tq` fetch (silently ignored -- see `AppEvent::TaskUrlFetched`),
+/// a failure here is unexpected and surfaced as an error banner.
+fn open_url(app: &mut App, url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = command::new(opener).arg(url).spawn() {
+        app.set_error(format!("Failed to open task: {e}"));
+    }
 }
 
 fn resume_selected_session(app: &mut App) {
@@ -570,6 +599,22 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             .and_then(|s| s.transcript_path.clone());
         return KeyEffects {
             preview_session_path: path,
+            ..Default::default()
+        };
+    }
+    // `t` opens the selected session's linked tq task in the browser.
+    // No-op with no selection or a session with no linked task.
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Char('t'), KeyModifiers::NONE) = (key.code, key.modifiers)
+    {
+        app.clear_error();
+        let selected_session_id = app.selected_session().map(|s| s.session_id.clone());
+        let task_id = selected_session_id
+            .as_deref()
+            .and_then(|id| app.task_by_session.get(id))
+            .map(|t| t.task_id.clone());
+        return KeyEffects {
+            fetch_task_url: task_id,
             ..Default::default()
         };
     }
@@ -1038,6 +1083,45 @@ mod tests {
         let mut app = create_test_app_with_sessions(1);
         handle_key_event(&mut app, key_ctrl('p'));
         assert_eq!(app.status_filter, Some(SessionStatus::Paused));
+    }
+
+    // =========================================================================
+    // Open task key binding tests
+    // =========================================================================
+
+    fn test_task(task_id: &str) -> super::session_rows::SessionTask {
+        super::session_rows::SessionTask {
+            task_id: task_id.to_string(),
+            task_number: 1,
+            task_title: "Test task".to_string(),
+            parent_task_id: None,
+        }
+    }
+
+    #[rstest]
+    #[case::with_linked_task(
+        1,
+        Some(test_task("task-1")),
+        KeyEffects {
+            fetch_task_url: Some("task-1".to_string()),
+            ..Default::default()
+        },
+    )]
+    #[case::no_linked_task(1, None, KeyEffects::default())]
+    #[case::no_selection(0, None, KeyEffects::default())]
+    fn test_open_task_key_effects(
+        #[case] session_count: usize,
+        #[case] task: Option<super::session_rows::SessionTask>,
+        #[case] expected: KeyEffects,
+    ) {
+        let mut app = create_test_app_with_sessions(session_count);
+        if let Some(task) = task {
+            app.task_by_session.insert("session-0".to_string(), task);
+        }
+        assert_eq!(
+            handle_key_event(&mut app, key(KeyCode::Char('t'))),
+            expected
+        );
     }
 
     // =========================================================================
