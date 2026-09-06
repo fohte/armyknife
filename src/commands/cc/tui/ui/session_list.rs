@@ -208,12 +208,17 @@ fn own_title_style(is_idle: bool, kin_color: Option<Color>) -> Style {
     }
 }
 
-/// Task title-prefix style: plain/default when the row's task is related to
-/// the cursor row's task (see [`is_related_task`]), `DIM_FG` otherwise. A
+/// Task title-prefix style: dusty purple ([`Color::Indexed(97)`]) whenever
+/// the linked tq task is closed -- this overrides the cursor-relatedness
+/// dimming entirely, so a closed task reads as closed regardless of which
+/// row is selected. Otherwise plain/default when the row's task is related
+/// to the cursor row's task (see [`is_related_task`]), `DIM_FG` otherwise. A
 /// channel separate from `own_title_style`'s `kin_color` -- session kinship
-/// colors the title, task kinship only ever dims or un-dims this prefix.
-fn task_prefix_style(is_related: bool) -> Style {
-    if is_related {
+/// colors the title, task kinship/closedness only ever colors this prefix.
+fn task_prefix_style(is_related: bool, is_closed: bool) -> Style {
+    if is_closed {
+        Style::default().fg(Color::Indexed(97))
+    } else if is_related {
         Style::default()
     } else {
         Style::default().fg(DIM_FG)
@@ -286,10 +291,19 @@ fn build_session_item(
         .and_then(|selected| app.task_by_session.get(selected.session_id.as_str()));
     let task_prefix = entry.task.as_ref().map(|task| {
         let related = is_related_task(cursor_task, Some(task));
-        (
-            format!("#{} {} \u{203a} ", task.task_number, task.task_title),
-            task_prefix_style(related),
-        )
+        let style = task_prefix_style(related, task.is_closed);
+        let label = format!("#{} {}", task.task_number, task.task_title);
+        let label_style = if task.is_closed {
+            style.add_modifier(Modifier::CROSSED_OUT)
+        } else {
+            style
+        };
+        TaskPrefixSpan {
+            text: format!("{label} \u{203a} "),
+            style,
+            label_style,
+            label_len: label.chars().count(),
+        }
     });
 
     let title_width = title_column_width(term_width);
@@ -355,6 +369,18 @@ fn descendant_badge_text(descendant_count: usize) -> String {
     }
 }
 
+/// Text and styling for the `#<number> <title> › ` task-prefix, split into
+/// the strikethrough-eligible label (`#<number> <title>`) and the trailing
+/// ` › ` separator, which never gets struck through: the tq task being
+/// closed says nothing about the session or its title after the separator
+/// (see [`build_breadcrumb_title_spans`]).
+struct TaskPrefixSpan {
+    text: String,
+    style: Style,
+    label_style: Style,
+    label_len: usize,
+}
+
 /// The badge's width is carved out of `title_width` up front so the
 /// breadcrumb+title portion truncates to leave room for it, and the badge is
 /// appended right after that (unpadded) content -- rather than after
@@ -367,7 +393,7 @@ fn build_title_spans(
     title_width: usize,
     query: &str,
     title_style: Style,
-    task_prefix: Option<(String, Style)>,
+    task_prefix: Option<TaskPrefixSpan>,
 ) -> Vec<Span<'static>> {
     let dim_style = Style::default().fg(DIM_FG);
     let badge = descendant_badge_text(entry.descendant_count);
@@ -404,8 +430,10 @@ fn build_title_spans(
 /// append the descendant-count badge directly after this content and pad
 /// only once both are known.
 ///
-/// Builds up to three style regions, left to right: `task_prefix` (kinship
-/// brightness, see [`task_prefix_style`]), the session breadcrumb prefix
+/// Builds up to four style regions, left to right: the task-prefix label
+/// (`#<number> <title>`, struck through when the task is closed), the
+/// task-prefix's trailing ` › ` separator (same color as the label but never
+/// struck through, see [`TaskPrefixSpan`]), the session breadcrumb prefix
 /// (always `dim_style`, unrelated to task kinship), then `own_title`
 /// (`title_style`, carrying session-kinship `kin_color`). `truncate` only
 /// ever cuts from the end, so an earlier region survives intact whenever the
@@ -418,11 +446,20 @@ fn build_breadcrumb_title_spans(
     max_width: usize,
     query: &str,
     title_style: Style,
-    task_prefix: Option<(String, Style)>,
+    task_prefix: Option<TaskPrefixSpan>,
 ) -> (Vec<Span<'static>>, usize) {
     let dim_style = Style::default().fg(DIM_FG);
-    let (task_prefix_text, task_prefix_style) =
-        task_prefix.unwrap_or_else(|| (String::new(), dim_style));
+    let TaskPrefixSpan {
+        text: task_prefix_text,
+        style: task_prefix_style,
+        label_style: task_label_style,
+        label_len: task_label_len,
+    } = task_prefix.unwrap_or_else(|| TaskPrefixSpan {
+        text: String::new(),
+        style: dim_style,
+        label_style: dim_style,
+        label_len: 0,
+    });
     let breadcrumb_prefix = entry.breadcrumb_ancestor.map(|parent| {
         let parent_title = app
             .get_cached_title(&parent.session_id)
@@ -440,6 +477,7 @@ fn build_breadcrumb_title_spans(
     let truncated_chars: Vec<char> = truncated.chars().collect();
 
     let task_boundary = task_prefix_text.chars().count();
+    let task_label_boundary = task_label_len.min(task_boundary);
     let breadcrumb_boundary = task_boundary
         + breadcrumb_prefix
             .as_deref()
@@ -448,6 +486,7 @@ fn build_breadcrumb_title_spans(
     let mut spans = Vec::new();
     let mut cursor = 0usize;
     let regions = [
+        (task_label_boundary, task_label_style),
         (task_boundary, task_prefix_style),
         (breadcrumb_boundary, dim_style),
         (truncated_chars.len(), title_style),
@@ -526,6 +565,19 @@ mod tests {
         #[case] expected: Style,
     ) {
         assert_eq!(own_title_style(is_idle, kin_color), expected);
+    }
+
+    #[rstest]
+    #[case::related_open(true, false, Style::default())]
+    #[case::unrelated_open(false, false, Style::default().fg(DIM_FG))]
+    #[case::related_closed(true, true, Style::default().fg(Color::Indexed(97)))]
+    #[case::unrelated_closed(false, true, Style::default().fg(Color::Indexed(97)))]
+    fn test_task_prefix_style(
+        #[case] is_related: bool,
+        #[case] is_closed: bool,
+        #[case] expected: Style,
+    ) {
+        assert_eq!(task_prefix_style(is_related, is_closed), expected);
     }
 
     #[test]
@@ -614,6 +666,7 @@ mod tests {
             task_number,
             task_title: task_title.to_string(),
             parent_task_id: parent_task_id.map(String::from),
+            is_closed: false,
         }
     }
 
@@ -683,6 +736,48 @@ mod tests {
         assert_ne!(buffer[(19, 2)].fg, DIM_FG);
         assert_ne!(buffer[(19, 3)].fg, DIM_FG);
         assert_eq!(buffer[(19, 4)].fg, DIM_FG);
+    }
+
+    #[test]
+    fn test_render_closed_task_prefix_strikes_through_label_only() {
+        let now = Utc::now();
+
+        let mut session = create_test_session("s1");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+
+        let sessions = vec![session];
+        let buffer = render_buffer_with(&sessions, Some(1), now, 80, 9, |app| {
+            app.task_by_session.insert(
+                "s1".to_string(),
+                SessionTask {
+                    is_closed: true,
+                    ..linked_task(42, "Fix the bug", None)
+                },
+            );
+        });
+
+        // Row 2 is the session row; the task-prefix starts at column 19
+        // (see `WAITING_QUESTION_INDENT`). The prefix text is
+        // "#42 Fix the bug › " (18 chars): the "#42 Fix the bug" label
+        // spans columns 19..34, the " › " separator columns 34..37, and the
+        // session's own title ("project") starts at column 37.
+        for x in 19..34 {
+            assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
+            assert!(
+                buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
+                "column {x}"
+            );
+        }
+        for x in 34..37 {
+            assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
+            assert!(
+                !buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
+                "column {x}"
+            );
+        }
+        assert!(!buffer[(37, 2)].modifier.contains(Modifier::CROSSED_OUT));
+        assert_ne!(buffer[(37, 2)].fg, Color::Indexed(97));
     }
 
     #[test]

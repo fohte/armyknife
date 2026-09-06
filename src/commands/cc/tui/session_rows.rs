@@ -66,6 +66,10 @@ pub(super) struct SessionTask {
     pub task_number: u32,
     pub task_title: String,
     pub parent_task_id: Option<String>,
+    /// Whether the linked tq task is closed. `false` both when the task is
+    /// genuinely open and when the running `tq` binary is too old to report
+    /// task status at all -- either way, the title-prefix renders as open.
+    pub is_closed: bool,
 }
 
 fn section_of(session: &Session) -> Section {
@@ -408,6 +412,7 @@ mod tests {
             task_number: 1,
             task_title: "Task".to_string(),
             parent_task_id: parent_id.map(String::from),
+            is_closed: false,
         }
     }
 

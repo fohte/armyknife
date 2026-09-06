@@ -1095,6 +1095,7 @@ mod tests {
             task_number: 1,
             task_title: "Test task".to_string(),
             parent_task_id: None,
+            is_closed: false,
         }
     }
 
