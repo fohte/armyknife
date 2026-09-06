@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.291](https://github.com/fohte/armyknife/compare/v0.1.290...v0.1.291) (2026-09-06)
+
+
+### Features
+
+* **cc:** display strikethrough on closed tq task prefixes ([#881](https://github.com/fohte/armyknife/issues/881)) ([c57aa9e](https://github.com/fohte/armyknife/commit/c57aa9e1d5a9783e5289a80ace717cebbfbd7956))
+
 ## [0.1.290](https://github.com/fohte/armyknife/compare/v0.1.289...v0.1.290) (2026-09-06)
 
 

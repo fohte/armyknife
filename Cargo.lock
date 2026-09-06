@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "armyknife"
-version = "0.1.290"
+version = "0.1.291"
 dependencies = [
  "anyhow",
  "chrono",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "config-schema-gen"
-version = "0.1.290"
+version = "0.1.291"
 dependencies = [
  "anyhow",
  "armyknife",
