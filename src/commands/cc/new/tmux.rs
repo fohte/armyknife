@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::infra::tmux;
-use crate::shared::config::{Config, LayoutNode, PaneConfig};
+use crate::shared::config::{Config, LayoutNode};
 
 /// Inputs for setting up a tmux window, grouped to keep `setup_tmux_window`'s
 /// argument count in check.
@@ -49,48 +49,6 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     }
 
     Ok(())
-}
-
-/// Inputs for `setup_no_worktree_window`, grouped to keep its argument count
-/// in check.
-pub(super) struct NoWorktreeWindowSpec<'a> {
-    pub repo_root: &'a str,
-    pub cwd: &'a str,
-    pub model: Option<&'a str>,
-    pub prompt: Option<&'a str>,
-    pub env_vars: &'a [(&'a str, &'a str)],
-    pub background: bool,
-}
-
-/// Opens a new tmux window in the target repo's own tmux session for `a cc
-/// new` without `--worktree`, used when the target repo differs from the
-/// invoking Claude Code session's repo (see `should_open_window` in
-/// `session_mode`) -- splitting the caller's pane would otherwise land the
-/// new session in the wrong repo's window.
-pub(super) fn setup_no_worktree_window(spec: NoWorktreeWindowSpec, config: &Config) -> Result<()> {
-    // PID-based placeholder: there's no worktree/branch name to use here, and
-    // `restore_automatic_rename` below lets tmux relabel the window once
-    // `claude` starts instead of keeping this name displayed.
-    let window_name = format!("claude-{}", std::process::id());
-    let layout = LayoutNode::Pane(PaneConfig {
-        command: "claude".to_string(),
-        focus: true,
-    });
-
-    setup_tmux_window(
-        TmuxWindowSpec {
-            repo_root: spec.repo_root,
-            cwd: spec.cwd,
-            window_name: &window_name,
-            layout: &layout,
-            model: spec.model,
-            prompt: spec.prompt,
-            env_vars: spec.env_vars,
-            background: spec.background,
-            restore_automatic_rename: true,
-        },
-        config,
-    )
 }
 
 /// Inputs for `setup_split_pane`, grouped to keep its argument count in check.
