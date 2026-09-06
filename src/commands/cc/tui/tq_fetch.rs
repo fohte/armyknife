@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::session_rows::SessionTask;
 use crate::commands::cc::claude_sessions::normalize_title;
-use crate::infra::tq::{SessionTasks, TqClient};
+use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
 
 /// Fetches tq's session -> tasks listing and reduces it to one
 /// [`SessionTask`] per locally known session_id.
@@ -59,6 +59,7 @@ fn build_task_by_session(
                     task_number: task.number,
                     task_title: normalize_title(&task.title),
                     parent_task_id: task.parent_id,
+                    is_closed: task.status == TqTaskStatus::Completed,
                 },
             ))
         })
@@ -82,6 +83,14 @@ mod tests {
             number,
             title: title.to_string(),
             parent_id: parent_id.map(String::from),
+            status: TqTaskStatus::Todo,
+        }
+    }
+
+    fn closed_task(id: &str, number: u32, title: &str, parent_id: Option<&str>) -> TqTask {
+        TqTask {
+            status: TqTaskStatus::Completed,
+            ..task(id, number, title, parent_id)
         }
     }
 
@@ -120,6 +129,7 @@ mod tests {
                 task_number: 10,
                 task_title: "First task".to_string(),
                 parent_task_id: None,
+                is_closed: false,
             },
         )]),
     )]
@@ -136,6 +146,7 @@ mod tests {
                 task_number: 1,
                 task_title: "Task".to_string(),
                 parent_task_id: None,
+                is_closed: false,
             },
         )]),
     )]
@@ -155,6 +166,7 @@ mod tests {
                 task_number: 1,
                 task_title: "Task one".to_string(),
                 parent_task_id: None,
+                is_closed: false,
             },
         )]),
     )]
@@ -171,6 +183,7 @@ mod tests {
                 task_number: 2,
                 task_title: "Child task".to_string(),
                 parent_task_id: Some("task-1".to_string()),
+                is_closed: false,
             },
         )]),
     )]
@@ -178,6 +191,23 @@ mod tests {
         vec![session("session-a", vec![])],
         &["session-a"],
         HashMap::new(),
+    )]
+    #[case::maps_completed_status_to_is_closed(
+        vec![session(
+            "session-a",
+            vec![closed_task("task-1", 1, "Task", None)],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "Task".to_string(),
+                parent_task_id: None,
+                is_closed: true,
+            },
+        )]),
     )]
     fn build_task_by_session_cases(
         #[case] sessions: Vec<SessionTasks>,

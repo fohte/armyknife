@@ -26,6 +26,22 @@ const CLAUDE_CODE_PROVIDER: &str = "claude_code";
 /// session-creation-triggered refetch.
 const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A tq task's open/closed state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TqTaskStatus {
+    #[default]
+    Todo,
+    Completed,
+    /// Any status value this binary doesn't recognize yet (e.g.
+    /// `in_progress`, or a future status `tq` adds) -- treated as open, not
+    /// a parse failure. `#[serde(default)]` on `TqTask::status` only covers
+    /// the key being *absent*; this covers the key being present with an
+    /// unrecognized value.
+    #[serde(other)]
+    Other,
+}
+
 /// One tq task linked to an agent session.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +54,11 @@ pub struct TqTask {
     /// rather than fail deserialization.
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// Defaults to `Todo` (open) on older `tq` binaries that predate this
+    /// field, so a task with unknown status renders the same as an open one
+    /// rather than failing deserialization.
+    #[serde(default)]
+    pub status: TqTaskStatus,
 }
 
 /// The tq tasks linked to a single agent session, as returned by
@@ -226,12 +247,14 @@ mod tests {
                             number: 42,
                             title: "Fix the bug".to_string(),
                             parent_id: Some("task-uuid-parent".to_string()),
+                            status: TqTaskStatus::Todo,
                         },
                         TqTask {
                             id: "task-uuid-2".to_string(),
                             number: 43,
                             title: "Parent task".to_string(),
                             parent_id: None,
+                            status: TqTaskStatus::Todo,
                         },
                     ],
                 },
@@ -276,33 +299,54 @@ mod tests {
                     number: 1,
                     title: "Task".to_string(),
                     parent_id: None,
+                    status: TqTaskStatus::Todo,
+                }],
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::todo("todo", TqTaskStatus::Todo)]
+    #[case::completed("completed", TqTaskStatus::Completed)]
+    #[case::unrecognized_value_falls_back_to_other("in_progress", TqTaskStatus::Other)]
+    fn status_parses_known_values(#[case] status_json: &str, #[case] expected: TqTaskStatus) {
+        let template = indoc! {r#"
+            [
+              {
+                "sessionId": "session-1",
+                "tasks": [
+                  { "id": "task-uuid-1", "number": 1, "title": "Task", "status": "STATUS" }
+                ]
+              }
+            ]
+        "#};
+        let json = template.replace("STATUS", status_json);
+
+        let result = parse_session_list(&json).unwrap();
+
+        assert_eq!(
+            result,
+            vec![SessionTasks {
+                session_id: "session-1".to_string(),
+                tasks: vec![TqTask {
+                    id: "task-uuid-1".to_string(),
+                    number: 1,
+                    title: "Task".to_string(),
+                    parent_id: None,
+                    status: expected,
                 }],
             }]
         );
     }
 
     #[test]
-    fn ignores_unknown_fields() {
-        // Mirrors the full shape of a real `tq session list` element: every
-        // field besides `sessionId`/`tasks` (and `tasks[].id/number/title`)
-        // is ignored.
+    fn status_defaults_to_todo_when_absent() {
         let json = indoc! {r#"
             [
               {
-                "id": "agent-session-uuid",
-                "provider": "claude_code",
                 "sessionId": "session-1",
-                "parentSessionId": null,
-                "context": "work",
-                "cwd": "/path/to/project",
-                "label": "Example label",
-                "lastMessage": "Example last message",
-                "customLabel": null,
-                "startedAt": "2026-01-01T00:00:00.000Z",
-                "lastActiveAt": "2026-01-01T01:00:00.000Z",
-                "endedAt": null,
                 "tasks": [
-                  { "id": "task-uuid-1", "number": 1, "title": "Task", "status": "in_progress" }
+                  { "id": "task-uuid-1", "number": 1, "title": "Task" }
                 ]
               }
             ]
@@ -319,6 +363,51 @@ mod tests {
                     number: 1,
                     title: "Task".to_string(),
                     parent_id: None,
+                    status: TqTaskStatus::Todo,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_fields() {
+        // Mirrors the full shape of a real `tq session list` element: every
+        // field besides `sessionId`/`tasks` (and
+        // `tasks[].id/number/title/parentId/status`) is ignored.
+        let json = indoc! {r#"
+            [
+              {
+                "id": "agent-session-uuid",
+                "provider": "claude_code",
+                "sessionId": "session-1",
+                "parentSessionId": null,
+                "context": "work",
+                "cwd": "/path/to/project",
+                "label": "Example label",
+                "lastMessage": "Example last message",
+                "customLabel": null,
+                "startedAt": "2026-01-01T00:00:00.000Z",
+                "lastActiveAt": "2026-01-01T01:00:00.000Z",
+                "endedAt": null,
+                "tasks": [
+                  { "id": "task-uuid-1", "number": 1, "title": "Task", "status": "completed" }
+                ]
+              }
+            ]
+        "#};
+
+        let result = parse_session_list(json).unwrap();
+
+        assert_eq!(
+            result,
+            vec![SessionTasks {
+                session_id: "session-1".to_string(),
+                tasks: vec![TqTask {
+                    id: "task-uuid-1".to_string(),
+                    number: 1,
+                    title: "Task".to_string(),
+                    parent_id: None,
+                    status: TqTaskStatus::Completed,
                 }],
             }]
         );
