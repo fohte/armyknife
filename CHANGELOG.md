@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.292](https://github.com/fohte/armyknife/compare/v0.1.291...v0.1.292) (2026-09-06)
+
+
+### Features
+
+* **cc:** open in a new tmux window when targeting a different repository ([#883](https://github.com/fohte/armyknife/issues/883)) ([2d7d204](https://github.com/fohte/armyknife/commit/2d7d204b6884581cdab1b2796069ca62609ed8d8))
+
 ## [0.1.291](https://github.com/fohte/armyknife/compare/v0.1.290...v0.1.291) (2026-09-06)
 
 
