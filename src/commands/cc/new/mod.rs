@@ -1,28 +1,23 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::error::CcError;
-use crate::commands::wm::git::branch_to_worktree_name;
-use crate::infra::git::cmd::run_git;
-use crate::infra::git::fetch_with_prune;
-use crate::infra::git::{get_main_branch_for_repo, get_repo_root, get_repo_root_in, open_repo_at};
-use crate::shared::config::{Config, load_config};
+use crate::infra::git::{get_repo_root, get_repo_root_in};
+use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
-use crate::shared::hooks;
 
 mod delegation;
 mod prompt;
+mod session_mode;
 mod tmux;
 mod worktree;
+mod worktree_creation;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
+use session_mode::{caller_repo_root, should_open_window};
 use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
-use worktree::{
-    BranchRollback, WorktreeAddMode, add_worktree_for_branch, git_worktree_add, repo_branch_exists,
-    rollback_worktree,
-};
+use worktree_creation::run_worktree_creation;
 
 /// CLI args shared by `a cc new`'s worktree and no-worktree modes.
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -68,8 +63,10 @@ pub struct NewArgs {
     /// when omitted, it is auto-generated from --prompt. When the flag
     /// itself is omitted entirely, no worktree is created; instead the
     /// session runs in the current directory (or the target repo root when
-    /// -R is given), splitting the tmux pane that invoked this command
-    /// (requires running inside tmux).
+    /// -R is given). If that target is the same repo as the invoking Claude
+    /// Code session's, this splits the tmux pane that invoked this command
+    /// (requires running inside tmux); otherwise it opens a new tmux window
+    /// in the target repo's own tmux session.
     #[arg(long, num_args = 0..=1, require_equals = true)]
     pub worktree: Option<Option<String>>,
 
@@ -107,7 +104,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         Some(worktree_value) => {
             run_worktree_mode(args, worktree_value.as_deref(), &repo_root, &config)
         }
-        None => run_session_only(args, &repo_root),
+        None => run_session_only(args, &repo_root, &config),
     }
 }
 
@@ -213,32 +210,18 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
     Ok((env_vars, background))
 }
 
-/// Returns the tmux pane ID of the caller, read from `$TMUX_PANE`.
-///
-/// `a cc new` without `--worktree` splits this pane rather than opening a
-/// new window, so it requires running inside one.
-fn current_pane_id() -> Result<String> {
-    crate::infra::tmux::current_pane_id_from_env().ok_or_else(|| CcError::NotInTmux.into())
-}
-
-/// Run `a cc new` without `--worktree`: split the tmux pane the invoking
-/// process is running in (`$TMUX_PANE`) into a new pane in the same window
-/// and start `claude` there, without any git-mutating operation (no fetch,
-/// no `git worktree add`, no post-worktree-create hook, no rollback). This
-/// keeps a handoff session visually attached to the session it continues,
-/// instead of opening in a separate window. `repo_root` is still resolved
-/// read-only by the caller purely so `-R` can point this at another repo's
-/// root; it has no role in tmux session targeting, which is derived from
-/// the pane itself.
-fn run_session_only(args: &NewArgs, repo_root: &str) -> Result<()> {
+/// Run `a cc new` without creating a worktree, either by splitting the
+/// caller's pane or opening a window in the target repo's session (see
+/// `should_open_window`).
+fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
     let raw_prompt = args.common.prompt.as_deref();
 
     with_prompt_cache_recovery(repo_root, raw_prompt, || {
-        run_session_only_inner(args, repo_root)
+        run_session_only_inner(args, repo_root, config)
     })
 }
 
-fn run_session_only_inner(args: &NewArgs, repo_root: &str) -> Result<()> {
+fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_string_lossy()
@@ -271,211 +254,56 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str) -> Result<()> {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let target_pane = current_pane_id()?;
-
-    setup_split_pane(TmuxSplitPaneSpec {
-        target_pane: &target_pane,
-        cwd: &cwd,
-        model: args.common.model.as_deref(),
-        prompt: prompt.as_deref(),
-        env_vars: &env_refs,
-        background,
-    })?;
-
     let suffix = if background { " (background)" } else { "" };
-    println!("Split tmux pane in '{cwd}'{suffix}");
 
-    Ok(())
-}
-
-fn run_worktree_creation(
-    args: &NewArgs,
-    name: &str,
-    prompt: Option<&str>,
-    repo_root: &str,
-    config: &Config,
-) -> Result<()> {
-    let repo = open_repo_at(Path::new(repo_root)).map_err(|_| CcError::NotInGitRepo)?;
-    let branch_prefix = &config.wm.branch_prefix;
-
-    // Determine worktree directory name from branch name
-    let worktree_name = branch_to_worktree_name(name, branch_prefix);
-    let worktrees_dir = format!("{repo_root}/{}", config.wm.worktrees_dir);
-    let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
-
-    // Ensure worktrees directory exists
-    std::fs::create_dir_all(&worktrees_dir).context("Failed to create worktrees directory")?;
-
-    // Fetch with prune
-    fetch_with_prune(&repo).context("Failed to fetch from remote")?;
-
-    // Remove branch prefix to avoid double prefix
-    let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
-
-    // Determine action based on branch existence and flags.
-    // Track the resolved branch/base for --agent context injection.
-    // actual_base is only populated when --agent is set (except when a new
-    // branch is created, where it is always known).
-    let actual_branch;
-    let actual_base: Option<String>;
-    let branch_rollback;
-
-    if args.force {
-        // Force create new branch with prefix
-        let main_branch = get_main_branch_for_repo(&repo)?;
-        let base_branch = args
-            .from
-            .clone()
-            .unwrap_or_else(|| format!("origin/{main_branch}"));
-        let branch = format!("{branch_prefix}{name_no_prefix}");
-
-        // ForceNewBranch resets a pre-existing local branch's tip; capture
-        // it so rollback can restore the user's branch to its previous
-        // commit on hook failure. Without the prior tip we cannot undo the
-        // reset safely, so refuse rather than risk silent branch loss.
-        branch_rollback = if repo.local_branch_exists(&branch) {
-            let tip = run_git(repo.workdir(), ["rev-parse", &branch]).with_context(|| {
-                format!("Failed to capture tip of '{branch}' before force reset")
-            })?;
-            BranchRollback::RestoreTip(tip)
-        } else {
-            BranchRollback::Delete
-        };
-
-        git_worktree_add(
-            &repo,
-            &worktree_dir,
-            WorktreeAddMode::ForceNewBranch {
-                branch: &branch,
-                base: &base_branch,
-            },
-        )?;
-
-        actual_branch = branch;
-        actual_base = Some(base_branch);
-    } else if repo_branch_exists(&repo, name) {
-        // Branch exists with the exact name provided
-        add_worktree_for_branch(&repo, &worktree_dir, name)?;
-
-        actual_branch = name.to_string();
-        branch_rollback = BranchRollback::Keep;
-        actual_base = if args.common.agent {
-            let main_branch = get_main_branch_for_repo(&repo)?;
-            Some(format!("origin/{main_branch}"))
-        } else {
-            None
-        };
-    } else {
-        let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
-        if repo_branch_exists(&repo, &branch_with_prefix) {
-            // Branch exists with prefix
-            add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
-
-            actual_branch = branch_with_prefix;
-            branch_rollback = BranchRollback::Keep;
-            actual_base = if args.common.agent {
-                let main_branch = get_main_branch_for_repo(&repo)?;
-                Some(format!("origin/{main_branch}"))
-            } else {
-                None
-            };
-        } else {
-            // Branch doesn't exist, create new one with prefix
-            let main_branch = get_main_branch_for_repo(&repo)?;
-            let base_branch = args
-                .from
-                .clone()
-                .unwrap_or_else(|| format!("origin/{main_branch}"));
-            let branch = format!("{branch_prefix}{name_no_prefix}");
-
-            git_worktree_add(
-                &repo,
-                &worktree_dir,
-                WorktreeAddMode::NewBranch {
-                    branch: &branch,
-                    base: &base_branch,
-                },
-            )?;
-
-            actual_branch = branch;
-            actual_base = Some(base_branch);
-            branch_rollback = BranchRollback::Delete;
-        }
-    }
-
-    // Wrap prompt with delegation context when --agent is used
-    let final_prompt = if args.common.agent {
-        let delegator_cwd = std::env::current_dir()
-            .context("Failed to get current directory")?
-            .to_string_lossy()
-            .to_string();
-        let worktree_cwd_str = worktree_dir
-            .to_str()
-            .context("Invalid worktree path")?
-            .to_string();
-
-        resolve_prompt(
-            true,
-            prompt,
-            Some(&actual_branch),
-            actual_base.as_deref(),
-            &delegator_cwd,
-            &worktree_cwd_str,
-        )
-    } else {
-        prompt.map(String::from)
-    };
-
-    // Run post-worktree-create hook. Hook failures roll back the worktree
-    // (and the branch, if we created it) before propagating the error.
-    if args.skip_hooks {
-        eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
-    } else {
-        let worktree_abs =
-            std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
-        if let Err(hook_err) = hooks::run_hook(
-            "post-worktree-create",
-            &[
-                (
-                    EnvVars::worktree_path_name(),
-                    &worktree_abs.to_string_lossy(),
-                ),
-                (EnvVars::branch_name_name(), &actual_branch),
-                (EnvVars::repo_root_name(), repo_root),
-            ],
-        ) {
-            rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback);
-            return Err(hook_err);
-        }
-    }
-
-    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
-    let env_refs: Vec<(&str, &str)> = env_vars
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-
-    // Setup tmux window using config layout
-    setup_tmux_window(
-        TmuxWindowSpec {
-            repo_root,
-            cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
-            window_name: &worktree_name,
-            layout: &config.wm.layout,
-            model: args.common.model.as_deref(),
-            prompt: final_prompt.as_deref(),
-            env_vars: &env_refs,
-            background,
-            restore_automatic_rename: false,
-        },
-        config,
-    )?;
-
-    let suffix = if background { " (background)" } else { "" };
-    println!(
-        "Created worktree '{}' and opened tmux window{}",
-        worktree_name, suffix
+    let differs = should_open_window(
+        repo_root,
+        &caller_repo_root(&current_dir),
+        &config.wm.worktrees_dir,
     );
+
+    // Window mode doesn't need a pane, so it's also the fallback when the
+    // caller isn't running inside one ($TMUX_PANE unset).
+    match crate::infra::tmux::current_pane_id_from_env() {
+        Some(target_pane) if !differs => {
+            setup_split_pane(TmuxSplitPaneSpec {
+                target_pane: &target_pane,
+                cwd: &cwd,
+                model: args.common.model.as_deref(),
+                prompt: prompt.as_deref(),
+                env_vars: &env_refs,
+                background,
+            })?;
+            println!("Split tmux pane in '{cwd}'{suffix}");
+        }
+        _ => {
+            // PID-based placeholder: there's no worktree/branch name to use
+            // here, and `restore_automatic_rename` below lets tmux relabel
+            // the window once `claude` starts instead of keeping this name
+            // displayed.
+            let window_name = format!("claude-{}", std::process::id());
+            let layout = LayoutNode::Pane(PaneConfig {
+                command: "claude".to_string(),
+                focus: true,
+            });
+
+            setup_tmux_window(
+                TmuxWindowSpec {
+                    repo_root,
+                    cwd: &cwd,
+                    window_name: &window_name,
+                    layout: &layout,
+                    model: args.common.model.as_deref(),
+                    prompt: prompt.as_deref(),
+                    env_vars: &env_refs,
+                    background,
+                    restore_automatic_rename: true,
+                },
+                config,
+            )?;
+            println!("Opened tmux window in '{cwd}'{suffix}");
+        }
+    }
 
     Ok(())
 }
@@ -557,19 +385,6 @@ mod tests {
     ) {
         temp_env::with_vars([("TQ_SESSION_ID", env_value)], || {
             assert_eq!(tq_parent_session_env_var(), expected);
-        });
-    }
-
-    #[rstest]
-    #[case::returns_value_when_set(Some("%12"), Ok("%12".to_string()))]
-    #[case::errors_when_unset(None, Err(CcError::NotInTmux.to_string()))]
-    #[case::errors_when_empty(Some(""), Err(CcError::NotInTmux.to_string()))]
-    fn current_pane_id_cases(
-        #[case] env_value: Option<&str>,
-        #[case] expected: std::result::Result<String, String>,
-    ) {
-        temp_env::with_vars([("TMUX_PANE", env_value)], || {
-            assert_eq!(current_pane_id().map_err(|e| e.to_string()), expected);
         });
     }
 }
