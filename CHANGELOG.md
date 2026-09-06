@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.290](https://github.com/fohte/armyknife/compare/v0.1.289...v0.1.290) (2026-09-06)
+
+
+### Bug Fixes
+
+* **cc:** skip session registration during headless execution ([#879](https://github.com/fohte/armyknife/issues/879)) ([e274d95](https://github.com/fohte/armyknife/commit/e274d9546b3b9ec40cb7448ba38294f77c3edc6f))
+
 ## [0.1.289](https://github.com/fohte/armyknife/compare/v0.1.288...v0.1.289) (2026-08-30)
 
 
