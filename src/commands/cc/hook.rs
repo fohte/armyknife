@@ -54,12 +54,8 @@ pub fn run(args: &HookArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Skip hooks for any headless run, not just armyknife's own. A `claude -p`
-    // started from a Bash tool call inherits TMUX_PANE from its parent
-    // interactive session, so get_pane_info_by_pid resolves to that same
-    // pane. Without this guard, the pane option and session store would get
-    // overwritten with the headless run's session id, which stops existing
-    // once that run ends.
+    // Headless runs inherit TMUX_PANE from their parent interactive session;
+    // skip them to avoid overwriting the parent's registered session state.
     if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
         return Ok(());
     }
@@ -640,7 +636,6 @@ fn process_hook_event_impl(
     Ok(ProcessResult::SessionSaved)
 }
 
-/// Returns true when `entrypoint` marks a headless Claude Code run.
 fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
     entrypoint.is_some_and(|v| v.starts_with(HEADLESS_ENTRYPOINT_PREFIX))
 }
