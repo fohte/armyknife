@@ -718,27 +718,32 @@ mod tests {
             );
         });
 
-        // Row 2 is the session row; the task-prefix starts at column 19
-        // (see `WAITING_QUESTION_INDENT`). The prefix text is
-        // "#42 Fix the bug › " (18 chars): the "#42 Fix the bug" label
-        // spans columns 19..34, the " › " separator columns 34..37, and the
-        // session's own title ("project") starts at column 37.
-        for x in 19..34 {
+        // Row 2 is the session row; the task-prefix "#42 Fix the bug › "
+        // starts at column 19 -- see `WAITING_QUESTION_INDENT`.
+        let label_cols = 19..34;
+        let separator_cols = 34..37;
+        let title_col = 37;
+
+        for x in label_cols {
             assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
             assert!(
                 buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
                 "column {x}"
             );
         }
-        for x in 34..37 {
+        for x in separator_cols {
             assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
             assert!(
                 !buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
                 "column {x}"
             );
         }
-        assert!(!buffer[(37, 2)].modifier.contains(Modifier::CROSSED_OUT));
-        assert_ne!(buffer[(37, 2)].fg, Color::Indexed(97));
+        assert!(
+            !buffer[(title_col, 2)]
+                .modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
+        assert_ne!(buffer[(title_col, 2)].fg, Color::Indexed(97));
     }
 
     #[test]
