@@ -41,12 +41,22 @@ pub struct HookArgs {
     pub event: String,
 }
 
+/// `CLAUDE_CODE_ENTRYPOINT` value prefix identifying headless invocations
+/// (e.g. `claude -p`), as opposed to `cli` for interactive tmux sessions.
+const HEADLESS_ENTRYPOINT_PREFIX: &str = "sdk-";
+
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
+        return Ok(());
+    }
+
+    // Headless runs inherit TMUX_PANE from their parent interactive session;
+    // skip them to avoid overwriting the parent's registered session state.
+    if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
         return Ok(());
     }
 
@@ -624,6 +634,10 @@ fn process_hook_event_impl(
     }
 
     Ok(ProcessResult::SessionSaved)
+}
+
+fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
+    entrypoint.is_some_and(|v| v.starts_with(HEADLESS_ENTRYPOINT_PREFIX))
 }
 
 /// Reads raw content from stdin.
@@ -1245,6 +1259,15 @@ mod tests {
         );
 
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    #[rstest]
+    #[case::sdk_cli(Some("sdk-cli"), true)]
+    #[case::sdk_other(Some("sdk-py"), true)]
+    #[case::interactive_cli(Some("cli"), false)]
+    #[case::unset(None, false)]
+    fn test_is_headless_entrypoint(#[case] entrypoint: Option<&str>, #[case] expected: bool) {
+        assert_eq!(is_headless_entrypoint(entrypoint), expected);
     }
 
     #[rstest]
