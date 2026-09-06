@@ -20,6 +20,9 @@ use super::helpers::{
     status_color, truncate,
 };
 
+mod task_prefix;
+use task_prefix::{TaskPrefixSpan, task_prefix_style};
+
 /// Display width reserved by ratatui's `List::highlight_symbol` (the `>`
 /// selection marker). Every row -- selected or not -- occupies this column,
 /// so it counts toward the fixed-width column budget below even though it
@@ -208,23 +211,6 @@ fn own_title_style(is_idle: bool, kin_color: Option<Color>) -> Style {
     }
 }
 
-/// Task title-prefix style: dusty purple ([`Color::Indexed(97)`]) whenever
-/// the linked tq task is closed -- this overrides the cursor-relatedness
-/// dimming entirely, so a closed task reads as closed regardless of which
-/// row is selected. Otherwise plain/default when the row's task is related
-/// to the cursor row's task (see [`is_related_task`]), `DIM_FG` otherwise. A
-/// channel separate from `own_title_style`'s `kin_color` -- session kinship
-/// colors the title, task kinship/closedness only ever colors this prefix.
-fn task_prefix_style(is_related: bool, is_closed: bool) -> Style {
-    if is_closed {
-        Style::default().fg(Color::Indexed(97))
-    } else if is_related {
-        Style::default()
-    } else {
-        Style::default().fg(DIM_FG)
-    }
-}
-
 /// Renders a section header as a horizontal rule with the label inline,
 /// e.g. `── RUNNING (3) ──...──`.
 ///
@@ -367,18 +353,6 @@ fn descendant_badge_text(descendant_count: usize) -> String {
     } else {
         format!(" \u{25b8}{descendant_count}")
     }
-}
-
-/// Text and styling for the `#<number> <title> › ` task-prefix, split into
-/// the strikethrough-eligible label (`#<number> <title>`) and the trailing
-/// ` › ` separator, which never gets struck through: the tq task being
-/// closed says nothing about the session or its title after the separator
-/// (see [`build_breadcrumb_title_spans`]).
-struct TaskPrefixSpan {
-    text: String,
-    style: Style,
-    label_style: Style,
-    label_len: usize,
 }
 
 /// The badge's width is carved out of `title_width` up front so the
@@ -565,19 +539,6 @@ mod tests {
         #[case] expected: Style,
     ) {
         assert_eq!(own_title_style(is_idle, kin_color), expected);
-    }
-
-    #[rstest]
-    #[case::related_open(true, false, Style::default())]
-    #[case::unrelated_open(false, false, Style::default().fg(DIM_FG))]
-    #[case::related_closed(true, true, Style::default().fg(Color::Indexed(97)))]
-    #[case::unrelated_closed(false, true, Style::default().fg(Color::Indexed(97)))]
-    fn test_task_prefix_style(
-        #[case] is_related: bool,
-        #[case] is_closed: bool,
-        #[case] expected: Style,
-    ) {
-        assert_eq!(task_prefix_style(is_related, is_closed), expected);
     }
 
     #[test]
