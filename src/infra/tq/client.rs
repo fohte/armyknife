@@ -33,6 +33,13 @@ pub enum TqTaskStatus {
     #[default]
     Todo,
     Completed,
+    /// Any status value this binary doesn't recognize yet (e.g.
+    /// `in_progress`, or a future status `tq` adds) -- treated as open, not
+    /// a parse failure. `#[serde(default)]` on `TqTask::status` only covers
+    /// the key being *absent*; this covers the key being present with an
+    /// unrecognized value.
+    #[serde(other)]
+    Other,
 }
 
 /// One tq task linked to an agent session.
@@ -301,6 +308,7 @@ mod tests {
     #[rstest]
     #[case::todo("todo", TqTaskStatus::Todo)]
     #[case::completed("completed", TqTaskStatus::Completed)]
+    #[case::unrecognized_value_falls_back_to_other("in_progress", TqTaskStatus::Other)]
     fn status_parses_known_values(#[case] status_json: &str, #[case] expected: TqTaskStatus) {
         let template = indoc! {r#"
             [
