@@ -41,12 +41,26 @@ pub struct HookArgs {
     pub event: String,
 }
 
+/// `CLAUDE_CODE_ENTRYPOINT` value prefix identifying headless invocations
+/// (e.g. `claude -p`), as opposed to `cli` for interactive tmux sessions.
+const HEADLESS_ENTRYPOINT_PREFIX: &str = "sdk-";
+
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
+        return Ok(());
+    }
+
+    // Skip hooks for any headless run, not just armyknife's own. A `claude -p`
+    // started from a Bash tool call inherits TMUX_PANE from its parent
+    // interactive session, so get_pane_info_by_pid resolves to that same
+    // pane. Without this guard, the pane option and session store would get
+    // overwritten with the headless run's session id, which stops existing
+    // once that run ends.
+    if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
         return Ok(());
     }
 
@@ -624,6 +638,11 @@ fn process_hook_event_impl(
     }
 
     Ok(ProcessResult::SessionSaved)
+}
+
+/// Returns true when `entrypoint` marks a headless Claude Code run.
+fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
+    entrypoint.is_some_and(|v| v.starts_with(HEADLESS_ENTRYPOINT_PREFIX))
 }
 
 /// Reads raw content from stdin.
@@ -1245,6 +1264,15 @@ mod tests {
         );
 
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    #[rstest]
+    #[case::sdk_cli(Some("sdk-cli"), true)]
+    #[case::sdk_other(Some("sdk-py"), true)]
+    #[case::interactive_cli(Some("cli"), false)]
+    #[case::unset(None, false)]
+    fn test_is_headless_entrypoint(#[case] entrypoint: Option<&str>, #[case] expected: bool) {
+        assert_eq!(is_headless_entrypoint(entrypoint), expected);
     }
 
     #[rstest]
