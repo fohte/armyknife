@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.293](https://github.com/fohte/armyknife/compare/v0.1.292...v0.1.293) (2026-09-07)
+
+
+### Dependencies
+
+* update clap monorepo ([#889](https://github.com/fohte/armyknife/issues/889)) ([da39d41](https://github.com/fohte/armyknife/commit/da39d41ecaeef90026636ee600f5634d084a6745))
+
 ## [0.1.292](https://github.com/fohte/armyknife/compare/v0.1.291...v0.1.292) (2026-09-06)
 
 
