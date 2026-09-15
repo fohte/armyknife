@@ -5,12 +5,22 @@ use thiserror::Error;
 use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::{process, tmux};
 use crate::shared::command::find_command_path;
+use crate::shared::env_var::EnvVars;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
     /// Claude Code session ID to resume. When omitted, the session ID is read from
     /// the current tmux pane's `@armyknife-last-claude-code-session-id` user option.
     pub session_id: Option<String>,
+
+    /// Comma-separated ancestor session IDs (root to immediate parent) to set as
+    /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` before exec'ing `claude`. `a cc resurrect
+    /// restore` passes this so the `SessionStart` hook can rebuild
+    /// `ancestor_session_ids` if the store JSON for this session was already
+    /// lost to `cleanup_stale_sessions` (see `resurrect.rs`), since a respawned
+    /// pane's environment otherwise carries no ancestor information.
+    #[arg(long)]
+    pub ancestor_session_ids: Option<String>,
 }
 
 /// Runs the resume command.
@@ -25,7 +35,18 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let claude_path = find_command_path("claude")
         .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
 
-    let err = process::exec_replace(&claude_path, ["--resume", &session_id]);
+    let err = match args
+        .ancestor_session_ids
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        Some(ancestor_ids) => process::exec_replace_with_env(
+            &claude_path,
+            ["--resume", &session_id],
+            &[(EnvVars::ancestor_session_ids_name(), ancestor_ids)],
+        ),
+        None => process::exec_replace(&claude_path, ["--resume", &session_id]),
+    };
     bail!("Failed to exec claude: {}", err)
 }
 

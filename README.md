@@ -453,6 +453,8 @@ $ a cc peer notify 1111... -m "PR merged, worktree cleaned up"
 
 Pane user options are not preserved by tmux-resurrect, so `a cc resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a cc resurrect restore` re-applies them and types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.
 
+`a cc resurrect save` also records each session's `ancestor_session_ids` (used by `a cc peer parent`/`children`, see above) alongside its session ID, since a tmux server restart can wipe the session's store JSON -- and the `ancestor_session_ids` it carried -- before restore runs. `a cc resurrect restore` passes any recorded ancestors to `a cc resume --ancestor-session-ids`, so `a cc peer parent`/`children` keep working across a restart even if the store JSON had to be rebuilt from scratch.
+
 Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
 
 ```tmux

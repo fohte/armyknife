@@ -102,7 +102,23 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    command::new(program).args(args).exec()
+    exec_replace_with_env(program, args, &[])
+}
+
+/// Like [`exec_replace`], but adds `extra_env` on top of the inherited
+/// environment before the `execve(2)` call.
+pub fn exec_replace_with_env<P, I, S>(program: P, args: I, extra_env: &[(&str, &str)]) -> io::Error
+where
+    P: AsRef<std::ffi::OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut cmd = command::new(program);
+    cmd.args(args);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.exec()
 }
 
 /// Spawns `program args...` with stdio redirected to `/dev/null` and the
