@@ -351,14 +351,9 @@ fn parse_resolve_checkbox(content: &str) -> bool {
 
 fn extract_draft_reply(content: &str) -> Option<String> {
     // Find the last occurrence of <!-- /comment -->
-    let last_comment_end = content.rfind("<!-- /comment -->");
-    let after_last_comment = match last_comment_end {
-        Some(pos) => {
-            let after = &content[pos + "<!-- /comment -->".len()..];
-            after.strip_prefix('\n').unwrap_or(after)
-        }
-        None => return None,
-    };
+    let last_comment_end = content.rfind("<!-- /comment -->")?;
+    let after = &content[last_comment_end + "<!-- /comment -->".len()..];
+    let after_last_comment = after.strip_prefix('\n').unwrap_or(after);
 
     // Check if there's another thread starting (should not happen within a single thread part)
     // The draft is everything after the last /comment, trimmed
