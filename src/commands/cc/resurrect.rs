@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -61,11 +61,9 @@ fn state_file_path() -> Result<PathBuf> {
 }
 
 /// Parses a state file line into (pane_position, session_id, ancestor_session_ids).
-/// Format: "session_name:window_index.pane_index<TAB>session_id<TAB>ancestor_session_ids",
-/// where `ancestor_session_ids` is a comma-separated list (root to immediate
-/// parent). The trailing field is optional so a state file written before
-/// ancestor tracking was added (e.g. by tmux-continuum's periodic `save`,
-/// which can run right after an armyknife update) still parses.
+/// Format: "session_name:window_index.pane_index<TAB>session_id[<TAB>ancestor_session_ids]",
+/// where `ancestor_session_ids` is an optional comma-separated list (root to
+/// immediate parent).
 fn parse_state_line(line: &str) -> Option<(&str, &str, Vec<String>)> {
     if line.is_empty() {
         return None;
@@ -79,7 +77,6 @@ fn parse_state_line(line: &str) -> Option<(&str, &str, Vec<String>)> {
     }
 }
 
-/// Parses the comma-separated ancestor IDs field of a state file line.
 fn parse_ancestor_ids(s: &str) -> Vec<String> {
     if s.is_empty() {
         Vec::new()
@@ -169,6 +166,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 
     let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION);
     let state_file = state_file_path()?;
+    let sessions_dir = store::sessions_dir()?;
 
     tracing::info!(event = "cc.resurrect.save.start", pane_count = panes.len());
 
@@ -188,11 +186,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
         .into_iter()
         .filter_map(|pane| {
             pane.option_value.map(|session_id| {
-                let ancestor_session_ids = store::load_session(&session_id)
-                    .ok()
-                    .flatten()
-                    .map(|session| session.ancestor_session_ids)
-                    .unwrap_or_default();
+                let ancestor_session_ids = load_ancestor_session_ids(&sessions_dir, &session_id);
                 (
                     pane.session_name,
                     pane.window_index,
@@ -210,6 +204,27 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
     );
 
     write_state_file(&state_file, &pane_sessions)
+}
+
+/// Reads `ancestor_session_ids` for `session_id` from the store, treating a
+/// missing session file the same as one with no ancestors. A read failure
+/// (e.g. a lock timeout against a session mid-write) is logged rather than
+/// folded into the same empty result, since silently returning an empty list
+/// here would reproduce the exact ancestor-loss bug this module exists to
+/// prevent, just via a different trigger than the one save is guarding
+/// against.
+fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<String> {
+    match store::load_session_from(sessions_dir, session_id) {
+        Ok(session) => session.map(|s| s.ancestor_session_ids).unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(
+                event = "cc.resurrect.save.ancestor_load_failed",
+                session_id = %session_id,
+                %error,
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Restores pane session IDs from the state file.
@@ -312,10 +327,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 ///
 /// `ancestor_session_ids`, when non-empty, is passed via
 /// `--ancestor-session-ids` so `a cc resume` can set
-/// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs -- the
-/// respawned pane's own environment carries no ancestor information, and by
-/// the time restore runs the store JSON this session used to carry
-/// `ancestor_session_ids` in may already be gone (see `run_save`).
+/// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
 fn resume_command_for(
     session_id: &str,
     ancestor_session_ids: &[String],
@@ -526,6 +538,62 @@ mod tests {
         let sessions = read_state_file(&state_file).expect("should read state file");
 
         assert!(sessions.is_empty());
+    }
+
+    mod load_ancestor_session_ids_tests {
+        use std::collections::BTreeSet;
+
+        use chrono::Utc;
+
+        use super::*;
+        use crate::commands::cc::types::{Session, SessionStatus};
+
+        fn session_with_ancestors(id: &str, ancestor_session_ids: Vec<String>) -> Session {
+            Session {
+                session_id: id.to_string(),
+                cwd: PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids,
+                pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
+                read_at: None,
+                sweep_signaled: false,
+            }
+        }
+
+        #[test]
+        fn returns_ancestors_recorded_on_the_session() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            let session = session_with_ancestors(
+                "sess-1",
+                vec!["root-1".to_string(), "parent-1".to_string()],
+            );
+            store::save_session_to(sessions_dir.path(), &session).expect("save session");
+
+            assert_eq!(
+                load_ancestor_session_ids(sessions_dir.path(), "sess-1"),
+                vec!["root-1".to_string(), "parent-1".to_string()]
+            );
+        }
+
+        #[test]
+        fn returns_empty_for_missing_session() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+
+            assert_eq!(
+                load_ancestor_session_ids(sessions_dir.path(), "no-such-session"),
+                Vec::<String>::new()
+            );
+        }
     }
 
     mod resume_command_for_tests {
