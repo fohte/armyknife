@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.294](https://github.com/fohte/armyknife/compare/v0.1.293...v0.1.294) (2026-09-15)
+
+
+### Bug Fixes
+
+* **cc:** preserve parent-child session relationships on tmux-resurrect restore ([#893](https://github.com/fohte/armyknife/issues/893)) ([d97311b](https://github.com/fohte/armyknife/commit/d97311b3b8a757d3dcf17aa2591989cc33474095))
+
 ## [0.1.293](https://github.com/fohte/armyknife/compare/v0.1.292...v0.1.293) (2026-09-07)
 
 
