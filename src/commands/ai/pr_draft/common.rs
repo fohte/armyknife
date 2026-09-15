@@ -214,7 +214,7 @@ impl DraftFile {
         Self::draft_dir()
             .join(&repo_info.owner)
             .join(&repo_info.repo)
-            .join(format!("{}.md", &repo_info.branch))
+            .join(format!("{}.md", repo_info.branch))
     }
 
     pub fn lock_path(draft_path: &Path) -> PathBuf {
