@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.299](https://github.com/fohte/armyknife/compare/v0.1.298...v0.1.299) (2026-09-16)
+
+
+### Features
+
+* **agent:** rename `cc` subcommands to `agent` ([#907](https://github.com/fohte/armyknife/issues/907)) ([de6f97e](https://github.com/fohte/armyknife/commit/de6f97eb1658e81f7feab7350cfedc689d476237))
+
 ## [0.1.298](https://github.com/fohte/armyknife/compare/v0.1.297...v0.1.298) (2026-09-16)
 
 
