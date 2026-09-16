@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.298](https://github.com/fohte/armyknife/compare/v0.1.297...v0.1.298) (2026-09-16)
+
+
+### Bug Fixes
+
+* **shared/merge-notify:** send merge notifications to sessions without labels ([#905](https://github.com/fohte/armyknife/issues/905)) ([bfb78bd](https://github.com/fohte/armyknife/commit/bfb78bd66b3072fe069bd71deec1eab1b08b7b74))
+
 ## [0.1.297](https://github.com/fohte/armyknife/compare/v0.1.296...v0.1.297) (2026-09-16)
 
 
