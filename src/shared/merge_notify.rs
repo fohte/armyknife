@@ -262,8 +262,7 @@ mod tests {
                 Some("standalone"),
                 SessionStatus::Running,
             ),
-            // No label -- must still be found (e.g. sessions restored from a
-            // tmux-resurrect state file, which doesn't persist labels).
+            // No label -- must still be found.
             make_session(
                 "no-label",
                 worktree.clone(),
