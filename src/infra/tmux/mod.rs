@@ -1,5 +1,6 @@
 //! Tmux session and window management.
 
+mod batch;
 pub mod layout;
 
 use std::fmt;
@@ -8,6 +9,8 @@ use std::time::Duration;
 
 use indoc::writedoc;
 use thiserror::Error;
+
+pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
@@ -376,12 +379,6 @@ pub fn set_pane_option(pane_id: &str, option: &str, value: &str) -> Result<()> {
     run_tmux(&["set-option", "-p", "-t", pane_id, option, value])
 }
 
-/// Types a command into the target pane and submits it with Enter.
-/// Intended for restoring a previously-running interactive process in a pane.
-pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
-    run_tmux(&["send-keys", "-t", pane_id, command, "Enter"])
-}
-
 /// Get a user option value from the current tmux pane.
 /// Returns None if not in tmux, the option is not set, or the command fails.
 pub fn get_current_pane_option(option: &str) -> Option<String> {
@@ -553,33 +550,6 @@ fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
     } else {
         None
     }
-}
-
-/// Finds a pane by session:window_index.pane_index and returns its pane_id.
-/// Returns None if the pane is not found.
-pub fn find_pane_id_by_position(
-    session_name: &str,
-    window_index: u32,
-    pane_index: u32,
-) -> Option<String> {
-    // tmux's `-t session:window.pane` target resolves at the window level and lists all
-    // panes in that window, so narrow the result with a `-f` filter on pane_index.
-    let target = format!("{}:{}", session_name, window_index);
-    let filter = format!("#{{==:#{{pane_index}},{}}}", pane_index);
-
-    let output = run_tmux_output(&[
-        "list-panes",
-        "-t",
-        &target,
-        "-f",
-        &filter,
-        "-F",
-        "#{pane_id}",
-    ])
-    .ok()?;
-
-    // Defensive: the filter should yield at most one match, but only the first line is used.
-    output.lines().next().map(|s| s.to_string())
 }
 
 /// Returns the PID of the process running in the given tmux pane.

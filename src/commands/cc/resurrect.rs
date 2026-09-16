@@ -85,16 +85,6 @@ fn parse_ancestor_ids(s: &str) -> Vec<String> {
     }
 }
 
-/// Parses a pane position string into (session_name, window_index, pane_index).
-/// Format: "session_name:window_index.pane_index"
-fn parse_pane_position(position: &str) -> Option<(&str, u32, u32)> {
-    let (session_name, rest) = position.split_once(':')?;
-    let (window_index_str, pane_index_str) = rest.split_once('.')?;
-    let window_index = window_index_str.parse::<u32>().ok()?;
-    let pane_index = pane_index_str.parse::<u32>().ok()?;
-    Some((session_name, window_index, pane_index))
-}
-
 /// Formats a pane position for state file.
 /// Format: "session_name:window_index.pane_index"
 fn format_pane_position(session_name: &str, window_index: u32, pane_index: u32) -> String {
@@ -275,43 +265,88 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     // per pane would fork once per restored pane instead of once per restore.
     let snapshot = ProcessSnapshot::capture();
 
-    let mut restore_count = 0;
-    for (pane_position, (session_id, ancestor_session_ids)) in &pane_sessions {
-        tracing::info!(event = "cc.resurrect.restore.pane_start", pane_position = %pane_position);
+    let panes_by_position: HashMap<String, (String, u32)> = tmux::list_all_panes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pane| {
+            (
+                format_pane_position(&pane.session_name, pane.window_index, pane.pane_index),
+                (pane.pane_id, pane.pane_pid),
+            )
+        })
+        .collect();
 
-        if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position)
-            && let Some(pane_id) =
-                tmux::find_pane_id_by_position(session_name, window_index, pane_index)
-            && tmux::set_pane_option(&pane_id, TMUX_SESSION_OPTION, session_id).is_ok()
-        {
-            // send-keys is best-effort: the option is already restored, so a failure
-            // here just means the user has to run `a cc resume` manually.
-            let pane_has_claude =
-                pane::process::pane_has_live_claude_process(&pane_id, snapshot.as_ref());
-            if let Some(command) =
-                resume_command_for(session_id, ancestor_session_ids, pane_has_claude)
-            {
-                let _ = tmux::send_command_to_pane(&pane_id, &command);
-            }
-            restore_count += 1;
-            tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
-        } else {
+    let mut commands = Vec::new();
+    let mut queued_count = 0;
+    for (pane_position, (session_id, ancestor_session_ids)) in &pane_sessions {
+        let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
-        }
+            continue;
+        };
+
+        let pane_has_claude =
+            pane::process::pane_has_live_claude_process(*pane_pid, snapshot.as_ref());
+        commands.extend(restore_commands_for_pane(
+            pane_id,
+            session_id,
+            ancestor_session_ids,
+            pane_has_claude,
+        ));
+
+        queued_count += 1;
+        tracing::info!(event = "cc.resurrect.restore.pane_queued", pane_position = %pane_position);
+    }
+
+    let batch_result = tmux::run_batch(&commands);
+    if let Err(error) = &batch_result {
+        tracing::warn!(event = "cc.resurrect.restore.batch_failed", %error);
     }
 
     tracing::info!(
         event = "cc.resurrect.restore.summary",
-        restored = restore_count,
+        queued = queued_count,
         total = pane_sessions.len(),
+        batch_ok = batch_result.is_ok(),
     );
 
-    // Clean up state file after successful restore
-    if restore_count > 0 {
+    // Only clean up the state file once the batch actually ran: if it failed
+    // (e.g. the tmux server was briefly unavailable), keeping the file lets
+    // the next restore attempt retry instead of losing the pane mapping.
+    if queued_count > 0 && batch_result.is_ok() {
         let _ = fs::remove_file(&state_file);
     }
 
     Ok(())
+}
+
+/// Builds the tmux commands to restore one pane: a `set-option` for the
+/// session id, plus an optional `send-keys` from `resume_command_for`.
+fn restore_commands_for_pane(
+    pane_id: &str,
+    session_id: &str,
+    ancestor_session_ids: &[String],
+    pane_has_claude: bool,
+) -> Vec<Vec<String>> {
+    let mut commands = vec![vec![
+        "set-option".to_string(),
+        "-p".to_string(),
+        "-t".to_string(),
+        pane_id.to_string(),
+        TMUX_SESSION_OPTION.to_string(),
+        session_id.to_string(),
+    ]];
+
+    if let Some(command) = resume_command_for(session_id, ancestor_session_ids, pane_has_claude) {
+        commands.push(vec![
+            "send-keys".to_string(),
+            "-t".to_string(),
+            pane_id.to_string(),
+            command,
+            "Enter".to_string(),
+        ]);
+    }
+
+    commands
 }
 
 /// Builds the `a cc resume <session_id>` command to type into a pane, or
@@ -394,21 +429,6 @@ mod tests {
         #[case] expected: Option<(&str, &str, Vec<String>)>,
     ) {
         assert_eq!(parse_state_line(line), expected);
-    }
-
-    #[rstest]
-    #[case::simple("main:0.1", Some(("main", 0, 1)))]
-    #[case::high_indices("work:10.5", Some(("work", 10, 5)))]
-    #[case::session_with_slash("fohte/repo:1.2", Some(("fohte/repo", 1, 2)))]
-    #[case::missing_colon("main0.1", None)]
-    #[case::missing_dot("main:01", None)]
-    #[case::non_numeric_window("main:a.1", None)]
-    #[case::non_numeric_pane("main:0.b", None)]
-    fn test_parse_pane_position(
-        #[case] position: &str,
-        #[case] expected: Option<(&str, u32, u32)>,
-    ) {
-        assert_eq!(parse_pane_position(position), expected);
     }
 
     #[rstest]
@@ -629,6 +649,89 @@ mod tests {
         ) {
             assert_eq!(
                 resume_command_for(session_id, ancestor_session_ids, pane_has_claude),
+                expected
+            );
+        }
+    }
+
+    mod restore_commands_for_pane_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::pane_has_claude(
+            "%5",
+            "abc-123",
+            &[],
+            true,
+            vec![vec![
+                "set-option".to_string(),
+                "-p".to_string(),
+                "-t".to_string(),
+                "%5".to_string(),
+                TMUX_SESSION_OPTION.to_string(),
+                "abc-123".to_string(),
+            ]]
+        )]
+        #[case::pane_is_free_no_ancestors(
+            "%5",
+            "abc-123",
+            &[],
+            false,
+            vec![
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "abc-123".to_string(),
+                ],
+                vec![
+                    "send-keys".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    "a cc resume abc-123".to_string(),
+                    "Enter".to_string(),
+                ],
+            ]
+        )]
+        #[case::pane_is_free_with_ancestors(
+            "%5",
+            "abc-123",
+            &["root-1".to_string(), "parent-1".to_string()],
+            false,
+            vec![
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "abc-123".to_string(),
+                ],
+                vec![
+                    "send-keys".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    "a cc resume abc-123 --ancestor-session-ids 'root-1,parent-1'".to_string(),
+                    "Enter".to_string(),
+                ],
+            ]
+        )]
+        fn restore_commands_for_pane_cases(
+            #[case] pane_id: &str,
+            #[case] session_id: &str,
+            #[case] ancestor_session_ids: &[String],
+            #[case] pane_has_claude: bool,
+            #[case] expected: Vec<Vec<String>>,
+        ) {
+            assert_eq!(
+                restore_commands_for_pane(
+                    pane_id,
+                    session_id,
+                    ancestor_session_ids,
+                    pane_has_claude
+                ),
                 expected
             );
         }
