@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.297](https://github.com/fohte/armyknife/compare/v0.1.296...v0.1.297) (2026-09-16)
+
+
+### Bug Fixes
+
+* **cc:** batch tmux calls in resurrect restore ([#903](https://github.com/fohte/armyknife/issues/903)) ([db637e3](https://github.com/fohte/armyknife/commit/db637e36f01fb7ede882efe605d1404bc23555ef))
+
 ## [0.1.296](https://github.com/fohte/armyknife/compare/v0.1.295...v0.1.296) (2026-09-16)
 
 
