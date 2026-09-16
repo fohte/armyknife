@@ -377,12 +377,6 @@ pub fn set_pane_option(pane_id: &str, option: &str, value: &str) -> Result<()> {
     run_tmux(&["set-option", "-p", "-t", pane_id, option, value])
 }
 
-/// Types a command into the target pane and submits it with Enter.
-/// Intended for restoring a previously-running interactive process in a pane.
-pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
-    run_tmux(&["send-keys", "-t", pane_id, command, "Enter"])
-}
-
 /// Runs multiple tmux commands in a single `tmux source-file` invocation.
 ///
 /// Each command line is evaluated independently, so a stale target in one

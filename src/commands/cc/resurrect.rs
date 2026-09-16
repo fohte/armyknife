@@ -265,10 +265,6 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     // per pane would fork once per restored pane instead of once per restore.
     let snapshot = ProcessSnapshot::capture();
 
-    // One `list-panes -a` call instead of one `list-panes` call per pane to
-    // resolve its pane_id and pane_pid: forking a `tmux` client costs ~50ms
-    // for the client/server handshake alone, which at real tmux-resurrect
-    // pane counts (e.g. 85 panes) dominates the whole restore.
     let panes_by_position: HashMap<String, (String, u32)> = tmux::list_all_panes()
         .unwrap_or_default()
         .into_iter()
@@ -281,57 +277,76 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         .collect();
 
     let mut commands = Vec::new();
-    let mut restore_count = 0;
+    let mut queued_count = 0;
     for (pane_position, (session_id, ancestor_session_ids)) in &pane_sessions {
         let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
         };
 
-        commands.push(vec![
-            "set-option".to_string(),
-            "-p".to_string(),
-            "-t".to_string(),
-            pane_id.clone(),
-            TMUX_SESSION_OPTION.to_string(),
-            session_id.clone(),
-        ]);
-
-        // send-keys is best-effort: the option is already queued for restore, so
-        // a failure here just means the user has to run `a cc resume` manually.
         let pane_has_claude =
             pane::process::pane_has_live_claude_process(*pane_pid, snapshot.as_ref());
-        if let Some(command) = resume_command_for(session_id, ancestor_session_ids, pane_has_claude)
-        {
-            commands.push(vec![
-                "send-keys".to_string(),
-                "-t".to_string(),
-                pane_id.clone(),
-                command,
-                "Enter".to_string(),
-            ]);
-        }
+        commands.extend(restore_commands_for_pane(
+            pane_id,
+            session_id,
+            ancestor_session_ids,
+            pane_has_claude,
+        ));
 
-        restore_count += 1;
-        tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
+        queued_count += 1;
+        tracing::info!(event = "cc.resurrect.restore.pane_queued", pane_position = %pane_position);
     }
 
-    if let Err(error) = tmux::run_batch(&commands) {
+    let batch_result = tmux::run_batch(&commands);
+    if let Err(error) = &batch_result {
         tracing::warn!(event = "cc.resurrect.restore.batch_failed", %error);
     }
 
     tracing::info!(
         event = "cc.resurrect.restore.summary",
-        restored = restore_count,
+        queued = queued_count,
         total = pane_sessions.len(),
+        batch_ok = batch_result.is_ok(),
     );
 
-    // Clean up state file after successful restore
-    if restore_count > 0 {
+    // Only clean up the state file once the batch actually ran: if it failed
+    // (e.g. the tmux server was briefly unavailable), keeping the file lets
+    // the next restore attempt retry instead of losing the pane mapping.
+    if queued_count > 0 && batch_result.is_ok() {
         let _ = fs::remove_file(&state_file);
     }
 
     Ok(())
+}
+
+/// Builds the tmux commands to restore one pane: a `set-option` for the
+/// session id, plus an optional `send-keys` from `resume_command_for`.
+fn restore_commands_for_pane(
+    pane_id: &str,
+    session_id: &str,
+    ancestor_session_ids: &[String],
+    pane_has_claude: bool,
+) -> Vec<Vec<String>> {
+    let mut commands = vec![vec![
+        "set-option".to_string(),
+        "-p".to_string(),
+        "-t".to_string(),
+        pane_id.to_string(),
+        TMUX_SESSION_OPTION.to_string(),
+        session_id.to_string(),
+    ]];
+
+    if let Some(command) = resume_command_for(session_id, ancestor_session_ids, pane_has_claude) {
+        commands.push(vec![
+            "send-keys".to_string(),
+            "-t".to_string(),
+            pane_id.to_string(),
+            command,
+            "Enter".to_string(),
+        ]);
+    }
+
+    commands
 }
 
 /// Builds the `a cc resume <session_id>` command to type into a pane, or
@@ -634,6 +649,89 @@ mod tests {
         ) {
             assert_eq!(
                 resume_command_for(session_id, ancestor_session_ids, pane_has_claude),
+                expected
+            );
+        }
+    }
+
+    mod restore_commands_for_pane_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::pane_has_claude(
+            "%5",
+            "abc-123",
+            &[],
+            true,
+            vec![vec![
+                "set-option".to_string(),
+                "-p".to_string(),
+                "-t".to_string(),
+                "%5".to_string(),
+                TMUX_SESSION_OPTION.to_string(),
+                "abc-123".to_string(),
+            ]]
+        )]
+        #[case::pane_is_free_no_ancestors(
+            "%5",
+            "abc-123",
+            &[],
+            false,
+            vec![
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "abc-123".to_string(),
+                ],
+                vec![
+                    "send-keys".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    "a cc resume abc-123".to_string(),
+                    "Enter".to_string(),
+                ],
+            ]
+        )]
+        #[case::pane_is_free_with_ancestors(
+            "%5",
+            "abc-123",
+            &["root-1".to_string(), "parent-1".to_string()],
+            false,
+            vec![
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "abc-123".to_string(),
+                ],
+                vec![
+                    "send-keys".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    "a cc resume abc-123 --ancestor-session-ids 'root-1,parent-1'".to_string(),
+                    "Enter".to_string(),
+                ],
+            ]
+        )]
+        fn restore_commands_for_pane_cases(
+            #[case] pane_id: &str,
+            #[case] session_id: &str,
+            #[case] ancestor_session_ids: &[String],
+            #[case] pane_has_claude: bool,
+            #[case] expected: Vec<Vec<String>>,
+        ) {
+            assert_eq!(
+                restore_commands_for_pane(
+                    pane_id,
+                    session_id,
+                    ancestor_session_ids,
+                    pane_has_claude
+                ),
                 expected
             );
         }
