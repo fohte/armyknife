@@ -383,23 +383,16 @@ pub fn send_command_to_pane(pane_id: &str, command: &str) -> Result<()> {
     run_tmux(&["send-keys", "-t", pane_id, command, "Enter"])
 }
 
-/// Runs multiple tmux commands in a single `tmux source-file` invocation,
-/// instead of forking one `tmux` client per command (~50ms client/server
-/// handshake each, which doesn't scale to tmux-resurrect's pane counts --
-/// e.g. 85 panes needing both a `set-option` and a `send-keys` costs
-/// several seconds of pure fork overhead before batching).
+/// Runs multiple tmux commands in a single `tmux source-file` invocation.
 ///
-/// Unlike joining commands with `;` on a single command line -- which,
-/// verified empirically, stops running every remaining command as soon as
-/// one fails -- `source-file` evaluates each line independently, so one
-/// stale target (e.g. a pane that closed between an earlier `list-panes`
-/// snapshot and this batch running) doesn't block the rest of the batch.
+/// Each command line is evaluated independently, so a stale target in one
+/// command (e.g. a pane closed since it was resolved) doesn't block the
+/// rest of the batch, unlike joining commands with `;` on one command line.
 ///
 /// Each element of `commands` is one already-tokenized tmux command, e.g.
 /// `["set-option", "-p", "-t", "%1", "@opt", "value"]`. Tokens are quoted
-/// per tmux's config-file syntax so arbitrary content (including tmux's own
-/// special characters like `;` and `#`) passes through literally, the same
-/// as passing argv directly to a `Command`.
+/// per tmux's config-file syntax so arbitrary content passes through
+/// literally.
 pub fn run_batch(commands: &[Vec<String>]) -> Result<()> {
     if commands.is_empty() {
         return Ok(());
@@ -425,13 +418,17 @@ pub fn run_batch(commands: &[Vec<String>]) -> Result<()> {
     run_tmux(&["source-file", &file.path().to_string_lossy()])
 }
 
-/// Quotes a single token for tmux's config-file syntax (used by
-/// `source-file`), which -- unlike passing argv directly to a `Command` --
-/// re-tokenizes its input on whitespace, so tokens containing whitespace or
-/// tmux's own special characters (`;`, `#`, quotes) must be quoted to
-/// survive as one literal argument.
+/// Quotes a single token for tmux config-file syntax so whitespace and
+/// special characters are preserved as one literal argument.
+///
+/// `$` must be escaped too, not just `\` and `"`: inside a double-quoted
+/// tmux config string, `$name` expands to tmux's `name` environment
+/// variable (verified empirically), which plain `Command` argv never does.
 fn quote_tmux_config_token(token: &str) -> String {
-    let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = token
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$");
     format!("\"{escaped}\"")
 }
 
@@ -970,6 +967,7 @@ mod tests {
     #[case::with_space("hello world", "\"hello world\"")]
     #[case::with_double_quote("say \"hi\"", "\"say \\\"hi\\\"\"")]
     #[case::with_backslash("a\\b", "\"a\\\\b\"")]
+    #[case::with_dollar("$HOME", "\"\\$HOME\"")]
     #[case::with_semicolon("a; rm -rf /", "\"a; rm -rf /\"")]
     #[case::with_hash("value # not a comment", "\"value # not a comment\"")]
     #[case::empty("", "\"\"")]
