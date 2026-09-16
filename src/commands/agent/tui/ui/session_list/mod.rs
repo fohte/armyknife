@@ -604,7 +604,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 9);
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 1 running · 0 idle
+             agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >● project         project                                              just now
 
@@ -646,7 +646,7 @@ mod tests {
         });
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 1 running · 0 idle
+             agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >● project         #42 Fix the bug › project                            just now
 
@@ -763,7 +763,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 9);
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 1 running · 0 idle
+             agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >◎ project         project                                              just now
 
@@ -792,7 +792,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 0 running · 0 idle
+             agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project                                              just now
                                “Which approach do you prefer?”
@@ -820,7 +820,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 0 running · 0 idle
+             agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project                                              just now
                                “”
@@ -864,7 +864,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 3 running · 0 idle
+             agent watch                                    0 needs you · 3 running · 0 idle
              ── RUNNING (3) ────────────────────────────────────────────────────────────────
             >● project         project ▸2                                           just now
              ● project         project › project                                    just now
@@ -896,7 +896,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 12);
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 1 running · 0 idle
+             agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
             >◐ project         project › project                                          2m
                                “Pick one”
@@ -945,7 +945,7 @@ mod tests {
         });
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 1 running · 0 idle
+             agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
              ◐ project         project                                              just now
                                “Pick one”
@@ -988,7 +988,7 @@ mod tests {
         });
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 1 running · 2 idle
+             agent watch                                    1 needs you · 1 running · 2 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
              ◐ project         project                                              just now
                                “Pick one”
@@ -1021,7 +1021,7 @@ mod tests {
         });
 
         let expected = indoc! {"
-             cc watch                                       1 needs you · 1 running · 0 idle
+             agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
              ◐ project         project                                              just now
                                “Pick one”
@@ -1050,7 +1050,7 @@ mod tests {
         let output = render_to_string(&sessions, None, now, 80, 10);
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 0 running · 2 idle
+             agent watch                                    0 needs you · 0 running · 2 idle
             ── PAUSED (2) ─────────────────────────────────────────────────────────────────
             ⏸ project         project                                              just now
             ⏸ project         project                                              just now

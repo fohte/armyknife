@@ -162,7 +162,7 @@ mod tests {
         });
 
         let expected = indoc! {"
-             cc watch                                       0 needs you · 0 running · 0 idle
+             agent watch                                    0 needs you · 0 running · 0 idle
              ▼ armyknife
             >  ◌ ▎ armyknife feat/a
                  ▎ 0 sessions · /tmp/armyknife/.worktrees/feat-a
@@ -189,7 +189,7 @@ mod tests {
         // Not `indoc!`: every non-blank line here has a leading space (the
         // header/help text itself starts with one), so there is no
         // zero-indent line for `indoc!` to anchor its dedent on.
-        let expected = " cc watch                                       0 needs you · 0 running · 0 idle\n  Loading worktrees...\n\n\n\n\n\n\n ?: keys   Enter/f: focus   Tab: switch view   q: quit";
+        let expected = " agent watch                                    0 needs you · 0 running · 0 idle\n  Loading worktrees...\n\n\n\n\n\n\n ?: keys   Enter/f: focus   Tab: switch view   q: quit";
 
         assert_eq!(output, expected);
     }

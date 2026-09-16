@@ -31,8 +31,8 @@ pub enum Commands {
 
     /// AI agent session monitor (Claude Code, etc.)
     ///
-    /// `cc` is kept as a hidden alias so existing hook/tmux configs that
-    /// still invoke `a cc ...` keep working during the migration.
+    /// `cc` is kept as a hidden alias: dotfiles' hook/tmux configs invoke
+    /// `a cc ...` directly and are updated independently of armyknife.
     #[command(subcommand, alias = "cc", visible_alias = "ag")]
     Agent(AgentCommands),
 

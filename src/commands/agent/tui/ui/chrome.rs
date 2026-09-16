@@ -112,7 +112,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let (running, waiting, stopped, paused) = count_statuses(&app.sessions);
     let idle = stopped + paused;
 
-    let title = " cc watch";
+    let title = " agent watch";
     let needs_you = format!("{waiting} needs you");
     let running_text = format!("{running} running");
     let idle_text = format!("{idle} idle");
@@ -553,7 +553,7 @@ mod tests {
 
         assert_eq!(
             header_line,
-            " cc watch                                       1 needs you · 1 running · 2 idle"
+            " agent watch                                    1 needs you · 1 running · 2 idle"
         );
     }
 

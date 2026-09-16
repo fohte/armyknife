@@ -83,7 +83,7 @@ tail -F "$LOG" | jq -c .
 
 ## Event reference
 
-### `cc auto-compact`
+### `agent auto-compact`
 
 Stop hook (parent process):
 
@@ -108,7 +108,7 @@ Stop hook (parent process):
 | `cc.auto_compact.schedule.sigterm_failed`       | SIGTERM to the live `claude` process failed (non-ESRCH)                                                                   |
 | `cc.auto_compact.schedule.compact_spawn_failed` | `claude -r -p /compact` spawn failed                                                                                      |
 
-### `cc sweep`
+### `agent sweep`
 
 | event                     | meaning                                                          |
 | ------------------------- | ---------------------------------------------------------------- |

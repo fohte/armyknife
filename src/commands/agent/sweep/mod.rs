@@ -152,7 +152,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     // above already records every signal for anyone tailing the JSONL log.
     if report.paused > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] cc sweep: scanned={} paused={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             report.signaled,
@@ -336,7 +336,7 @@ where
                             pid = pid,
                         );
                         eprintln!(
-                            "[armyknife] cc sweep (dry-run): would signal {} (pid={pid})",
+                            "[armyknife] agent sweep (dry-run): would signal {} (pid={pid})",
                             session.session_id,
                         );
                         report.signaled += 1;
@@ -360,7 +360,7 @@ where
                             session = %session.session_id,
                         );
                         eprintln!(
-                            "[armyknife] cc sweep (dry-run): would confirm {} as paused",
+                            "[armyknife] agent sweep (dry-run): would confirm {} as paused",
                             session.session_id,
                         );
                         report.paused += 1;

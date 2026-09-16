@@ -32,7 +32,7 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub agent: bool,
 
-    /// Label for the new session (displayed in cc watch).
+    /// Label for the new session (displayed in agent watch).
     /// When not specified, the session will get its label via the
     /// user-prompt-submit hook (auto-generation from prompt).
     #[arg(long)]
