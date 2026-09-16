@@ -85,16 +85,6 @@ fn parse_ancestor_ids(s: &str) -> Vec<String> {
     }
 }
 
-/// Parses a pane position string into (session_name, window_index, pane_index).
-/// Format: "session_name:window_index.pane_index"
-fn parse_pane_position(position: &str) -> Option<(&str, u32, u32)> {
-    let (session_name, rest) = position.split_once(':')?;
-    let (window_index_str, pane_index_str) = rest.split_once('.')?;
-    let window_index = window_index_str.parse::<u32>().ok()?;
-    let pane_index = pane_index_str.parse::<u32>().ok()?;
-    Some((session_name, window_index, pane_index))
-}
-
 /// Formats a pane position for state file.
 /// Format: "session_name:window_index.pane_index"
 fn format_pane_position(session_name: &str, window_index: u32, pane_index: u32) -> String {
@@ -275,29 +265,59 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     // per pane would fork once per restored pane instead of once per restore.
     let snapshot = ProcessSnapshot::capture();
 
+    // One `list-panes -a` call instead of one `list-panes` call per pane to
+    // resolve its pane_id and pane_pid: forking a `tmux` client costs ~50ms
+    // for the client/server handshake alone, which at real tmux-resurrect
+    // pane counts (e.g. 85 panes) dominates the whole restore.
+    let panes_by_position: HashMap<String, (String, u32)> = tmux::list_all_panes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pane| {
+            (
+                format_pane_position(&pane.session_name, pane.window_index, pane.pane_index),
+                (pane.pane_id, pane.pane_pid),
+            )
+        })
+        .collect();
+
+    let mut commands = Vec::new();
     let mut restore_count = 0;
     for (pane_position, (session_id, ancestor_session_ids)) in &pane_sessions {
-        tracing::info!(event = "cc.resurrect.restore.pane_start", pane_position = %pane_position);
-
-        if let Some((session_name, window_index, pane_index)) = parse_pane_position(pane_position)
-            && let Some(pane_id) =
-                tmux::find_pane_id_by_position(session_name, window_index, pane_index)
-            && tmux::set_pane_option(&pane_id, TMUX_SESSION_OPTION, session_id).is_ok()
-        {
-            // send-keys is best-effort: the option is already restored, so a failure
-            // here just means the user has to run `a cc resume` manually.
-            let pane_has_claude =
-                pane::process::pane_has_live_claude_process(&pane_id, snapshot.as_ref());
-            if let Some(command) =
-                resume_command_for(session_id, ancestor_session_ids, pane_has_claude)
-            {
-                let _ = tmux::send_command_to_pane(&pane_id, &command);
-            }
-            restore_count += 1;
-            tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
-        } else {
+        let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
+            continue;
+        };
+
+        commands.push(vec![
+            "set-option".to_string(),
+            "-p".to_string(),
+            "-t".to_string(),
+            pane_id.clone(),
+            TMUX_SESSION_OPTION.to_string(),
+            session_id.clone(),
+        ]);
+
+        // send-keys is best-effort: the option is already queued for restore, so
+        // a failure here just means the user has to run `a cc resume` manually.
+        let pane_has_claude =
+            pane::process::pane_has_live_claude_process(*pane_pid, snapshot.as_ref());
+        if let Some(command) = resume_command_for(session_id, ancestor_session_ids, pane_has_claude)
+        {
+            commands.push(vec![
+                "send-keys".to_string(),
+                "-t".to_string(),
+                pane_id.clone(),
+                command,
+                "Enter".to_string(),
+            ]);
         }
+
+        restore_count += 1;
+        tracing::info!(event = "cc.resurrect.restore.pane_restored", pane_position = %pane_position);
+    }
+
+    if let Err(error) = tmux::run_batch(&commands) {
+        tracing::warn!(event = "cc.resurrect.restore.batch_failed", %error);
     }
 
     tracing::info!(
@@ -394,21 +414,6 @@ mod tests {
         #[case] expected: Option<(&str, &str, Vec<String>)>,
     ) {
         assert_eq!(parse_state_line(line), expected);
-    }
-
-    #[rstest]
-    #[case::simple("main:0.1", Some(("main", 0, 1)))]
-    #[case::high_indices("work:10.5", Some(("work", 10, 5)))]
-    #[case::session_with_slash("fohte/repo:1.2", Some(("fohte/repo", 1, 2)))]
-    #[case::missing_colon("main0.1", None)]
-    #[case::missing_dot("main:01", None)]
-    #[case::non_numeric_window("main:a.1", None)]
-    #[case::non_numeric_pane("main:0.b", None)]
-    fn test_parse_pane_position(
-        #[case] position: &str,
-        #[case] expected: Option<(&str, u32, u32)>,
-    ) {
-        assert_eq!(parse_pane_position(position), expected);
     }
 
     #[rstest]
