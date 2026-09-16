@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
+use crate::commands::agent::AgentCommands;
 use crate::commands::ai::AiCommands;
-use crate::commands::cc::CcCommands;
 use crate::commands::config::ConfigCommands;
 use crate::commands::doctor::DoctorArgs;
 use crate::commands::gh::GhCommands;
@@ -29,9 +29,12 @@ pub enum Commands {
     #[command(subcommand)]
     Ai(AiCommands),
 
-    /// Claude Code session monitor
-    #[command(subcommand)]
-    Cc(CcCommands),
+    /// AI agent session monitor (Claude Code, etc.)
+    ///
+    /// `cc` is kept as a hidden alias: dotfiles' hook/tmux configs invoke
+    /// `a cc ...` directly and are updated independently of armyknife.
+    #[command(subcommand, alias = "cc", visible_alias = "ag")]
+    Agent(AgentCommands),
 
     /// GitHub-related tools
     #[command(subcommand)]

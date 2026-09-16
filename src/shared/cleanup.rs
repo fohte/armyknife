@@ -1,13 +1,13 @@
 //! Shared cleanup logic for Claude Code sessions and git worktrees.
 //!
-//! Both `cc watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
+//! Both `agent watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
 //! need to clean up related resources. This module provides the shared logic to
 //! ensure consistent cleanup regardless of the entry point.
 
 use std::path::Path;
 
-use crate::commands::cc::store;
-use crate::commands::cc::types::SessionStatus;
+use crate::commands::agent::store;
+use crate::commands::agent::types::SessionStatus;
 use crate::commands::wm::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
@@ -131,7 +131,7 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
 /// Returns true if the pane hosting this session still runs a live Claude
 /// process that needs SIGTERM before we drop the session file.
 ///
-/// Paused sessions were already SIGTERM'd by `cc sweep`, and Ended sessions
+/// Paused sessions were already SIGTERM'd by `agent sweep`, and Ended sessions
 /// exited on their own. In both cases the pane's foreground process is the
 /// user's shell (possibly the shell that just invoked `a wm delete` from
 /// within the worktree). Signaling that shell would kill the very process we
@@ -198,7 +198,7 @@ mod tests {
     #[case::paused(SessionStatus::Paused, false)]
     #[case::ended(SessionStatus::Ended, false)]
     fn should_sigterm_session_by_status(#[case] status: SessionStatus, #[case] expected: bool) {
-        // Paused sessions were already SIGTERM'd by `cc sweep` so the pane
+        // Paused sessions were already SIGTERM'd by `agent sweep` so the pane
         // now hosts the user's shell -- signaling it would kill the caller
         // when `a wm delete` runs from that same pane.
         assert_eq!(should_sigterm_session(status), expected);

@@ -9,9 +9,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
-use crate::commands::cc::auto_pause::parse_duration;
-use crate::commands::cc::store::list_sessions;
-use crate::commands::cc::types::Session;
+use crate::commands::agent::auto_pause::parse_duration;
+use crate::commands::agent::store::list_sessions;
+use crate::commands::agent::types::Session;
 use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
@@ -623,7 +623,7 @@ async fn collect_worktrees(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::cc::types::SessionStatus;
+    use crate::commands::agent::types::SessionStatus;
     use crate::shared::active_session::NoActivityProbe;
     use crate::shared::testing::TestRepo;
     use chrono::Utc;

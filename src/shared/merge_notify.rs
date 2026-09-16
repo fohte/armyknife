@@ -3,15 +3,15 @@
 //! continue.
 //!
 //! Shared by all three worktree-deletion entry points (`wm delete`, `wm
-//! clean`, and the TUI clean view's detached `cc clean-detached` child) so
+//! clean`, and the TUI clean view's detached `agent clean-detached` child) so
 //! the notification fires identically regardless of which one removes a
 //! merged worktree.
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::commands::cc::peer::notify::notify as notify_peer_session;
-use crate::commands::cc::store;
+use crate::commands::agent::peer::notify::notify as notify_peer_session;
+use crate::commands::agent::store;
 use crate::commands::wm::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 use crate::infra::git::{GitRepo, get_merge_status_for_repo, github_owner_and_repo};
 use crate::infra::github::{GitHubClient, PrClient};
@@ -185,7 +185,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::commands::cc::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{Session, SessionStatus};
     use crate::shared::testing::TestRepo;
 
     fn make_session(

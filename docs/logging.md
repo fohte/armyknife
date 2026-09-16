@@ -1,7 +1,7 @@
 # Logging
 
 Structured JSONL logs for debugging armyknife internals — primarily the
-`cc auto-compact` and `cc sweep` workflows that misbehave silently when they
+`agent auto-compact` and `agent sweep` workflows that misbehave silently when they
 fail.
 
 ## Where logs go
@@ -39,7 +39,7 @@ The variable also accepts `tracing-subscriber` directives like
   "event": "cc.sweep.start",
   "timeout": "30m",
   "dry_run": true,
-  "target": "a::commands::cc::sweep",
+  "target": "a::commands::agent::sweep",
   "span": { "run_id": "6ac23df6", "name": "cc.sweep" }
 }
 ```
@@ -83,7 +83,7 @@ tail -F "$LOG" | jq -c .
 
 ## Event reference
 
-### `cc auto-compact`
+### `agent auto-compact`
 
 Stop hook (parent process):
 
@@ -108,7 +108,7 @@ Stop hook (parent process):
 | `cc.auto_compact.schedule.sigterm_failed`       | SIGTERM to the live `claude` process failed (non-ESRCH)                                                                   |
 | `cc.auto_compact.schedule.compact_spawn_failed` | `claude -r -p /compact` spawn failed                                                                                      |
 
-### `cc sweep`
+### `agent sweep`
 
 | event                     | meaning                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
@@ -144,7 +144,7 @@ Stop hook (parent process):
 ### "Sweep should have paused this session"
 
 ```bash
-a cc sweep --dry-run --timeout 1s   # forces every Stopped session to be a candidate
+a agent sweep --dry-run --timeout 1s   # forces every Stopped session to be a candidate
 jq -c 'select(.session == "<id>")' ~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 ```
 
