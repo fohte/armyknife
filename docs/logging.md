@@ -1,7 +1,7 @@
 # Logging
 
 Structured JSONL logs for debugging armyknife internals — primarily the
-`cc auto-compact` and `cc sweep` workflows that misbehave silently when they
+`agent auto-compact` and `agent sweep` workflows that misbehave silently when they
 fail.
 
 ## Where logs go
@@ -39,7 +39,7 @@ The variable also accepts `tracing-subscriber` directives like
   "event": "cc.sweep.start",
   "timeout": "30m",
   "dry_run": true,
-  "target": "a::commands::cc::sweep",
+  "target": "a::commands::agent::sweep",
   "span": { "run_id": "6ac23df6", "name": "cc.sweep" }
 }
 ```
@@ -144,7 +144,7 @@ Stop hook (parent process):
 ### "Sweep should have paused this session"
 
 ```bash
-a cc sweep --dry-run --timeout 1s   # forces every Stopped session to be a candidate
+a agent sweep --dry-run --timeout 1s   # forces every Stopped session to be a candidate
 jq -c 'select(.session == "<id>")' ~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 ```
 

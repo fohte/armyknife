@@ -359,10 +359,10 @@ pub struct CcConfig {
 /// Configuration for automatically pausing sessions that stay in the Stopped
 /// state for longer than `timeout`.
 ///
-/// A periodic `a cc sweep` run (typically driven by launchd) scans all sessions,
+/// A periodic `a agent sweep` run (typically driven by launchd) scans all sessions,
 /// sends SIGTERM to any Claude Code process whose session has been Stopped for
 /// longer than `timeout`, and flips the session status to Paused so that
-/// `a cc resume` can restore it later.
+/// `a agent resume` can restore it later.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -400,7 +400,7 @@ fn default_auto_pause_timeout() -> String {
 /// Configuration for automatically running `/compact` against sessions that
 /// have been idle for `idle_timeout` while the prompt cache is still warm.
 ///
-/// The Stop hook spawns a detached `a cc auto-compact schedule` process for
+/// The Stop hook spawns a detached `a agent auto-compact schedule` process for
 /// each Stop event. After `idle_timeout` of inactivity (anchored on the Stop
 /// hook fire time), it SIGTERMs the live `claude` process and then re-runs
 /// `claude -r <id> -p "/compact"` so that the compaction itself benefits from

@@ -48,9 +48,9 @@ For editor autocompletion, add the following to the top of your config file:
 
 wm:
   worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
-  branch_prefix: fohte/ # branch name prefix for `a cc new --worktree` (default: "fohte/")
+  branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
   repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
-  layout: # tmux pane layout for `a cc new --worktree`
+  layout: # tmux pane layout for `a agent new --worktree`
     direction: horizontal
     first:
       command: nvim
@@ -315,9 +315,9 @@ a gh pr-review reply review <pr-number> [options]
 | ------------------- | ------------------------------ |
 | `-R, --repo <REPO>` | Target repository (owner/repo) |
 
-### `a cc`
+### `a agent`
 
-Claude Code session monitoring with tmux integration.
+Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
 | Action                                  | Aliases | Description                                                              |
 | --------------------------------------- | ------- | ------------------------------------------------------------------------ |
@@ -351,13 +351,13 @@ Claude Code session monitoring with tmux integration.
 | `-R, --repo <path>`        | Target repository path (default: current directory)                                                                                                                                                                                                                                                                                                                                                                      |
 | `--prompt <text>`          | Initial prompt to send to Claude Code                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--agent`                  | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                                                                                                                                                                                                                                                   |
-| `--label <title>`          | Label for the new session (displayed in `cc watch`)                                                                                                                                                                                                                                                                                                                                                                      |
+| `--label <title>`          | Label for the new session (displayed in `agent watch`)                                                                                                                                                                                                                                                                                                                                                                   |
 | `--model <model>`          | Model for the new Claude Code session (passed through to `claude --model`); accepts an alias (e.g. `opus`, `sonnet`) or a full model name (e.g. `claude-fable-5`)                                                                                                                                                                                                                                                        |
 | `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                                                                                                                                                                                                                                                                |
 
-Without `--worktree`, `a cc new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking Claude Code session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
+Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking Claude Code session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
 
-`a cc new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
+`a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
 
 #### Setup
 
@@ -368,114 +368,118 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook session-start" }]
+        "hooks": [
+          { "type": "command", "command": "a agent hook session-start" }
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "a cc hook user-prompt-submit" }
+          { "type": "command", "command": "a agent hook user-prompt-submit" }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook pre-tool-use" }]
+        "hooks": [{ "type": "command", "command": "a agent hook pre-tool-use" }]
       }
     ],
     "PostToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook post-tool-use" }]
+        "hooks": [
+          { "type": "command", "command": "a agent hook post-tool-use" }
+        ]
       }
     ],
     "Notification": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook notification" }]
+        "hooks": [{ "type": "command", "command": "a agent hook notification" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook stop" }]
+        "hooks": [{ "type": "command", "command": "a agent hook stop" }]
       }
     ],
     "SessionEnd": [
       {
-        "hooks": [{ "type": "command", "command": "a cc hook session-end" }]
+        "hooks": [{ "type": "command", "command": "a agent hook session-end" }]
       }
     ]
   }
 }
 ```
 
-These hooks record session state changes, enabling `a cc list` to display active sessions with their current status (running, waiting for input, or stopped).
+These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, or stopped).
 
-The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID in the tmux pane user option `@armyknife-last-claude-code-session-id`, so that `a cc resume` can relaunch `claude --resume <id>` inside that pane.
+The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID in the tmux pane user option `@armyknife-last-claude-code-session-id`, so that `a agent resume` can relaunch `claude --resume <id>` inside that pane.
 
 #### Peer session name resolution
 
-Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a cc new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a cc peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a cc new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
+Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a agent new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a agent peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a agent new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
-`a cc peer parent`, `a cc peer children`, `a cc peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a cc peer me` all print a JSON array of `{name, session_id, cwd, label, status, pane_id}`; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+`a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, pane_id}`; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
 ```console
-$ a cc peer parent
+$ a agent peer parent
 [{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","pane_id":"%3"}]
-$ a cc peer parent | jq -r '.[0].name // empty'
+$ a agent peer parent | jq -r '.[0].name // empty'
 myproject-4f
-$ a cc peer list -R myproject
+$ a agent peer list -R myproject
 [{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running","pane_id":"%7"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped","pane_id":null}]
 ```
 
-`a cc peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-claude-code-session-id` user option (see above), the same mechanism `a cc resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a cc peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a cc sweep`).
+`a agent peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-claude-code-session-id` user option (see above), the same mechanism `a agent resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a agent peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a agent sweep`).
 
 ```console
-$ a cc peer me
+$ a agent peer me
 [{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","pane_id":"%3"}]
 ```
 
-`.[0].name` is `null` both when the array is empty (no tracked peer) and when the tracked peer's process has exited without leaving a registry entry -- most commonly a session `a cc sweep` has paused. `// empty` collapses both cases to empty output, so a caller can tell "no usable name" apart from the literal string `"null"`. When the peer is merely paused (its `session_id` still resolves via `a cc peer`), `a cc peer wake <session_id>` resumes its tmux pane, waits for it to re-register, and prints the freshly resolved name -- the name changes on every resume, so re-run `a cc peer` (or use `peer wake`'s own output) rather than reusing a name seen before the pause. `peer wake` is separate from `a cc resume`: `resume` replaces the calling pane's own process and only makes sense run from inside the target pane, while `peer wake` runs from an unrelated caller and never touches its own process.
+`.[0].name` is `null` both when the array is empty (no tracked peer) and when the tracked peer's process has exited without leaving a registry entry -- most commonly a session `a agent sweep` has paused. `// empty` collapses both cases to empty output, so a caller can tell "no usable name" apart from the literal string `"null"`. When the peer is merely paused (its `session_id` still resolves via `a agent peer`), `a agent peer wake <session_id>` resumes its tmux pane, waits for it to re-register, and prints the freshly resolved name -- the name changes on every resume, so re-run `a agent peer` (or use `peer wake`'s own output) rather than reusing a name seen before the pause. `peer wake` is separate from `a agent resume`: `resume` replaces the calling pane's own process and only makes sense run from inside the target pane, while `peer wake` runs from an unrelated caller and never touches its own process.
 
 ```console
-$ a cc peer parent | jq -r '.[0].name // empty'
-$ a cc peer parent | jq -r '.[0].session_id'
+$ a agent peer parent | jq -r '.[0].name // empty'
+$ a agent peer parent | jq -r '.[0].session_id'
 1111...
-$ a cc peer wake 1111...
+$ a agent peer wake 1111...
 myproject-7e
 ```
 
-`a cc peer notify <session_id> -m <text>` delivers a message to a session's `SendMessage` socket directly, without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
+`a agent peer notify <session_id> -m <text>` delivers a message to a session's `SendMessage` socket directly, without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
 
 ```console
-$ a cc peer notify 1111... -m "PR merged, worktree cleaned up"
+$ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
 ```
 
 #### tmux-resurrect integration
 
-Pane user options are not preserved by tmux-resurrect, so `a cc resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a cc resurrect restore` re-applies them and types `a cc resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.
+Pane user options are not preserved by tmux-resurrect, so `a agent resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a agent resurrect restore` re-applies them and types `a agent resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.
 
-`a cc resurrect save` also records each session's `ancestor_session_ids` (used by `a cc peer parent`/`children`, see above) alongside its session ID, since a tmux server restart can wipe the session's store JSON -- and the `ancestor_session_ids` it carried -- before restore runs. `a cc resurrect restore` passes any recorded ancestors to `a cc resume --ancestor-session-ids`, so `a cc peer parent`/`children` keep working across a restart even if the store JSON had to be rebuilt from scratch.
+`a agent resurrect save` also records each session's `ancestor_session_ids` (used by `a agent peer parent`/`children`, see above) alongside its session ID, since a tmux server restart can wipe the session's store JSON -- and the `ancestor_session_ids` it carried -- before restore runs. `a agent resurrect restore` passes any recorded ancestors to `a agent resume --ancestor-session-ids`, so `a agent peer parent`/`children` keep working across a restart even if the store JSON had to be rebuilt from scratch.
 
 Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
 
 ```tmux
-set -g @resurrect-hook-post-save-all '$HOME/.cargo/bin/a cc resurrect save'
-set -g @resurrect-hook-post-restore-all '$HOME/.cargo/bin/a cc resurrect restore'
+set -g @resurrect-hook-post-save-all '$HOME/.cargo/bin/a agent resurrect save'
+set -g @resurrect-hook-post-restore-all '$HOME/.cargo/bin/a agent resurrect restore'
 ```
 
 Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which prevents tilde expansion when tmux-resurrect `eval`s the hook.
 
 #### Auto-pause
 
-Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a cc resume` can restore the conversation by invoking `claude --resume`.
+Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated with SIGTERM to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a agent resume` can restore the conversation by invoking `claude --resume`.
 
-`a cc sweep` scans every session file once. For any `stopped` session whose timeout has elapsed, it (re-)sends SIGTERM as long as a live `claude` process still resolves for it; only once no process resolves does it mark the session `paused` (SIGTERM alone does not guarantee prompt exit). Run it periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
+`a agent sweep` scans every session file once. For any `stopped` session whose timeout has elapsed, it (re-)sends SIGTERM as long as a live `claude` process still resolves for it; only once no process resolves does it mark the session `paused` (SIGTERM alone does not guarantee prompt exit). Run it periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
-| Command                | Description                                                       |
-| ---------------------- | ----------------------------------------------------------------- |
-| `a cc sweep`           | Run a single sweep pass (equivalent to `a cc sweep run`)          |
-| `a cc sweep install`   | Install and bootstrap a launchd agent that runs sweep every 5 min |
-| `a cc sweep status`    | Print the plist path and whether the agent is bootstrapped        |
-| `a cc sweep uninstall` | Bootout the agent and remove its plist                            |
+| Command                   | Description                                                       |
+| ------------------------- | ----------------------------------------------------------------- |
+| `a agent sweep`           | Run a single sweep pass (equivalent to `a agent sweep run`)       |
+| `a agent sweep install`   | Install and bootstrap a launchd agent that runs sweep every 5 min |
+| `a agent sweep status`    | Print the plist path and whether the agent is bootstrapped        |
+| `a agent sweep uninstall` | Bootout the agent and remove its plist                            |
 
 Options for the run command:
 
@@ -501,7 +505,7 @@ Set `enabled: false` to disable auto-pausing entirely. The launchd agent stays i
 
 Default Claude Code auto-compact fires the moment a hard token threshold is crossed, which often interrupts an in-flight chain of prompts and discards context the user still needs. Armyknife's auto-compact instead fires only when the session has been idle long enough that the user is likely done — but still soon enough that the prompt cache is warm, so the `/compact` invocation itself reuses the cache rather than re-paying for the whole context.
 
-The Stop hook spawns a detached `a cc auto-compact schedule` worker per Stop event. After `idle_timeout` of inactivity (anchored on the Stop event) it SIGTERMs the live `claude` process and runs `claude -r <session_id> -p "/compact"` so the compaction lands on the same session.
+The Stop hook spawns a detached `a agent auto-compact schedule` worker per Stop event. After `idle_timeout` of inactivity (anchored on the Stop event) it SIGTERMs the live `claude` process and runs `claude -r <session_id> -p "/compact"` so the compaction lands on the same session.
 
 The worker re-checks state at wake-up and aborts in any of these cases:
 
@@ -528,13 +532,13 @@ The default `idle_timeout` of 4m30s targets the 5-minute prompt cache TTL on Cla
 
 #### Unread stopped sessions
 
-Stopped sessions that have not been focused since their most recent Stop render as `✱` (unread); focusing the pane reverts them to `○` (read). Wire `a cc mark-read` into tmux's `pane-focus-in` hook to enable this — see [docs/setup.md](docs/setup.md).
+Stopped sessions that have not been focused since their most recent Stop render as `✱` (unread); focusing the pane reverts them to `○` (read). Wire `a agent mark-read` into tmux's `pane-focus-in` hook to enable this — see [docs/setup.md](docs/setup.md).
 
 #### Window status
 
-`a cc hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `◎` main loop idle with only a background task/subagent still in flight, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
+`a agent hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input, `◎` main loop idle with only a background task/subagent still in flight, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw.
 
-The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a cc watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `cc watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a cc new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
+The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a agent watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `agent watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a agent new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
 
 Reference both options from tmux's `window-status-format` to surface per-window session state and title next to the window index. `#{?...}` falls back to `#W` (the tmux window name) when no session in the window has a title set:
 
@@ -542,11 +546,11 @@ Reference both options from tmux's `window-status-format` to surface per-window 
 set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc-window-title},#{@armyknife-cc-window-title},#W}'
 ```
 
-`a cc window-status <window_id>` prints the same status symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
+`a agent window-status <window_id>` prints the same status symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
 
 #### Pane has-paused flag
 
-`a cc hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a cc pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.
+`a agent hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a agent pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.
 
 #### Task linking (tq)
 
@@ -556,7 +560,7 @@ When `tq` isn't on `PATH`, or the command fails, every row simply renders with n
 
 Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
 
-armyknife is the only place that distinguishes a `Paused` session (auto-paused by `a cc sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. So whenever a session transitions to `Ended` -- via a genuine `SessionEnd`, or via a `Paused` session getting evicted because its tmux pane was taken over by a different session -- `a cc hook` also spawns a detached `a cc delete-tq-session-detached --session <id>` to delete tq's record of that session via `tq session delete claude_code <id>`. This is best-effort and never blocks the hook: `tq` sits behind Cloudflare Access and can be slow or unreachable, and tq performs its own periodic cleanup of stale sessions regardless, so a failed or skipped deletion here is never the only cleanup path.
+armyknife is the only place that distinguishes a `Paused` session (auto-paused by `a agent sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. So whenever a session transitions to `Ended` -- via a genuine `SessionEnd`, or via a `Paused` session getting evicted because its tmux pane was taken over by a different session -- `a agent hook` also spawns a detached `a agent delete-tq-session-detached --session <id>` to delete tq's record of that session via `tq session delete claude_code <id>`. This is best-effort and never blocks the hook: `tq` sits behind Cloudflare Access and can be slow or unreachable, and tq performs its own periodic cleanup of stale sessions regardless, so a failed or skipped deletion here is never the only cleanup path.
 
 #### Environment Variables
 
@@ -580,9 +584,9 @@ Git worktree management with tmux integration.
 | `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch       |
 | `clean`             | `c`      | Bulk delete merged or closed worktrees |
 
-Use `a cc new --worktree=<branch>` to create a new worktree and open a tmux window.
+Use `a agent new --worktree=<branch>` to create a new worktree and open a tmux window.
 
-When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a cc new --worktree` from another session), it also notifies the delegator session via `a cc peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
+When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
 
 Deletion also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 

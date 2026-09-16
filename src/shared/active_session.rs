@@ -1,6 +1,6 @@
 //! Shared "is this Claude Code session still active?" predicate.
 //!
-//! `cc sweep` uses this to decide whether to pause a Stopped session;
+//! `agent sweep` uses this to decide whether to pause a Stopped session;
 //! `wm clean` uses it to protect worktrees that still host live sessions
 //! from being deleted. Keeping the definition in one place ensures the two
 //! features cannot drift apart.
@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::commands::cc::auto_pause::{PauseDecision, decide_pause_with_effective};
-use crate::commands::cc::pane;
-use crate::commands::cc::types::{Session, SessionStatus};
+use crate::commands::agent::auto_pause::{PauseDecision, decide_pause_with_effective};
+use crate::commands::agent::pane;
+use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::tmux;
 
 /// Pane option used to persist the prior `<input-hash>,<unix_seconds>`

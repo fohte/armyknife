@@ -1,5 +1,5 @@
+pub mod agent;
 pub mod ai;
-pub mod cc;
 pub mod config;
 pub mod doctor;
 pub mod gh;

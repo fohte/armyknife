@@ -263,7 +263,7 @@ pub fn get_session_name_for_pane(pane_id: &str) -> Option<String> {
 ///
 /// Unlike `current_window_id`, this targets a specific pane, so it resolves
 /// the window of a known pane rather than the caller's own — needed by
-/// detached processes (e.g. an `a cc hook` invocation) that must update the
+/// detached processes (e.g. an `a agent hook` invocation) that must update the
 /// window of the session that fired the hook.
 ///
 /// Returns None if the pane no longer exists or tmux is unavailable.

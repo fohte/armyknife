@@ -29,8 +29,8 @@ async fn run() -> Result<()> {
     }
 
     match command {
+        Commands::Agent(agent_cmd) => agent_cmd.run().await?,
         Commands::Ai(ai_cmd) => ai_cmd.run().await?,
-        Commands::Cc(cc_cmd) => cc_cmd.run().await?,
         Commands::Config(config_cmd) => config_cmd.run().await?,
         Commands::Doctor(args) => armyknife::commands::doctor::run(&args)?,
         Commands::Gh(gh_cmd) => gh_cmd.run().await?,

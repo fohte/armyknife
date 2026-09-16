@@ -116,7 +116,7 @@ impl TqClient {
     }
 
     /// Deletes tq's record of a Claude Code agent session by session_id.
-    /// Best-effort: the caller (see `cc::delete_tq_session_detached`) treats
+    /// Best-effort: the caller (see `agent::delete_tq_session_detached`) treats
     /// any error here as non-fatal, since tq's own periodic cleanup of stale
     /// sessions is the fallback if this never runs.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
