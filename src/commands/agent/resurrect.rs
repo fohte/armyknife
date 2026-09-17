@@ -224,10 +224,8 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
 /// unless the pane already has a live `claude` process (see `resume_command_for`).
 /// The session ID is passed as an argument (instead of relying on the pane option)
 /// so the resumed process is not racing against tmux to observe the just-set option.
-/// Each session's stored `tmux_info.pane_id` is also corrected to the newly
-/// resolved pane_id (see `store::update_session_tmux_pane_id_in`) before any
-/// pane's resume command is sent, since the tmux server restart underlying
-/// tmux-resurrect renumbers every pane_id from scratch.
+/// Each session's stored pane_id is also corrected here — see
+/// `store::update_session_tmux_pane_id_in` for why.
 ///
 /// tmux-resurrect's own `@resurrect-processes` is not used: its per-pane full-command
 /// field may contain multiple lines (one per shell child) which confuses the awk-based
@@ -289,11 +287,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             continue;
         };
 
-        // Corrects the session's stored pane_id before any pane below gets
-        // its resume command sent below: since all resolved pane_ids are
-        // written here, ahead of the single `tmux::run_batch` call that
-        // sends every pane's keys, no restored session's SessionStart hook
-        // can observe a sibling's stale pre-restart pane_id (see
+        // Must happen before `commands` is sent below (see
         // `store::update_session_tmux_pane_id_in`).
         if let Err(error) =
             store::update_session_tmux_pane_id_in(&sessions_dir, session_id, pane_id)

@@ -466,17 +466,12 @@ pub(crate) fn update_session_label_if_unchanged_in(
     Ok(applied)
 }
 
-/// Overwrites a session's `tmux_info.pane_id`, leaving the rest of
-/// `tmux_info` untouched. A no-op when the session has no `tmux_info` at all
-/// (never ran in tmux), since there is no window/session name to fill in.
+/// Overwrites a session's `tmux_info.pane_id`. No-op if `tmux_info` is unset.
 ///
-/// tmux-resurrect restarts the tmux server, which renumbers every pane_id
-/// from scratch, so a session's on-disk `pane_id` from before the restart
-/// can coincidentally match a pane now occupied by an unrelated session.
-/// `resurrect::run_restore` calls this for every pane it resolves to correct
-/// the record before any restored pane starts resuming, so
-/// `evict_paused_sessions_on_pane_takeover` (hook.rs) never matches a Paused
-/// session against a pane_id it no longer actually occupies.
+/// tmux-resurrect restarts the tmux server, renumbering every pane_id, so a
+/// stale on-disk pane_id can coincidentally match an unrelated session's new
+/// pane. `resurrect::run_restore` calls this to keep
+/// `evict_paused_sessions_on_pane_takeover` (hook.rs) from mismatching on it.
 pub(crate) fn update_session_tmux_pane_id_in(
     sessions_dir: &Path,
     session_id: &str,
