@@ -224,6 +224,8 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
 /// unless the pane already has a live `claude` process (see `resume_command_for`).
 /// The session ID is passed as an argument (instead of relying on the pane option)
 /// so the resumed process is not racing against tmux to observe the just-set option.
+/// Each session's stored pane_id is also corrected here — see
+/// `store::update_session_tmux_pane_id_in` for why.
 ///
 /// tmux-resurrect's own `@resurrect-processes` is not used: its per-pane full-command
 /// field may contain multiple lines (one per shell child) which confuses the awk-based
@@ -235,6 +237,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let _entered = span.enter();
 
     let state_file = state_file_path()?;
+    let sessions_dir = store::sessions_dir()?;
 
     if !state_file.exists() {
         // No state file means nothing to restore
@@ -283,6 +286,19 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
         };
+
+        // Must run before `commands` is sent below: only then can no
+        // sibling session's SessionStart hook observe a still-stale pane_id
+        // (see `store::update_session_tmux_pane_id_in`).
+        if let Err(error) =
+            store::update_session_tmux_pane_id_in(&sessions_dir, session_id, pane_id)
+        {
+            tracing::warn!(
+                event = "cc.resurrect.restore.pane_id_update_failed",
+                session_id = %session_id,
+                %error,
+            );
+        }
 
         let pane_has_claude =
             pane::process::pane_has_live_claude_process(*pane_pid, snapshot.as_ref());

@@ -117,7 +117,7 @@ pub struct Session {
     pub sweep_signaled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TmuxInfo {
     pub session_name: String,
     pub window_name: String,

@@ -466,6 +466,29 @@ pub(crate) fn update_session_label_if_unchanged_in(
     Ok(applied)
 }
 
+/// Overwrites a session's `tmux_info.pane_id`. No-op if `tmux_info` is unset.
+///
+/// tmux-resurrect restarts the tmux server, renumbering every pane_id, so a
+/// stale on-disk pane_id can coincidentally match an unrelated session's new
+/// pane. `resurrect::run_restore` calls this to keep
+/// `evict_paused_sessions_on_pane_takeover` (hook.rs) from mismatching on it.
+pub(crate) fn update_session_tmux_pane_id_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    pane_id: &str,
+) -> Result<()> {
+    update_session_field_in(sessions_dir, session_id, |session| {
+        let Some(tmux_info) = session.tmux_info.as_mut() else {
+            return false;
+        };
+        if tmux_info.pane_id == pane_id {
+            return false;
+        }
+        tmux_info.pane_id = pane_id.to_string();
+        true
+    })
+}
+
 /// Deletes a session from disk.
 /// Returns Ok(()) even if the session file doesn't exist.
 pub fn delete_session(session_id: &str) -> Result<()> {
@@ -1261,6 +1284,69 @@ mod tests {
             .expect("missing session should be ok");
 
             assert!(!applied);
+        }
+    }
+
+    mod update_session_tmux_pane_id_tests {
+        use super::*;
+        use crate::commands::agent::types::TmuxInfo;
+        use rstest::rstest;
+
+        fn make_session(tmux_info: Option<TmuxInfo>) -> Session {
+            let mut s = create_test_session("pane-target");
+            s.tmux_info = tmux_info;
+            s
+        }
+
+        fn tmux_info(pane_id: &str) -> TmuxInfo {
+            TmuxInfo {
+                session_name: "main".to_string(),
+                window_name: "dev".to_string(),
+                window_index: 0,
+                pane_id: pane_id.to_string(),
+            }
+        }
+
+        #[rstest]
+        fn overwrites_pane_id_and_keeps_other_fields(temp_session_dir: TempSessionDir) {
+            let session = make_session(Some(tmux_info("%1")));
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "pane-target", "%42")
+                .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "pane-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                reloaded.tmux_info,
+                Some(TmuxInfo {
+                    session_name: "main".to_string(),
+                    window_name: "dev".to_string(),
+                    window_index: 0,
+                    pane_id: "%42".to_string(),
+                })
+            );
+        }
+
+        #[rstest]
+        fn missing_tmux_info_is_noop(temp_session_dir: TempSessionDir) {
+            let session = make_session(None);
+            save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
+
+            update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "pane-target", "%42")
+                .expect("update should succeed");
+
+            let reloaded = load_session_from(&temp_session_dir.sessions_path, "pane-target")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(reloaded.tmux_info, None);
+        }
+
+        #[rstest]
+        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+            update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "ghost", "%42")
+                .expect("missing session should be ok");
         }
     }
 
