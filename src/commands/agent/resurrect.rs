@@ -287,8 +287,9 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             continue;
         };
 
-        // Must happen before `commands` is sent below (see
-        // `store::update_session_tmux_pane_id_in`).
+        // Must run before `commands` is sent below: only then can no
+        // sibling session's SessionStart hook observe a still-stale pane_id
+        // (see `store::update_session_tmux_pane_id_in`).
         if let Err(error) =
             store::update_session_tmux_pane_id_in(&sessions_dir, session_id, pane_id)
         {
