@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.300](https://github.com/fohte/armyknife/compare/v0.1.299...v0.1.300) (2026-09-17)
+
+
+### Bug Fixes
+
+* **agent:** prevent false session termination on tmux restore ([#909](https://github.com/fohte/armyknife/issues/909)) ([d08dc47](https://github.com/fohte/armyknife/commit/d08dc475bb00d41c8a5411d3754743c8cb9ef8d8))
+
 ## [0.1.299](https://github.com/fohte/armyknife/compare/v0.1.298...v0.1.299) (2026-09-16)
 
 
