@@ -2,27 +2,18 @@
 
 use super::merge_yaml;
 
-/// Build a YAML value from `ARMYKNIFE_*` environment variables, to be merged
-/// on top of the YAML config files (highest priority).
+/// Builds a YAML overlay from `ARMYKNIFE_*` env vars (highest priority),
+/// merged on top of the YAML config files. Strips `ARMYKNIFE_`, lowercases
+/// the rest, and splits on `__` (not `_`, since keys like `auto_compact`
+/// contain it) into a config dot-path — e.g.
+/// `ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false` maps to
+/// `cc.auto_compact.enabled`. Values parse as YAML scalars.
 ///
-/// The `ARMYKNIFE_` prefix is stripped, the rest is lowercased, and `__` splits
-/// it into a dot-path of config keys (`_` alone isn't a valid separator since
-/// keys themselves contain it, e.g. `auto_compact`). For example
-/// `ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false` maps to `cc.auto_compact.enabled`.
-/// Each value is parsed as a YAML scalar (so `false` is a bool, `3` a number).
-///
-/// `repos.*` entries are unreachable this way since repo keys contain `/`,
-/// which can't appear in an environment variable name — that's fine, they're
-/// out of scope for this overlay.
-///
-/// Variables whose path has no `__` are skipped rather than treated as an
-/// unknown top-level key: every `Config` field is itself a struct, so a real
-/// config path always needs at least one `__` to reach a leaf value. This
-/// also keeps single-segment `ARMYKNIFE_*` variables that already have an
-/// unrelated meaning (`ARMYKNIFE_SESSION_ID`, `ARMYKNIFE_WORKTREE_PATH`, etc.,
-/// see `env_var.rs`) from being misread as config overrides.
-///
-/// Returns `None` if no `ARMYKNIFE_*` variable maps to a config path.
+/// Paths without `__` are skipped, since every `Config` field is a struct
+/// and no real override is single-segment; this also avoids misreading
+/// unrelated vars like `ARMYKNIFE_SESSION_ID` (see `env_var.rs`) as config
+/// keys. `repos.*` stays unreachable too, since repo keys contain `/`.
+/// Returns `None` when no variable maps to a config path.
 pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
     const PREFIX: &str = "ARMYKNIFE_";
 
