@@ -56,8 +56,7 @@ pub struct CommonNewArgs {
     pub repo: Option<PathBuf>,
 
     /// Coding agent CLI to launch for the new session. Falls back to
-    /// `config.agent.default_engine` (default: `claude`) when omitted; see
-    /// `resolve_engine`.
+    /// `config.agent.default_engine` (default: `claude`) when omitted.
     ///
     /// Only applies to the no-worktree path (`run_session_only`); rejected
     /// together with `--worktree`, which always launches

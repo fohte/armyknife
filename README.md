@@ -377,7 +377,7 @@ Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the 
 
 `--engine codex` launches `codex` instead of `claude` in the no-worktree path (pane command and window-name placeholder). Combining `--engine` with `--worktree` is rejected: that path always launches `config.wm.layout`'s configured commands, which are independent of `--engine`. A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch -- `resume` always follows that recorded engine, never `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
-Set `agent.default_engine: codex` in config (or export `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` for a single invocation, see [Environment variable overrides](#environment-variable-overrides)) to change what an omitted `--engine` resolves to; an explicit `--engine` on the command line always wins over both.
+Set `agent.default_engine: codex` in config, or prefix a single invocation with `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` (see [Environment variable overrides](#environment-variable-overrides)), to change what an omitted `--engine` resolves to; an explicit `--engine` on the command line always wins over both.
 
 #### Setup
 
