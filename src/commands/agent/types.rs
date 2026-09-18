@@ -1,10 +1,35 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::error::CcError;
+
+/// Which coding agent CLI hosts a session. Determines the process name to
+/// look for in a tmux pane, and which binary/subcommand `a agent new` /
+/// `a agent resume` launch. Defaults to `Claude` (`#[serde(default)]` on
+/// `Session::engine`) so on-disk session files predating this field, and
+/// hook invocations that don't pass `--engine`, keep behaving exactly as
+/// before Codex support existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Engine {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Engine {
+    /// Process name to look for in a tmux pane's process tree.
+    pub fn process_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
 
 /// Tmux user option name for storing Claude Code session ID.
 /// User options in tmux are prefixed with '@' and persist until explicitly unset.
@@ -115,6 +140,9 @@ pub struct Session {
     /// longer relevant) and by `sweep::confirm_paused`.
     #[serde(default)]
     pub sweep_signaled: bool,
+    /// Which coding agent CLI this session belongs to. See `Engine`.
+    #[serde(default)]
+    pub engine: Engine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +312,13 @@ pub struct HookInput {
     #[serde(default)]
     pub transcript_path: Option<PathBuf>,
 
+    /// Which coding agent CLI fired this hook. Never present in the JSON
+    /// payload itself (`#[serde(default)]` -- neither Claude Code nor Codex
+    /// send an `engine` field); `hook.rs::run` overwrites this from
+    /// `HookArgs::engine` (the `--engine` CLI flag) right after parsing.
+    #[serde(default)]
+    pub engine: Engine,
+
     // SessionStart event fields
     /// Source of the session start event: "startup" (new session) or "resume" (session restore).
     /// Used to skip "startup" events on `claude -c` which create unwanted empty sessions.
@@ -323,7 +358,14 @@ pub struct HookInput {
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTask>,
 
-    // Ignore other fields from Claude Code hooks
+    /// Codex's `Stop` hook payload carries the turn's final assistant
+    /// message directly (unlike Claude Code, which requires re-reading the
+    /// transcript file -- see `hook.rs`'s Codex branch of the `last_message`
+    /// update). Absent for Claude Code, which has no such field.
+    #[serde(default)]
+    pub last_assistant_message: Option<String>,
+
+    // Ignore other fields from Claude Code / Codex hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
 }
@@ -432,6 +474,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

@@ -11,6 +11,8 @@ use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::commands::agent::auto_pause::parse_duration;
 use crate::commands::agent::store::list_sessions;
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
 use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
@@ -652,6 +654,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

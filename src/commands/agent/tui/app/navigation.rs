@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
 
 use super::super::session_rows::{is_descendant_of, nearest_living_ancestor};
@@ -196,6 +198,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

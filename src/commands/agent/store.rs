@@ -7,6 +7,8 @@ use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
 
 use super::error::CcError;
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -710,6 +712,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
@@ -1494,6 +1497,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             }
         }
 

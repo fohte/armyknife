@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 
 /// What the schedule subcommand should do at wake-up time.
@@ -170,6 +172,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

@@ -9,6 +9,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{Session, SessionStatus};
 
 /// Purely time/status-based pause decision.
@@ -187,6 +189,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

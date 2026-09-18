@@ -3,6 +3,8 @@ use clap::Args;
 
 use super::error::CcError;
 use super::store;
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{Session, TmuxInfo};
 use crate::infra::tmux;
 
@@ -59,6 +61,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

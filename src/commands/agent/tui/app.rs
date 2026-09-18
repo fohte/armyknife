@@ -1,4 +1,6 @@
 use crate::commands::agent::store;
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -317,6 +319,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
