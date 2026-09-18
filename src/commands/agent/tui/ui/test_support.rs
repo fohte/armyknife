@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::worktree_view::WorktreeRow;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
 use super::chrome::render_with_time;
 
@@ -28,6 +28,7 @@ pub(super) fn create_test_session(id: &str) -> Session {
         pending_permission_agent_ids: BTreeSet::new(),
         read_at: None,
         sweep_signaled: false,
+        engine: Engine::Claude,
     }
 }
 

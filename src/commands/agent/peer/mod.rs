@@ -23,6 +23,8 @@ use super::claude_registry;
 use super::error::CcError;
 use super::resume;
 use super::store;
+#[cfg(test)]
+use super::types::Engine;
 use super::types::Session;
 use crate::shared::env_var::EnvVars;
 
@@ -234,6 +236,7 @@ mod tests {
             pending_permission_agent_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

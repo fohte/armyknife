@@ -769,7 +769,7 @@ fn focus_session_child(app: &mut App, child: &self::worktree_session_children::S
 mod tests {
     use super::*;
     use crate::commands::agent::tui::app::AppMode;
-    use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use chrono::Utc;
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
@@ -794,6 +794,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             })
             .collect();
 
@@ -1255,6 +1256,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "session-waiting".to_string(),
@@ -1274,6 +1276,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "session-stopped".to_string(),
@@ -1293,6 +1296,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "session-paused".to_string(),
@@ -1312,6 +1316,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
         ];
         App::with_sessions(sessions)
@@ -1551,6 +1556,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 
 /// One row in the session list's selection/render order.
@@ -395,6 +397,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

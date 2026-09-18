@@ -40,6 +40,8 @@ use super::auto_pause::{self, PauseDecision};
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
 use crate::shared::active_session::{ActivityProbe, TmuxActivityProbe, effective_updated_at};
@@ -170,8 +172,8 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 /// process; wm clean can use a plain `ActivityProbe` and skip the snapshot
 /// walk entirely.
 pub(crate) trait SessionProbe: ActivityProbe {
-    /// Returns the pid of the live `claude` process hosting `session`, if one
-    /// can be located via the session's tmux pane.
+    /// Returns the pid of the live process hosting `session` (per
+    /// `session.engine`), if one can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
 }
 
@@ -195,13 +197,16 @@ impl<A: ActivityProbe> SessionProbe for TmuxSessionProbe<'_, A> {
     fn resolve_pid(&self, session: &Session) -> Option<u32> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
         let pane_pid = crate::infra::tmux::get_pane_pid(pane_id)?;
-        // When claude is launched directly as the pane command (no shell
-        // wrapper), pane_pid itself is the claude process -- BFS from
+        // When the agent is launched directly as the pane command (no shell
+        // wrapper), pane_pid itself is the agent process -- BFS from
         // pane_pid (exclusive) would miss it. Use the inclusive variant so
-        // both "pane_pid is claude" and "pane_pid is zsh, child is claude"
-        // resolve correctly.
-        self.snapshot?
-            .find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
+        // both "pane_pid is the agent" and "pane_pid is zsh, child is the
+        // agent" resolve correctly.
+        self.snapshot?.find_self_or_descendant_by_command(
+            pane_pid,
+            session.engine.process_name(),
+            MAX_DESCENDANT_NODES,
+        )
     }
 }
 
@@ -545,6 +550,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

@@ -17,6 +17,8 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use crate::commands::agent::auto_pause::{PauseDecision, decide_pause_with_effective};
 use crate::commands::agent::pane;
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::tmux;
 
@@ -223,6 +225,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

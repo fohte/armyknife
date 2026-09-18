@@ -84,12 +84,12 @@ pub(super) fn wake(session_id: &str) -> Result<String> {
     }
     match respawn_paused_session(&session) {
         Ok(_pane_id) => {}
-        // The pane already moved past the shell prompt into `claude`
-        // itself -- another wake (racing just outside this lock) or the
-        // user beat us to it. Fall through to polling instead of
-        // erroring; an unrelated `claude` here would just make the poll
-        // below time out rather than silently succeed.
-        Err(RespawnError::PaneBusy(cmd)) if cmd == "claude" => {}
+        // The pane already moved past the shell prompt into the session's
+        // agent itself -- another wake (racing just outside this lock) or
+        // the user beat us to it. Fall through to polling instead of
+        // erroring; an unrelated process with the same name here would just
+        // make the poll below time out rather than silently succeed.
+        Err(RespawnError::PaneBusy(cmd)) if cmd == session.engine.process_name() => {}
         Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
     }
     drop(lock);

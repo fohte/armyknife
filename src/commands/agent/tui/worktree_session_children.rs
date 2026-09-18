@@ -13,6 +13,8 @@ use crate::commands::agent::types::{DisplayStatus, Session};
 #[cfg(test)]
 use super::worktree_view::canonicalize_or_self;
 #[cfg(test)]
+use crate::commands::agent::types::Engine;
+#[cfg(test)]
 use crate::commands::agent::types::SessionStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +175,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

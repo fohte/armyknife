@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
 
 use super::super::worktree_view::{
@@ -257,6 +259,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

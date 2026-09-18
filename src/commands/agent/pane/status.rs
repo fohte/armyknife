@@ -138,7 +138,7 @@ fn paused_flag(status: SessionStatus) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{Engine, Session};
     use chrono::Utc;
     use rstest::rstest;
     use tempfile::TempDir;
@@ -164,6 +164,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

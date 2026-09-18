@@ -107,7 +107,7 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use rstest::rstest;
     use std::path::Path;
     use tempfile::TempDir;
@@ -141,6 +141,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

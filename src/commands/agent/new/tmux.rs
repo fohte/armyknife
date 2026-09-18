@@ -59,10 +59,12 @@ pub(super) struct TmuxSplitPaneSpec<'a> {
     pub prompt: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
+    /// Command to launch in the new pane (e.g. `"claude"` or `"codex"`).
+    pub command: &'a str,
 }
 
 /// Splits `spec.target_pane` — the tmux pane the invoking process is running
-/// in — into a new pane in the same window and starts `claude` there.
+/// in — into a new pane in the same window and starts `spec.command` there.
 pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
     let session = tmux::get_session_name_for_pane(spec.target_pane).with_context(|| {
         format!(
@@ -81,7 +83,7 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
             background: spec.background,
         },
         target_pane: spec.target_pane,
-        command: "claude",
+        command: spec.command,
     })
     .context("Failed to split tmux pane")?;
 

@@ -176,7 +176,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::testing::TestRepo;
 
     fn make_session(
@@ -204,6 +204,7 @@ mod tests {
             pending_permission_agent_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
