@@ -12,7 +12,8 @@ use super::merge_yaml;
 /// Paths without `__` are skipped, since every `Config` field is a struct
 /// and no real override is single-segment; this also avoids misreading
 /// unrelated vars like `ARMYKNIFE_SESSION_ID` (see `env_var.rs`) as config
-/// keys. `repos.*` stays unreachable too, since repo keys contain `/`.
+/// keys. `repos.*` and `orgs.*` stay unreachable too, since repo keys
+/// contain `/` and org logins can't be safely case-folded.
 /// Returns `None` when no variable maps to a config path.
 pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
     const PREFIX: &str = "ARMYKNIFE_";
@@ -23,6 +24,16 @@ pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
             continue;
         };
         if !path.contains("__") {
+            continue;
+        }
+        // `orgs.*` keys are GitHub org logins, not struct field names, so
+        // lowercasing them below (like the rest of the path) could silently
+        // create a separate entry instead of overriding the intended org.
+        if path
+            .split("__")
+            .next()
+            .is_some_and(|s| s.eq_ignore_ascii_case("orgs"))
+        {
             continue;
         }
 
@@ -57,28 +68,32 @@ pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
     overlay
 }
 
+/// Clears every ambient `ARMYKNIFE_*` variable that `env_overlay()` would
+/// pick up (path contains `__`) before applying `extra`, so tests aren't
+/// flaky depending on what's exported in the invoking shell — including
+/// this feature's own overrides in a dev setup that dogfoods it. Shared by
+/// this module's tests and `config`'s, so both stay isolated the same way.
+#[cfg(test)]
+pub(super) fn with_isolated_env_overlay<R>(
+    extra: Vec<(&str, Option<&str>)>,
+    f: impl FnOnce() -> R,
+) -> R {
+    let mut vars: Vec<(String, Option<String>)> = std::env::vars()
+        .filter(|(k, _)| k.starts_with("ARMYKNIFE_") && k.contains("__"))
+        .map(|(k, _)| (k, None))
+        .collect();
+    vars.extend(
+        extra
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.map(str::to_string))),
+    );
+    temp_env::with_vars(vars, f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
-
-    /// Clears every ambient `ARMYKNIFE_*` variable that `env_overlay()` would
-    /// pick up (path contains `__`) before applying `extra`, so this test
-    /// isn't flaky depending on what's exported in the invoking shell —
-    /// including this very feature's own overrides in a dev setup that
-    /// dogfoods it.
-    fn with_isolated_env_overlay<R>(extra: Vec<(&str, Option<&str>)>, f: impl FnOnce() -> R) -> R {
-        let mut vars: Vec<(String, Option<String>)> = std::env::vars()
-            .filter(|(k, _)| k.starts_with("ARMYKNIFE_") && k.contains("__"))
-            .map(|(k, _)| (k, None))
-            .collect();
-        vars.extend(
-            extra
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.map(str::to_string))),
-        );
-        temp_env::with_vars(vars, f)
-    }
 
     #[rstest]
     #[case::bool_false("false", serde_yaml::Value::Bool(false))]
@@ -114,5 +129,14 @@ mod tests {
         );
 
         assert_eq!(overlay, Some(serde_yaml::Value::Mapping(expected)));
+    }
+
+    #[rstest]
+    #[case::lowercase("ARMYKNIFE_ORGS__SOMEORG__AI__REVIEW__REVIEWERS")]
+    #[case::mixed_case("ARMYKNIFE_Orgs__SomeOrg__AI__REVIEW__REVIEWERS")]
+    fn env_overlay_skips_orgs_paths(#[case] var_name: &str) {
+        let overlay = with_isolated_env_overlay(vec![(var_name, Some("devin"))], env_overlay);
+
+        assert_eq!(overlay, None);
     }
 }

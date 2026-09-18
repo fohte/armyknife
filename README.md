@@ -94,15 +94,15 @@ ln -s ~/work/dotfiles-private/armyknife.yaml ~/.config/armyknife/work.yaml
 
 ### Environment variable overrides
 
-Any config value can also be set via an `ARMYKNIFE_*` environment variable, which takes priority over every YAML file. Strip the `ARMYKNIFE_` prefix, lowercase what remains, and join the config key path with `__` (double underscore, since key names themselves contain `_`). For example:
+Any scalar config value (string, bool, number) can also be set via an `ARMYKNIFE_*` environment variable, which takes priority over every YAML file. Strip the `ARMYKNIFE_` prefix, lowercase what remains, and join the config key path with `__` (double underscore, since key names themselves contain `_`). For example:
 
 ```sh
 ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false
 ```
 
-maps to `cc.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number.
+maps to `cc.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
 
-Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name.
+Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name. `orgs.*` entries aren't reachable either, since org logins are matched case-sensitively but the overlay lowercases every path segment.
 
 ### Supported Terminal Emulators
 

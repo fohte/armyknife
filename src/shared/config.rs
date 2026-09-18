@@ -683,6 +683,7 @@ pub fn generate_schema() -> schemars::Schema {
 
 #[cfg(test)]
 mod tests {
+    use super::env_overlay::with_isolated_env_overlay;
     use super::*;
     use indoc::indoc;
     #[cfg(feature = "schema-gen")]
@@ -1279,24 +1280,6 @@ mod tests {
         let missing = dir.path().join("nonexistent");
         let config = load_config_from_dir(&missing).unwrap();
         assert_eq!(config, Config::default());
-    }
-
-    /// Clears every ambient `ARMYKNIFE_*` variable that `env_overlay()` would
-    /// pick up (path contains `__`) before applying `extra`, so tests calling
-    /// `load_config()` aren't flaky depending on what's exported in the
-    /// invoking shell — including this very feature's own overrides in a dev
-    /// setup that dogfoods it.
-    fn with_isolated_env_overlay<R>(extra: Vec<(&str, Option<&str>)>, f: impl FnOnce() -> R) -> R {
-        let mut vars: Vec<(String, Option<String>)> = std::env::vars()
-            .filter(|(k, _)| k.starts_with("ARMYKNIFE_") && k.contains("__"))
-            .map(|(k, _)| (k, None))
-            .collect();
-        vars.extend(
-            extra
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.map(str::to_string))),
-        );
-        temp_env::with_vars(vars, f)
     }
 
     #[test]
