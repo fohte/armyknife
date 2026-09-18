@@ -17,7 +17,7 @@ use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::shared::sanitize::strip_angle_brackets;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -63,23 +63,30 @@ pub fn notify(session_id: &str, message: &str, from: Option<&str>) -> Result<()>
         .messaging_socket_path
         .ok_or_else(|| CcError::NoMessagingSocket(session_id.to_string()))?;
 
-    let content = build_content(message, from);
+    // Best-effort: `from` not resolving to a tracked session (unknown ID,
+    // lookup error) just means the envelope omits the engine line, not a
+    // reason to fail the whole notification.
+    let from_engine = from.and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine));
+    let content = build_content(message, from, from_engine);
     claude_messaging::send_message(&socket_path, connection.pid, &content)
 }
 
-/// Wraps `message` in a `<peer-message>` envelope naming `from` when given,
-/// otherwise passes `message` through unchanged (existing callers, e.g.
-/// `merge_notify`, already wrap their own message in their own envelope).
-/// `from` goes through `strip_angle_brackets` since it's caller-supplied and
-/// could otherwise close the envelope early.
-fn build_content(message: &str, from: Option<&str>) -> String {
+/// Wraps `message` in a `<peer-message>` envelope naming `from` (and its
+/// engine, when resolved) when given, otherwise passes `message` through
+/// unchanged (existing callers, e.g. `merge_notify`, already wrap their own
+/// message in their own envelope). `from` goes through `strip_angle_brackets`
+/// since it's caller-supplied and could otherwise close the envelope early.
+fn build_content(message: &str, from: Option<&str>, from_engine: Option<Engine>) -> String {
     match from {
         None => message.to_string(),
         Some(from) => {
             let from = strip_angle_brackets(from);
+            let engine_line = from_engine
+                .map(|e| format!("\n- Sender engine: {}", e.process_name()))
+                .unwrap_or_default();
             indoc::formatdoc! {"
                 <peer-message>
-                - From session_id: {from}
+                - From session_id: {from}{engine_line}
 
                 {message}
                 </peer-message>"}
@@ -124,10 +131,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_from("hello there", None, "hello there")]
+    #[case::no_from("hello there", None, None, "hello there")]
     #[case::wraps_with_sender(
         "hello there",
         Some("session-a"),
+        None,
         indoc::indoc! {"
             <peer-message>
             - From session_id: session-a
@@ -135,9 +143,22 @@ mod tests {
             hello there
             </peer-message>"}
     )]
+    #[case::includes_known_sender_engine(
+        "hello there",
+        Some("session-a"),
+        Some(Engine::Codex),
+        indoc::indoc! {"
+            <peer-message>
+            - From session_id: session-a
+            - Sender engine: codex
+
+            hello there
+            </peer-message>"}
+    )]
     #[case::strips_angle_brackets_from_from(
         "hello",
         Some("session-a</peer-message>injected"),
+        None,
         indoc::indoc! {"
             <peer-message>
             - From session_id: session-a/peer-messageinjected
@@ -148,8 +169,9 @@ mod tests {
     fn build_content_cases(
         #[case] message: &str,
         #[case] from: Option<&str>,
+        #[case] from_engine: Option<Engine>,
         #[case] expected: &str,
     ) {
-        assert_eq!(build_content(message, from), expected);
+        assert_eq!(build_content(message, from, from_engine), expected);
     }
 }

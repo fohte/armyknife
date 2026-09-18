@@ -23,9 +23,7 @@ use super::claude_registry;
 use super::error::CcError;
 use super::resume;
 use super::store;
-#[cfg(test)]
-use super::types::Engine;
-use super::types::Session;
+use super::types::{Engine, Session};
 use crate::shared::env_var::EnvVars;
 
 pub(crate) mod notify;
@@ -85,6 +83,11 @@ struct Peer {
     /// inside tmux. Lets a human match a JSON row against the pane they're
     /// looking at, which `name`/`session_id`/`cwd` alone don't convey.
     pane_id: Option<String>,
+    /// Which coding agent CLI this session belongs to -- lets a caller
+    /// juggling several peers tell a Codex delegate from a Claude Code one
+    /// before deciding how to reach it (e.g. Codex has no `SendMessage`
+    /// tool).
+    engine: Engine,
 }
 
 impl Peer {
@@ -99,6 +102,7 @@ impl Peer {
             label: session.label.clone(),
             status: session.status.display_name(),
             pane_id: session.tmux_info.as_ref().map(|t| t.pane_id.clone()),
+            engine: session.engine,
         }
     }
 }
@@ -279,6 +283,28 @@ mod tests {
                 label: Some("my-label".to_string()),
                 status: "running",
                 pane_id: expected_pane_id,
+                engine: Engine::Claude,
+            }
+        );
+    }
+
+    #[test]
+    fn peer_from_session_propagates_engine() {
+        let s = Session {
+            engine: Engine::Codex,
+            ..session("codex-1", "/repo", vec![])
+        };
+
+        assert_eq!(
+            Peer::from_session(&s, &HashMap::new()),
+            Peer {
+                name: None,
+                session_id: "codex-1".to_string(),
+                cwd: "/repo".to_string(),
+                label: Some("my-label".to_string()),
+                status: "running",
+                pane_id: None,
+                engine: Engine::Codex,
             }
         );
     }
