@@ -28,8 +28,8 @@ pub struct DeleteTqSessionDetachedArgs {
 /// failing the hook over an opportunistic cleanup is the wrong trade.
 pub fn spawn_in_background(session_id: &str) {
     process::spawn_self_detached(
-        "cc.tq_delete.spawn",
-        "cc.tq_delete.spawn_failed",
+        "agent.tq_delete.spawn",
+        "agent.tq_delete.spawn_failed",
         session_id,
         &[
             "agent",
@@ -46,7 +46,7 @@ pub fn run(args: &DeleteTqSessionDetachedArgs) -> Result<()> {
     };
     if let Err(e) = client.delete_session(&args.session) {
         tracing::warn!(
-            event = "cc.tq_delete.failed",
+            event = "agent.tq_delete.failed",
             session = %args.session,
             error = %e,
         );

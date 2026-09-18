@@ -151,21 +151,24 @@ fn read_state_file(state_file: &PathBuf) -> Result<HashMap<String, (String, Vec<
 /// restore gets a chance to run.
 fn run_save(_args: &SaveArgs) -> Result<()> {
     let run_id = short_run_id();
-    let span = tracing::info_span!("cc.resurrect.save", run_id = %run_id);
+    let span = tracing::info_span!("agent.resurrect.save", run_id = %run_id);
     let _entered = span.enter();
 
     let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION);
     let state_file = state_file_path()?;
     let sessions_dir = store::sessions_dir()?;
 
-    tracing::info!(event = "cc.resurrect.save.start", pane_count = panes.len());
+    tracing::info!(
+        event = "agent.resurrect.save.start",
+        pane_count = panes.len()
+    );
 
     // Preserve the existing state file when no panes carry a session ID.
     // The tmux server may simply have just restarted and not yet been restored,
     // and the state file is consumed by tmux-resurrect's post-restore hook.
     if panes.is_empty() {
         tracing::info!(
-            event = "cc.resurrect.save.skip",
+            event = "agent.resurrect.save.skip",
             reason = "no panes with session option"
         );
         return Ok(());
@@ -189,7 +192,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
         .collect();
 
     tracing::info!(
-        event = "cc.resurrect.save.summary",
+        event = "agent.resurrect.save.summary",
         saved = pane_sessions.len()
     );
 
@@ -203,7 +206,7 @@ fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
     load_session_field(
         sessions_dir,
         session_id,
-        "cc.resurrect.restore.engine_load_failed",
+        "agent.resurrect.restore.engine_load_failed",
         |s| s.engine,
     )
 }
@@ -219,7 +222,7 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
     load_session_field(
         sessions_dir,
         session_id,
-        "cc.resurrect.save.ancestor_load_failed",
+        "agent.resurrect.save.ancestor_load_failed",
         |s| s.ancestor_session_ids,
     )
 }
@@ -258,7 +261,7 @@ fn load_session_field<T: Default>(
 /// post-restore hook, so the option would not yet be set anyway.
 fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let run_id = short_run_id();
-    let span = tracing::info_span!("cc.resurrect.restore", run_id = %run_id);
+    let span = tracing::info_span!("agent.resurrect.restore", run_id = %run_id);
     let _entered = span.enter();
 
     let state_file = state_file_path()?;
@@ -267,7 +270,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     if !state_file.exists() {
         // No state file means nothing to restore
         tracing::info!(
-            event = "cc.resurrect.restore.skip",
+            event = "agent.resurrect.restore.skip",
             reason = "no state file"
         );
         return Ok(());
@@ -276,13 +279,13 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let pane_sessions = read_state_file(&state_file)?;
 
     tracing::info!(
-        event = "cc.resurrect.restore.start",
+        event = "agent.resurrect.restore.start",
         pane_count = pane_sessions.len(),
     );
 
     if pane_sessions.is_empty() {
         tracing::info!(
-            event = "cc.resurrect.restore.skip",
+            event = "agent.resurrect.restore.skip",
             reason = "empty state file"
         );
         return Ok(());
@@ -308,7 +311,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     let mut queued_count = 0;
     for (pane_position, (session_id, ancestor_session_ids)) in &pane_sessions {
         let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
-            tracing::warn!(event = "cc.resurrect.restore.pane_skipped", pane_position = %pane_position);
+            tracing::warn!(event = "agent.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
         };
 
@@ -319,7 +322,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             store::update_session_tmux_pane_id_in(&sessions_dir, session_id, pane_id)
         {
             tracing::warn!(
-                event = "cc.resurrect.restore.pane_id_update_failed",
+                event = "agent.resurrect.restore.pane_id_update_failed",
                 session_id = %session_id,
                 %error,
             );
@@ -336,16 +339,16 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         ));
 
         queued_count += 1;
-        tracing::info!(event = "cc.resurrect.restore.pane_queued", pane_position = %pane_position);
+        tracing::info!(event = "agent.resurrect.restore.pane_queued", pane_position = %pane_position);
     }
 
     let batch_result = tmux::run_batch(&commands);
     if let Err(error) = &batch_result {
-        tracing::warn!(event = "cc.resurrect.restore.batch_failed", %error);
+        tracing::warn!(event = "agent.resurrect.restore.batch_failed", %error);
     }
 
     tracing::info!(
-        event = "cc.resurrect.restore.summary",
+        event = "agent.resurrect.restore.summary",
         queued = queued_count,
         total = pane_sessions.len(),
         batch_ok = batch_result.is_ok(),

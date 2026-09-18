@@ -53,7 +53,7 @@ pub async fn run(args: &CleanDetachedArgs) -> Result<()> {
 
 async fn run_inner(args: &CleanDetachedArgs) -> Result<()> {
     let run_id = args.run_id.clone().unwrap_or_else(short_run_id);
-    let span = tracing::info_span!("cc.clean", run_id = %run_id);
+    let span = tracing::info_span!("agent.clean", run_id = %run_id);
 
     let paths = collect_paths(args);
     let cleaner = RealCleaner;
@@ -78,7 +78,7 @@ fn collect_paths(args: &CleanDetachedArgs) -> Vec<PathBuf> {
             Err(e) => {
                 tracing::warn!(
                     target: EVENT_TARGET,
-                    event = "cc.clean.err",
+                    event = "agent.clean.err",
                     path = %file.display(),
                     msg = format!("failed to open paths file: {e}"),
                 );
@@ -114,7 +114,7 @@ impl Cleaner for RealCleaner {
 async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
     tracing::info!(
         target: EVENT_TARGET,
-        event = "cc.clean.start",
+        event = "agent.clean.start",
         total = paths.len(),
     );
 
@@ -127,7 +127,7 @@ async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
                 ok += 1;
                 tracing::info!(
                     target: EVENT_TARGET,
-                    event = "cc.clean.ok",
+                    event = "agent.clean.ok",
                     path = %path_str,
                 );
             }
@@ -135,7 +135,7 @@ async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
                 failed += 1;
                 tracing::warn!(
                     target: EVENT_TARGET,
-                    event = "cc.clean.err",
+                    event = "agent.clean.err",
                     path = %path_str,
                     msg = format!("{e:#}"),
                 );
@@ -145,7 +145,7 @@ async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
 
     tracing::info!(
         target: EVENT_TARGET,
-        event = "cc.clean.done",
+        event = "agent.clean.done",
         ok = ok,
         failed = failed,
     );

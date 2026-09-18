@@ -48,13 +48,13 @@ impl CleanLogEvent {
             return None;
         }
         match value.get("event")?.as_str()? {
-            "cc.clean.start" => Some(CleanLogEvent::Start {
+            "agent.clean.start" => Some(CleanLogEvent::Start {
                 total: value.get("total")?.as_u64()? as usize,
             }),
-            "cc.clean.ok" => Some(CleanLogEvent::Ok {
+            "agent.clean.ok" => Some(CleanLogEvent::Ok {
                 path: value.get("path")?.as_str()?.to_string(),
             }),
-            "cc.clean.err" => Some(CleanLogEvent::Err {
+            "agent.clean.err" => Some(CleanLogEvent::Err {
                 path: value.get("path")?.as_str()?.to_string(),
                 msg: value
                     .get("msg")
@@ -62,7 +62,7 @@ impl CleanLogEvent {
                     .unwrap_or("")
                     .to_string(),
             }),
-            "cc.clean.done" => Some(CleanLogEvent::Done {
+            "agent.clean.done" => Some(CleanLogEvent::Done {
                 ok: value.get("ok")?.as_u64()? as usize,
                 failed: value.get("failed")?.as_u64()? as usize,
             }),
@@ -337,17 +337,17 @@ mod tests {
         let mine = tracing_event(
             target,
             "mine",
-            json!({"event": "cc.clean.start", "total": 2}),
+            json!({"event": "agent.clean.start", "total": 2}),
         );
         let theirs = tracing_event(
             target,
             "theirs",
-            json!({"event": "cc.clean.ok", "path": "/x"}),
+            json!({"event": "agent.clean.ok", "path": "/x"}),
         );
         let other_target = tracing_event(
             "armyknife::other",
             "mine",
-            json!({"event": "cc.clean.ok", "path": "/y"}),
+            json!({"event": "agent.clean.ok", "path": "/y"}),
         );
 
         assert_eq!(
@@ -370,17 +370,17 @@ mod tests {
         body.push_str(&line(tracing_event(
             target,
             "rid",
-            json!({"event": "cc.clean.start", "total": 2}),
+            json!({"event": "agent.clean.start", "total": 2}),
         )));
         body.push_str(&line(tracing_event(
             target,
             "other",
-            json!({"event": "cc.clean.ok", "path": "/x"}),
+            json!({"event": "agent.clean.ok", "path": "/x"}),
         )));
         body.push_str(&line(tracing_event(
             target,
             "rid",
-            json!({"event": "cc.clean.ok", "path": "/a"}),
+            json!({"event": "agent.clean.ok", "path": "/a"}),
         )));
         fs::write(&log, body).expect("write");
 

@@ -36,11 +36,11 @@ The variable also accepts `tracing-subscriber` directives like
 {
   "timestamp": "2026-05-06T09:12:26.303328Z",
   "level": "INFO",
-  "event": "cc.sweep.start",
+  "event": "agent.sweep.start",
   "timeout": "30m",
   "dry_run": true,
   "target": "a::commands::agent::sweep",
-  "span": { "run_id": "6ac23df6", "name": "cc.sweep" }
+  "span": { "run_id": "6ac23df6", "name": "agent.sweep" }
 }
 ```
 
@@ -48,13 +48,13 @@ Top-level fields:
 
 - `timestamp` — UTC, RFC 3339
 - `level` — `INFO` / `WARN` / `ERROR`
-- `event` — fully-qualified `<area>.<verb>` (e.g. `cc.auto_compact.schedule.armed`),
+- `event` — fully-qualified `<area>.<verb>` (e.g. `agent.auto_compact.schedule.armed`),
   the primary key for filtering
 - `target` — Rust module path the event was emitted from
 - `span.run_id` — short hex id that groups every event from a single
   invocation (one sweep pass, one schedule worker, one hook call)
 - `span.name` — area identifier matching the `event` prefix
-  (`cc.sweep` / `cc.auto_compact.schedule` / `cc.hook`)
+  (`agent.sweep` / `agent.auto_compact.schedule` / `agent.hook`)
 
 Other fields are event-specific. `session` is present whenever an event
 relates to a single Claude Code session.
@@ -71,11 +71,11 @@ jq -c 'select(.span.run_id == "6ac23df6")' "$LOG"
 jq -c 'select(.session == "ec2143e0-…")' "$LOG"
 
 # Decision distribution across schedule workers
-jq -r 'select(.event == "cc.auto_compact.schedule.decision") | .decision' "$LOG" \
+jq -r 'select(.event == "agent.auto_compact.schedule.decision") | .decision' "$LOG" \
   | sort | uniq -c
 
 # Everything from the auto-compact subsystem
-jq -c 'select(.event | startswith("cc.auto_compact"))' "$LOG"
+jq -c 'select(.event | startswith("agent.auto_compact"))' "$LOG"
 
 # Tail and pretty-print live
 tail -F "$LOG" | jq -c .
@@ -87,38 +87,38 @@ tail -F "$LOG" | jq -c .
 
 Stop hook (parent process):
 
-| event                          | meaning                                                      |
-| ------------------------------ | ------------------------------------------------------------ |
-| `cc.auto_compact.spawn`        | Stop hook is forking a `schedule` worker                     |
-| `cc.auto_compact.spawn_failed` | `current_exe` resolution or `spawn_detached` failed          |
-| `cc.auto_compact.skipped`      | Spawn skipped (`reason=disabled` / `reason=bg_task_pending`) |
+| event                             | meaning                                                      |
+| --------------------------------- | ------------------------------------------------------------ |
+| `agent.auto_compact.spawn`        | Stop hook is forking a `schedule` worker                     |
+| `agent.auto_compact.spawn_failed` | `current_exe` resolution or `spawn_detached` failed          |
+| `agent.auto_compact.skipped`      | Spawn skipped (`reason=disabled` / `reason=bg_task_pending`) |
 
 `schedule` worker (detached child):
 
-| event                                           | meaning                                                                                                                   |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `cc.auto_compact.schedule.start`                | Worker entered its run loop                                                                                               |
-| `cc.auto_compact.schedule.cancelled_prev`       | Sent SIGTERM to an earlier worker for the same pane; `already_gone=true` when the prior worker had already exited (ESRCH) |
-| `cc.auto_compact.schedule.cancel_prev_failed`   | SIGTERM to a prior worker failed (non-ESRCH)                                                                              |
-| `cc.auto_compact.schedule.armed`                | About to sleep `idle_timeout_secs`                                                                                        |
-| `cc.auto_compact.schedule.exit`                 | Returned early; `reason` is `disabled` / `session_missing_at_arm` / `preempted` / `session_missing_at_wake`               |
-| `cc.auto_compact.schedule.inputs`               | Snapshot of every input fed to `decide_compact` (status, branch_merged, context_tokens, …)                                |
-| `cc.auto_compact.schedule.decision`             | Final `CompactDecision` value                                                                                             |
-| `cc.auto_compact.schedule.compact_executed`     | SIGTERMed `claude` and spawned `claude -r -p /compact`                                                                    |
-| `cc.auto_compact.schedule.sigterm_failed`       | SIGTERM to the live `claude` process failed (non-ESRCH)                                                                   |
-| `cc.auto_compact.schedule.compact_spawn_failed` | `claude -r -p /compact` spawn failed                                                                                      |
+| event                                              | meaning                                                                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `agent.auto_compact.schedule.start`                | Worker entered its run loop                                                                                               |
+| `agent.auto_compact.schedule.cancelled_prev`       | Sent SIGTERM to an earlier worker for the same pane; `already_gone=true` when the prior worker had already exited (ESRCH) |
+| `agent.auto_compact.schedule.cancel_prev_failed`   | SIGTERM to a prior worker failed (non-ESRCH)                                                                              |
+| `agent.auto_compact.schedule.armed`                | About to sleep `idle_timeout_secs`                                                                                        |
+| `agent.auto_compact.schedule.exit`                 | Returned early; `reason` is `disabled` / `session_missing_at_arm` / `preempted` / `session_missing_at_wake`               |
+| `agent.auto_compact.schedule.inputs`               | Snapshot of every input fed to `decide_compact` (status, branch_merged, context_tokens, …)                                |
+| `agent.auto_compact.schedule.decision`             | Final `CompactDecision` value                                                                                             |
+| `agent.auto_compact.schedule.compact_executed`     | SIGTERMed `claude` and spawned `claude -r -p /compact`                                                                    |
+| `agent.auto_compact.schedule.sigterm_failed`       | SIGTERM to the live `claude` process failed (non-ESRCH)                                                                   |
+| `agent.auto_compact.schedule.compact_spawn_failed` | `claude -r -p /compact` spawn failed                                                                                      |
 
 ### `agent sweep`
 
-| event                     | meaning                                                          |
-| ------------------------- | ---------------------------------------------------------------- |
-| `cc.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)                |
-| `cc.sweep.signaled`       | Live pid still resolves; SIGTERM (re-)sent, status stays Stopped |
-| `cc.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                        |
-| `cc.sweep.paused`         | No resolvable pid; status confirmed Paused                       |
-| `cc.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`                |
-| `cc.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                   |
-| `cc.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)     |
+| event                        | meaning                                                          |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `agent.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)                |
+| `agent.sweep.signaled`       | Live pid still resolves; SIGTERM (re-)sent, status stays Stopped |
+| `agent.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                        |
+| `agent.sweep.paused`         | No resolvable pid; status confirmed Paused                       |
+| `agent.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`                |
+| `agent.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                   |
+| `agent.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)     |
 
 ## Debugging recipes
 
@@ -126,18 +126,18 @@ Stop hook (parent process):
 
 1. Trigger a Stop hook (let `claude` finish a turn) and tail the log.
 2. Walk the event chain:
-   - No `cc.auto_compact.spawn` → the Stop hook never reached armyknife.
+   - No `agent.auto_compact.spawn` → the Stop hook never reached armyknife.
      Check `~/.claude/settings.json` and `ARMYKNIFE_SKIP_HOOKS`.
-   - `cc.auto_compact.skipped reason=disabled` → enable it in `~/.config/armyknife`.
-   - `cc.auto_compact.skipped reason=bg_task_pending` → expected; the next
+   - `agent.auto_compact.skipped reason=disabled` → enable it in `~/.config/armyknife`.
+   - `agent.auto_compact.skipped reason=bg_task_pending` → expected; the next
      genuine Stop will consume the flag.
-   - `cc.auto_compact.spawn` but no `cc.auto_compact.schedule.start` → the
-     detached child died. Look for `cc.auto_compact.spawn_failed`.
-   - `cc.auto_compact.schedule.armed` but no `cc.auto_compact.schedule.decision`
+   - `agent.auto_compact.spawn` but no `agent.auto_compact.schedule.start` → the
+     detached child died. Look for `agent.auto_compact.spawn_failed`.
+   - `agent.auto_compact.schedule.armed` but no `agent.auto_compact.schedule.decision`
      after `idle_timeout_secs` → the worker was preempted;
-     `cc.auto_compact.schedule.exit reason=preempted` should be present.
-   - `cc.auto_compact.schedule.decision` other than `Compact` → look at the
-     preceding `cc.auto_compact.schedule.inputs` event to see which input
+     `agent.auto_compact.schedule.exit reason=preempted` should be present.
+   - `agent.auto_compact.schedule.decision` other than `Compact` → look at the
+     preceding `agent.auto_compact.schedule.inputs` event to see which input
      vetoed it (most often `context_tokens < min_context_tokens` for
      `BelowThreshold`).
 
@@ -148,8 +148,8 @@ a agent sweep --dry-run --timeout 1s   # forces every Stopped session to be a ca
 jq -c 'select(.session == "<id>")' ~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 ```
 
-`cc.sweep.dry_run_pause` means the session has no live `claude` (probably
-already exited) and would be confirmed Paused; `cc.sweep.dry_run_signal`
+`agent.sweep.dry_run_pause` means the session has no live `claude` (probably
+already exited) and would be confirmed Paused; `agent.sweep.dry_run_signal`
 means a pid still resolves, so this pass can only (re-)send SIGTERM.
 
 ## Adding new events
@@ -162,7 +162,7 @@ When wiring a new lifecycle path:
   below it inherits `run_id` automatically — the grouping is what makes the
   JSONL useful.
 - Use a fully-qualified `event = "<area>.<verb>"` string. The area should
-  match the span name (`cc.sweep`, `cc.auto_compact.schedule`, …) so
+  match the span name (`agent.sweep`, `agent.auto_compact.schedule`, …) so
   `jq 'select(.event | startswith("<area>"))'` and
   `jq 'select(.span.name == "<area>")'` produce the same set.
 - Pass values as fields, not formatted strings: `pid = pid` rather than

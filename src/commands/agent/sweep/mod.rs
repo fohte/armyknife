@@ -94,7 +94,7 @@ pub fn run(args: &SweepArgs) -> Result<()> {
 
 fn run_sweep(args: &SweepArgs) -> Result<()> {
     let run_id = short_run_id();
-    let span = tracing::info_span!("cc.sweep", run_id = %run_id);
+    let span = tracing::info_span!("agent.sweep", run_id = %run_id);
     let _entered = span.enter();
 
     let config = config::load_config().unwrap_or_default();
@@ -121,7 +121,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         activity: TmuxActivityProbe,
     };
     tracing::info!(
-        event = "cc.sweep.start",
+        event = "agent.sweep.start",
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
@@ -135,7 +135,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         args.dry_run,
     )?;
     tracing::info!(
-        event = "cc.sweep.summary",
+        event = "agent.sweep.summary",
         scanned = report.scanned,
         paused = report.paused,
         signaled = report.signaled,
@@ -303,7 +303,7 @@ where
         // them before making the pause decision.
         if session.has_pending_bg_tasks() && probe.resolve_pid(&session).is_none() {
             tracing::info!(
-                event = "cc.sweep.stale_pending_tasks_cleared",
+                event = "agent.sweep.stale_pending_tasks_cleared",
                 session = %session.session_id,
                 pending_bg_tasks = session.pending_bg_task_ids.len(),
                 pending_agent_tasks = session.pending_agent_task_ids.len(),
@@ -336,7 +336,7 @@ where
                     // is what confirms the process has actually exited.
                     if dry_run {
                         tracing::info!(
-                            event = "cc.sweep.dry_run_signal",
+                            event = "agent.sweep.dry_run_signal",
                             session = %session.session_id,
                             pid = pid,
                         );
@@ -348,7 +348,7 @@ where
                         continue;
                     }
                     tracing::info!(
-                        event = "cc.sweep.signaled",
+                        event = "agent.sweep.signaled",
                         session = %session.session_id,
                         pid = pid,
                     );
@@ -361,7 +361,7 @@ where
                     // on its own). Confirm the pause now.
                     if dry_run {
                         tracing::info!(
-                            event = "cc.sweep.dry_run_pause",
+                            event = "agent.sweep.dry_run_pause",
                             session = %session.session_id,
                         );
                         eprintln!(
@@ -372,7 +372,7 @@ where
                         continue;
                     }
                     tracing::info!(
-                        event = "cc.sweep.paused",
+                        event = "agent.sweep.paused",
                         session = %session.session_id,
                     );
                     confirm_paused(sessions_dir, session, syncer)?;
@@ -387,7 +387,7 @@ where
             }
             PauseDecision::BgTaskPending => {
                 tracing::info!(
-                    event = "cc.sweep.bg_task_pending",
+                    event = "agent.sweep.bg_task_pending",
                     session = %session.session_id,
                     pending_bg_tasks = session.pending_bg_task_ids.len(),
                     pending_agent_tasks = session.pending_agent_task_ids.len(),
@@ -422,7 +422,7 @@ fn signal_session<S: SignalSender>(
         && e.raw_os_error() != Some(libc::ESRCH)
     {
         tracing::warn!(
-            event = "cc.sweep.sigterm_failed",
+            event = "agent.sweep.sigterm_failed",
             session = %session.session_id,
             pid = pid,
             error = %e,
