@@ -33,7 +33,7 @@ a <command>
 
 armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armyknife/` (or `$XDG_CONFIG_HOME/armyknife/` if set), sorts them alphabetically by file name, and deep-merges them in order so that later files override earlier ones. Subdirectories (e.g., `hooks/`) and other extensions are ignored. Symlinks pointing to YAML files are followed, so private/company-specific config can live in a separate repository and be linked into this directory.
 
-Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist, armyknife runs entirely on defaults.
+Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -91,6 +91,18 @@ ln -s ~/work/dotfiles-private/armyknife.yaml ~/.config/armyknife/work.yaml
 ```
 
 `config.yaml` is loaded first (alphabetical), `work.yaml` overrides it. Subdirectories such as `hooks/` are not scanned and remain unaffected.
+
+### Environment variable overrides
+
+Any config value can also be set via an `ARMYKNIFE_*` environment variable, which takes priority over every YAML file. Strip the `ARMYKNIFE_` prefix, lowercase what remains, and join the config key path with `__` (double underscore, since key names themselves contain `_`). For example:
+
+```sh
+ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false
+```
+
+maps to `cc.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number.
+
+Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name.
 
 ### Supported Terminal Emulators
 
