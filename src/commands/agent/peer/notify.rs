@@ -18,6 +18,7 @@ use crate::commands::agent::claude_registry;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
+use crate::shared::env_var::EnvVars;
 use crate::shared::sanitize::strip_angle_brackets;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -28,21 +29,64 @@ pub struct NotifyArgs {
     /// Message text to deliver as a user message to the target session
     #[arg(short = 'm', long = "message")]
     pub message: String,
-
-    /// Sender's own session_id (e.g. `$ARMYKNIFE_SESSION_ID`). When set, the
-    /// message is wrapped in a `<peer-message>` envelope naming the sender,
-    /// since the underlying protocol has no `from` field of its own (see
-    /// `claude_messaging::send_message`) and a session juggling several
-    /// peers otherwise can't tell which one a message came from.
-    #[arg(long = "from")]
-    pub from: Option<String>,
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
-    notify(&args.session_id, &args.message, args.from.as_deref())
+    let (from, from_engine_hint) = match resolve_sender() {
+        Some((id, engine_hint)) => (Some(id), engine_hint),
+        None => (None, None),
+    };
+    notify(
+        &args.session_id,
+        &args.message,
+        from.as_deref(),
+        from_engine_hint,
+    )
 }
 
-pub fn notify(session_id: &str, message: &str, from: Option<&str>) -> Result<()> {
+/// Resolves this process's own session_id for the `<peer-message>` sender
+/// line, trying `ARMYKNIFE_SESSION_ID` (set by `a agent new`, for either
+/// engine) before each engine's own ambient session env var -- present for a
+/// plain `claude`/`codex` CLI invocation started outside `a agent new`.
+/// Returns `None` when nothing resolves (e.g. `a wm delete` has no session
+/// in the loop), which sends the message unwrapped.
+///
+/// The paired `Engine` is only a fallback guess, used by [`notify`] when the
+/// resolved ID isn't in armyknife's store: `ARMYKNIFE_SESSION_ID` carries no
+/// engine hint of its own (`a agent new --engine codex` sets it too), so
+/// only the engine-specific variables pair with a guess.
+///
+/// Only called from [`run`], not [`notify`] itself: reading these env vars
+/// inside `notify` would make `merge_notify`'s direct calls pick up
+/// whichever session's env happens to be ambient in the calling process,
+/// misattributing an automated merge notification as a personal message.
+fn resolve_sender() -> Option<(String, Option<Engine>)> {
+    if let Some(id) = EnvVars::load().session_id {
+        return Some((id, None));
+    }
+    if let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID") {
+        return Some((id, Some(Engine::Claude)));
+    }
+    // Codex sets both CODEX_SESSION_ID (shared by the root thread and all of
+    // its subagent threads) and CODEX_THREAD_ID (unique per subagent
+    // thread). CODEX_SESSION_ID is the one that matches how armyknife scopes
+    // a session: a Claude Code subagent's hook events still carry the
+    // top-level session's session_id (see `HookInput::agent_id`'s doc
+    // comment in types.rs) rather than a per-subagent ID, so the Codex
+    // equivalent of "this session" is the value stable across its subagents
+    // too.
+    if let Ok(id) = std::env::var("CODEX_SESSION_ID") {
+        return Some((id, Some(Engine::Codex)));
+    }
+    None
+}
+
+pub fn notify(
+    session_id: &str,
+    message: &str,
+    from: Option<&str>,
+    from_engine_hint: Option<Engine>,
+) -> Result<()> {
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
@@ -64,9 +108,11 @@ pub fn notify(session_id: &str, message: &str, from: Option<&str>) -> Result<()>
         .ok_or_else(|| CcError::NoMessagingSocket(session_id.to_string()))?;
 
     // Best-effort: `from` not resolving to a tracked session (unknown ID,
-    // lookup error) just means the envelope omits the engine line, not a
-    // reason to fail the whole notification.
-    let from_engine = from.and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine));
+    // lookup error) just means the engine falls back to `from_engine_hint`
+    // (or is omitted), not a reason to fail the whole notification.
+    let from_engine = from
+        .and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine))
+        .or(from_engine_hint);
     let content = build_content(message, from, from_engine);
     claude_messaging::send_message(&socket_path, connection.pid, &content)
 }
@@ -173,5 +219,42 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(build_content(message, from, from_engine), expected);
+    }
+
+    #[rstest]
+    #[case::armyknife_session_id_wins(
+        Some("armyknife-id"),
+        Some("claude-id"),
+        Some("codex-id"),
+        Some(("armyknife-id".to_string(), None))
+    )]
+    #[case::falls_back_to_claude_code_session_id(
+        None,
+        Some("claude-id"),
+        Some("codex-id"),
+        Some(("claude-id".to_string(), Some(Engine::Claude)))
+    )]
+    #[case::falls_back_to_codex_session_id(
+        None,
+        None,
+        Some("codex-id"),
+        Some(("codex-id".to_string(), Some(Engine::Codex)))
+    )]
+    #[case::none_resolve(None, None, None, None)]
+    fn resolve_sender_cases(
+        #[case] armyknife_session_id: Option<&str>,
+        #[case] claude_code_session_id: Option<&str>,
+        #[case] codex_session_id: Option<&str>,
+        #[case] expected: Option<(String, Option<Engine>)>,
+    ) {
+        let result = temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", armyknife_session_id),
+                ("CLAUDE_CODE_SESSION_ID", claude_code_session_id),
+                ("CODEX_SESSION_ID", codex_session_id),
+            ],
+            resolve_sender,
+        );
+        assert_eq!(result, expected);
     }
 }

@@ -56,7 +56,7 @@ pub async fn notify_delegator_of_merge(main_repo: &GitRepo, branch: &str, worktr
 
     for delegator_id in delegates {
         let message = build_merge_notification(branch, &pr_url);
-        if let Err(e) = notify_peer_session(&delegator_id, &message, None) {
+        if let Err(e) = notify_peer_session(&delegator_id, &message, None, None) {
             warn_notify_failure(&format!(
                 "failed to notify delegator session {delegator_id}: {e}"
             ));

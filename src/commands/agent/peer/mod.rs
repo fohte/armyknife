@@ -248,10 +248,11 @@ mod tests {
     #[case::resolved_no_tmux(
         HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
         None,
+        Engine::Claude,
         Some("repo-ab".to_string()),
         None
     )]
-    #[case::unresolved_no_tmux(HashMap::new(), None, None, None)]
+    #[case::unresolved_no_tmux(HashMap::new(), None, Engine::Claude, None, None)]
     #[case::resolved_in_tmux(
         HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
         Some(TmuxInfo {
@@ -260,17 +261,21 @@ mod tests {
             window_index: 0,
             pane_id: "%3".to_string(),
         }),
+        Engine::Claude,
         Some("repo-ab".to_string()),
         Some("%3".to_string())
     )]
+    #[case::propagates_codex_engine(HashMap::new(), None, Engine::Codex, None, None)]
     fn peer_from_session(
         #[case] name_map: HashMap<String, String>,
         #[case] tmux_info: Option<TmuxInfo>,
+        #[case] engine: Engine,
         #[case] expected_name: Option<String>,
         #[case] expected_pane_id: Option<String>,
     ) {
         let s = Session {
             tmux_info,
+            engine,
             ..session("child-1", "/repo/.worktrees/child", vec![])
         };
 
@@ -283,28 +288,7 @@ mod tests {
                 label: Some("my-label".to_string()),
                 status: "running",
                 pane_id: expected_pane_id,
-                engine: Engine::Claude,
-            }
-        );
-    }
-
-    #[test]
-    fn peer_from_session_propagates_engine() {
-        let s = Session {
-            engine: Engine::Codex,
-            ..session("codex-1", "/repo", vec![])
-        };
-
-        assert_eq!(
-            Peer::from_session(&s, &HashMap::new()),
-            Peer {
-                name: None,
-                session_id: "codex-1".to_string(),
-                cwd: "/repo".to_string(),
-                label: Some("my-label".to_string()),
-                status: "running",
-                pane_id: None,
-                engine: Engine::Codex,
+                engine,
             }
         );
     }
