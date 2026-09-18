@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 
 use super::pane;
 use super::store;
-use super::types::{Engine, TMUX_SESSION_OPTION};
+use super::types::{Engine, Session, TMUX_SESSION_OPTION};
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -200,17 +200,12 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 /// `Engine::Claude` (matching `Session::engine`'s own default) when the
 /// session file is missing or fails to load.
 fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
-    match store::load_session_from(sessions_dir, session_id) {
-        Ok(session) => session.map(|s| s.engine).unwrap_or_default(),
-        Err(error) => {
-            tracing::warn!(
-                event = "cc.resurrect.restore.engine_load_failed",
-                session_id = %session_id,
-                %error,
-            );
-            Engine::default()
-        }
-    }
+    load_session_field(
+        sessions_dir,
+        session_id,
+        "cc.resurrect.restore.engine_load_failed",
+        |s| s.engine,
+    )
 }
 
 /// Reads `ancestor_session_ids` for `session_id` from the store, treating a
@@ -221,15 +216,28 @@ fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
 /// prevent, just via a different trigger than the one save is guarding
 /// against.
 fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<String> {
+    load_session_field(
+        sessions_dir,
+        session_id,
+        "cc.resurrect.save.ancestor_load_failed",
+        |s| s.ancestor_session_ids,
+    )
+}
+
+/// Shared "read one field off the stored session, defaulting on a missing
+/// file, or on a read error (logged as `log_event`)" pattern behind
+/// `load_engine` and `load_ancestor_session_ids`.
+fn load_session_field<T: Default>(
+    sessions_dir: &Path,
+    session_id: &str,
+    log_event: &'static str,
+    field: impl FnOnce(Session) -> T,
+) -> T {
     match store::load_session_from(sessions_dir, session_id) {
-        Ok(session) => session.map(|s| s.ancestor_session_ids).unwrap_or_default(),
+        Ok(session) => session.map(field).unwrap_or_default(),
         Err(error) => {
-            tracing::warn!(
-                event = "cc.resurrect.save.ancestor_load_failed",
-                session_id = %session_id,
-                %error,
-            );
-            Vec::new()
+            tracing::warn!(event = log_event, session_id = %session_id, %error);
+            T::default()
         }
     }
 }
@@ -648,6 +656,57 @@ mod tests {
             assert_eq!(
                 load_ancestor_session_ids(sessions_dir.path(), "no-such-session"),
                 Vec::<String>::new()
+            );
+        }
+    }
+
+    mod load_engine_tests {
+        use std::collections::BTreeSet;
+
+        use chrono::Utc;
+
+        use super::*;
+        use crate::commands::agent::types::{Engine, Session, SessionStatus};
+
+        fn session_with_engine(id: &str, engine: Engine) -> Session {
+            Session {
+                session_id: id.to_string(),
+                cwd: PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
+                read_at: None,
+                sweep_signaled: false,
+                engine,
+            }
+        }
+
+        #[test]
+        fn returns_the_engine_recorded_on_the_session() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            let session = session_with_engine("sess-1", Engine::Codex);
+            store::save_session_to(sessions_dir.path(), &session).expect("save session");
+
+            assert_eq!(load_engine(sessions_dir.path(), "sess-1"), Engine::Codex);
+        }
+
+        #[test]
+        fn defaults_to_claude_for_missing_session() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+
+            assert_eq!(
+                load_engine(sessions_dir.path(), "no-such-session"),
+                Engine::Claude
             );
         }
     }

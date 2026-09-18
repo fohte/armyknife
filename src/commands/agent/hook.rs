@@ -632,8 +632,14 @@ fn process_hook_event_impl(
     // main loop went idle (the post-launch Stop is synthetic). This reads
     // `pending_bg_task_ids` as refreshed from `background_tasks` a few
     // lines above, not any state accumulated across separate hook events.
-    if side_effects.auto_compact && event == HookEvent::Stop && session.engine == Engine::Claude {
-        if !session.pending_bg_task_ids.is_empty() {
+    if side_effects.auto_compact && event == HookEvent::Stop {
+        if session.engine != Engine::Claude {
+            tracing::info!(
+                event = "cc.auto_compact.skipped",
+                session = %session.session_id,
+                reason = "unsupported_engine",
+            );
+        } else if !session.pending_bg_task_ids.is_empty() {
             tracing::info!(
                 event = "cc.auto_compact.skipped",
                 session = %session.session_id,

@@ -57,10 +57,11 @@ pub struct CommonNewArgs {
 
     /// Coding agent CLI to launch for the new session.
     ///
-    /// Only affects the no-worktree path (`run_session_only`); `--worktree`
-    /// launches `config.wm.layout`, a user-configurable pane tree whose
-    /// commands are independent of `Engine`.
-    #[arg(long, value_enum, default_value_t = Engine::Claude)]
+    /// Only applies to the no-worktree path (`run_session_only`); rejected
+    /// together with `--worktree`, which always launches
+    /// `config.wm.layout`, a user-configurable pane tree whose commands are
+    /// independent of `Engine`.
+    #[arg(long, value_enum, default_value_t = Engine::Claude, conflicts_with = "worktree")]
     pub engine: Engine,
 }
 
@@ -356,6 +357,7 @@ mod tests {
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
+    #[case::engine_with_worktree(&["a", "--worktree", "--engine", "codex"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
     }

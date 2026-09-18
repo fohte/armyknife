@@ -33,10 +33,15 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         _ => resolve_session_id_from_pane()?,
     };
 
-    let session = store::load_session(&session_id)?
-        .ok_or_else(|| anyhow::anyhow!("Session {session_id} not found"))?;
+    // A missing store record (e.g. a tmux-resurrect restore racing
+    // `cleanup_stale_sessions`, see `resurrect.rs`) must not block resuming
+    // -- fall back to the default engine and let `claude --resume` itself
+    // report an unknown session ID.
+    let engine = store::load_session(&session_id)?
+        .map(|s| s.engine)
+        .unwrap_or_default();
 
-    let (binary_name, resume_args) = resume_binary_and_args(session.engine, &session_id);
+    let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
 
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
