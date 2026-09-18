@@ -492,15 +492,54 @@ pub enum ConfigError {
     /// YAML parse error
     #[error("Invalid config file {path}: {message}")]
     ParseError { path: PathBuf, message: String },
+
+    /// Deserialization error caused by an `ARMYKNIFE_*` environment variable
+    /// overlay, kept distinct from `ParseError` so the message doesn't blame a
+    /// YAML file for a value that actually came from the environment.
+    #[error("Invalid configuration from ARMYKNIFE_* environment variables: {message}")]
+    EnvParseError { message: String },
 }
 
-/// Load configuration from ~/.config/armyknife/.
-/// Returns Config::default() if the directory doesn't exist or contains no YAML files.
+/// Load configuration from ~/.config/armyknife/, then apply the
+/// `ARMYKNIFE_*` environment variable overlay (see `env_overlay`) on top.
+/// Returns Config::default() if there is no config directory, no YAML files,
+/// and no relevant environment variables.
 pub fn load_config() -> anyhow::Result<Config> {
-    let Some(dir) = super::dirs::config_dir() else {
-        return Ok(Config::default());
+    let dir = super::dirs::config_dir().map(|d| d.join("armyknife"));
+    let yaml_merged = match &dir {
+        Some(dir) => merged_yaml_from_dir(dir)?,
+        None => None,
     };
-    load_config_from_dir(&dir.join("armyknife"))
+    let blame_path = dir.unwrap_or_else(|| PathBuf::from("~/.config/armyknife"));
+
+    let Some(overlay) = env_overlay()? else {
+        return deserialize_config(yaml_merged, &blame_path);
+    };
+    let combined = match yaml_merged.clone() {
+        Some(base) => merge_yaml(base, overlay),
+        None => overlay,
+    };
+    match serde_yaml::from_value::<Config>(combined) {
+        Ok(config) => Ok(config),
+        // The env overlay merges cleanly into the YAML document, so a single
+        // deserialize error can't tell which side caused it. Re-deserialize
+        // the YAML-only value to find out: if that succeeds, the environment
+        // is at fault.
+        Err(e) => {
+            if deserialize_config(yaml_merged, &blame_path).is_ok() {
+                Err(ConfigError::EnvParseError {
+                    message: e.to_string(),
+                }
+                .into())
+            } else {
+                Err(ConfigError::ParseError {
+                    path: blame_path,
+                    message: e.to_string(),
+                }
+                .into())
+            }
+        }
+    }
 }
 
 /// Load configuration from a specific directory.
@@ -513,10 +552,22 @@ pub fn load_config() -> anyhow::Result<Config> {
 ///
 /// Returns `Config::default()` if `dir` does not exist or contains no matching
 /// files.
+///
+/// Does not apply the `ARMYKNIFE_*` environment variable overlay (see
+/// `load_config`) — this is also called directly from tests, which must not
+/// be sensitive to the process environment.
 pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
+    let merged = merged_yaml_from_dir(dir)?;
+    deserialize_config(merged, dir)
+}
+
+/// Read and deep-merge every `*.yaml` / `*.yml` file directly under `dir`, in
+/// file name order. Returns `None` if `dir` does not exist or contains no
+/// matching (non-null) files.
+fn merged_yaml_from_dir(dir: &Path) -> anyhow::Result<Option<serde_yaml::Value>> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
             return Err(ConfigError::ReadError {
                 path: dir.to_path_buf(),
@@ -552,10 +603,6 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
     }
     paths.sort();
 
-    if paths.is_empty() {
-        return Ok(Config::default());
-    }
-
     let mut merged: Option<serde_yaml::Value> = None;
     for path in &paths {
         let content = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadError {
@@ -578,18 +625,80 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
         });
     }
 
+    Ok(merged)
+}
+
+/// Deserialize a merged YAML value into `Config`, or `Config::default()` if
+/// `merged` is `None`. `blame_path` is attributed in any resulting
+/// `ParseError` (the merged document has no single source file of its own).
+fn deserialize_config(
+    merged: Option<serde_yaml::Value>,
+    blame_path: &Path,
+) -> anyhow::Result<Config> {
     let Some(value) = merged else {
         return Ok(Config::default());
     };
 
     serde_yaml::from_value(value)
         .map_err(|e| ConfigError::ParseError {
-            // Use the directory path here because the error reflects the merged
-            // document, not any single source file.
-            path: dir.to_path_buf(),
+            path: blame_path.to_path_buf(),
             message: e.to_string(),
         })
         .map_err(Into::into)
+}
+
+/// Build a YAML value from `ARMYKNIFE_*` environment variables, to be merged
+/// on top of the YAML config files (highest priority).
+///
+/// The `ARMYKNIFE_` prefix is stripped, the rest is lowercased, and `__` splits
+/// it into a dot-path of config keys (`_` alone isn't a valid separator since
+/// keys themselves contain it, e.g. `auto_compact`). For example
+/// `ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false` maps to `cc.auto_compact.enabled`.
+/// Each value is parsed as a YAML scalar (so `false` is a bool, `3` a number).
+///
+/// `repos.*` entries are unreachable this way since repo keys contain `/`,
+/// which can't appear in an environment variable name — that's fine, they're
+/// out of scope for this overlay.
+///
+/// Variables whose path has no `__` are skipped rather than treated as an
+/// unknown top-level key: every `Config` field is itself a struct, so a real
+/// config path always needs at least one `__` to reach a leaf value. This
+/// also keeps single-segment `ARMYKNIFE_*` variables that already have an
+/// unrelated meaning (`ARMYKNIFE_SESSION_ID`, `ARMYKNIFE_WORKTREE_PATH`, etc.,
+/// see `env_var.rs`) from being misread as config overrides.
+///
+/// Returns `None` if no `ARMYKNIFE_*` variable maps to a config path.
+fn env_overlay() -> anyhow::Result<Option<serde_yaml::Value>> {
+    const PREFIX: &str = "ARMYKNIFE_";
+
+    let mut overlay: Option<serde_yaml::Value> = None;
+    for (name, raw_value) in std::env::vars() {
+        let Some(path) = name.strip_prefix(PREFIX) else {
+            continue;
+        };
+        if !path.contains("__") {
+            continue;
+        }
+
+        let scalar: serde_yaml::Value =
+            serde_yaml::from_str(&raw_value).map_err(|e| ConfigError::EnvParseError {
+                message: format!("invalid value for {name}: {e}"),
+            })?;
+
+        let mut node = scalar;
+        for segment in path.to_ascii_lowercase().rsplit("__") {
+            let mut mapping = serde_yaml::Mapping::new();
+            mapping.insert(serde_yaml::Value::String(segment.to_string()), node);
+            node = serde_yaml::Value::Mapping(mapping);
+        }
+
+        overlay = Some(match overlay {
+            None => node,
+            Some(base) => merge_yaml(base, node),
+        });
+    }
+
+    Ok(overlay)
 }
 
 /// Recursively merge two YAML values. Mappings merge key-by-key; any other type
@@ -1219,6 +1328,124 @@ mod tests {
         let missing = dir.path().join("nonexistent");
         let config = load_config_from_dir(&missing).unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn load_config_env_overlay_overrides_yaml_and_interprets_scalars() {
+        let dir = TempDir::new().unwrap();
+        let config_dir = dir.path().join("armyknife");
+        fs::create_dir(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.yaml"),
+            indoc! {"
+                cc:
+                  auto_compact:
+                    enabled: true
+                    idle_timeout: 3m
+                    min_context_tokens: 100000
+            "},
+        )
+        .unwrap();
+
+        let config = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
+                ("ARMYKNIFE_CC__AUTO_COMPACT__ENABLED", Some("false")),
+                ("ARMYKNIFE_CC__AUTO_COMPACT__IDLE_TIMEOUT", Some("5m")),
+                ("ARMYKNIFE_CC__AUTO_COMPACT__MIN_CONTEXT_TOKENS", Some("42")),
+            ],
+            load_config,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                cc: CcConfig {
+                    auto_compact: AutoCompactConfig {
+                        enabled: false,
+                        idle_timeout: "5m".to_string(),
+                        min_context_tokens: 42,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_config_env_overlay_works_without_any_yaml_config() {
+        let dir = TempDir::new().unwrap();
+        // dir/armyknife is never created, so there's no config directory at all.
+
+        let config = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
+                ("ARMYKNIFE_NOTIFICATION__SOUND", Some("Ping")),
+            ],
+            load_config,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                notification: NotificationConfig {
+                    sound: "Ping".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_config_unknown_env_key_errors_and_blames_environment() {
+        let dir = TempDir::new().unwrap();
+
+        let err = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
+                ("ARMYKNIFE_WM__TYPO", Some("1")),
+            ],
+            || load_config().unwrap_err(),
+        );
+
+        let config_err = err.downcast_ref::<ConfigError>().unwrap();
+        match config_err {
+            ConfigError::EnvParseError { message } => {
+                assert_eq!(
+                    message,
+                    "unknown field `typo`, expected one of `worktrees_dir`, `branch_prefix`, `layout`, `repos_root`"
+                );
+            }
+            other => panic!("expected EnvParseError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_config_from_dir_ignores_armyknife_env_vars() {
+        // load_config_from_dir is called directly by tests and must not read
+        // ARMYKNIFE_* environment variables, or tests would become flaky
+        // depending on what's exported in the running shell.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            indoc! {"
+                notification:
+                  sound: FromYaml
+            "},
+        )
+        .unwrap();
+
+        let config =
+            temp_env::with_vars([("ARMYKNIFE_NOTIFICATION__SOUND", Some("FromEnv"))], || {
+                load_config_from_dir(dir.path())
+            })
+            .unwrap();
+
+        assert_eq!(config.notification.sound, "FromYaml");
     }
 
     #[rstest]
