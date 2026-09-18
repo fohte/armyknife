@@ -55,14 +55,16 @@ pub struct CommonNewArgs {
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
 
-    /// Coding agent CLI to launch for the new session.
+    /// Coding agent CLI to launch for the new session. Falls back to
+    /// `config.agent.default_engine` (default: `claude`) when omitted; see
+    /// `resolve_engine`.
     ///
     /// Only applies to the no-worktree path (`run_session_only`); rejected
     /// together with `--worktree`, which always launches
     /// `config.wm.layout`, a user-configurable pane tree whose commands are
     /// independent of `Engine`.
-    #[arg(long, value_enum, default_value_t = Engine::Claude, conflicts_with = "worktree")]
-    pub engine: Engine,
+    #[arg(long, value_enum, conflicts_with = "worktree")]
+    pub engine: Option<Engine>,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -220,6 +222,15 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
     Ok((env_vars, background))
 }
 
+/// Resolves the engine to launch for the no-worktree path: an explicit
+/// `--engine` always wins over `config.agent.default_engine`, which itself
+/// already reflects any `ARMYKNIFE_AGENT__DEFAULT_ENGINE` override applied
+/// while loading `config` (see `env_overlay`) and defaults to `Engine::Claude`
+/// when neither is set.
+fn resolve_engine(explicit: Option<Engine>, config: &Config) -> Engine {
+    explicit.unwrap_or(config.agent.default_engine)
+}
+
 /// Run `a agent new` without creating a worktree, either by splitting the
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
@@ -265,6 +276,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
         .collect();
 
     let suffix = if background { " (background)" } else { "" };
+    let engine = resolve_engine(args.common.engine, config);
 
     let differs = should_open_window(
         repo_root,
@@ -283,7 +295,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 prompt: prompt.as_deref(),
                 env_vars: &env_refs,
                 background,
-                command: args.common.engine.process_name(),
+                command: engine.process_name(),
             })?;
             println!("Split tmux pane in '{cwd}'{suffix}");
         }
@@ -292,13 +304,9 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
             // here, and `restore_automatic_rename` below lets tmux relabel
             // the window once the engine's process starts instead of keeping
             // this name displayed.
-            let window_name = format!(
-                "{}-{}",
-                args.common.engine.process_name(),
-                std::process::id()
-            );
+            let window_name = format!("{}-{}", engine.process_name(), std::process::id());
             let layout = LayoutNode::Pane(PaneConfig {
-                command: args.common.engine.process_name().to_string(),
+                command: engine.process_name().to_string(),
                 focus: true,
             });
 
@@ -346,11 +354,29 @@ mod tests {
     }
 
     #[rstest]
-    #[case::default_is_claude(&["a"], Engine::Claude)]
-    #[case::explicit_codex(&["a", "--engine", "codex"], Engine::Codex)]
-    fn engine_value_parses(#[case] argv: &[&str], #[case] expected: Engine) {
+    #[case::omitted(&["a"], None)]
+    #[case::explicit_codex(&["a", "--engine", "codex"], Some(Engine::Codex))]
+    fn engine_value_parses(#[case] argv: &[&str], #[case] expected: Option<Engine>) {
         let cli = TestCli::try_parse_from(argv).unwrap();
         assert_eq!(cli.args.common.engine, expected);
+    }
+
+    #[rstest]
+    #[case::explicit_wins_over_config_default(Some(Engine::Codex), Engine::Claude, Engine::Codex)]
+    #[case::falls_back_to_config_default(None, Engine::Codex, Engine::Codex)]
+    #[case::falls_back_to_claude_when_neither_set(None, Engine::Claude, Engine::Claude)]
+    fn resolve_engine_cases(
+        #[case] explicit: Option<Engine>,
+        #[case] config_default: Engine,
+        #[case] expected: Engine,
+    ) {
+        let config = Config {
+            agent: crate::shared::config::AgentConfig {
+                default_engine: config_default,
+            },
+            ..Default::default()
+        };
+        assert_eq!(resolve_engine(explicit, &config), expected);
     }
 
     #[rstest]

@@ -46,6 +46,9 @@ For editor autocompletion, add the following to the top of your config file:
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
 
+agent:
+  default_engine: claude # coding agent CLI for `a agent new` when `--engine` is omitted (default: "claude")
+
 wm:
   worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
   branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
@@ -366,13 +369,15 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `--label <title>`          | Label for the new session (displayed in `agent watch`)                                                                                                                                                                                                                                                                                                                                                                   |
 | `--model <model>`          | Model for the new Claude Code session (passed through to `claude --model`); accepts an alias (e.g. `opus`, `sonnet`) or a full model name (e.g. `claude-fable-5`)                                                                                                                                                                                                                                                        |
 | `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                                                                                                                                                                                                                                                                |
-| `--engine <claude\|codex>` | Coding agent CLI to launch (default: `claude`). Only valid without `--worktree` -- see below                                                                                                                                                                                                                                                                                                                             |
+| `--engine <claude\|codex>` | Coding agent CLI to launch (default: `agent.default_engine` config, itself defaulting to `claude`). Only valid without `--worktree` -- see below                                                                                                                                                                                                                                                                         |
 
 Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking Claude Code session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
 
 `a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
 
-`--engine codex` launches `codex` instead of `claude` in the no-worktree path (pane command and window-name placeholder). Combining `--engine` with `--worktree` is rejected: that path always launches `config.wm.layout`'s configured commands, which are independent of `--engine`. A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch.
+`--engine codex` launches `codex` instead of `claude` in the no-worktree path (pane command and window-name placeholder). Combining `--engine` with `--worktree` is rejected: that path always launches `config.wm.layout`'s configured commands, which are independent of `--engine`. A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch -- `resume` always follows that recorded engine, never `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
+
+Set `agent.default_engine: codex` in config (or export `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` for a single invocation, see [Environment variable overrides](#environment-variable-overrides)) to change what an omitted `--engine` resolves to; an explicit `--engine` on the command line always wins over both.
 
 #### Setup
 
