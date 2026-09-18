@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.301](https://github.com/fohte/armyknife/compare/v0.1.300...v0.1.301) (2026-09-18)
+
+
+### Features
+
+* **agent:** support Codex CLI sessions ([#913](https://github.com/fohte/armyknife/issues/913)) ([cbbfb23](https://github.com/fohte/armyknife/commit/cbbfb23be0d192f3a4c20358486a5bd9898653bd))
+
 ## [0.1.300](https://github.com/fohte/armyknife/compare/v0.1.299...v0.1.300) (2026-09-17)
 
 
