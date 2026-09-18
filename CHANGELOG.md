@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.302](https://github.com/fohte/armyknife/compare/v0.1.301...v0.1.302) (2026-09-18)
+
+
+### Features
+
+* **config:** support overriding configuration via environment variables ([#915](https://github.com/fohte/armyknife/issues/915)) ([a72c793](https://github.com/fohte/armyknife/commit/a72c793b92467d45a72fbcaebb7523dd3a4a82ad))
+
 ## [0.1.301](https://github.com/fohte/armyknife/compare/v0.1.300...v0.1.301) (2026-09-18)
 
 
