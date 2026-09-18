@@ -15,6 +15,8 @@ use ratatui::widgets::ListState;
 
 use super::worktree_session_children::{SessionChild, sessions_under_worktree_from_canonical};
 use super::worktree_view::{WorktreeRow, canonicalize_or_self};
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
 use crate::infra::git::MergeStatus;
 use crate::infra::github::PrState;
@@ -753,6 +755,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

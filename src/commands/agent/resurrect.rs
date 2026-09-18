@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 
 use super::pane;
 use super::store;
-use super::types::TMUX_SESSION_OPTION;
+use super::types::{Engine, TMUX_SESSION_OPTION};
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -196,6 +196,23 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
     write_state_file(&state_file, &pane_sessions)
 }
 
+/// Reads `engine` for `session_id` from the store, defaulting to
+/// `Engine::Claude` (matching `Session::engine`'s own default) when the
+/// session file is missing or fails to load.
+fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
+    match store::load_session_from(sessions_dir, session_id) {
+        Ok(session) => session.map(|s| s.engine).unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(
+                event = "cc.resurrect.restore.engine_load_failed",
+                session_id = %session_id,
+                %error,
+            );
+            Engine::default()
+        }
+    }
+}
+
 /// Reads `ancestor_session_ids` for `session_id` from the store, treating a
 /// missing session file the same as one with no ancestors. A read failure
 /// (e.g. a lock timeout against a session mid-write) is logged rather than
@@ -221,7 +238,7 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
 ///
 /// Reads the state file and, for each pane that still exists, sets the user option
 /// and types `a agent resume <session-id>` into the pane to re-launch Claude Code,
-/// unless the pane already has a live `claude` process (see `resume_command_for`).
+/// unless the pane already has a live agent process (see `resume_command_for`).
 /// The session ID is passed as an argument (instead of relying on the pane option)
 /// so the resumed process is not racing against tmux to observe the just-set option.
 /// Each session's stored pane_id is also corrected here — see
@@ -300,8 +317,9 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             );
         }
 
+        let engine = load_engine(&sessions_dir, session_id);
         let pane_has_claude =
-            pane::process::pane_has_live_claude_process(*pane_pid, snapshot.as_ref());
+            pane::process::pane_has_live_agent_process(*pane_pid, engine, snapshot.as_ref());
         commands.extend(restore_commands_for_pane(
             pane_id,
             session_id,
@@ -369,7 +387,8 @@ fn restore_commands_for_pane(
 /// `None` when the pane must not be touched.
 ///
 /// `pane_has_claude` reflects whether the pane's process tree already has a
-/// live `claude` process (see `pane::process::pane_has_live_claude_process`).
+/// live process for the session's engine (see
+/// `pane::process::pane_has_live_agent_process`).
 /// A pane carries `TMUX_SESSION_OPTION` for as long as a session ever ran
 /// there -- including one that is still active with a live process reading
 /// the pane's input -- so restoring the option is always safe, but typing
@@ -582,7 +601,7 @@ mod tests {
         use chrono::Utc;
 
         use super::*;
-        use crate::commands::agent::types::{Session, SessionStatus};
+        use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
         fn session_with_ancestors(id: &str, ancestor_session_ids: Vec<String>) -> Session {
             Session {
@@ -603,6 +622,7 @@ mod tests {
                 pending_permission_agent_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             }
         }
 

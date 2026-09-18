@@ -128,7 +128,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
     fn create_test_session(id: &str) -> Session {
         Session {
@@ -149,6 +149,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

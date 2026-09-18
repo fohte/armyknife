@@ -6,6 +6,8 @@ use anyhow::Result;
 use clap::Args;
 
 use super::store;
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{
     Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_WINDOW_STATUS_OPTION,
     TMUX_WINDOW_TITLE_OPTION,
@@ -201,6 +203,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

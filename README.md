@@ -354,10 +354,13 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `--label <title>`          | Label for the new session (displayed in `agent watch`)                                                                                                                                                                                                                                                                                                                                                                   |
 | `--model <model>`          | Model for the new Claude Code session (passed through to `claude --model`); accepts an alias (e.g. `opus`, `sonnet`) or a full model name (e.g. `claude-fable-5`)                                                                                                                                                                                                                                                        |
 | `--parent-session-id <id>` | Parent session ID for tree view hierarchy                                                                                                                                                                                                                                                                                                                                                                                |
+| `--engine <claude\|codex>` | Coding agent CLI to launch (default: `claude`). Only affects the no-worktree path -- see below                                                                                                                                                                                                                                                                                                                           |
 
 Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking Claude Code session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
 
 `a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
+
+`--engine codex` launches `codex` instead of `claude` in the no-worktree path (pane command and window-name placeholder). The `--worktree` path always launches `config.wm.layout`'s configured commands regardless of `--engine`. A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch.
 
 #### Setup
 
@@ -414,6 +417,8 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, or stopped).
 
 The `SessionStart` and `UserPromptSubmit` hooks store the Claude Code session ID in the tmux pane user option `@armyknife-last-claude-code-session-id`, so that `a agent resume` can relaunch `claude --resume <id>` inside that pane.
+
+`a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: `stop` resolves to `Stopped` ("waiting for the next prompt") and `notification` with `notification_type: "permission_prompt"` (or `permission-request`) resolves to `WaitingInput` ("waiting for tool-call approval"), so a Codex `hooks.json` registration that maps Codex's own hook events onto these same `--event` values gets the same approval-wait/input-wait distinction in `a agent list` for free. Wiring that registration is a separate, dotfiles-side change; this repo only accepts and records the `--engine` flag.
 
 #### Peer session name resolution
 

@@ -19,8 +19,8 @@ use super::error::CcError;
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{
-    HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus, TMUX_SESSION_OPTION,
-    TmuxInfo,
+    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
+    TMUX_SESSION_OPTION, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -39,6 +39,12 @@ const TRANSCRIPT_MAX_RETRIES: u32 = 5;
 pub struct HookArgs {
     /// Hook event name (e.g., user-prompt-submit, stop, notification)
     pub event: String,
+
+    /// Which coding agent CLI fired this hook. Defaults to `claude` so
+    /// existing Claude Code hook registrations (which never pass this flag)
+    /// keep working unchanged.
+    #[arg(long, value_enum, default_value_t = Engine::Claude)]
+    pub engine: Engine,
 }
 
 /// `CLAUDE_CODE_ENTRYPOINT` value prefix identifying headless invocations
@@ -72,7 +78,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Parse JSON from raw stdin
     let log_level = get_log_level();
-    let input = match parse_stdin_json(&raw_stdin) {
+    let mut input = match parse_stdin_json(&raw_stdin) {
         Ok(input) => {
             // Log successful parse only at debug level
             if log_level == LogLevel::Debug {
@@ -89,6 +95,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
         }
     };
 
+    input.engine = args.engine;
     process_hook_event(event, input)
 }
 
@@ -409,6 +416,7 @@ fn process_hook_event_impl(
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: input.engine,
         }
     });
 
@@ -534,21 +542,30 @@ fn process_hook_event_impl(
     session_lock.save(&session)?;
     drop(session_lock);
 
-    // Update last_message from Claude Code's transcript.
-    // For Stop events, retry if transcript hasn't been updated yet (race condition with
-    // Claude Code's write). For other events, read once without retrying.
-    let max_retries = if event == HookEvent::Stop {
-        TRANSCRIPT_MAX_RETRIES
-    } else {
-        0
+    // Update last_message. Claude Code requires re-reading the transcript
+    // file (see get_last_message_with_retry's retry loop, which works around
+    // a write race with Claude Code's own transcript write). Codex's `Stop`
+    // hook payload carries the turn's final assistant message directly, so
+    // no transcript read or retry is needed there; Codex's other events
+    // carry no such field and leave last_message untouched.
+    let last_message = match session.engine {
+        Engine::Claude => {
+            let max_retries = if event == HookEvent::Stop {
+                TRANSCRIPT_MAX_RETRIES
+            } else {
+                0
+            };
+            get_last_message_with_retry(
+                &session.cwd,
+                &session.session_id,
+                session.last_message.as_deref(),
+                TRANSCRIPT_RETRY_DELAY,
+                max_retries,
+            )
+        }
+        Engine::Codex if event == HookEvent::Stop => input.last_assistant_message.clone(),
+        Engine::Codex => session.last_message.clone(),
     };
-    let last_message = get_last_message_with_retry(
-        &session.cwd,
-        &session.session_id,
-        session.last_message.as_deref(),
-        TRANSCRIPT_RETRY_DELAY,
-        max_retries,
-    );
     if last_message != session.last_message {
         // Compare-and-swap against the pre-read value: a slower sibling
         // event's own transcript read could otherwise finish and save first,
@@ -606,12 +623,16 @@ fn process_hook_event_impl(
     // worker re-checks user activity / branch state on wake-up so a quick
     // follow-up turn cancels the compaction transparently.
     //
+    // Codex sessions are excluded: this workaround exists because Claude
+    // Code has no built-in idle auto-compact, and the resume command it
+    // spawns (`claude -r -p "/compact"`) is Claude-CLI-specific.
+    //
     // Skip while any background task launched in this session has not
     // reported completion: the user is still mid-task even if Claude's
     // main loop went idle (the post-launch Stop is synthetic). This reads
     // `pending_bg_task_ids` as refreshed from `background_tasks` a few
     // lines above, not any state accumulated across separate hook events.
-    if side_effects.auto_compact && event == HookEvent::Stop {
+    if side_effects.auto_compact && event == HookEvent::Stop && session.engine == Engine::Claude {
         if !session.pending_bg_task_ids.is_empty() {
             tracing::info!(
                 event = "cc.auto_compact.skipped",
@@ -997,7 +1018,7 @@ fn build_notification(
     session: &Session,
     config: &Config,
 ) -> Notification {
-    // Title: "⏳ Claude Code - Waiting" or "⏹ Claude Code - Stopped"
+    // Title: "⏳ Claude Code - Waiting" or "⏹ Codex - Stopped"
     let (emoji, status_label) = match session.status {
         SessionStatus::WaitingInput => ("\u{23f3}", "Waiting"),
         SessionStatus::Stopped => ("\u{23f9}", "Stopped"),
@@ -1005,7 +1026,11 @@ fn build_notification(
         SessionStatus::Paused => ("\u{23f8}", "Paused"),
         SessionStatus::Ended => ("\u{1f3c1}", "Ended"),
     };
-    let title = format!("{} Claude Code - {}", emoji, status_label);
+    let engine_label = match session.engine {
+        Engine::Claude => "Claude Code",
+        Engine::Codex => "Codex",
+    };
+    let title = format!("{} {} - {}", emoji, engine_label, status_label);
 
     // Subtitle: "session:window | タイトル" format
     // Limit to ~50 characters
@@ -1413,6 +1438,18 @@ mod tests {
     }
 
     #[test]
+    fn test_build_notification_codex_engine_label() {
+        let input = create_test_input(None);
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Stopped;
+        session.engine = Engine::Codex;
+        let notification =
+            build_notification(HookEvent::Stop, &input, &session, &Config::default());
+
+        assert_eq!(notification.title(), "\u{23f9} Codex - Stopped");
+    }
+
+    #[test]
     fn test_build_notification_fallback_message() {
         let input = create_test_input(None);
         let mut session = create_test_session(None);
@@ -1602,6 +1639,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -1617,6 +1655,29 @@ mod tests {
             reloaded.status, expected,
             "{event:?} on Paused session should result in {expected:?}"
         );
+    }
+
+    #[test]
+    fn codex_stop_uses_last_assistant_message_without_transcript_read() {
+        // Codex's `Stop` payload carries the turn's final assistant message
+        // directly. No transcript file exists at this test's `cwd`, so a
+        // Claude-engine session would leave `last_message` at `None` (its
+        // path re-reads the transcript instead -- see
+        // `get_last_message_with_retry`).
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let payload = r#"{"session_id":"codex-stop","cwd":"/tmp/test","engine":"codex","last_assistant_message":"All done."}"#;
+        let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "codex-stop")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.last_message, Some("All done.".to_string()));
+        assert_eq!(reloaded.engine, Engine::Codex);
     }
 
     #[test]
@@ -1709,6 +1770,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled,
+            engine: Engine::Claude,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -2248,6 +2310,7 @@ mod tests {
             pending_permission_agent_ids: BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
@@ -2563,6 +2626,7 @@ mod tests {
                 pending_permission_agent_ids: BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             }
         }
 

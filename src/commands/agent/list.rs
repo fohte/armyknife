@@ -6,6 +6,8 @@ use clap::Args;
 
 use super::claude_sessions;
 use super::store;
+#[cfg(test)]
+use super::types::Engine;
 use super::types::{DisplayStatus, Session, StatusColor};
 use crate::shared::table::{color, pad_or_truncate};
 
@@ -262,6 +264,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
@@ -408,6 +411,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -427,6 +431,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -446,6 +451,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "s4".to_string(),
@@ -465,6 +471,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
         ];
 
@@ -757,6 +764,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "s2".to_string(),
@@ -781,6 +789,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
             Session {
                 session_id: "s3".to_string(),
@@ -800,6 +809,7 @@ mod tests {
                 pending_permission_agent_ids: std::collections::BTreeSet::new(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             },
         ];
 

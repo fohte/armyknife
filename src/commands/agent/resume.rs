@@ -2,7 +2,8 @@ use anyhow::{Result, bail};
 use clap::Args;
 use thiserror::Error;
 
-use super::types::{Session, SessionStatus, TMUX_SESSION_OPTION};
+use super::store;
+use super::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::{process, tmux};
 use crate::shared::command::find_command_path;
 use crate::shared::env_var::EnvVars;
@@ -32,8 +33,13 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         _ => resolve_session_id_from_pane()?,
     };
 
-    let claude_path = find_command_path("claude")
-        .ok_or_else(|| anyhow::anyhow!("Could not find 'claude' command in PATH"))?;
+    let session = store::load_session(&session_id)?
+        .ok_or_else(|| anyhow::anyhow!("Session {session_id} not found"))?;
+
+    let (binary_name, resume_args) = resume_binary_and_args(session.engine, &session_id);
+
+    let binary_path = find_command_path(binary_name)
+        .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
 
     let err = match args
         .ancestor_session_ids
@@ -41,13 +47,26 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         .filter(|s| !s.is_empty())
     {
         Some(ancestor_ids) => process::exec_replace_with_env(
-            &claude_path,
-            ["--resume", &session_id],
+            &binary_path,
+            resume_args,
             &[(EnvVars::ancestor_session_ids_name(), ancestor_ids)],
         ),
-        None => process::exec_replace(&claude_path, ["--resume", &session_id]),
+        None => process::exec_replace(&binary_path, resume_args),
     };
-    bail!("Failed to exec claude: {}", err)
+    bail!("Failed to exec {}: {}", binary_name, err)
+}
+
+/// Binary name and CLI args needed to resume `session_id` for `engine`.
+/// Codex's resume is a subcommand (`codex resume <id>`), not a flag like
+/// Claude Code's `--resume`.
+fn resume_binary_and_args(engine: Engine, session_id: &str) -> (&'static str, Vec<String>) {
+    match engine {
+        Engine::Claude => (
+            "claude",
+            vec!["--resume".to_string(), session_id.to_string()],
+        ),
+        Engine::Codex => ("codex", vec!["resume".to_string(), session_id.to_string()]),
+    }
 }
 
 /// Also used by `peer::me` to resolve the session running in the caller's
@@ -236,6 +255,29 @@ mod tests {
         }
     }
 
+    mod resume_binary_and_args_tests {
+        use super::*;
+
+        #[rstest]
+        #[case::claude(
+            Engine::Claude,
+            "session-1",
+            ("claude", vec!["--resume".to_string(), "session-1".to_string()])
+        )]
+        #[case::codex(
+            Engine::Codex,
+            "session-1",
+            ("codex", vec!["resume".to_string(), "session-1".to_string()])
+        )]
+        fn cases(
+            #[case] engine: Engine,
+            #[case] session_id: &str,
+            #[case] expected: (&str, Vec<String>),
+        ) {
+            assert_eq!(resume_binary_and_args(engine, session_id), expected);
+        }
+    }
+
     mod respawn_paused_session_guard_tests {
         use chrono::Utc;
         use std::path::PathBuf;
@@ -262,6 +304,7 @@ mod tests {
                 pending_permission_agent_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                engine: Engine::Claude,
             }
         }
 

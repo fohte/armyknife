@@ -39,6 +39,8 @@ use crate::commands::agent::claude_sessions;
 use crate::commands::agent::pane;
 use crate::commands::agent::signal::{LibcSignalSender, SignalSender};
 use crate::commands::agent::store;
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::git::{MergeStatus, get_merge_status_for_repo, open_repo_at};
 use crate::infra::process::{self, ProcessSnapshot};
@@ -448,6 +450,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 

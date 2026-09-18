@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
+use crate::commands::agent::types::Engine;
 use crate::infra::git::{get_repo_root, get_repo_root_in};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
@@ -53,6 +54,14 @@ pub struct CommonNewArgs {
     /// When specified, operates on the given repository instead of the current directory.
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
+
+    /// Coding agent CLI to launch for the new session.
+    ///
+    /// Only affects the no-worktree path (`run_session_only`); `--worktree`
+    /// launches `config.wm.layout`, a user-configurable pane tree whose
+    /// commands are independent of `Engine`.
+    #[arg(long, value_enum, default_value_t = Engine::Claude)]
+    pub engine: Engine,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -273,17 +282,22 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 prompt: prompt.as_deref(),
                 env_vars: &env_refs,
                 background,
+                command: args.common.engine.process_name(),
             })?;
             println!("Split tmux pane in '{cwd}'{suffix}");
         }
         _ => {
             // PID-based placeholder: there's no worktree/branch name to use
             // here, and `restore_automatic_rename` below lets tmux relabel
-            // the window once `claude` starts instead of keeping this name
-            // displayed.
-            let window_name = format!("claude-{}", std::process::id());
+            // the window once the engine's process starts instead of keeping
+            // this name displayed.
+            let window_name = format!(
+                "{}-{}",
+                args.common.engine.process_name(),
+                std::process::id()
+            );
             let layout = LayoutNode::Pane(PaneConfig {
-                command: "claude".to_string(),
+                command: args.common.engine.process_name().to_string(),
                 focus: true,
             });
 
@@ -328,6 +342,14 @@ mod tests {
         let cli = TestCli::try_parse_from(argv).unwrap();
         let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::default_is_claude(&["a"], Engine::Claude)]
+    #[case::explicit_codex(&["a", "--engine", "codex"], Engine::Codex)]
+    fn engine_value_parses(#[case] argv: &[&str], #[case] expected: Engine) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        assert_eq!(cli.args.common.engine, expected);
     }
 
     #[rstest]

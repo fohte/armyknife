@@ -1,4 +1,6 @@
 use crate::commands::agent::claude_sessions;
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -307,6 +309,7 @@ mod tests {
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
             read_at: None,
             sweep_signaled: false,
+            engine: Engine::Claude,
         }
     }
 
