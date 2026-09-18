@@ -64,21 +64,27 @@ fn resolve_sender() -> Option<(String, Option<Engine>)> {
     if let Some(id) = EnvVars::load().session_id {
         return Some((id, None));
     }
-    if let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID") {
+    if let Some(id) = non_empty_env_var("CLAUDE_CODE_SESSION_ID") {
         return Some((id, Some(Engine::Claude)));
     }
     // Codex sets both CODEX_SESSION_ID (shared by the root thread and all of
     // its subagent threads) and CODEX_THREAD_ID (unique per subagent
     // thread). CODEX_SESSION_ID is the one that matches how armyknife scopes
-    // a session: a Claude Code subagent's hook events still carry the
-    // top-level session's session_id (see `HookInput::agent_id`'s doc
-    // comment in types.rs) rather than a per-subagent ID, so the Codex
-    // equivalent of "this session" is the value stable across its subagents
-    // too.
-    if let Ok(id) = std::env::var("CODEX_SESSION_ID") {
+    // a session: `HookInput` (types.rs) carries a single `session_id` field
+    // plus a separate optional `agent_id` for subagent-fired events, so a
+    // Claude Code subagent's hook events still report the top-level
+    // session's session_id, not a per-subagent one. The Codex equivalent of
+    // "this session" is the value that's stable across its subagents too.
+    if let Some(id) = non_empty_env_var("CODEX_SESSION_ID") {
         return Some((id, Some(Engine::Codex)));
     }
     None
+}
+
+/// Treats an empty-but-set env var as unset, matching `EnvVars::load`'s own
+/// `non_empty_var` handling of `ARMYKNIFE_*` variables one branch above.
+fn non_empty_env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 pub fn notify(
