@@ -319,26 +319,26 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                  | Aliases | Description                                                              |
-| --------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                |
-| `hook <event>`                          |         | Record session events (called from Claude Code hooks)                    |
-| `list`                                  | `ls`    | List all Claude Code sessions with status                                |
-| `focus <session_id>`                    |         | Focus on a session's tmux pane                                           |
-| `mark-read [-t <pane_id>]`              |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
-| `resume [session_id]`                   | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
-| `resurrect save`                        |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
-| `resurrect restore`                     |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
-| `peer parent`                           |         | List the session that delegated to this one, if any (JSON)               |
-| `peer children`                         |         | List the sessions this one delegated to (JSON)                           |
-| `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)               |
-| `peer me`                               |         | Print the session running in the caller's own tmux pane (JSON)           |
-| `peer wake <session_id>`                |         | Resume a paused peer session and print its resolved SendMessage name     |
-| `peer notify <session_id> -m <text>`    |         | Send a message directly to another session's SendMessage socket          |
-| `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                 |
-| `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)            |
-| `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                   |
-| `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
+| Action                                             | Aliases | Description                                                                                          |
+| -------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `new [--worktree[=<branch>]] [options]`            |         | Start a Claude Code session, optionally in a new worktree                                            |
+| `hook <event>`                                     |         | Record session events (called from Claude Code hooks)                                                |
+| `list`                                             | `ls`    | List all Claude Code sessions with status                                                            |
+| `focus <session_id>`                               |         | Focus on a session's tmux pane                                                                       |
+| `mark-read [-t <pane_id>]`                         |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                                     |
+| `resume [session_id]`                              | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                             |
+| `resurrect save`                                   |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                                   |
+| `resurrect restore`                                |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                                |
+| `peer parent`                                      |         | List the session that delegated to this one, if any (JSON)                                           |
+| `peer children`                                    |         | List the sessions this one delegated to (JSON)                                                       |
+| `peer list [-R <repo>]`                            |         | List tracked sessions, with their SendMessage names (JSON)                                           |
+| `peer me`                                          |         | Print the session running in the caller's own tmux pane (JSON)                                       |
+| `peer wake <session_id>`                           |         | Resume a paused peer session and print its resolved SendMessage name                                 |
+| `peer notify <session_id> -m <text> [--from <id>]` |         | Send a message directly to another session's SendMessage socket, optionally wrapped with a sender ID |
+| `sweep`                                            |         | Pause long-stopped sessions (run periodically or manual)                                             |
+| `auto-compact schedule --session <id>`             |         | Detached worker spawned by the Stop hook (not for direct use)                                        |
+| `window-status <window_id>`                        |         | Print status symbols for the sessions in a tmux window                                               |
+| `pane-has-paused <pane_id>`                        |         | Print `1` when the pane holds a Paused Claude Code session, else empty                               |
 
 `new` options:
 
@@ -448,6 +448,8 @@ myproject-7e
 ```
 
 `a agent peer notify <session_id> -m <text>` delivers a message to a session's `SendMessage` socket directly, without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
+
+Add `--from <id>` (typically the caller's own `session_id`) to wrap the message in a `<peer-message>` envelope naming the sender, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. Omitting `--from` delivers the message unwrapped, matching prior behavior.
 
 ```console
 $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
