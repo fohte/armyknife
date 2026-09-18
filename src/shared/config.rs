@@ -510,9 +510,11 @@ pub fn load_config() -> anyhow::Result<Config> {
         Some(dir) => merged_yaml_from_dir(dir)?,
         None => None,
     };
-    let blame_path = dir.unwrap_or_else(|| PathBuf::from("~/.config/armyknife"));
+    // Unreachable when `dir` is None: `yaml_merged` is also None in that case,
+    // and `deserialize_config(None, _)` never looks at `blame_path`.
+    let blame_path = dir.unwrap_or_default();
 
-    let Some(overlay) = env_overlay()? else {
+    let Some(overlay) = env_overlay() else {
         return deserialize_config(yaml_merged, &blame_path);
     };
     let combined = match yaml_merged.clone() {
@@ -668,7 +670,7 @@ fn deserialize_config(
 /// see `env_var.rs`) from being misread as config overrides.
 ///
 /// Returns `None` if no `ARMYKNIFE_*` variable maps to a config path.
-fn env_overlay() -> anyhow::Result<Option<serde_yaml::Value>> {
+fn env_overlay() -> Option<serde_yaml::Value> {
     const PREFIX: &str = "ARMYKNIFE_";
 
     let mut overlay: Option<serde_yaml::Value> = None;
@@ -680,10 +682,20 @@ fn env_overlay() -> anyhow::Result<Option<serde_yaml::Value>> {
             continue;
         }
 
-        let scalar: serde_yaml::Value =
-            serde_yaml::from_str(&raw_value).map_err(|e| ConfigError::EnvParseError {
-                message: format!("invalid value for {name}: {e}"),
-            })?;
+        // A value like "Bottle: full" or "- 1" parses as a YAML mapping or
+        // sequence rather than the literal string it's meant to be, and some
+        // values aren't valid YAML at all. Env values are plain text, not
+        // embedded documents, so only accept genuine scalars and otherwise
+        // fall back to the raw string.
+        let scalar = match serde_yaml::from_str::<serde_yaml::Value>(&raw_value) {
+            Ok(
+                value @ (serde_yaml::Value::Null
+                | serde_yaml::Value::Bool(_)
+                | serde_yaml::Value::Number(_)
+                | serde_yaml::Value::String(_)),
+            ) => value,
+            _ => serde_yaml::Value::String(raw_value),
+        };
 
         let mut node = scalar;
         for segment in path.to_ascii_lowercase().rsplit("__") {
@@ -698,7 +710,7 @@ fn env_overlay() -> anyhow::Result<Option<serde_yaml::Value>> {
         });
     }
 
-    Ok(overlay)
+    overlay
 }
 
 /// Recursively merge two YAML values. Mappings merge key-by-key; any other type
@@ -1330,6 +1342,60 @@ mod tests {
         assert_eq!(config, Config::default());
     }
 
+    /// Clears every ambient `ARMYKNIFE_*` variable that `env_overlay()` would
+    /// pick up (path contains `__`) before applying `extra`, so tests calling
+    /// `load_config()` aren't flaky depending on what's exported in the
+    /// invoking shell — including this very feature's own overrides in a dev
+    /// setup that dogfoods it.
+    fn with_isolated_env_overlay<R>(extra: Vec<(&str, Option<&str>)>, f: impl FnOnce() -> R) -> R {
+        let mut vars: Vec<(String, Option<String>)> = std::env::vars()
+            .filter(|(k, _)| k.starts_with("ARMYKNIFE_") && k.contains("__"))
+            .map(|(k, _)| (k, None))
+            .collect();
+        vars.extend(
+            extra
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.map(str::to_string))),
+        );
+        temp_env::with_vars(vars, f)
+    }
+
+    #[rstest]
+    #[case::bool_false("false", serde_yaml::Value::Bool(false))]
+    #[case::number("3", serde_yaml::Value::Number(3.into()))]
+    #[case::plain_string("hello", serde_yaml::Value::String("hello".to_string()))]
+    // Regression: these all parse as a non-scalar YAML document (mapping or
+    // sequence) if fed straight into serde_yaml, even though they're meant
+    // as a literal string value.
+    #[case::string_with_colon(
+        "Bottle: full",
+        serde_yaml::Value::String("Bottle: full".to_string())
+    )]
+    #[case::string_looks_like_sequence("- 1", serde_yaml::Value::String("- 1".to_string()))]
+    #[case::string_looks_like_mapping("{a: 1}", serde_yaml::Value::String("{a: 1}".to_string()))]
+    fn env_overlay_interprets_value_as_scalar_only(
+        #[case] raw_value: &str,
+        #[case] expected_scalar: serde_yaml::Value,
+    ) {
+        let overlay = with_isolated_env_overlay(
+            vec![("ARMYKNIFE_NOTIFICATION__SOUND", Some(raw_value))],
+            env_overlay,
+        );
+
+        let mut notification = serde_yaml::Mapping::new();
+        notification.insert(
+            serde_yaml::Value::String("sound".to_string()),
+            expected_scalar,
+        );
+        let mut expected = serde_yaml::Mapping::new();
+        expected.insert(
+            serde_yaml::Value::String("notification".to_string()),
+            serde_yaml::Value::Mapping(notification),
+        );
+
+        assert_eq!(overlay, Some(serde_yaml::Value::Mapping(expected)));
+    }
+
     #[test]
     fn load_config_env_overlay_overrides_yaml_and_interprets_scalars() {
         let dir = TempDir::new().unwrap();
@@ -1347,8 +1413,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = temp_env::with_vars(
-            [
+        let config = with_isolated_env_overlay(
+            vec![
                 ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
                 ("ARMYKNIFE_CC__AUTO_COMPACT__ENABLED", Some("false")),
                 ("ARMYKNIFE_CC__AUTO_COMPACT__IDLE_TIMEOUT", Some("5m")),
@@ -1379,8 +1445,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // dir/armyknife is never created, so there's no config directory at all.
 
-        let config = temp_env::with_vars(
-            [
+        let config = with_isolated_env_overlay(
+            vec![
                 ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
                 ("ARMYKNIFE_NOTIFICATION__SOUND", Some("Ping")),
             ],
@@ -1404,8 +1470,8 @@ mod tests {
     fn load_config_unknown_env_key_errors_and_blames_environment() {
         let dir = TempDir::new().unwrap();
 
-        let err = temp_env::with_vars(
-            [
+        let err = with_isolated_env_overlay(
+            vec![
                 ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
                 ("ARMYKNIFE_WM__TYPO", Some("1")),
             ],
@@ -1445,7 +1511,16 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(config.notification.sound, "FromYaml");
+        assert_eq!(
+            config,
+            Config {
+                notification: NotificationConfig {
+                    sound: "FromYaml".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
     }
 
     #[rstest]
