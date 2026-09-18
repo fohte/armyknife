@@ -41,7 +41,7 @@ pub fn run(args: &GenerateTitleDetachedArgs) -> Result<()> {
     if let Err(e) = run_inner(args) {
         tracing::warn!(
             target: EVENT_TARGET,
-            event = "cc.generate_title.err",
+            event = "agent.generate_title.err",
             session_id = %args.session_id,
             msg = format!("{e:#}"),
         );
@@ -71,7 +71,7 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
     let title = backend.generate(&prompt).inspect_err(|e| {
         tracing::warn!(
             target: EVENT_TARGET,
-            event = "cc.generate_title.backend_err",
+            event = "agent.generate_title.backend_err",
             session_id = %args.session_id,
             msg = format!("{e:#}"),
         );
@@ -86,7 +86,7 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
     if !applied {
         tracing::info!(
             target: EVENT_TARGET,
-            event = "cc.generate_title.stale",
+            event = "agent.generate_title.stale",
             session_id = %args.session_id,
         );
         return Ok(());
@@ -94,7 +94,7 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
 
     tracing::info!(
         target: EVENT_TARGET,
-        event = "cc.generate_title.applied",
+        event = "agent.generate_title.applied",
         session_id = %args.session_id,
     );
     if let Ok(Some(session)) = store::load_session(&args.session_id) {

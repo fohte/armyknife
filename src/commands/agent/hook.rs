@@ -67,7 +67,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     }
 
     let run_id = short_run_id();
-    let span = tracing::info_span!("cc.hook", run_id = %run_id, event = %args.event);
+    let span = tracing::info_span!("agent.hook", run_id = %run_id, event = %args.event);
     let _entered = span.enter();
 
     // Read raw stdin first for debug logging
@@ -609,7 +609,7 @@ fn process_hook_event_impl(
             send_notification(event, &input, &session, &config);
         } else if event == HookEvent::Stop && session.has_pending_bg_tasks() {
             tracing::info!(
-                event = "cc.notification.skipped",
+                event = "agent.notification.skipped",
                 session = %session.session_id,
                 reason = "bg_task_pending",
                 pending_bg_tasks = session.pending_bg_task_ids.len(),
@@ -635,13 +635,13 @@ fn process_hook_event_impl(
     if side_effects.auto_compact && event == HookEvent::Stop {
         if session.engine != Engine::Claude {
             tracing::info!(
-                event = "cc.auto_compact.skipped",
+                event = "agent.auto_compact.skipped",
                 session = %session.session_id,
                 reason = "unsupported_engine",
             );
         } else if !session.pending_bg_task_ids.is_empty() {
             tracing::info!(
-                event = "cc.auto_compact.skipped",
+                event = "agent.auto_compact.skipped",
                 session = %session.session_id,
                 reason = "bg_task_pending",
                 pending = session.pending_bg_task_ids.len(),
@@ -652,7 +652,7 @@ fn process_hook_event_impl(
                 auto_compact::spawn_in_background(&session.session_id);
             } else {
                 tracing::info!(
-                    event = "cc.auto_compact.skipped",
+                    event = "agent.auto_compact.skipped",
                     session = %session.session_id,
                     reason = "disabled",
                 );
