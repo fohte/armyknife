@@ -57,7 +57,7 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
     )? {
         Delivery::Sent => {}
         Delivery::Queued => println!(
-            "Queued for Codex session {}. Not delivered yet: the running codex picks it up within ~10s once the session is idle.",
+            "Queued for Codex session {}. Not delivered yet: it is injected once that session's codex is running and idle (polled about every 10s).",
             args.session_id
         ),
     }

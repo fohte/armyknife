@@ -5,8 +5,9 @@
 //! queue` only appends to the thread's queue in a SQLite DB under
 //! `$CODEX_HOME` (so a mismatched `$CODEX_HOME` queues into a DB nobody
 //! reads); the interactive `codex` process that owns the thread polls that DB
-//! every 10 seconds and starts a turn once the thread is idle. A successful
-//! return therefore means "queued", not "delivered".
+//! every 10 seconds and starts a turn once the thread is idle. A thread whose
+//! last turn the user interrupted is skipped until its next turn completes.
+//! A successful return therefore means "queued", not "delivered".
 
 use std::io::ErrorKind;
 use std::process::Output;

@@ -73,6 +73,11 @@ pub(super) fn wake(session_id: &str) -> Result<Option<String>> {
                     session.status.display_name()
                 )
             }),
+            // No registry to check liveness against, so only the status
+            // armyknife itself tracks can be refused.
+            Engine::Codex if session.status == SessionStatus::Ended => {
+                bail!("Session {session_id} has ended; not waking it")
+            }
             Engine::Codex => Ok(None),
         };
     }
@@ -98,9 +103,10 @@ pub(super) fn wake(session_id: &str) -> Result<Option<String>> {
         Ok(_pane_id) => {}
         // The pane already moved past the shell prompt into the session's
         // agent itself -- another wake (racing just outside this lock) or
-        // the user beat us to it. Fall through to polling instead of
-        // erroring; an unrelated process with the same name here would just
-        // make the poll below time out rather than silently succeed.
+        // the user beat us to it. Fall through instead of erroring. For
+        // Claude, an unrelated process with the same name here just makes the
+        // poll below time out rather than silently succeed; for Codex there
+        // is nothing to poll, so it is trusted as-is.
         Err(RespawnError::PaneBusy(cmd)) if cmd == session.engine.process_name() => {}
         Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
     }
