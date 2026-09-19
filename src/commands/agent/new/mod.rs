@@ -292,9 +292,9 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 cwd: &cwd,
                 model: args.common.model.as_deref(),
                 prompt: prompt.as_deref(),
+                engine,
                 env_vars: &env_refs,
                 background,
-                command: engine.process_name(),
             })?;
             println!("Split tmux pane in '{cwd}'{suffix}");
         }
@@ -317,6 +317,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                     layout: &layout,
                     model: args.common.model.as_deref(),
                     prompt: prompt.as_deref(),
+                    engine,
                     env_vars: &env_refs,
                     background,
                     restore_automatic_rename: true,

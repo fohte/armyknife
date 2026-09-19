@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
+use crate::commands::agent::types::Engine;
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod prompt;
-use prompt::{apply_prompt_if_agent, detect_engine};
+use prompt::{apply_prompt_if_agent, is_engine_command};
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,11 +41,15 @@ pub struct LayoutCommandsSpec<'a> {
     pub cwd: &'a str,
     pub window_name: &'a str,
     pub layout: &'a LayoutNode,
-    /// Inserted right after `claude` in claude pane commands.
+    /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
-    /// When set, claude pane commands read the prompt from this file at
+    /// When set, `engine` pane commands read the prompt from this file at
     /// shell execution time and delete it afterward.
     pub prompt_file: Option<&'a Path>,
+    /// The agent CLI this session is for. `model` and `prompt_file` apply
+    /// only to panes running it, so other panes (including another agent
+    /// CLI in a user-configured layout) are left as written.
+    pub engine: Engine,
     /// Set as tmux session-level environment variables so all panes in the
     /// window inherit them.
     pub env_vars: &'a [(&'a str, &'a str)],
@@ -83,6 +88,7 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
         layout,
         model,
         prompt_file,
+        engine,
         env_vars,
         background,
         restore_automatic_rename,
@@ -151,14 +157,14 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
     let last_agent_index = prompt_file.and_then(|_| {
         pane_entries
             .iter()
-            .rposition(|e| detect_engine(&e.command).is_some())
+            .rposition(|e| is_engine_command(&e.command, engine))
     });
 
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{pane_prefix}{}", i + 1);
         let cleanup = last_agent_index == Some(i);
-        let cmd = apply_prompt_if_agent(&entry.command, model, prompt_file, cleanup);
+        let cmd = apply_prompt_if_agent(&entry.command, engine, model, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -297,11 +303,14 @@ pub struct TmuxSessionSpec<'a> {
     pub session: &'a str,
     /// Working directory for the new pane(s).
     pub cwd: &'a str,
-    /// Inserted right after `claude` in claude pane commands.
+    /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
-    /// Written to a temp file and passed to claude pane commands; the temp
+    /// Written to a temp file and passed to `engine` pane commands; the temp
     /// file is read and deleted by the shell command at execution time.
     pub prompt: Option<&'a str>,
+    /// The agent CLI this session is for. `model` and `prompt` apply only to
+    /// panes running it.
+    pub engine: Engine,
     /// Set as tmux session-level environment variables so all panes in the
     /// window inherit them.
     pub env_vars: &'a [(&'a str, &'a str)],
@@ -333,6 +342,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
         cwd,
         model,
         prompt,
+        engine,
         env_vars,
         background,
     } = common;
@@ -346,6 +356,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
         layout,
         model,
         prompt_file: prompt_path,
+        engine,
         env_vars,
         background,
         restore_automatic_rename,
@@ -381,6 +392,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
                 cwd,
                 model,
                 prompt,
+                engine,
                 env_vars,
                 background,
             },
@@ -389,7 +401,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
     } = spec;
 
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let cmd = apply_prompt_if_agent(command, model, prompt_file.as_deref(), true);
+    let cmd = apply_prompt_if_agent(command, engine, model, prompt_file.as_deref(), true);
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
         session,
@@ -559,6 +571,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -601,6 +614,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -647,6 +661,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -701,6 +716,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -752,6 +768,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: Some(&prompt_path),
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -804,6 +821,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -836,6 +854,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -881,6 +900,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -943,6 +963,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: Some(&prompt_path),
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -977,13 +998,31 @@ mod tests {
     }
 
     // =========================================================================
-    // build_layout_commands: claude and codex panes share one prompt file
-    // The last agent pane (whichever engine) deletes the temp file, and
-    // non-agent panes are left alone.
+    // build_layout_commands: claude and codex panes in one layout
+    // Only panes running the session's engine get --model and the prompt, and
+    // the last of them deletes the temp file. Other panes (including the other
+    // engine's CLI) are left as written.
     // =========================================================================
 
-    #[test]
-    fn mixed_engine_panes_only_last_agent_deletes_prompt_file() {
+    #[rstest]
+    #[case::claude_session(
+        Engine::Claude,
+        "opus",
+        "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+        "codex"
+    )]
+    #[case::codex_session(
+        Engine::Codex,
+        "gpt-5",
+        "claude",
+        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    fn mixed_engine_layout_only_touches_session_engine_panes(
+        #[case] engine: Engine,
+        #[case] model: &str,
+        #[case] expected_claude_pane: &str,
+        #[case] expected_codex_pane: &str,
+    ) {
         let prompt_path = PathBuf::from("/tmp/prompt.txt");
         let pane = |command: &str| {
             Box::new(LayoutNode::Pane(PaneConfig {
@@ -1006,8 +1045,9 @@ mod tests {
             cwd: "/tmp",
             window_name: "dev",
             layout: &layout,
-            model: Some("opus"),
+            model: Some(model),
             prompt_file: Some(&prompt_path),
+            engine,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -1020,20 +1060,10 @@ mod tests {
                 cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
                 cmd(&["split-window", "-v", "-t", "2", "-c", "/tmp"]),
                 cmd(&["select-pane", "-t", "1"]),
-                cmd(&[
-                    "send-keys",
-                    "-l",
-                    "--",
-                    "claude --model opus \"$(cat /tmp/prompt.txt)\"",
-                ]),
+                cmd(&["send-keys", "-l", "--", expected_claude_pane]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
-                cmd(&[
-                    "send-keys",
-                    "-l",
-                    "--",
-                    "codex --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
-                ]),
+                cmd(&["send-keys", "-l", "--", expected_codex_pane]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "3"]),
                 cmd(&["send-keys", "-l", "--", "nvim"]),
@@ -1057,6 +1087,7 @@ mod tests {
             layout: &layout,
             model: Some("opus"),
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -1102,6 +1133,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &env_vars,
             background: false,
             restore_automatic_rename: false,
@@ -1153,6 +1185,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: true,
             restore_automatic_rename: false,
@@ -1204,6 +1237,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &env_vars,
             background: true,
             restore_automatic_rename: false,
@@ -1226,6 +1260,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
@@ -1279,6 +1314,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename,
@@ -1306,6 +1342,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: true,
             restore_automatic_rename: true,
@@ -1434,6 +1471,7 @@ mod tests {
             layout: &layout,
             model: None,
             prompt_file: None,
+            engine: Engine::Claude,
             env_vars: &[],
             background: false,
             restore_automatic_rename: false,
