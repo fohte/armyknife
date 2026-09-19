@@ -65,16 +65,17 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
 }
 
 /// Resolves this process's own session_id for the `<peer-message>` sender
-/// line, trying `ARMYKNIFE_SESSION_ID` (set by `a agent new`, for either
-/// engine) before each engine's own ambient session env var -- present for a
-/// plain `claude`/`codex` CLI invocation started outside `a agent new`.
+/// line, trying `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start`
+/// hook) before each engine's own ambient session env var -- present for a
+/// plain `claude`/`codex` CLI invocation, including one whose hooks aren't
+/// registered.
 /// Returns `None` when nothing resolves (e.g. `a wm delete` has no session
 /// in the loop), which sends the message unwrapped.
 ///
 /// The paired `Engine` is only a fallback guess, used by [`notify`] when the
 /// resolved ID isn't in armyknife's store: `ARMYKNIFE_SESSION_ID` carries no
-/// engine hint of its own (`a agent new --engine codex` sets it too), so
-/// only the engine-specific variables pair with a guess.
+/// engine hint of its own, so only the engine-specific variables pair with a
+/// guess.
 ///
 /// Only called from [`run`], not [`notify`] itself: reading these env vars
 /// inside `notify` would make `merge_notify`'s direct calls pick up

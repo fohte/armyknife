@@ -10,7 +10,7 @@ use crate::shared::env_var::EnvVars;
 /// `$TMUX_PANE` won't do -- `a agent new` may run in the background.
 pub(super) fn caller_repo_root(current_dir: &str) -> String {
     EnvVars::load()
-        .session_id
+        .own_session_id()
         .and_then(|id| cc_store::load_session(&id).ok().flatten())
         .and_then(|session| get_repo_root_in(&session.cwd).ok())
         .or_else(|| get_repo_root_in(Path::new(current_dir)).ok())

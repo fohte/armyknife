@@ -122,7 +122,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
 
 fn current_session_id() -> Result<String> {
     EnvVars::load()
-        .session_id
+        .own_session_id()
         .ok_or_else(|| CcError::SelfSessionUnknown.into())
 }
 

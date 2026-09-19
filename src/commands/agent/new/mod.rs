@@ -204,9 +204,12 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
     // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
     // so `a agent new` called from a Claude Code Bash tool automatically inherits
-    // the parent session ID without requiring --parent-session-id.
-    let env = EnvVars::load();
-    let parent_id = common.parent_session_id.clone().or(env.session_id);
+    // the parent session ID without requiring --parent-session-id. Codex has no
+    // env file, so it falls back to CODEX_SESSION_ID (see `own_session_id`).
+    let parent_id = common
+        .parent_session_id
+        .clone()
+        .or(EnvVars::load().own_session_id());
     if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;
         env_vars.push((
