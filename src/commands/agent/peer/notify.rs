@@ -1,13 +1,13 @@
-//! `a agent peer notify` -- send a message directly to another Claude Code
-//! session's `SendMessage` socket, without going through any Claude Code
-//! session's own `SendMessage` tool call.
+//! `a agent peer notify` -- send a message to another session without going
+//! through any session's own `SendMessage` tool call.
 //!
 //! `a agent peer` and `a agent peer wake` both assume a Claude Code session is
 //! driving them (the session resolves a name, then calls its own
 //! `SendMessage` tool). Some notifications have no session in the loop --
 //! e.g. reporting that a delegated PR merged from inside `a wm delete`
-//! itself. This command is that missing send path, built on
-//! `claude_messaging`'s direct socket write.
+//! itself. This command is that missing send path: a Claude Code target gets
+//! `claude_messaging`'s direct socket write, a Codex target gets
+//! `codex_queue`'s `codex queue`.
 
 use anyhow::Result;
 use clap::Args;
@@ -15,6 +15,7 @@ use clap::Args;
 use super::wake;
 use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
+use crate::commands::agent::codex_queue;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
@@ -31,17 +32,36 @@ pub struct NotifyArgs {
     pub message: String,
 }
 
+/// What a successful [`notify`] guarantees -- callers must not report more
+/// than this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// Written to the target's messaging socket.
+    Sent,
+    /// Appended to the target Codex session's queue. The running `codex`
+    /// injects it later (polls every ~10s, and only once the session is
+    /// idle), so it may not have reached the session yet.
+    Queued,
+}
+
 pub fn run(args: &NotifyArgs) -> Result<()> {
     let (from, from_engine_hint) = match resolve_sender() {
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
-    notify(
+    match notify(
         &args.session_id,
         &args.message,
         from.as_deref(),
         from_engine_hint,
-    )
+    )? {
+        Delivery::Sent => {}
+        Delivery::Queued => println!(
+            "Queued for Codex session {}. Not delivered yet: it is injected once that session's codex is running and idle (polled about every 10s).",
+            args.session_id
+        ),
+    }
+    Ok(())
 }
 
 /// Resolves this process's own session_id for the `<peer-message>` sender
@@ -92,7 +112,7 @@ pub fn notify(
     message: &str,
     from: Option<&str>,
     from_engine_hint: Option<Engine>,
-) -> Result<()> {
+) -> Result<Delivery> {
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
@@ -106,13 +126,6 @@ pub fn notify(
         NotifyReadiness::Ready => {}
     }
 
-    let connection = claude_registry::load_peer_connection(session_id).ok_or_else(|| {
-        anyhow::anyhow!("no active Claude Code session registry entry for session {session_id}")
-    })?;
-    let socket_path = connection
-        .messaging_socket_path
-        .ok_or_else(|| CcError::NoMessagingSocket(session_id.to_string()))?;
-
     // Best-effort: `from` not resolving to a tracked session (unknown ID,
     // lookup error) just means the engine falls back to `from_engine_hint`
     // (or is omitted), not a reason to fail the whole notification.
@@ -120,7 +133,27 @@ pub fn notify(
         .and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine))
         .or(from_engine_hint);
     let content = build_content(message, from, from_engine);
-    claude_messaging::send_message(&socket_path, connection.pid, &content)
+
+    match session.engine {
+        Engine::Claude => {
+            send_to_claude(session_id, &content)?;
+            Ok(Delivery::Sent)
+        }
+        Engine::Codex => {
+            codex_queue::queue_message(session_id, &content)?;
+            Ok(Delivery::Queued)
+        }
+    }
+}
+
+fn send_to_claude(session_id: &str, content: &str) -> Result<()> {
+    let connection = claude_registry::load_peer_connection(session_id).ok_or_else(|| {
+        anyhow::anyhow!("no active Claude Code session registry entry for session {session_id}")
+    })?;
+    let socket_path = connection
+        .messaging_socket_path
+        .ok_or_else(|| CcError::NoMessagingSocket(session_id.to_string()))?;
+    claude_messaging::send_message(&socket_path, connection.pid, content)
 }
 
 /// Wraps `message` in a `<peer-message>` envelope naming `from` (and its

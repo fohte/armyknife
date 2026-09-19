@@ -50,12 +50,14 @@ pub enum PeerCommands {
     Me,
 
     /// Resume a paused peer session by session ID and print its resolved
-    /// SendMessage name (see the `wake` module doc for why this isn't a
-    /// flag on `a agent resume`)
+    /// SendMessage name -- nothing for Codex, which has none (see the `wake`
+    /// module doc for why this isn't a flag on `a agent resume`)
     Wake(WakeArgs),
 
-    /// Send a message directly to another session's SendMessage socket,
-    /// without going through any session's own SendMessage tool call
+    /// Send a message to another session without going through any
+    /// session's own SendMessage tool call (SendMessage socket for Claude
+    /// Code, `codex queue` for Codex -- a Codex message is only queued, and
+    /// delivered later)
     Notify(NotifyArgs),
 }
 
