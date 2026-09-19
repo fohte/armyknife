@@ -59,11 +59,10 @@ pub struct CommonNewArgs {
     /// Coding agent CLI to launch for the new session. Falls back to
     /// `config.agent.default_engine` (default: `claude`) when omitted.
     ///
-    /// Only applies to the no-worktree path (`run_session_only`); rejected
-    /// together with `--worktree`, which always launches
-    /// `config.wm.layout`, a user-configurable pane tree whose commands are
-    /// independent of `Engine`.
-    #[arg(long, value_enum, conflicts_with = "worktree")]
+    /// With `--worktree`, `config.wm.layout` panes running `claude` are
+    /// replaced by this engine's CLI (without their arguments) unless the
+    /// layout already has a pane for it; other panes are left as written.
+    #[arg(long, value_enum)]
     pub engine: Option<Engine>,
 
     /// Reasoning effort for the new session. Passed as `claude --effort` or,
@@ -229,7 +228,7 @@ fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, 
     Ok((env_vars, background))
 }
 
-/// Resolves the engine to launch for the no-worktree path: an explicit
+/// Resolves the engine to launch: an explicit
 /// `--engine` always wins over `config.agent.default_engine`, which itself
 /// already reflects any `ARMYKNIFE_AGENT__DEFAULT_ENGINE` override applied
 /// while loading `config` (see `env_overlay`) and defaults to `Engine::Claude`
@@ -389,6 +388,7 @@ mod tests {
     #[rstest]
     #[case::omitted(&["a"], None)]
     #[case::explicit_codex(&["a", "--engine", "codex"], Some(Engine::Codex))]
+    #[case::codex_with_worktree(&["a", "--worktree=my-branch", "--engine", "codex"], Some(Engine::Codex))]
     fn engine_value_parses(#[case] argv: &[&str], #[case] expected: Option<Engine>) {
         let cli = TestCli::try_parse_from(argv).unwrap();
         assert_eq!(cli.args.common.engine, expected);
@@ -478,7 +478,6 @@ mod tests {
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
-    #[case::engine_with_worktree(&["a", "--worktree", "--engine", "codex"])]
     #[case::unknown_reasoning_effort(&["a", "--reasoning-effort", "maxx"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());

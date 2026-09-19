@@ -10,7 +10,6 @@ use super::worktree::{
     rollback_worktree,
 };
 use crate::commands::agent::error::CcError;
-use crate::commands::agent::types::Engine;
 use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
@@ -186,9 +185,7 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    // `--engine` is rejected with `--worktree`, so `config.wm.layout` is always
-    // a Claude Code session.
-    let engine = Engine::Claude;
+    let engine = super::resolve_engine(args.common.engine, config);
     let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
 
     // Setup tmux window using config layout

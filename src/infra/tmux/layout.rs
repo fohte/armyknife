@@ -6,7 +6,7 @@ use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod prompt;
-use prompt::{apply_prompt_if_agent, is_engine_command};
+use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,8 +50,10 @@ pub struct LayoutCommandsSpec<'a> {
     /// shell execution time and delete it afterward.
     pub prompt_file: Option<&'a Path>,
     /// The agent CLI this session is for. `model` and `prompt_file` apply
-    /// only to panes running it, so other panes (including another agent
-    /// CLI in a user-configured layout) are left as written.
+    /// only to panes running it. A plain `claude` pane is retargeted to it
+    /// (dropping its arguments) unless the layout already has a pane for it;
+    /// all other panes, including another agent CLI in a user-configured
+    /// layout, are left as written.
     pub engine: Engine,
     /// Set as tmux session-level environment variables so all panes in the
     /// window inherit them.
@@ -156,6 +158,17 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
         1,
         &pane_prefix,
     );
+
+    // A layout that already has a pane for `engine` was written with that
+    // engine in mind, so leave its `claude` pane alone.
+    if !pane_entries
+        .iter()
+        .any(|e| is_engine_command(&e.command, engine))
+    {
+        for entry in &mut pane_entries {
+            entry.command = retarget_agent_command(&entry.command, engine);
+        }
+    }
 
     // Find the last agent pane index so only it performs temp file cleanup
     let last_agent_index = prompt_file.and_then(|_| {
@@ -575,6 +588,14 @@ mod tests {
     /// Helper: create a TmuxCommand from a slice of string slices.
     fn cmd(args: &[&str]) -> TmuxCommand {
         TmuxCommand::new(args)
+    }
+
+    /// Helper: create an unfocused leaf pane running `command`.
+    fn pane(command: &str) -> Box<LayoutNode> {
+        Box::new(LayoutNode::Pane(PaneConfig {
+            command: command.to_string(),
+            focus: false,
+        }))
     }
 
     // =========================================================================
@@ -1031,6 +1052,55 @@ mod tests {
     }
 
     // =========================================================================
+    // build_layout_commands: claude-only layout launched for another engine
+    // The `claude` pane becomes the engine's CLI and gets model, effort and
+    // the prompt; other panes are left as written.
+    // =========================================================================
+
+    #[test]
+    fn claude_layout_is_retargeted_to_codex_session() {
+        let prompt_path = PathBuf::from("/tmp/prompt.txt");
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: pane("claude --dangerously-skip-permissions"),
+            second: pane("nvim"),
+        });
+
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: Some("gpt-5"),
+            reasoning_effort: Some(ReasoningEffort::Max),
+            prompt_file: Some(&prompt_path),
+            engine: Engine::Codex,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "codex --model gpt-5 -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
+            ]
+        );
+    }
+
+    // =========================================================================
     // build_layout_commands: claude and codex panes in one layout
     // Only panes running the session's engine get --model and the prompt, and
     // the last of them deletes the temp file. Other panes (including the other
@@ -1057,12 +1127,6 @@ mod tests {
         #[case] expected_codex_pane: &str,
     ) {
         let prompt_path = PathBuf::from("/tmp/prompt.txt");
-        let pane = |command: &str| {
-            Box::new(LayoutNode::Pane(PaneConfig {
-                command: command.to_string(),
-                focus: false,
-            }))
-        };
         let layout = LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: pane("claude"),
