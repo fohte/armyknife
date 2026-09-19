@@ -452,10 +452,8 @@ pub struct ToolInput {
     pub pattern: Option<String>,
 }
 
-// Never fails: this is display-only data, and a hook that errors on an
-// unexpected shape would drop the whole event. Codex passes a tool's raw
-// arguments through as `tool_input`, so it can be a bare string or hold
-// non-string values under these keys (MCP tools choose their own schema).
+// Never fails: Codex passes a tool's raw arguments as `tool_input`, so it can
+// be a bare string or hold non-string values under these keys.
 impl<'de> Deserialize<'de> for ToolInput {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
