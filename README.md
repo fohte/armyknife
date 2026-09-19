@@ -471,6 +471,8 @@ Register these in Codex's `hooks.json` (each command with `--engine codex`) to t
 
 Codex has no `Notification` event, so nothing maps to `a agent hook notification`. `SessionEnd` is best-effort: Codex may exit without firing it or cut the hook short at its own per-hook `timeout`, and a Codex session that never reports it is handled by `a agent sweep` like any other stopped session. Codex has no equivalent of `CLAUDE_ENV_FILE`, so `ARMYKNIFE_SESSION_ID` is never set inside a Codex session; commands that need the caller's own session ID (`a agent new`'s parent resolution, `a agent peer parent`/`children`) fall back to `CODEX_SESSION_ID`, which Codex exports to every command it runs.
 
+Permission notifications use a short debounce before sending because another `PermissionRequest` hook can resolve the request without showing the approval UI. A subsequent `PostToolUse` or `Stop` event cancels the pending notification; the debounce is bounded because neither engine exposes a hook event for the aggregate decision.
+
 #### Peer session name resolution
 
 Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a agent new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a agent peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a agent new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
