@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.304](https://github.com/fohte/armyknife/compare/v0.1.303...v0.1.304) (2026-09-19)
+
+
+### Features
+
+* **agent:** allow configuring the default execution engine ([#920](https://github.com/fohte/armyknife/issues/920)) ([0f66309](https://github.com/fohte/armyknife/commit/0f66309103f044e039a5fdad1afff57550077fc4))
+
 ## [0.1.303](https://github.com/fohte/armyknife/compare/v0.1.302...v0.1.303) (2026-09-19)
 
 
