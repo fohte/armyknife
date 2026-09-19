@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.306](https://github.com/fohte/armyknife/compare/v0.1.305...v0.1.306) (2026-09-19)
+
+
+### Bug Fixes
+
+* **agent:** pass prompt and model when launching codex ([#924](https://github.com/fohte/armyknife/issues/924)) ([52ad212](https://github.com/fohte/armyknife/commit/52ad212904cb825beffe91ba0292903b5c3b04fa))
+
 ## [0.1.305](https://github.com/fohte/armyknife/compare/v0.1.304...v0.1.305) (2026-09-19)
 
 
