@@ -4,6 +4,7 @@ mod claude_messaging;
 mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
+mod codex_queue;
 mod delete_tq_session_detached;
 mod error;
 mod focus;
