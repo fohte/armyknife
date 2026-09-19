@@ -1,11 +1,14 @@
+use std::path::Path;
+
 use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
 use clap::Args;
 use thiserror::Error;
 
 use super::store;
 use super::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::{process, tmux};
-use crate::shared::command::find_command_path;
+use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -46,6 +49,26 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
 
+    // Codex delays its resume SessionStart hook until the first turn. Make
+    // the restored session visible while it is waiting for that turn.
+    if engine == Engine::Codex {
+        let status_change = mark_codex_session_resumed(&session_id)?;
+        let result = run_codex_resume(
+            &binary_path,
+            resume_args,
+            args.ancestor_session_ids
+                .as_deref()
+                .filter(|s| !s.is_empty()),
+        );
+        if let Err(error) = result {
+            if let Some(change) = status_change {
+                restore_failed_codex_resume(&session_id, &change)?;
+            }
+            return Err(error);
+        }
+        return Ok(());
+    }
+
     let err = match args
         .ancestor_session_ids
         .as_deref()
@@ -58,7 +81,100 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         ),
         None => process::exec_replace(&binary_path, resume_args),
     };
+
     bail!("Failed to exec {}: {}", binary_name, err)
+}
+
+/// Runs Codex as a child so a non-zero resume failure can restore the ended
+/// status. The child keeps the invoking terminal attached for the interactive
+/// TUI, while Claude retains the existing exec-based path below.
+fn run_codex_resume(
+    binary_path: &Path,
+    resume_args: Vec<String>,
+    ancestor_session_ids: Option<&str>,
+) -> Result<()> {
+    let mut command = command::new(binary_path);
+    command.args(resume_args);
+    if let Some(ancestor_session_ids) = ancestor_session_ids {
+        command.env(EnvVars::ancestor_session_ids_name(), ancestor_session_ids);
+    }
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("codex resume exited with status {status}")
+    }
+}
+
+/// Captures the status fields needed to undo the pre-exec transition if the
+/// target process could not be started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResumeStatusChange {
+    original_status: SessionStatus,
+    original_read_at: Option<DateTime<Utc>>,
+    original_updated_at: DateTime<Utc>,
+    marked_at: DateTime<Utc>,
+}
+
+/// Marks an ended Codex session as stopped before launching `codex resume`.
+/// The lock keeps this transition from racing with a hook that updates the
+/// same session file.
+fn mark_codex_session_resumed(session_id: &str) -> Result<Option<ResumeStatusChange>> {
+    let sessions_dir = store::sessions_dir()?;
+    mark_codex_session_resumed_in(&sessions_dir, session_id)
+}
+
+fn mark_codex_session_resumed_in(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Option<ResumeStatusChange>> {
+    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = session_lock.load()? else {
+        return Ok(None);
+    };
+    if session.engine != Engine::Codex || session.status != SessionStatus::Ended {
+        return Ok(None);
+    }
+
+    let change = ResumeStatusChange {
+        original_status: session.status,
+        original_read_at: session.read_at,
+        original_updated_at: session.updated_at,
+        marked_at: Utc::now(),
+    };
+    session.status = SessionStatus::Stopped;
+    session.read_at = None;
+    session.updated_at = change.marked_at;
+    session_lock.save(&session)?;
+    Ok(Some(change))
+}
+
+/// Restores the pre-resume status only when no hook has updated the session
+/// since the transition. Other fields are kept so a concurrent metadata update
+/// cannot be overwritten by a failed exec rollback.
+fn restore_failed_codex_resume(session_id: &str, change: &ResumeStatusChange) -> Result<()> {
+    let sessions_dir = store::sessions_dir()?;
+    restore_failed_codex_resume_in(&sessions_dir, session_id, change)
+}
+
+fn restore_failed_codex_resume_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    change: &ResumeStatusChange,
+) -> Result<()> {
+    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = session_lock.load()? else {
+        return Ok(());
+    };
+    if session.status != SessionStatus::Stopped || session.updated_at != change.marked_at {
+        return Ok(());
+    }
+
+    session.status = change.original_status;
+    session.read_at = change.original_read_at;
+    session.updated_at = change.original_updated_at;
+    session_lock.save(&session)?;
+    Ok(())
 }
 
 /// Binary name and CLI args needed to resume `session_id` for `engine`.
@@ -133,7 +249,7 @@ pub(crate) enum RespawnError {
 }
 
 /// Replaces a paused session's pane's root process with `a agent resume`
-/// wrapped in the user's login shell, so `claude --resume` restarts in it.
+/// wrapped in the user's login shell, so the selected agent CLI restarts in it.
 /// Does not focus the pane -- callers that want that (the TUI) do it
 /// themselves afterward, since a resume triggered from another session must
 /// not steal the user's tmux focus.
@@ -173,10 +289,10 @@ fn check_idle_at_shell_prompt(pane_current_command: Option<&str>) -> Result<(), 
 /// normally, control returns to a shell prompt instead of tmux closing the
 /// pane (`respawn-pane` replaces the pane's root process).
 ///
-/// `-i` is required on the outer shell: `a agent resume` looks up `claude` in
-/// $PATH via `find_command_path`, and many users only extend $PATH in their
-/// interactive rc file (e.g. `.zshrc`). Running without `-i` would inherit
-/// tmux's pre-rc $PATH and fail to locate `claude`.
+/// `-i` is required on the outer shell: `a agent resume` looks up the selected
+/// agent CLI in $PATH via `find_command_path`, and many users only extend
+/// $PATH in their interactive rc file (e.g. `.zshrc`). Running without `-i`
+/// would inherit tmux's pre-rc $PATH and fail to locate the CLI.
 fn build_resume_command() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let exe = std::env::current_exe()
@@ -280,6 +396,128 @@ mod tests {
             #[case] expected: (&str, Vec<String>),
         ) {
             assert_eq!(resume_binary_and_args(engine, session_id), expected);
+        }
+    }
+
+    mod codex_resume_status_tests {
+        use std::path::PathBuf;
+
+        use rstest::{fixture, rstest};
+        use tempfile::TempDir;
+
+        use super::*;
+
+        #[fixture]
+        fn temp_dir() -> TempDir {
+            TempDir::new().expect("temp dir creation should succeed")
+        }
+
+        fn session(engine: Engine, status: SessionStatus) -> Session {
+            let now = Utc::now();
+            Session {
+                session_id: "resume-target".to_string(),
+                cwd: PathBuf::from("/tmp/test"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status,
+                created_at: now,
+                updated_at: now,
+                last_message: None,
+                current_tool: None,
+                label: None,
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: Default::default(),
+                pending_agent_task_ids: Default::default(),
+                pending_permission_agent_ids: Default::default(),
+                read_at: Some(now),
+                sweep_signaled: false,
+                engine,
+            }
+        }
+
+        #[rstest]
+        #[case::codex_ended(Engine::Codex, SessionStatus::Ended, true, SessionStatus::Stopped)]
+        #[case::codex_stopped(Engine::Codex, SessionStatus::Stopped, false, SessionStatus::Stopped)]
+        #[case::codex_paused(Engine::Codex, SessionStatus::Paused, false, SessionStatus::Paused)]
+        #[case::claude_ended(Engine::Claude, SessionStatus::Ended, false, SessionStatus::Ended)]
+        fn marks_only_ended_codex_sessions(
+            temp_dir: TempDir,
+            #[case] engine: Engine,
+            #[case] status: SessionStatus,
+            #[case] expected_change: bool,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let original = session(engine, status);
+            let expected_read_at = original.read_at;
+            store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+
+            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
+                .expect("mark should succeed");
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+
+            assert_eq!(
+                (change.is_some(), reloaded.status, reloaded.read_at),
+                (
+                    expected_change,
+                    expected_status,
+                    if expected_change {
+                        None
+                    } else {
+                        expected_read_at
+                    },
+                )
+            );
+        }
+
+        #[rstest]
+        fn failed_exec_restores_codex_session(temp_dir: TempDir) {
+            let original = session(Engine::Codex, SessionStatus::Ended);
+            let expected = (original.status, original.read_at, original.updated_at);
+            store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+
+            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
+                .expect("mark should succeed")
+                .expect("Codex session should be marked");
+            restore_failed_codex_resume_in(temp_dir.path(), "resume-target", &change)
+                .expect("restore should succeed");
+
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(
+                (reloaded.status, reloaded.read_at, reloaded.updated_at),
+                expected
+            );
+        }
+
+        #[rstest]
+        fn failed_exec_does_not_restore_after_a_hook_update(temp_dir: TempDir) {
+            let original = session(Engine::Codex, SessionStatus::Ended);
+            store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+
+            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
+                .expect("mark should succeed")
+                .expect("Codex session should be marked");
+            let mut updated = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+            updated.status = SessionStatus::Running;
+            updated.updated_at = Utc::now();
+            store::save_session_to(temp_dir.path(), &updated).expect("save should succeed");
+
+            restore_failed_codex_resume_in(temp_dir.path(), "resume-target", &change)
+                .expect("restore should succeed");
+
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+            assert_eq!(
+                (reloaded.status, reloaded.updated_at),
+                (SessionStatus::Running, updated.updated_at)
+            );
         }
     }
 
