@@ -23,9 +23,7 @@ use super::claude_registry;
 use super::error::CcError;
 use super::resume;
 use super::store;
-#[cfg(test)]
-use super::types::Engine;
-use super::types::Session;
+use super::types::{Engine, Session};
 use crate::shared::env_var::EnvVars;
 
 pub(crate) mod notify;
@@ -85,6 +83,11 @@ struct Peer {
     /// inside tmux. Lets a human match a JSON row against the pane they're
     /// looking at, which `name`/`session_id`/`cwd` alone don't convey.
     pane_id: Option<String>,
+    /// Which coding agent CLI this session belongs to -- lets a caller
+    /// juggling several peers tell a Codex delegate from a Claude Code one
+    /// before deciding how to reach it (e.g. Codex has no `SendMessage`
+    /// tool).
+    engine: Engine,
 }
 
 impl Peer {
@@ -99,6 +102,7 @@ impl Peer {
             label: session.label.clone(),
             status: session.status.display_name(),
             pane_id: session.tmux_info.as_ref().map(|t| t.pane_id.clone()),
+            engine: session.engine,
         }
     }
 }
@@ -244,10 +248,11 @@ mod tests {
     #[case::resolved_no_tmux(
         HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
         None,
+        Engine::Claude,
         Some("repo-ab".to_string()),
         None
     )]
-    #[case::unresolved_no_tmux(HashMap::new(), None, None, None)]
+    #[case::unresolved_no_tmux(HashMap::new(), None, Engine::Claude, None, None)]
     #[case::resolved_in_tmux(
         HashMap::from([("child-1".to_string(), "repo-ab".to_string())]),
         Some(TmuxInfo {
@@ -256,17 +261,21 @@ mod tests {
             window_index: 0,
             pane_id: "%3".to_string(),
         }),
+        Engine::Claude,
         Some("repo-ab".to_string()),
         Some("%3".to_string())
     )]
+    #[case::propagates_codex_engine(HashMap::new(), None, Engine::Codex, None, None)]
     fn peer_from_session(
         #[case] name_map: HashMap<String, String>,
         #[case] tmux_info: Option<TmuxInfo>,
+        #[case] engine: Engine,
         #[case] expected_name: Option<String>,
         #[case] expected_pane_id: Option<String>,
     ) {
         let s = Session {
             tmux_info,
+            engine,
             ..session("child-1", "/repo/.worktrees/child", vec![])
         };
 
@@ -279,6 +288,7 @@ mod tests {
                 label: Some("my-label".to_string()),
                 status: "running",
                 pane_id: expected_pane_id,
+                engine,
             }
         );
     }

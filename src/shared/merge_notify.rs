@@ -15,6 +15,7 @@ use crate::commands::agent::store;
 use crate::commands::wm::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 use crate::infra::git::{GitRepo, get_merge_status_for_repo, github_owner_and_repo};
 use crate::infra::github::{GitHubClient, PrClient};
+use crate::shared::sanitize::strip_angle_brackets;
 
 /// Tracing target for failures on this path. The TUI clean view's detached
 /// child has its stderr wired to `/dev/null`, so the rotating log is the
@@ -55,7 +56,7 @@ pub async fn notify_delegator_of_merge(main_repo: &GitRepo, branch: &str, worktr
 
     for delegator_id in delegates {
         let message = build_merge_notification(branch, &pr_url);
-        if let Err(e) = notify_peer_session(&delegator_id, &message) {
+        if let Err(e) = notify_peer_session(&delegator_id, &message, None, None) {
             warn_notify_failure(&format!(
                 "failed to notify delegator session {delegator_id}: {e}"
             ));
@@ -150,16 +151,6 @@ async fn fetch_merged_pr_url(main_repo: &GitRepo, branch: &str) -> anyhow::Resul
     let client = GitHubClient::get()?;
     let pr_info = client.get_pr_for_branch(&owner, &repo_name, branch).await?;
     Ok(pr_info.map(|info| info.url))
-}
-
-/// Strips `<`/`>` from a value before it's embedded in the
-/// `<delegation-update>` envelope. `branch` is a git branch name chosen by
-/// the delegate session, which doesn't reject these characters, so without
-/// this a crafted value could close the envelope early and inject text the
-/// delegator would read as free-standing, unwrapped content instead of
-/// part of this automated notice.
-fn strip_angle_brackets(value: &str) -> String {
-    value.chars().filter(|c| *c != '<' && *c != '>').collect()
 }
 
 fn build_merge_notification(branch: &str, pr_url: &str) -> String {

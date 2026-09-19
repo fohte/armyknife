@@ -12,6 +12,7 @@ pub mod human_in_the_loop;
 pub mod log;
 pub mod merge_notify;
 pub mod repos_root;
+pub mod sanitize;
 pub mod table;
 #[cfg(test)]
 pub mod testing;
