@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 
 /// Whether a pane command starts `engine`'s CLI. Both `claude` and `codex`
 /// take the session prompt as a trailing positional argument and
@@ -12,9 +12,10 @@ pub(super) fn is_engine_command(command: &str, engine: Engine) -> bool {
     command.starts_with(engine.process_name())
 }
 
-/// If the command starts `engine`'s CLI, insert `--model <model>` right after
-/// the program name and append the prompt file path. Any other command is
-/// returned untouched, including another engine's CLI: `model` is only
+/// If the command starts `engine`'s CLI, insert `--model <model>` (and, for
+/// codex, `-c model_reasoning_effort=<effort>`) right after the program name
+/// and append the prompt file path. Any other command is returned untouched,
+/// including another engine's CLI: `model` and `reasoning_effort` are only
 /// meaningful to the engine the session was started for.
 ///
 /// Uses `$(cat <path>)` to read the prompt at shell execution time.
@@ -25,6 +26,7 @@ pub(super) fn apply_prompt_if_agent(
     command: &str,
     engine: Engine,
     model: Option<&str>,
+    reasoning_effort: Option<ReasoningEffort>,
     prompt_file: Option<&Path>,
     cleanup: bool,
 ) -> String {
@@ -33,16 +35,26 @@ pub(super) fn apply_prompt_if_agent(
     }
     let program = engine.process_name();
 
+    let mut flags = String::new();
+    if let Some(model) = model {
+        let escaped_model = shlex::try_quote(model)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| model.to_string());
+        flags.push_str(&format!(" --model {escaped_model}"));
+    }
+    // `-c` overrides config.toml for this launch only, unlike editing
+    // `~/.codex/config.toml`, which a hand-run `codex` would also pick up.
+    if let (Engine::Codex, Some(effort)) = (engine, reasoning_effort) {
+        flags.push_str(&format!(" -c model_reasoning_effort={}", effort.as_str()));
+    }
+
     // Restrict to the exact program name (optionally followed by a
     // space-separated rest) so a differently-named pane command that merely
     // starts with it (e.g. a "claude-code" wrapper script) isn't mangled by
-    // splicing --model into the middle of its name.
-    let command = match (model, command.strip_prefix(program)) {
-        (Some(model), Some(rest)) if rest.is_empty() || rest.starts_with(' ') => {
-            let escaped_model = shlex::try_quote(model)
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| model.to_string());
-            format!("{program} --model {escaped_model}{rest}")
+    // splicing flags into the middle of its name.
+    let command = match command.strip_prefix(program) {
+        Some(rest) if rest.is_empty() || rest.starts_with(' ') => {
+            format!("{program}{flags}{rest}")
         }
         _ => command.to_string(),
     };
@@ -82,7 +94,7 @@ mod tests {
         #[case] path: Option<&str>,
     ) {
         let path_buf = path.map(PathBuf::from);
-        let result = apply_prompt_if_agent(command, engine, None, path_buf.as_deref(), true);
+        let result = apply_prompt_if_agent(command, engine, None, None, path_buf.as_deref(), true);
         assert_eq!(result, command);
     }
 
@@ -137,7 +149,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let path_buf = PathBuf::from(path);
-        let result = apply_prompt_if_agent(command, engine, None, Some(&path_buf), cleanup);
+        let result = apply_prompt_if_agent(command, engine, None, None, Some(&path_buf), cleanup);
         assert_eq!(result, expected);
     }
 
@@ -215,7 +227,70 @@ mod tests {
         #[case] expected: &str,
     ) {
         let path_buf = path.map(PathBuf::from);
-        let result = apply_prompt_if_agent(command, engine, model, path_buf.as_deref(), true);
+        let result = apply_prompt_if_agent(command, engine, model, None, path_buf.as_deref(), true);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::codex_effort_only(
+        Engine::Codex,
+        "codex",
+        None,
+        Some(ReasoningEffort::Max),
+        None,
+        "codex -c model_reasoning_effort=max"
+    )]
+    #[case::codex_model_and_effort_with_prompt(
+        Engine::Codex,
+        "codex",
+        Some("gpt-5.6-luna"),
+        Some(ReasoningEffort::Max),
+        Some("/tmp/prompt.txt"),
+        "codex --model gpt-5.6-luna -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    #[case::codex_effort_keeps_extra_args(
+        Engine::Codex,
+        "codex --search",
+        None,
+        Some(ReasoningEffort::XHigh),
+        None,
+        "codex -c model_reasoning_effort=xhigh --search"
+    )]
+    #[case::codex_wrapper_unchanged(
+        Engine::Codex,
+        "codex-wrapper",
+        None,
+        Some(ReasoningEffort::Max),
+        None,
+        "codex-wrapper"
+    )]
+    #[case::claude_ignores_effort(
+        Engine::Claude,
+        "claude",
+        None,
+        Some(ReasoningEffort::Max),
+        None,
+        "claude"
+    )]
+    #[case::other_engine_pane_ignores_effort(
+        Engine::Claude,
+        "codex",
+        None,
+        Some(ReasoningEffort::Max),
+        None,
+        "codex"
+    )]
+    fn test_apply_prompt_if_agent_with_reasoning_effort(
+        #[case] engine: Engine,
+        #[case] command: &str,
+        #[case] model: Option<&str>,
+        #[case] effort: Option<ReasoningEffort>,
+        #[case] path: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let path_buf = path.map(PathBuf::from);
+        let result =
+            apply_prompt_if_agent(command, engine, model, effort, path_buf.as_deref(), true);
         assert_eq!(result, expected);
     }
 }

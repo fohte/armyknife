@@ -8,6 +8,10 @@
       "description": "`a agent` settings.",
       "$ref": "#/$defs/AgentConfig",
       "default": {
+        "codex": {
+          "model": null,
+          "reasoning_effort": null
+        },
         "default_engine": "claude"
       }
     },
@@ -86,6 +90,14 @@
       "description": "`a agent` settings.",
       "type": "object",
       "properties": {
+        "codex": {
+          "description": "Defaults applied to `a agent new --engine codex` sessions only.",
+          "$ref": "#/$defs/CodexConfig",
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
         "default_engine": {
           "description": "Coding agent CLI `a agent new` launches when `--engine` is omitted\n(default: \"claude\"). Overridable for a single invocation via\n`ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
@@ -114,10 +126,7 @@
       "properties": {
         "reviewers": {
           "description": "Default reviewers for `a ai review wait` and `a ai review request`.\n`None` means \"fall back to the next layer\" (org -> built-in default).",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "default": null,
           "items": {
             "$ref": "#/$defs/Reviewer"
@@ -191,6 +200,30 @@
       },
       "additionalProperties": false
     },
+    "CodexConfig": {
+      "description": "Per-invocation `codex` defaults. Passed on the command line rather than\nwritten to `~/.codex/config.toml`, so a hand-run `codex` is unaffected.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Model passed to `codex --model` when `--model` is omitted.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "reasoning_effort": {
+          "description": "Value passed to `codex -c model_reasoning_effort=...` when\n`--reasoning-effort` is omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
     "EditorConfig": {
       "description": "Terminal/editor configuration for human-in-the-loop reviews.",
       "type": "object",
@@ -202,10 +235,7 @@
         },
         "focus_app": {
           "description": "App name to focus on notification click (macOS only).\nIf omitted, derived from the terminal setting.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "terminal": {
@@ -219,10 +249,7 @@
     "Engine": {
       "description": "Which coding agent CLI hosts a session. Determines the process name to\nlook for in a tmux pane, and which binary/subcommand `a agent new` /\n`a agent resume` launch. Defaults to `Claude` (`#[serde(default)]` on\n`Session::engine`) so on-disk session files predating this field, and\nhook invocations that don't pass `--engine`, keep behaving exactly as\nbefore Codex support existed.",
       "type": "string",
-      "enum": [
-        "claude",
-        "codex"
-      ]
+      "enum": ["claude", "codex"]
     },
     "LayoutNode": {
       "description": "Layout tree node: either a single pane (leaf) or a split (internal node).",
@@ -285,9 +312,12 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "command"
-      ]
+      "required": ["command"]
+    },
+    "ReasoningEffort": {
+      "description": "Codex's `model_reasoning_effort` values. A closed set so a typo is rejected\nat parse time instead of reaching `codex`, which would silently fall back to\nits default effort.",
+      "type": "string",
+      "enum": ["low", "medium", "high", "xhigh", "max"]
     },
     "RepoConfig": {
       "description": "Per-repository configuration.",
@@ -309,10 +339,7 @@
         },
         "language": {
           "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         }
       },
@@ -350,11 +377,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "direction",
-        "first",
-        "second"
-      ]
+      "required": ["direction", "first", "second"]
     },
     "SplitDirection": {
       "description": "Split direction.",
@@ -412,10 +435,7 @@
         },
         "repos_root": {
           "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "default": null
         },
         "worktrees_dir": {

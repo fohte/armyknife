@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::git::{get_repo_root, get_repo_root_in};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
@@ -64,6 +64,13 @@ pub struct CommonNewArgs {
     /// independent of `Engine`.
     #[arg(long, value_enum, conflicts_with = "worktree")]
     pub engine: Option<Engine>,
+
+    /// Codex reasoning effort for the new session, passed to
+    /// `codex -c model_reasoning_effort=...` for this launch only. Falls back
+    /// to `agent.codex.reasoning_effort`. Rejected unless the engine is
+    /// `codex`.
+    #[arg(long, value_enum, conflicts_with = "worktree")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -230,6 +237,34 @@ fn resolve_engine(explicit: Option<Engine>, config: &Config) -> Engine {
     explicit.unwrap_or(config.agent.default_engine)
 }
 
+/// Resolves the model and reasoning effort to launch `engine` with. Explicit
+/// flags win over the `agent.codex` config defaults, which only apply to
+/// codex so a Claude session never receives codex-specific values. An effort
+/// requested for a non-codex engine is an error rather than silently ignored.
+fn resolve_launch_options(
+    engine: Engine,
+    common: &CommonNewArgs,
+    config: &Config,
+) -> Result<(Option<String>, Option<ReasoningEffort>)> {
+    match engine {
+        Engine::Claude => {
+            if common.reasoning_effort.is_some() {
+                bail!("--reasoning-effort is only supported with --engine codex");
+            }
+            Ok((common.model.clone(), None))
+        }
+        Engine::Codex => Ok((
+            common
+                .model
+                .clone()
+                .or_else(|| config.agent.codex.model.clone()),
+            common
+                .reasoning_effort
+                .or(config.agent.codex.reasoning_effort),
+        )),
+    }
+}
+
 /// Run `a agent new` without creating a worktree, either by splitting the
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
@@ -276,6 +311,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
 
     let suffix = if background { " (background)" } else { "" };
     let engine = resolve_engine(args.common.engine, config);
+    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, config)?;
 
     let differs = should_open_window(
         repo_root,
@@ -290,7 +326,8 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
             setup_split_pane(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
                 cwd: &cwd,
-                model: args.common.model.as_deref(),
+                model: model.as_deref(),
+                reasoning_effort,
                 prompt: prompt.as_deref(),
                 engine,
                 env_vars: &env_refs,
@@ -315,7 +352,8 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                     cwd: &cwd,
                     window_name: &window_name,
                     layout: &layout,
-                    model: args.common.model.as_deref(),
+                    model: model.as_deref(),
+                    reasoning_effort,
                     prompt: prompt.as_deref(),
                     engine,
                     env_vars: &env_refs,
@@ -373,6 +411,7 @@ mod tests {
         let config = Config {
             agent: crate::shared::config::AgentConfig {
                 default_engine: config_default,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -380,10 +419,73 @@ mod tests {
     }
 
     #[rstest]
+    #[case::omitted(&["a"], None)]
+    #[case::xhigh(&["a", "--reasoning-effort", "xhigh"], Some(ReasoningEffort::XHigh))]
+    #[case::max(&["a", "--reasoning-effort", "max"], Some(ReasoningEffort::Max))]
+    fn reasoning_effort_value_parses(
+        #[case] argv: &[&str],
+        #[case] expected: Option<ReasoningEffort>,
+    ) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        assert_eq!(cli.args.common.reasoning_effort, expected);
+    }
+
+    fn codex_defaults() -> Config {
+        Config {
+            agent: crate::shared::config::AgentConfig {
+                codex: crate::shared::config::CodexConfig {
+                    model: Some("gpt-5.6-luna".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::Max),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    #[case::codex_uses_config_defaults(
+        Engine::Codex,
+        &["a"],
+        Ok((Some("gpt-5.6-luna"), Some(ReasoningEffort::Max)))
+    )]
+    #[case::codex_flags_win_over_config(
+        Engine::Codex,
+        &["a", "--model", "gpt-5", "--reasoning-effort", "low"],
+        Ok((Some("gpt-5"), Some(ReasoningEffort::Low)))
+    )]
+    #[case::claude_ignores_codex_config(Engine::Claude, &["a"], Ok((None, None)))]
+    #[case::claude_keeps_explicit_model(
+        Engine::Claude,
+        &["a", "--model", "opus"],
+        Ok((Some("opus"), None))
+    )]
+    #[case::claude_rejects_reasoning_effort(
+        Engine::Claude,
+        &["a", "--reasoning-effort", "max"],
+        Err("--reasoning-effort is only supported with --engine codex")
+    )]
+    fn resolve_launch_options_cases(
+        #[case] engine: Engine,
+        #[case] argv: &[&str],
+        #[case] expected: Result<(Option<&str>, Option<ReasoningEffort>), &str>,
+    ) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        let actual = resolve_launch_options(engine, &cli.args.common, &codex_defaults())
+            .map_err(|e| e.to_string());
+        let expected = expected
+            .map(|(model, effort)| (model.map(str::to_string), effort))
+            .map_err(str::to_string);
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
     #[case::engine_with_worktree(&["a", "--worktree", "--engine", "codex"])]
+    #[case::reasoning_effort_with_worktree(&["a", "--worktree", "--reasoning-effort", "max"])]
+    #[case::unknown_reasoning_effort(&["a", "--reasoning-effort", "maxx"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
     }

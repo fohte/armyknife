@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::tmux;
 use crate::shared::config::{Config, LayoutNode};
 
@@ -12,6 +12,7 @@ pub(super) struct TmuxWindowSpec<'a> {
     pub window_name: &'a str,
     pub layout: &'a LayoutNode,
     pub model: Option<&'a str>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub prompt: Option<&'a str>,
     /// The agent CLI `model` and `prompt` are for; layout panes running any
     /// other command are left as written.
@@ -38,6 +39,7 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
             session: &target_session,
             cwd: spec.cwd,
             model: spec.model,
+            reasoning_effort: spec.reasoning_effort,
             prompt: spec.prompt,
             engine: spec.engine,
             env_vars: spec.env_vars,
@@ -61,6 +63,7 @@ pub(super) struct TmuxSplitPaneSpec<'a> {
     pub target_pane: &'a str,
     pub cwd: &'a str,
     pub model: Option<&'a str>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub prompt: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
@@ -83,6 +86,7 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
             session: &session,
             cwd: spec.cwd,
             model: spec.model,
+            reasoning_effort: spec.reasoning_effort,
             prompt: spec.prompt,
             engine: spec.engine,
             env_vars: spec.env_vars,

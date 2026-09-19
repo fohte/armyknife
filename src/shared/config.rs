@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::ai::review::reviewer::Reviewer;
 
 mod env_overlay;
@@ -118,6 +118,26 @@ pub struct AgentConfig {
     /// `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
     #[serde(default)]
     pub default_engine: Engine,
+
+    /// Defaults applied to `a agent new --engine codex` sessions only.
+    #[serde(default)]
+    pub codex: CodexConfig,
+}
+
+/// Per-invocation `codex` defaults. Passed on the command line rather than
+/// written to `~/.codex/config.toml`, so a hand-run `codex` is unaffected.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexConfig {
+    /// Model passed to `codex --model` when `--model` is omitted.
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Value passed to `codex -c model_reasoning_effort=...` when
+    /// `--reasoning-effort` is omitted.
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Worktree management configuration.
@@ -763,6 +783,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_codex_yaml() {
+        let yaml = indoc! {"
+            agent:
+              codex:
+                model: gpt-5.6-luna
+                reasoning_effort: max
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.agent,
+            AgentConfig {
+                codex: CodexConfig {
+                    model: Some("gpt-5.6-luna".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::Max),
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::misspelled_effort("maxx")]
+    #[case::x_high_spelling("x-high")]
+    fn parse_agent_codex_rejects_unknown_reasoning_effort(#[case] effort: &str) {
+        let yaml = format!("agent:\n  codex:\n    reasoning_effort: {effort}\n");
+        assert!(serde_yaml::from_str::<Config>(&yaml).is_err());
+    }
+
+    #[test]
     fn parse_full_yaml_config() {
         let yaml = indoc! {"
             wm:
@@ -1363,6 +1412,7 @@ mod tests {
             Config {
                 agent: AgentConfig {
                     default_engine: Engine::Codex,
+                    ..Default::default()
                 },
                 ..Default::default()
             }
