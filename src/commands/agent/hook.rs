@@ -437,9 +437,9 @@ fn process_hook_event_impl(
     // `pending_permission_agent_ids`, so one agent stuck on a permission
     // prompt isn't cleared by an unrelated event from a sibling agent.
     // `PermissionRequest` inserts the firing agent's key; every other event
-    // except `Notification` removes it, since Claude Code resolves a
-    // prompt -- approved or denied -- before that agent fires any further
-    // event. `Notification` is skipped because
+    // except `Notification` removes it, since the engine resolves a prompt
+    // -- approved or denied -- before that agent fires any further event.
+    // `Notification` is skipped because
     // `Notification(permission_prompt)` is a status-only event for the same
     // prompt and would otherwise immediately remove the key it just inserted.
     let permission_agent_key = input
@@ -608,8 +608,7 @@ fn process_hook_event_impl(
         let config = config::load_config().unwrap_or_default();
         if should_notify(event, session.has_pending_bg_tasks(), &config) {
             if event == HookEvent::PermissionRequest {
-                let message = format_permission_request_message(&input)
-                    .unwrap_or_else(|| "Permission required".to_string());
+                let message = permission_notification_message(&input);
                 permission_notification::spawn(&session, &permission_agent_key, &message);
             } else {
                 send_notification(event, &input, &session, &config);
@@ -862,6 +861,10 @@ fn format_permission_request_message(input: &HookInput) -> Option<String> {
     Some(regex_replace_all!(r"\x1b\[[0-9;]*[A-Za-z]", &result, |_| "").to_string())
 }
 
+fn permission_notification_message(input: &HookInput) -> String {
+    format_permission_request_message(input).unwrap_or_else(|| "Permission required".to_string())
+}
+
 /// Reads the last assistant message from the transcript, retrying if it hasn't changed.
 ///
 /// Claude Code may not have written the latest response to the transcript .jsonl file
@@ -1035,9 +1038,7 @@ fn build_notification(
     // Message: for permission requests, show tool details (e.g., "Bash: cargo test").
     // For stop events, use last_message if available.
     let message = match event {
-        HookEvent::PermissionRequest => {
-            format_permission_request_message(input).unwrap_or_else(|| "Permission required".into())
-        }
+        HookEvent::PermissionRequest => permission_notification_message(input),
         // Falls back on `session.status` rather than `event` so the body
         // never contradicts the title above: a `Stop` with a still-pending
         // bg task reports `Running`, not `Stopped` (see
@@ -1054,17 +1055,6 @@ fn build_notification(
     };
 
     build_notification_with_message(message, session, config)
-}
-
-/// Builds a permission notification from its already-formatted message.
-/// Permission requests are sent by a detached worker after the original hook
-/// process has exited, so the worker cannot reconstruct the full hook input.
-fn build_permission_notification(
-    message: &str,
-    session: &Session,
-    config: &Config,
-) -> Notification {
-    build_notification_with_message(message.to_string(), session, config)
 }
 
 fn build_notification_with_message(
@@ -1903,6 +1893,51 @@ mod tests {
     }
 
     #[test]
+    fn notification_after_permission_request_keeps_delayed_notification_current() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut permission_input =
+            create_test_input_with_tool("Bash", Some(r#"{"command":"echo waiting"}"#));
+        permission_input.engine = Engine::Codex;
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            permission_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("permission hook should succeed");
+
+        let mut notification_input =
+            create_test_input_with_session_and_source("test-123", Some("permission_prompt"), None);
+        notification_input.engine = Engine::Codex;
+        process_hook_event_impl(
+            HookEvent::Notification,
+            notification_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("notification hook should succeed");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("load")
+            .expect("session exists");
+        let is_current = permission_notification::is_current(&session, MAIN_THREAD_AGENT_KEY);
+        assert_eq!(
+            (
+                session.status,
+                session.pending_permission_agent_ids,
+                is_current
+            ),
+            (
+                SessionStatus::WaitingInput,
+                BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]),
+                true,
+            ),
+        );
+    }
+
+    #[test]
     fn stop_with_pending_bg_task_keeps_paused_session_paused() {
         // A session already confirmed Paused (its process is dead) can still
         // receive one last `Stop` fired by that process's own SIGTERM
@@ -2294,7 +2329,7 @@ mod tests {
     // Notification never carries `agent_id` (see `HookInput::agent_id`), so
     // this always resolves to `MAIN_THREAD_AGENT_KEY` -- but the `Notification`
     // match arm is a no-op regardless of key, and must stay that way even for
-    // `permission_prompt`, since it fires right after the main thread's own
+    // `permission_prompt`, since it accompanies the main thread's own
     // `PermissionRequest` for the same prompt.
     #[case::no_existing_key(&[], &[])]
     #[case::existing_key_preserved(&[MAIN_THREAD_AGENT_KEY], &[MAIN_THREAD_AGENT_KEY])]

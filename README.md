@@ -471,7 +471,7 @@ Register these in Codex's `hooks.json` (each command with `--engine codex`) to t
 
 Codex has no `Notification` event, so nothing maps to `a agent hook notification`. `SessionEnd` is best-effort: Codex may exit without firing it or cut the hook short at its own per-hook `timeout`, and a Codex session that never reports it is handled by `a agent sweep` like any other stopped session. Codex has no equivalent of `CLAUDE_ENV_FILE`, so `ARMYKNIFE_SESSION_ID` is never set inside a Codex session; commands that need the caller's own session ID (`a agent new`'s parent resolution, `a agent peer parent`/`children`) fall back to `CODEX_SESSION_ID`, which Codex exports to every command it runs.
 
-Permission notifications use a short debounce before sending because another `PermissionRequest` hook can resolve the request without showing the approval UI. A subsequent `PostToolUse` or `Stop` event cancels the pending notification; the debounce is bounded because neither engine exposes a hook event for the aggregate decision.
+Both engines delay permission notifications by about one second because another `PermissionRequest` hook can resolve the request without showing the approval UI. A subsequent event that clears the pending request, such as `PostToolUse` or `Stop`, cancels the notification. The delay is fixed rather than waiting for the decision because neither engine exposes a hook event for the aggregate decision.
 
 #### Peer session name resolution
 

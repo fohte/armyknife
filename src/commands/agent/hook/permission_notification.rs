@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Args;
 
-use super::{build_permission_notification, config, is_notification_enabled, store};
+use super::{build_notification_with_message, config, is_notification_enabled, store};
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::notification;
 use crate::infra::process;
@@ -29,10 +29,6 @@ pub struct DelayedPermissionNotificationArgs {
     #[arg(long)]
     pub agent_key: String,
 
-    /// Session updated_at timestamp captured when the request was received.
-    #[arg(long)]
-    pub scheduled_at_micros: i64,
-
     /// Already-formatted permission message, including tool details.
     #[arg(long, allow_hyphen_values = true)]
     pub message: String,
@@ -41,7 +37,6 @@ pub struct DelayedPermissionNotificationArgs {
 /// Starts a detached worker so the synchronous hook is not held open
 /// while waiting for a possible follow-up event.
 pub(super) fn spawn(session: &Session, agent_key: &str, message: &str) {
-    let scheduled_at_micros = session.updated_at.timestamp_micros().to_string();
     let args = [
         "agent",
         "permission-notification",
@@ -49,8 +44,6 @@ pub(super) fn spawn(session: &Session, agent_key: &str, message: &str) {
         session.session_id.as_str(),
         "--agent-key",
         agent_key,
-        "--scheduled-at-micros",
-        scheduled_at_micros.as_str(),
         "--message",
         message,
     ];
@@ -67,27 +60,49 @@ pub(crate) fn run(args: &DelayedPermissionNotificationArgs) -> Result<()> {
 
     let sessions_dir = store::sessions_dir()?;
     let Some(session) = store::load_session_from(&sessions_dir, &args.session)? else {
+        tracing::info!(
+            event = "agent.permission_notification.exit",
+            session = %args.session,
+            reason = "session_missing",
+        );
         return Ok(());
     };
-    if !is_current(&session, &args.agent_key, args.scheduled_at_micros) {
+    if !is_current(&session, &args.agent_key) {
+        tracing::info!(
+            event = "agent.permission_notification.exit",
+            session = %args.session,
+            reason = "resolved",
+        );
         return Ok(());
     }
 
     let config = config::load_config().unwrap_or_default();
     if !is_notification_enabled(&config) {
+        tracing::info!(
+            event = "agent.permission_notification.exit",
+            session = %args.session,
+            reason = "disabled",
+        );
         return Ok(());
     }
 
-    let notification = build_permission_notification(&args.message, &session, &config);
-    if let Err(error) = notification::send(&notification) {
-        eprintln!("[armyknife] warning: failed to send notification: {error}");
+    let notification = build_notification_with_message(args.message.clone(), &session, &config);
+    match notification::send(&notification) {
+        Ok(()) => tracing::info!(
+            event = "agent.permission_notification.sent",
+            session = %args.session,
+        ),
+        Err(error) => tracing::warn!(
+            event = "agent.permission_notification.send_failed",
+            session = %args.session,
+            error = %error,
+        ),
     }
     Ok(())
 }
 
-fn is_current(session: &Session, agent_key: &str, scheduled_at_micros: i64) -> bool {
+pub(super) fn is_current(session: &Session, agent_key: &str) -> bool {
     session.status == SessionStatus::WaitingInput
-        && session.updated_at.timestamp_micros() == scheduled_at_micros
         && session.pending_permission_agent_ids.contains(agent_key)
 }
 
@@ -126,34 +141,50 @@ mod tests {
     }
 
     #[rstest]
-    #[case::codex_current_request(Engine::Codex, SessionStatus::WaitingInput, true, true, true)]
-    #[case::claude_current_request(Engine::Claude, SessionStatus::WaitingInput, true, true, true)]
-    #[case::post_tool_use_cleared(Engine::Codex, SessionStatus::Running, false, true, false)]
-    #[case::stop_cleared(Engine::Codex, SessionStatus::Stopped, false, true, false)]
-    #[case::newer_event(Engine::Codex, SessionStatus::WaitingInput, true, false, false)]
+    #[case::codex_current_request(
+        Engine::Codex,
+        SessionStatus::WaitingInput,
+        Some(MAIN_THREAD_AGENT_KEY),
+        true
+    )]
+    #[case::claude_current_request(
+        Engine::Claude,
+        SessionStatus::WaitingInput,
+        Some(MAIN_THREAD_AGENT_KEY),
+        true
+    )]
+    #[case::post_tool_use_cleared(
+        Engine::Codex,
+        SessionStatus::Running,
+        Some(MAIN_THREAD_AGENT_KEY),
+        false
+    )]
+    #[case::stop_cleared(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        Some(MAIN_THREAD_AGENT_KEY),
+        false
+    )]
+    #[case::no_pending_permission(Engine::Codex, SessionStatus::WaitingInput, None, false)]
+    #[case::sibling_permission_only(
+        Engine::Codex,
+        SessionStatus::WaitingInput,
+        Some("sibling-agent"),
+        false
+    )]
     fn only_current_permission_wait_is_notified(
         mut session: Session,
         #[case] engine: Engine,
         #[case] status: SessionStatus,
-        #[case] pending: bool,
-        #[case] timestamp_matches: bool,
+        #[case] pending_agent: Option<&str>,
         #[case] expected: bool,
     ) {
         session.engine = engine;
         session.status = status;
-        if !pending {
-            session.pending_permission_agent_ids.clear();
-        }
-        let scheduled_at_micros = session.updated_at.timestamp_micros();
-        let scheduled_at_micros = if timestamp_matches {
-            scheduled_at_micros
-        } else {
-            scheduled_at_micros.saturating_sub(1)
-        };
+        session.pending_permission_agent_ids = pending_agent
+            .map(|agent| BTreeSet::from([agent.to_string()]))
+            .unwrap_or_default();
 
-        assert_eq!(
-            is_current(&session, MAIN_THREAD_AGENT_KEY, scheduled_at_micros),
-            expected
-        );
+        assert_eq!(is_current(&session, MAIN_THREAD_AGENT_KEY), expected);
     }
 }
