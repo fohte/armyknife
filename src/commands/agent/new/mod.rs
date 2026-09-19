@@ -41,7 +41,8 @@ pub struct CommonNewArgs {
 
     /// Model for the new session. Passed through to `<engine> --model`.
     /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
-    /// (e.g. "claude-fable-5").
+    /// (e.g. "claude-fable-5"). For `--engine codex`, falls back to
+    /// `agent.codex.model` when omitted.
     #[arg(long)]
     pub model: Option<String>,
 
@@ -269,14 +270,32 @@ fn resolve_launch_options(
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
 fn run_session_only(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+    // Resolved before the prompt cache is written so a rejected flag
+    // combination doesn't overwrite a prompt saved by an earlier failure.
+    let engine = resolve_engine(args.common.engine, config);
+    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, config)?;
     let raw_prompt = args.common.prompt.as_deref();
 
     with_prompt_cache_recovery(repo_root, raw_prompt, || {
-        run_session_only_inner(args, repo_root, config)
+        run_session_only_inner(
+            args,
+            repo_root,
+            config,
+            engine,
+            model.as_deref(),
+            reasoning_effort,
+        )
     })
 }
 
-fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> Result<()> {
+fn run_session_only_inner(
+    args: &NewArgs,
+    repo_root: &str,
+    config: &Config,
+    engine: Engine,
+    model: Option<&str>,
+    reasoning_effort: Option<ReasoningEffort>,
+) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_string_lossy()
@@ -310,8 +329,6 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
         .collect();
 
     let suffix = if background { " (background)" } else { "" };
-    let engine = resolve_engine(args.common.engine, config);
-    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, config)?;
 
     let differs = should_open_window(
         repo_root,
@@ -326,7 +343,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
             setup_split_pane(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
                 cwd: &cwd,
-                model: model.as_deref(),
+                model,
                 reasoning_effort,
                 prompt: prompt.as_deref(),
                 engine,
@@ -352,7 +369,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                     cwd: &cwd,
                     window_name: &window_name,
                     layout: &layout,
-                    model: model.as_deref(),
+                    model,
                     reasoning_effort,
                     prompt: prompt.as_deref(),
                     engine,
