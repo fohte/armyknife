@@ -13,6 +13,7 @@ use super::error::CcError;
 /// `Session::engine`) so on-disk session files predating this field, and
 /// hook invocations that don't pass `--engine`, keep behaving exactly as
 /// before Codex support existed.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {

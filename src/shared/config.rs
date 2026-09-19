@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::agent::types::Engine;
 use crate::commands::ai::review::reviewer::Reviewer;
 
 mod env_overlay;
@@ -13,6 +14,10 @@ use env_overlay::env_overlay;
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// `a agent` settings.
+    #[serde(default)]
+    pub agent: AgentConfig,
+
     /// Worktree management settings.
     #[serde(default)]
     pub wm: WmConfig,
@@ -101,6 +106,18 @@ fn resolve_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json
     } else {
         Some(current.clone())
     }
+}
+
+/// `a agent` settings.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentConfig {
+    /// Coding agent CLI `a agent new` launches when `--engine` is omitted
+    /// (default: "claude"). Overridable for a single invocation via
+    /// `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
+    #[serde(default)]
+    pub default_engine: Engine,
 }
 
 /// Worktree management configuration.
@@ -696,6 +713,7 @@ mod tests {
     fn config_default_has_expected_values() {
         let config = Config::default();
 
+        assert_eq!(config.agent.default_engine, Engine::Claude);
         assert_eq!(config.wm.worktrees_dir, ".worktrees");
         assert_eq!(config.wm.branch_prefix, "fohte/");
         assert_eq!(
@@ -1320,6 +1338,31 @@ mod tests {
                         min_context_tokens: 42,
                     },
                     ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_config_env_overlay_overrides_default_engine() {
+        let dir = TempDir::new().unwrap();
+        // dir/armyknife is never created: no YAML sets agent.default_engine either.
+
+        let config = with_isolated_env_overlay(
+            vec![
+                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
+                ("ARMYKNIFE_AGENT__DEFAULT_ENGINE", Some("codex")),
+            ],
+            load_config,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    default_engine: Engine::Codex,
                 },
                 ..Default::default()
             }
