@@ -10,6 +10,7 @@ use super::worktree::{
     rollback_worktree,
 };
 use crate::commands::agent::error::CcError;
+use crate::commands::agent::types::Engine;
 use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
@@ -194,6 +195,9 @@ pub(super) fn run_worktree_creation(
             layout: &config.wm.layout,
             model: args.common.model.as_deref(),
             prompt: final_prompt.as_deref(),
+            // `--engine` is rejected with `--worktree`, so `config.wm.layout`
+            // is always a Claude Code session.
+            engine: Engine::Claude,
             env_vars: &env_refs,
             background,
             restore_automatic_rename: false,

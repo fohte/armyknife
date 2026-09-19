@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 
+use crate::commands::agent::types::Engine;
 use crate::infra::tmux;
 use crate::shared::config::{Config, LayoutNode};
 
@@ -12,6 +13,9 @@ pub(super) struct TmuxWindowSpec<'a> {
     pub layout: &'a LayoutNode,
     pub model: Option<&'a str>,
     pub prompt: Option<&'a str>,
+    /// The agent CLI `model` and `prompt` are for; layout panes running any
+    /// other command are left as written.
+    pub engine: Engine,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
     /// Turns `automatic-rename` back on right after window creation, undoing
@@ -35,6 +39,7 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
             cwd: spec.cwd,
             model: spec.model,
             prompt: spec.prompt,
+            engine: spec.engine,
             env_vars: spec.env_vars,
             background: spec.background,
         },
@@ -59,12 +64,12 @@ pub(super) struct TmuxSplitPaneSpec<'a> {
     pub prompt: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
-    /// Command to launch in the new pane (e.g. `"claude"` or `"codex"`).
-    pub command: &'a str,
+    /// Agent CLI to launch in the new pane.
+    pub engine: Engine,
 }
 
 /// Splits `spec.target_pane` — the tmux pane the invoking process is running
-/// in — into a new pane in the same window and starts `spec.command` there.
+/// in — into a new pane in the same window and starts `spec.engine`'s CLI there.
 pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
     let session = tmux::get_session_name_for_pane(spec.target_pane).with_context(|| {
         format!(
@@ -79,11 +84,12 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
             cwd: spec.cwd,
             model: spec.model,
             prompt: spec.prompt,
+            engine: spec.engine,
             env_vars: spec.env_vars,
             background: spec.background,
         },
         target_pane: spec.target_pane,
-        command: spec.command,
+        command: spec.engine.process_name(),
     })
     .context("Failed to split tmux pane")?;
 
