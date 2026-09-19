@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.305](https://github.com/fohte/armyknife/compare/v0.1.304...v0.1.305) (2026-09-19)
+
+
+### Features
+
+* **agent:** support peer notify for Codex sessions ([#922](https://github.com/fohte/armyknife/issues/922)) ([e6d0d73](https://github.com/fohte/armyknife/commit/e6d0d731dc11c6e8584630f20ea0c287a587a342))
+
 ## [0.1.304](https://github.com/fohte/armyknife/compare/v0.1.303...v0.1.304) (2026-09-19)
 
 
