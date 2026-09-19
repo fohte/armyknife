@@ -159,6 +159,7 @@ mod tests {
         "claude",
         Some("opus"),
         None,
+        None,
         "claude --model opus"
     )]
     #[case::claude_with_extra_args_and_model(
@@ -166,14 +167,23 @@ mod tests {
         "claude -p agent1",
         Some("opus"),
         None,
+        None,
         "claude --model opus -p agent1"
     )]
-    #[case::claude_without_model_unchanged(Engine::Claude, "claude", None, None, "claude")]
-    #[case::non_agent_with_model_unchanged(Engine::Claude, "nvim", Some("opus"), None, "nvim")]
+    #[case::claude_without_model_unchanged(Engine::Claude, "claude", None, None, None, "claude")]
+    #[case::non_agent_with_model_unchanged(
+        Engine::Claude,
+        "nvim",
+        Some("opus"),
+        None,
+        None,
+        "nvim"
+    )]
     #[case::claude_prefixed_other_command_unchanged(
         Engine::Claude,
         "claude-code",
         Some("opus"),
+        None,
         None,
         "claude-code"
     )]
@@ -181,88 +191,9 @@ mod tests {
         Engine::Claude,
         "claude",
         Some("opus"),
+        None,
         Some("/tmp/prompt.txt"),
         "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
-    )]
-    #[case::codex_with_model_no_prompt(
-        Engine::Codex,
-        "codex",
-        Some("gpt-5"),
-        None,
-        "codex --model gpt-5"
-    )]
-    #[case::codex_with_extra_args_and_model(
-        Engine::Codex,
-        "codex --search",
-        Some("gpt-5"),
-        None,
-        "codex --model gpt-5 --search"
-    )]
-    #[case::codex_prefixed_other_command_unchanged(
-        Engine::Codex,
-        "codex-wrapper",
-        Some("gpt-5"),
-        None,
-        "codex-wrapper"
-    )]
-    #[case::codex_with_model_and_prompt(
-        Engine::Codex,
-        "codex",
-        Some("gpt-5"),
-        Some("/tmp/prompt.txt"),
-        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
-    )]
-    #[case::other_engine_pane_keeps_model_and_prompt_off(
-        Engine::Claude,
-        "codex",
-        Some("opus"),
-        Some("/tmp/prompt.txt"),
-        "codex"
-    )]
-    fn test_apply_prompt_if_agent_with_model(
-        #[case] engine: Engine,
-        #[case] command: &str,
-        #[case] model: Option<&str>,
-        #[case] path: Option<&str>,
-        #[case] expected: &str,
-    ) {
-        let path_buf = path.map(PathBuf::from);
-        let result = apply_prompt_if_agent(command, engine, model, None, path_buf.as_deref(), true);
-        assert_eq!(result, expected);
-    }
-
-    #[rstest]
-    #[case::codex_effort_only(
-        Engine::Codex,
-        "codex",
-        None,
-        Some(ReasoningEffort::Max),
-        None,
-        "codex -c model_reasoning_effort=max"
-    )]
-    #[case::codex_model_and_effort_with_prompt(
-        Engine::Codex,
-        "codex",
-        Some("gpt-5.6-luna"),
-        Some(ReasoningEffort::Max),
-        Some("/tmp/prompt.txt"),
-        "codex --model gpt-5.6-luna -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
-    )]
-    #[case::codex_effort_keeps_extra_args(
-        Engine::Codex,
-        "codex --search",
-        None,
-        Some(ReasoningEffort::XHigh),
-        None,
-        "codex -c model_reasoning_effort=xhigh --search"
-    )]
-    #[case::codex_wrapper_unchanged(
-        Engine::Codex,
-        "codex-wrapper",
-        None,
-        Some(ReasoningEffort::Max),
-        None,
-        "codex-wrapper"
     )]
     #[case::claude_ignores_effort(
         Engine::Claude,
@@ -272,15 +203,71 @@ mod tests {
         None,
         "claude"
     )]
-    #[case::other_engine_pane_ignores_effort(
-        Engine::Claude,
+    #[case::codex_with_model_no_prompt(
+        Engine::Codex,
+        "codex",
+        Some("gpt-5"),
+        None,
+        None,
+        "codex --model gpt-5"
+    )]
+    #[case::codex_with_extra_args_and_model(
+        Engine::Codex,
+        "codex --search",
+        Some("gpt-5"),
+        None,
+        None,
+        "codex --model gpt-5 --search"
+    )]
+    #[case::codex_prefixed_other_command_unchanged(
+        Engine::Codex,
+        "codex-wrapper",
+        Some("gpt-5"),
+        Some(ReasoningEffort::Max),
+        None,
+        "codex-wrapper"
+    )]
+    #[case::codex_with_model_and_prompt(
+        Engine::Codex,
+        "codex",
+        Some("gpt-5"),
+        None,
+        Some("/tmp/prompt.txt"),
+        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    #[case::codex_effort_only(
+        Engine::Codex,
         "codex",
         None,
         Some(ReasoningEffort::Max),
         None,
+        "codex -c model_reasoning_effort=max"
+    )]
+    #[case::codex_effort_keeps_extra_args(
+        Engine::Codex,
+        "codex --search",
+        None,
+        Some(ReasoningEffort::XHigh),
+        None,
+        "codex -c model_reasoning_effort=xhigh --search"
+    )]
+    #[case::codex_model_and_effort_with_prompt(
+        Engine::Codex,
+        "codex",
+        Some("gpt-5.6-luna"),
+        Some(ReasoningEffort::Max),
+        Some("/tmp/prompt.txt"),
+        "codex --model gpt-5.6-luna -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+    )]
+    #[case::other_engine_pane_keeps_model_effort_and_prompt_off(
+        Engine::Claude,
+        "codex",
+        Some("opus"),
+        Some(ReasoningEffort::Max),
+        Some("/tmp/prompt.txt"),
         "codex"
     )]
-    fn test_apply_prompt_if_agent_with_reasoning_effort(
+    fn test_apply_prompt_if_agent_with_launch_flags(
         #[case] engine: Engine,
         #[case] command: &str,
         #[case] model: Option<&str>,
