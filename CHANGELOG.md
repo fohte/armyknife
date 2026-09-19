@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.303](https://github.com/fohte/armyknife/compare/v0.1.302...v0.1.303) (2026-09-19)
+
+
+### Features
+
+* **agent:** unify communication from delegated sessions to notify ([#918](https://github.com/fohte/armyknife/issues/918)) ([88aabf4](https://github.com/fohte/armyknife/commit/88aabf427435a1dbdb5bdb09326f989641f9f6a4))
+
 ## [0.1.302](https://github.com/fohte/armyknife/compare/v0.1.301...v0.1.302) (2026-09-18)
 
 
