@@ -14,6 +14,11 @@
 //! one before respawning -- `a agent resume` (which the respawned pane runs)
 //! resumes whatever session is recorded on the pane, not necessarily the
 //! one this command was asked to wake.
+//!
+//! A Codex session has no `SendMessage` name to wait for, so waking one only
+//! respawns the pane and returns no name. That is enough for
+//! `peer::notify`: `codex queue` persists to a DB under `$CODEX_HOME`, and
+//! the resumed `codex` dispatches any pending queue when it loads the thread.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,7 +31,7 @@ use crate::commands::agent::claude_registry;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::resume::{RespawnError, respawn_paused_session};
 use crate::commands::agent::store;
-use crate::commands::agent::types::{SessionStatus, TMUX_SESSION_OPTION};
+use crate::commands::agent::types::{Engine, SessionStatus, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 /// How often to poll Claude Code's session registry for the resumed
@@ -43,26 +48,33 @@ pub struct WakeArgs {
     pub session_id: String,
 }
 
-/// Runs the wake command: prints the resolved `SendMessage` name to stdout.
+/// Runs the wake command: prints the resolved `SendMessage` name to stdout
+/// (nothing for a Codex session, which has none).
 pub fn run(args: &WakeArgs) -> Result<()> {
-    println!("{}", wake(&args.session_id)?);
+    if let Some(name) = wake(&args.session_id)? {
+        println!("{name}");
+    }
     Ok(())
 }
 
 /// Resumes `session_id` if paused and returns its resolved `SendMessage`
-/// name. `pub(super)` so `peer::notify` can drive the same resume-and-wait
-/// flow before delivering a message to a paused session.
-pub(super) fn wake(session_id: &str) -> Result<String> {
+/// name, or `None` for a Codex session. `pub(super)` so `peer::notify` can
+/// drive the same resume flow before delivering a message to a paused
+/// session.
+pub(super) fn wake(session_id: &str) -> Result<Option<String>> {
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
     if session.status != SessionStatus::Paused {
-        return resolve_name(session_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No SendMessage name available for session {session_id} (status: {})",
-                session.status.display_name()
-            )
-        });
+        return match session.engine {
+            Engine::Claude => resolve_name(session_id).map(Some).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No SendMessage name available for session {session_id} (status: {})",
+                    session.status.display_name()
+                )
+            }),
+            Engine::Codex => Ok(None),
+        };
     }
 
     let tmux_info = session
@@ -80,7 +92,7 @@ pub(super) fn wake(session_id: &str) -> Result<String> {
     // `claude`.
     let lock = store::lock_session_for_update(&store::sessions_dir()?, session_id)?;
     if let Some(name) = resolve_name(session_id) {
-        return Ok(name);
+        return Ok(Some(name));
     }
     match respawn_paused_session(&session) {
         Ok(_pane_id) => {}
@@ -94,7 +106,10 @@ pub(super) fn wake(session_id: &str) -> Result<String> {
     }
     drop(lock);
 
-    wait_for_name(session_id)
+    match session.engine {
+        Engine::Claude => wait_for_name(session_id).map(Some),
+        Engine::Codex => Ok(None),
+    }
 }
 
 /// Error from [`check_pane_matches_target`]: the pane's recorded session
