@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.311](https://github.com/fohte/armyknife/compare/v0.1.310...v0.1.311) (2026-09-19)
+
+
+### Bug Fixes
+
+* **agent:** suppress permission notifications when approval UI is hidden ([#936](https://github.com/fohte/armyknife/issues/936)) ([dd45ce0](https://github.com/fohte/armyknife/commit/dd45ce0e7b14be50232e28ab3fd842b33cab0537))
+
 ## [0.1.310](https://github.com/fohte/armyknife/compare/v0.1.309...v0.1.310) (2026-09-19)
 
 
