@@ -23,7 +23,7 @@ use worktree_creation::run_worktree_creation;
 /// CLI args shared by `a agent new`'s worktree and no-worktree modes.
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CommonNewArgs {
-    /// Initial prompt to send to Claude Code.
+    /// Initial prompt to send to the agent (Claude Code or Codex).
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
     pub prompt: Option<String>,
@@ -39,7 +39,7 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub label: Option<String>,
 
-    /// Model for the new Claude Code session. Passed through to `claude --model`.
+    /// Model for the new session. Passed through to `<engine> --model`.
     /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
     /// (e.g. "claude-fable-5").
     #[arg(long)]

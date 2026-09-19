@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod prompt;
-use prompt::apply_prompt_if_claude;
+use prompt::{apply_prompt_if_agent, detect_engine};
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,18 +147,18 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
         &pane_prefix,
     );
 
-    // Find the last claude pane index so only it performs temp file cleanup
-    let last_claude_index = prompt_file.and_then(|_| {
+    // Find the last agent pane index so only it performs temp file cleanup
+    let last_agent_index = prompt_file.and_then(|_| {
         pane_entries
             .iter()
-            .rposition(|e| e.command.starts_with("claude"))
+            .rposition(|e| detect_engine(&e.command).is_some())
     });
 
     // Send commands to each pane
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{pane_prefix}{}", i + 1);
-        let cleanup = last_claude_index == Some(i);
-        let cmd = apply_prompt_if_claude(&entry.command, model, prompt_file, cleanup);
+        let cleanup = last_agent_index == Some(i);
+        let cmd = apply_prompt_if_agent(&entry.command, model, prompt_file, cleanup);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -368,7 +368,7 @@ pub struct SplitSpec<'a> {
 }
 
 /// Splits `target_pane` into a new pane within the same window and starts
-/// `command` there (typically `claude`). Returns the new pane's id.
+/// `command` there (typically `claude` or `codex`). Returns the new pane's id.
 ///
 /// Unlike `build_layout`, this never creates a window: `a agent new` without
 /// `--worktree` uses it to keep a handoff session visually attached to the
@@ -389,7 +389,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
     } = spec;
 
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let cmd = apply_prompt_if_claude(command, model, prompt_file.as_deref(), true);
+    let cmd = apply_prompt_if_agent(command, model, prompt_file.as_deref(), true);
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
         session,
@@ -928,7 +928,7 @@ mod tests {
 
     // =========================================================================
     // build_layout_commands: multiple claude panes with prompt file
-    // Only the last claude pane should delete the temp file.
+    // Only the last agent pane should delete the temp file.
     // =========================================================================
 
     #[rstest]
@@ -972,6 +972,72 @@ mod tests {
                 ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
+            ]
+        );
+    }
+
+    // =========================================================================
+    // build_layout_commands: claude and codex panes share one prompt file
+    // The last agent pane (whichever engine) deletes the temp file, and
+    // non-agent panes are left alone.
+    // =========================================================================
+
+    #[test]
+    fn mixed_engine_panes_only_last_agent_deletes_prompt_file() {
+        let prompt_path = PathBuf::from("/tmp/prompt.txt");
+        let pane = |command: &str| {
+            Box::new(LayoutNode::Pane(PaneConfig {
+                command: command.to_string(),
+                focus: false,
+            }))
+        };
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: pane("claude"),
+            second: Box::new(LayoutNode::Split(SplitConfig {
+                direction: SplitDirection::Vertical,
+                first: pane("codex"),
+                second: pane("nvim"),
+            })),
+        });
+
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: Some("opus"),
+            prompt_file: Some(&prompt_path),
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["split-window", "-v", "-t", "2", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "claude --model opus \"$(cat /tmp/prompt.txt)\"",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "codex --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "3"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
             ]
         );
     }
