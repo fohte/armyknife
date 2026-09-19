@@ -19,12 +19,20 @@ pub(super) fn is_engine_command(command: &str, engine: Engine) -> bool {
 /// command is returned untouched.
 pub(super) fn retarget_agent_command(command: &str, engine: Engine) -> String {
     let layout_engine = Engine::Claude;
-    match command.strip_prefix(layout_engine.process_name()) {
-        Some(rest) if engine != layout_engine && (rest.is_empty() || rest.starts_with(' ')) => {
-            engine.process_name().to_string()
-        }
-        _ => command.to_string(),
+    if engine != layout_engine && strip_program(command, layout_engine.process_name()).is_some() {
+        engine.process_name().to_string()
+    } else {
+        command.to_string()
     }
+}
+
+/// Returns the arguments after `program` when `command` is exactly `program`
+/// or `program` followed by a space; `None` for a differently-named command
+/// that merely starts with it (e.g. a "claude-code" wrapper script).
+fn strip_program<'a>(command: &'a str, program: &str) -> Option<&'a str> {
+    command
+        .strip_prefix(program)
+        .filter(|rest| rest.is_empty() || rest.starts_with(' '))
 }
 
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
@@ -72,11 +80,9 @@ pub(super) fn apply_prompt_if_agent(
     // space-separated rest) so a differently-named pane command that merely
     // starts with it (e.g. a "claude-code" wrapper script) isn't mangled by
     // splicing flags into the middle of its name.
-    let command = match command.strip_prefix(program) {
-        Some(rest) if rest.is_empty() || rest.starts_with(' ') => {
-            format!("{program}{flags}{rest}")
-        }
-        _ => command.to_string(),
+    let command = match strip_program(command, program) {
+        Some(rest) => format!("{program}{flags}{rest}"),
+        None => command.to_string(),
     };
 
     match prompt_file {

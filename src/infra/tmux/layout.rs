@@ -50,8 +50,10 @@ pub struct LayoutCommandsSpec<'a> {
     /// shell execution time and delete it afterward.
     pub prompt_file: Option<&'a Path>,
     /// The agent CLI this session is for. `model` and `prompt_file` apply
-    /// only to panes running it, so other panes (including another agent
-    /// CLI in a user-configured layout) are left as written.
+    /// only to panes running it. A plain `claude` pane is retargeted to it
+    /// (dropping its arguments) unless the layout already has a pane for it;
+    /// all other panes, including another agent CLI in a user-configured
+    /// layout, are left as written.
     pub engine: Engine,
     /// Set as tmux session-level environment variables so all panes in the
     /// window inherit them.
@@ -588,6 +590,14 @@ mod tests {
         TmuxCommand::new(args)
     }
 
+    /// Helper: create an unfocused leaf pane running `command`.
+    fn pane(command: &str) -> Box<LayoutNode> {
+        Box::new(LayoutNode::Pane(PaneConfig {
+            command: command.to_string(),
+            focus: false,
+        }))
+    }
+
     // =========================================================================
     // build_layout_commands: single pane (no split)
     // =========================================================================
@@ -1050,12 +1060,6 @@ mod tests {
     #[test]
     fn claude_layout_is_retargeted_to_codex_session() {
         let prompt_path = PathBuf::from("/tmp/prompt.txt");
-        let pane = |command: &str| {
-            Box::new(LayoutNode::Pane(PaneConfig {
-                command: command.to_string(),
-                focus: false,
-            }))
-        };
         let layout = LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: pane("claude --dangerously-skip-permissions"),
@@ -1123,12 +1127,6 @@ mod tests {
         #[case] expected_codex_pane: &str,
     ) {
         let prompt_path = PathBuf::from("/tmp/prompt.txt");
-        let pane = |command: &str| {
-            Box::new(LayoutNode::Pane(PaneConfig {
-                command: command.to_string(),
-                focus: false,
-            }))
-        };
         let layout = LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: pane("claude"),
