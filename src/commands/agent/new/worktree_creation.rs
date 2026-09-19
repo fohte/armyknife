@@ -186,6 +186,11 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
+    // `--engine` is rejected with `--worktree`, so `config.wm.layout` is always
+    // a Claude Code session.
+    let engine = Engine::Claude;
+    let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
+
     // Setup tmux window using config layout
     setup_tmux_window(
         TmuxWindowSpec {
@@ -193,12 +198,10 @@ pub(super) fn run_worktree_creation(
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
             window_name: &worktree_name,
             layout: &config.wm.layout,
-            model: args.common.model.as_deref(),
-            reasoning_effort: args.common.reasoning_effort,
+            model: model.as_deref(),
+            reasoning_effort,
             prompt: final_prompt.as_deref(),
-            // `--engine` is rejected with `--worktree`, so `config.wm.layout`
-            // is always a Claude Code session.
-            engine: Engine::Claude,
+            engine,
             env_vars: &env_refs,
             background,
             restore_automatic_rename: false,
