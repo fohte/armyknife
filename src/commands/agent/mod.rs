@@ -34,6 +34,7 @@ pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
+pub use hook::permission_notification::DelayedPermissionNotificationArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
@@ -52,6 +53,11 @@ pub enum AgentCommands {
 
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
+
+    /// Internal: send a delayed permission notification after the
+    /// request remains unresolved through the grace period.
+    #[command(name = "permission-notification", hide = true)]
+    PermissionNotification(DelayedPermissionNotificationArgs),
 
     /// List Claude Code sessions
     #[command(visible_alias = "ls")]
@@ -116,6 +122,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Hook(args) => hook::run(args)?,
+            Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,
             Self::Focus(args) => focus::run(args)?,
