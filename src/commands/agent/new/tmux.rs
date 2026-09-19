@@ -14,8 +14,8 @@ pub(super) struct TmuxWindowSpec<'a> {
     pub model: Option<&'a str>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub prompt: Option<&'a str>,
-    /// The agent CLI `model`, `reasoning_effort` and `prompt` are for; layout panes running any
-    /// other command are left as written.
+    /// The agent CLI `model`, `reasoning_effort` and `prompt` are for. Layout panes running
+    /// `claude` are retargeted to it; panes running any other command are left as written.
     pub engine: Engine,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
