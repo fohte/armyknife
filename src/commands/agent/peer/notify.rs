@@ -65,23 +65,25 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
 }
 
 /// Resolves this process's own session_id for the `<peer-message>` sender
-/// line, trying `ARMYKNIFE_SESSION_ID` (set by `a agent new`, for either
-/// engine) before each engine's own ambient session env var -- present for a
-/// plain `claude`/`codex` CLI invocation started outside `a agent new`.
+/// line, trying `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start`
+/// hook) before each engine's own ambient session env var -- present for a
+/// plain `claude`/`codex` CLI invocation, including one whose hooks aren't
+/// registered.
 /// Returns `None` when nothing resolves (e.g. `a wm delete` has no session
 /// in the loop), which sends the message unwrapped.
 ///
 /// The paired `Engine` is only a fallback guess, used by [`notify`] when the
 /// resolved ID isn't in armyknife's store: `ARMYKNIFE_SESSION_ID` carries no
-/// engine hint of its own (`a agent new --engine codex` sets it too), so
-/// only the engine-specific variables pair with a guess.
+/// engine hint of its own, so only the engine-specific variables pair with a
+/// guess.
 ///
 /// Only called from [`run`], not [`notify`] itself: reading these env vars
 /// inside `notify` would make `merge_notify`'s direct calls pick up
 /// whichever session's env happens to be ambient in the calling process,
 /// misattributing an automated merge notification as a personal message.
 fn resolve_sender() -> Option<(String, Option<Engine>)> {
-    if let Some(id) = EnvVars::load().session_id {
+    let env = EnvVars::load();
+    if let Some(id) = env.session_id {
         return Some((id, None));
     }
     if let Some(id) = non_empty_env_var("CLAUDE_CODE_SESSION_ID") {
@@ -95,7 +97,7 @@ fn resolve_sender() -> Option<(String, Option<Engine>)> {
     // Claude Code subagent's hook events still report the top-level
     // session's session_id, not a per-subagent one. The Codex equivalent of
     // "this session" is the value that's stable across its subagents too.
-    if let Some(id) = non_empty_env_var("CODEX_SESSION_ID") {
+    if let Some(id) = env.codex_session_id {
         return Some((id, Some(Engine::Codex)));
     }
     None

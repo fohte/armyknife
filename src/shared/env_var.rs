@@ -5,6 +5,7 @@
 
 const SKIP_HOOKS: &str = "ARMYKNIFE_SKIP_HOOKS";
 const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
+const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
 const CC_HOOK_LOG: &str = "ARMYKNIFE_CC_HOOK_LOG";
@@ -30,6 +31,10 @@ pub struct EnvVars {
     /// Session ID of the current Claude Code session.
     pub session_id: Option<String>,
 
+    /// Session ID of the current Codex session. Not an `ARMYKNIFE_*` variable:
+    /// Codex exports it to every command it runs.
+    pub codex_session_id: Option<String>,
+
     /// Session label set by `a agent new --label` or auto-generated.
     pub session_label: Option<String>,
 
@@ -53,11 +58,22 @@ impl EnvVars {
         Self {
             skip_hooks: std::env::var(SKIP_HOOKS).is_ok(),
             session_id: non_empty_var(SESSION_ID),
+            codex_session_id: non_empty_var(CODEX_SESSION_ID),
             session_label: non_empty_var(SESSION_LABEL),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
         }
+    }
+
+    /// Session ID of the session this process runs in, whichever engine hosts
+    /// it. `ARMYKNIFE_SESSION_ID` is only ever set through Claude Code's
+    /// `CLAUDE_ENV_FILE`, which Codex has no equivalent of, so Codex sessions
+    /// are identified by the variable Codex itself exports.
+    pub fn own_session_id(&self) -> Option<String> {
+        self.session_id
+            .clone()
+            .or_else(|| self.codex_session_id.clone())
     }
 
     /// Returns the env var name for SESSION_ID (used in CLAUDE_ENV_FILE export).
@@ -130,5 +146,33 @@ impl EnvVars {
     /// Returns the env var name for PR_IS_UPDATE ("1" when updating, "0" when creating).
     pub fn pr_is_update_name() -> &'static str {
         PR_IS_UPDATE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::armyknife_only(Some("armyknife-id"), None, Some("armyknife-id"))]
+    #[case::codex_only(None, Some("codex-id"), Some("codex-id"))]
+    #[case::armyknife_wins(Some("armyknife-id"), Some("codex-id"), Some("armyknife-id"))]
+    #[case::empty_armyknife_falls_back(Some(""), Some("codex-id"), Some("codex-id"))]
+    #[case::none(None, None, None)]
+    fn own_session_id_cases(
+        #[case] armyknife: Option<&str>,
+        #[case] codex: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let result = temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", armyknife),
+                ("CODEX_SESSION_ID", codex),
+            ],
+            || EnvVars::load().own_session_id(),
+        );
+        assert_eq!(result.as_deref(), expected);
     }
 }

@@ -442,7 +442,7 @@ pub struct BackgroundTask {
 }
 
 /// Tool input data from pre-tool-use events.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ToolInput {
     /// Command for Bash tool
     pub command: Option<String>,
@@ -450,6 +450,20 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
+}
+
+// Never fails: Codex passes a tool's raw arguments as `tool_input`, so it can
+// be a bare string or hold non-string values under these keys.
+impl<'de> Deserialize<'de> for ToolInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let field = |key: &str| value.get(key)?.as_str().map(str::to_string);
+        Ok(Self {
+            command: field("command"),
+            file_path: field("file_path"),
+            pattern: field("pattern"),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -633,5 +647,34 @@ mod tests {
         let mut s = session(SessionStatus::WaitingInput, None);
         s.pending_permission_agent_ids = pending.iter().map(|id| (*id).to_string()).collect();
         assert_eq!(s.has_pending_permission_requests(), expected);
+    }
+
+    fn tool_input(
+        command: Option<&str>,
+        file_path: Option<&str>,
+        pattern: Option<&str>,
+    ) -> ToolInput {
+        ToolInput {
+            command: command.map(str::to_string),
+            file_path: file_path.map(str::to_string),
+            pattern: pattern.map(str::to_string),
+        }
+    }
+
+    // Codex forwards a tool's raw arguments as `tool_input`, so the hook must
+    // survive shapes Claude Code never sends.
+    #[rstest]
+    #[case::bash(r#"{"command":"ls"}"#, tool_input(Some("ls"), None, None))]
+    #[case::read(r#"{"file_path":"/a"}"#, tool_input(None, Some("/a"), None))]
+    #[case::grep(r#"{"pattern":"x"}"#, tool_input(None, None, Some("x")))]
+    #[case::bare_string(r#""raw arguments""#, tool_input(None, None, None))]
+    #[case::array(r#"["a","b"]"#, tool_input(None, None, None))]
+    #[case::empty_object("{}", tool_input(None, None, None))]
+    #[case::non_string_values(
+        r#"{"command":["a","b"],"file_path":1,"pattern":null}"#,
+        tool_input(None, None, None)
+    )]
+    fn tool_input_deserializes_any_shape(#[case] json: &str, #[case] expected: ToolInput) {
+        assert_eq!(serde_json::from_str::<ToolInput>(json).unwrap(), expected);
     }
 }

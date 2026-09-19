@@ -35,7 +35,7 @@ pub enum CcError {
     LockTimeout(Duration),
 
     #[error(
-        "ARMYKNIFE_SESSION_ID is not set (not running inside an armyknife-tracked Claude Code session)"
+        "Neither ARMYKNIFE_SESSION_ID nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)"
     )]
     SelfSessionUnknown,
 

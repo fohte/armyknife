@@ -1686,6 +1686,96 @@ mod tests {
         assert_eq!(reloaded.engine, Engine::Codex);
     }
 
+    /// A payload with the fields Codex puts on every hook event (see
+    /// `codex-rs/hooks/src/schema.rs`), plus the event-specific `extra`.
+    fn codex_payload(event_name: &str, extra: serde_json::Value) -> String {
+        let mut payload = serde_json::json!({
+            "session_id": "codex-lifecycle",
+            "turn_id": "turn-1",
+            "transcript_path": null,
+            "cwd": "/tmp/test",
+            "hook_event_name": event_name,
+            "model": "gpt-5",
+            "permission_mode": "default",
+        });
+        payload
+            .as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        payload.to_string()
+    }
+
+    #[test]
+    fn codex_payloads_drive_the_session_lifecycle() {
+        // Includes a `tool_input` that is a bare string, which Codex sends for
+        // tools whose arguments aren't a JSON object.
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let steps = [
+            (
+                HookEvent::UserPromptSubmit,
+                codex_payload("UserPromptSubmit", serde_json::json!({"prompt": "hi"})),
+            ),
+            (
+                HookEvent::PostToolUse,
+                codex_payload(
+                    "PostToolUse",
+                    serde_json::json!({
+                        "tool_name": "custom_tool",
+                        "tool_input": "raw arguments",
+                        "tool_response": "ok",
+                        "tool_use_id": "call-1",
+                    }),
+                ),
+            ),
+            (
+                HookEvent::PermissionRequest,
+                codex_payload(
+                    "PermissionRequest",
+                    serde_json::json!({
+                        "tool_name": "Bash",
+                        "tool_input": {"command": "rm x", "description": null},
+                    }),
+                ),
+            ),
+            (
+                HookEvent::Stop,
+                codex_payload(
+                    "Stop",
+                    serde_json::json!({
+                        "stop_hook_active": false,
+                        "last_assistant_message": "done",
+                    }),
+                ),
+            ),
+        ];
+
+        let statuses: Vec<SessionStatus> = steps
+            .into_iter()
+            .map(|(event, payload)| {
+                let mut input = parse_stdin_json(&payload).expect("Codex payload should parse");
+                input.engine = Engine::Codex;
+                process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+                    .expect("hook should succeed");
+                store::load_session_from(sessions_dir, "codex-lifecycle")
+                    .expect("load")
+                    .expect("session exists")
+                    .status
+            })
+            .collect();
+
+        assert_eq!(
+            statuses,
+            vec![
+                SessionStatus::Running,
+                SessionStatus::Running,
+                SessionStatus::WaitingInput,
+                SessionStatus::Stopped,
+            ]
+        );
+    }
+
     #[test]
     fn stop_with_pending_bg_task_keeps_paused_session_paused() {
         // A session already confirmed Paused (its process is dead) can still

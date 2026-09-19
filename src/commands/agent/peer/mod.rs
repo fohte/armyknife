@@ -122,7 +122,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
 
 fn current_session_id() -> Result<String> {
     EnvVars::load()
-        .session_id
+        .own_session_id()
         .ok_or_else(|| CcError::SelfSessionUnknown.into())
 }
 
@@ -149,7 +149,7 @@ fn run_list(args: &PeerListArgs) -> Result<()> {
 
 /// Resolves the session running in the caller's own tmux pane, via the
 /// pane's `TMUX_SESSION_OPTION` (see `resume::resolve_session_id_from_pane`)
-/// rather than `current_session_id`'s `ARMYKNIFE_SESSION_ID` env var --
+/// rather than `current_session_id`'s session-ID env var --
 /// `me` is meant to be run from a human-typed shell command (e.g. bash mode
 /// in the target session's own prompt), which doesn't carry that env var.
 fn run_me() -> Result<()> {
