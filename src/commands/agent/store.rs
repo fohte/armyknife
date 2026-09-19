@@ -328,10 +328,9 @@ impl SessionLock {
 ///
 /// Holds the exclusive lock across the whole load-modify-save round-trip so
 /// a concurrent hook write of the full session (e.g. a new `last_message`)
-/// cannot interleave with this one and tear the result. Shared by every
-/// single-field session update (`mark_session_read_in`,
-/// `update_session_label_in`) so the atomic-write plumbing exists once.
-fn update_session_field_in(
+/// cannot interleave with this one and tear the result. Shared by session
+/// updates so the atomic-write plumbing exists once.
+pub(crate) fn update_session_in(
     sessions_dir: &Path,
     session_id: &str,
     mutate: impl FnOnce(&mut Session) -> bool,
@@ -379,7 +378,7 @@ pub(crate) fn mark_session_read_in(
     session_id: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    update_session_field_in(sessions_dir, session_id, |session| {
+    update_session_in(sessions_dir, session_id, |session| {
         if session.status != SessionStatus::Stopped || session.read_at.is_some() {
             return false;
         }
@@ -402,7 +401,7 @@ pub(crate) fn update_session_last_message_if_unchanged_in(
     expected_current: Option<&str>,
     last_message: Option<String>,
 ) -> Result<()> {
-    update_session_field_in(sessions_dir, session_id, |session| {
+    update_session_in(sessions_dir, session_id, |session| {
         if session.last_message.as_deref() != expected_current {
             return false;
         }
@@ -426,7 +425,7 @@ pub(crate) fn update_session_label_in(
     session_id: &str,
     label: Option<String>,
 ) -> Result<()> {
-    update_session_field_in(sessions_dir, session_id, |session| {
+    update_session_in(sessions_dir, session_id, |session| {
         session.label = label;
         true
     })
@@ -457,7 +456,7 @@ pub(crate) fn update_session_label_if_unchanged_in(
     new_label: Option<String>,
 ) -> Result<bool> {
     let mut applied = false;
-    update_session_field_in(sessions_dir, session_id, |session| {
+    update_session_in(sessions_dir, session_id, |session| {
         if session.label.as_deref() != expected_current {
             return false;
         }
@@ -479,7 +478,7 @@ pub(crate) fn update_session_tmux_pane_id_in(
     session_id: &str,
     pane_id: &str,
 ) -> Result<()> {
-    update_session_field_in(sessions_dir, session_id, |session| {
+    update_session_in(sessions_dir, session_id, |session| {
         let Some(tmux_info) = session.tmux_info.as_mut() else {
             return false;
         };

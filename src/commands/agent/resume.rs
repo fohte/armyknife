@@ -6,7 +6,7 @@ use clap::Args;
 use thiserror::Error;
 
 use super::store;
-use super::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION};
+use super::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
 use crate::infra::{process, tmux};
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
@@ -49,31 +49,20 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
 
+    let ancestor_session_ids = args
+        .ancestor_session_ids
+        .as_deref()
+        .filter(|s| !s.is_empty());
+
     // Codex delays its resume SessionStart hook until the first turn. Make
     // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
-        let status_change = mark_codex_session_resumed(&session_id)?;
-        let result = run_codex_resume(
-            &binary_path,
-            resume_args,
-            args.ancestor_session_ids
-                .as_deref()
-                .filter(|s| !s.is_empty()),
-        );
-        if let Err(error) = result {
-            if let Some(change) = status_change {
-                restore_failed_codex_resume(&session_id, &change)?;
-            }
-            return Err(error);
-        }
-        return Ok(());
+        return run_codex_resume_with_status(&session_id, || {
+            run_codex_resume(&binary_path, resume_args, ancestor_session_ids)
+        });
     }
 
-    let err = match args
-        .ancestor_session_ids
-        .as_deref()
-        .filter(|s| !s.is_empty())
-    {
+    let err = match ancestor_session_ids {
         Some(ancestor_ids) => process::exec_replace_with_env(
             &binary_path,
             resume_args,
@@ -85,9 +74,9 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     bail!("Failed to exec {}: {}", binary_name, err)
 }
 
-/// Runs Codex as a child so a non-zero resume failure can restore the ended
+/// Runs Codex as a child so an unsuccessful resume can restore the ended
 /// status. The child keeps the invoking terminal attached for the interactive
-/// TUI, while Claude retains the existing exec-based path below.
+/// TUI, while Claude keeps the existing `exec_replace` path in [`run`].
 fn run_codex_resume(
     binary_path: &Path,
     resume_args: Vec<String>,
@@ -98,7 +87,9 @@ fn run_codex_resume(
     if let Some(ancestor_session_ids) = ancestor_session_ids {
         command.env(EnvVars::ancestor_session_ids_name(), ancestor_session_ids);
     }
-    let status = command.status()?;
+    let status = command
+        .status()
+        .map_err(|error| anyhow::anyhow!("Failed to start codex: {error}"))?;
     if status.success() {
         Ok(())
     } else {
@@ -106,75 +97,109 @@ fn run_codex_resume(
     }
 }
 
-/// Captures the status fields needed to undo the pre-exec transition if the
-/// target process could not be started.
+/// Captures the fields needed to undo the resume transition if Codex exits
+/// unsuccessfully.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResumeStatusChange {
-    original_status: SessionStatus,
     original_read_at: Option<DateTime<Utc>>,
     original_updated_at: DateTime<Utc>,
+    original_tmux_info: Option<TmuxInfo>,
     marked_at: DateTime<Utc>,
+}
+
+/// Runs a Codex resume while making its delayed first-turn hook transition
+/// visible in the session store.
+fn run_codex_resume_with_status(
+    session_id: &str,
+    launch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let sessions_dir = store::sessions_dir()?;
+    run_codex_resume_with_status_in(&sessions_dir, session_id, current_tmux_info(), launch)
+}
+
+fn run_codex_resume_with_status_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    current_tmux_info: Option<TmuxInfo>,
+    launch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let status_change = mark_codex_session_resumed_in(sessions_dir, session_id, current_tmux_info)?;
+    let result = launch();
+    if let Err(error) = result {
+        if let Some(change) = status_change
+            && let Err(restore_error) =
+                restore_failed_codex_resume_in(sessions_dir, session_id, &change)
+        {
+            eprintln!(
+                "[armyknife] warning: failed to restore session status after Codex resume failure: {restore_error}"
+            );
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Finds the pane that invoked `a agent resume`, if the command runs in tmux.
+/// The stored pane must follow the resumed process so stale-pane cleanup does
+/// not remove a session merely because its old pane was replaced.
+fn current_tmux_info() -> Option<TmuxInfo> {
+    tmux::get_pane_info_by_pid(std::process::id()).map(|pane| TmuxInfo {
+        session_name: pane.session_name,
+        window_name: pane.window_name,
+        window_index: pane.window_index,
+        pane_id: pane.pane_id,
+    })
 }
 
 /// Marks an ended Codex session as stopped before launching `codex resume`.
 /// The lock keeps this transition from racing with a hook that updates the
 /// same session file.
-fn mark_codex_session_resumed(session_id: &str) -> Result<Option<ResumeStatusChange>> {
-    let sessions_dir = store::sessions_dir()?;
-    mark_codex_session_resumed_in(&sessions_dir, session_id)
-}
-
 fn mark_codex_session_resumed_in(
     sessions_dir: &Path,
     session_id: &str,
+    current_tmux_info: Option<TmuxInfo>,
 ) -> Result<Option<ResumeStatusChange>> {
-    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    let Some(mut session) = session_lock.load()? else {
-        return Ok(None);
-    };
-    if session.engine != Engine::Codex || session.status != SessionStatus::Ended {
-        return Ok(None);
-    }
+    let mut change = None;
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.engine != Engine::Codex || session.status != SessionStatus::Ended {
+            return false;
+        }
 
-    let change = ResumeStatusChange {
-        original_status: session.status,
-        original_read_at: session.read_at,
-        original_updated_at: session.updated_at,
-        marked_at: Utc::now(),
-    };
-    session.status = SessionStatus::Stopped;
-    session.read_at = None;
-    session.updated_at = change.marked_at;
-    session_lock.save(&session)?;
-    Ok(Some(change))
+        let marked_at = Utc::now();
+        change = Some(ResumeStatusChange {
+            original_read_at: session.read_at,
+            original_updated_at: session.updated_at,
+            original_tmux_info: session.tmux_info.clone(),
+            marked_at,
+        });
+        session.status = SessionStatus::Stopped;
+        session.read_at = None;
+        session.updated_at = marked_at;
+        session.tmux_info = current_tmux_info;
+        true
+    })?;
+    Ok(change)
 }
 
-/// Restores the pre-resume status only when no hook has updated the session
+/// Restores the pre-resume fields only when no hook has updated the session
 /// since the transition. Other fields are kept so a concurrent metadata update
-/// cannot be overwritten by a failed exec rollback.
-fn restore_failed_codex_resume(session_id: &str, change: &ResumeStatusChange) -> Result<()> {
-    let sessions_dir = store::sessions_dir()?;
-    restore_failed_codex_resume_in(&sessions_dir, session_id, change)
-}
-
+/// cannot be overwritten by a failed resume rollback.
 fn restore_failed_codex_resume_in(
     sessions_dir: &Path,
     session_id: &str,
     change: &ResumeStatusChange,
 ) -> Result<()> {
-    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    let Some(mut session) = session_lock.load()? else {
-        return Ok(());
-    };
-    if session.status != SessionStatus::Stopped || session.updated_at != change.marked_at {
-        return Ok(());
-    }
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.status != SessionStatus::Stopped || session.updated_at != change.marked_at {
+            return false;
+        }
 
-    session.status = change.original_status;
-    session.read_at = change.original_read_at;
-    session.updated_at = change.original_updated_at;
-    session_lock.save(&session)?;
-    Ok(())
+        session.status = SessionStatus::Ended;
+        session.read_at = change.original_read_at;
+        session.updated_at = change.original_updated_at;
+        session.tmux_info = change.original_tmux_info.clone();
+        true
+    })
 }
 
 /// Binary name and CLI args needed to resume `session_id` for `engine`.
@@ -452,7 +477,7 @@ mod tests {
             let expected_read_at = original.read_at;
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
-            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
+            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target", None)
                 .expect("mark should succeed");
             let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
                 .expect("load should succeed")
@@ -473,50 +498,101 @@ mod tests {
         }
 
         #[rstest]
-        fn failed_exec_restores_codex_session(temp_dir: TempDir) {
+        fn failed_resume_restores_codex_session(temp_dir: TempDir) {
             let original = session(Engine::Codex, SessionStatus::Ended);
-            let expected = (original.status, original.read_at, original.updated_at);
+            let expected = (
+                original.status,
+                original.read_at,
+                original.updated_at,
+                original.tmux_info.clone(),
+            );
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
-            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
-                .expect("mark should succeed")
-                .expect("Codex session should be marked");
-            restore_failed_codex_resume_in(temp_dir.path(), "resume-target", &change)
-                .expect("restore should succeed");
+            let result =
+                run_codex_resume_with_status_in(temp_dir.path(), "resume-target", None, || {
+                    Err(anyhow::anyhow!("resume failed"))
+                });
 
             let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
                 .expect("load should succeed")
                 .expect("session should exist");
             assert_eq!(
-                (reloaded.status, reloaded.read_at, reloaded.updated_at),
-                expected
+                (
+                    result.err().map(|error| error.to_string()),
+                    (
+                        reloaded.status,
+                        reloaded.read_at,
+                        reloaded.updated_at,
+                        reloaded.tmux_info,
+                    ),
+                ),
+                (Some("resume failed".to_string()), expected)
             );
         }
 
         #[rstest]
-        fn failed_exec_does_not_restore_after_a_hook_update(temp_dir: TempDir) {
+        fn failed_resume_does_not_restore_after_a_hook_update(temp_dir: TempDir) {
             let original = session(Engine::Codex, SessionStatus::Ended);
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
-            let change = mark_codex_session_resumed_in(temp_dir.path(), "resume-target")
-                .expect("mark should succeed")
-                .expect("Codex session should be marked");
-            let mut updated = store::load_session_from(temp_dir.path(), "resume-target")
-                .expect("load should succeed")
-                .expect("session should exist");
-            updated.status = SessionStatus::Running;
-            updated.updated_at = Utc::now();
-            store::save_session_to(temp_dir.path(), &updated).expect("save should succeed");
-
-            restore_failed_codex_resume_in(temp_dir.path(), "resume-target", &change)
-                .expect("restore should succeed");
+            let hook_updated_at = Utc::now();
+            let result =
+                run_codex_resume_with_status_in(temp_dir.path(), "resume-target", None, || {
+                    let mut updated = store::load_session_from(temp_dir.path(), "resume-target")
+                        .expect("load should succeed")
+                        .expect("session should exist");
+                    updated.status = SessionStatus::Running;
+                    updated.updated_at = hook_updated_at;
+                    store::save_session_to(temp_dir.path(), &updated).expect("save should succeed");
+                    Err(anyhow::anyhow!("resume failed"))
+                });
 
             let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
                 .expect("load should succeed")
                 .expect("session should exist");
             assert_eq!(
-                (reloaded.status, reloaded.updated_at),
-                (SessionStatus::Running, updated.updated_at)
+                (
+                    result.err().map(|error| error.to_string()),
+                    reloaded.status,
+                    reloaded.updated_at,
+                ),
+                (
+                    Some("resume failed".to_string()),
+                    SessionStatus::Running,
+                    hook_updated_at,
+                )
+            );
+        }
+
+        #[rstest]
+        fn successful_resume_stores_current_tmux_info(temp_dir: TempDir) {
+            let original = session(Engine::Codex, SessionStatus::Ended);
+            store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+            let current_tmux_info = Some(TmuxInfo {
+                session_name: "resumed-session".to_string(),
+                window_name: "resumed-window".to_string(),
+                window_index: 2,
+                pane_id: "%9".to_string(),
+            });
+
+            let result = run_codex_resume_with_status_in(
+                temp_dir.path(),
+                "resume-target",
+                current_tmux_info.clone(),
+                || Ok(()),
+            );
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+
+            assert_eq!(
+                (
+                    result.is_ok(),
+                    reloaded.status,
+                    reloaded.read_at,
+                    reloaded.tmux_info,
+                ),
+                (true, SessionStatus::Stopped, None, current_tmux_info)
             );
         }
     }
