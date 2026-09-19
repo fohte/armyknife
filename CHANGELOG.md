@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.309](https://github.com/fohte/armyknife/compare/v0.1.308...v0.1.309) (2026-09-19)
+
+
+### Bug Fixes
+
+* **agent:** track and reference Codex sessions ([#932](https://github.com/fohte/armyknife/issues/932)) ([73a768d](https://github.com/fohte/armyknife/commit/73a768d71ae03b3564e30a8e07914521c0df23b1))
+
 ## [0.1.308](https://github.com/fohte/armyknife/compare/v0.1.307...v0.1.308) (2026-09-19)
 
 
