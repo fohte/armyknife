@@ -5,8 +5,9 @@ use crate::infra::git::get_repo_root_in;
 use crate::infra::tmux;
 use crate::shared::env_var::EnvVars;
 
-/// Repo root of the invoking Claude Code session, via `ARMYKNIFE_SESSION_ID`
-/// in the session store; falls back to `current_dir` if untracked.
+/// Repo root of the invoking session, via its own session ID (see
+/// `EnvVars::own_session_id`) in the session store; falls back to
+/// `current_dir` if untracked.
 /// `$TMUX_PANE` won't do -- `a agent new` may run in the background.
 pub(super) fn caller_repo_root(current_dir: &str) -> String {
     EnvVars::load()
@@ -42,10 +43,16 @@ mod tests {
         let subdir = repo.path().join("subdir");
         std::fs::create_dir(&subdir).unwrap();
 
-        temp_env::with_vars([("ARMYKNIFE_SESSION_ID", None::<&str>)], || {
-            let result = caller_repo_root(subdir.to_str().unwrap());
-            assert_eq!(result, repo.path().to_string_lossy());
-        });
+        temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || {
+                let result = caller_repo_root(subdir.to_str().unwrap());
+                assert_eq!(result, repo.path().to_string_lossy());
+            },
+        );
     }
 
     #[rstest]

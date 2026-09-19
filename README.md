@@ -375,7 +375,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `--engine <claude\|codex>`                           | Coding agent CLI to launch (default: `agent.default_engine` config, itself defaulting to `claude`). With `--worktree`, see below                                                                                                                                                                                                                                                                                         |
 | `--reasoning-effort <low\|medium\|high\|xhigh\|max>` | Reasoning effort for this launch only, passed as `claude --effort <effort>` or `codex -c model_reasoning_effort=<effort>` (for `codex`, default: `agent.codex.reasoning_effort` config)                                                                                                                                                                                                                                  |
 
-Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking Claude Code session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
+Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
 
 `a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
 
@@ -454,7 +454,22 @@ Register these in Codex's `hooks.json` (each command with `--engine codex`) to t
 | `Stop`              | `a agent hook stop --engine codex`               |
 | `SessionEnd`        | `a agent hook session-end --engine codex`        |
 
-Codex has no `Notification` event, so nothing maps to `a agent hook notification`. `SessionEnd` only fires when Codex runs its shutdown sequence and its default hook timeout is 1 second (set `"timeout": 3`, the maximum), so it is best-effort: a Codex session that never fires it stays `Stopped` until its tmux pane disappears, like a Claude Code session that crashed. Codex has no equivalent of `CLAUDE_ENV_FILE`, so `ARMYKNIFE_SESSION_ID` is never set inside a Codex session; commands that need the caller's own session ID (`a agent new`'s parent resolution, `a agent peer parent`/`children`) fall back to `CODEX_SESSION_ID`, which Codex exports to every command it runs.
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          { "type": "command", "command": "a agent hook stop --engine codex" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Codex has no `Notification` event, so nothing maps to `a agent hook notification`. `SessionEnd` is best-effort: Codex may exit without firing it or cut the hook short at its own per-hook `timeout`, and a Codex session that never reports it is handled by `a agent sweep` like any other stopped session. Codex has no equivalent of `CLAUDE_ENV_FILE`, so `ARMYKNIFE_SESSION_ID` is never set inside a Codex session; commands that need the caller's own session ID (`a agent new`'s parent resolution, `a agent peer parent`/`children`) fall back to `CODEX_SESSION_ID`, which Codex exports to every command it runs.
 
 #### Peer session name resolution
 
@@ -492,7 +507,7 @@ myproject-7e
 
 For a Codex target (see `engine` above), `notify` runs `codex queue --thread <session_id>` instead, so `codex` must be in `PATH` and share the target's `$CODEX_HOME`. This only _queues_ the message: the running `codex` polls the queue about every 10 seconds and injects it as a user turn once the session is idle, so it can arrive later than the command returns (e.g. while a turn is running, or after a turn the user interrupted completes). `notify` prints `Queued for Codex session ...` rather than claiming delivery. A `Paused` Codex target is resumed first (the pane is respawned, without waiting for anything to register); the queued message is picked up once the resumed `codex` loads the thread. `codex queue` failures (archived thread, a running local app-server daemon, ...) are returned as errors with `codex`'s own message.
 
-`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (for a plain `claude`/`codex` invocation started outside `a agent new`), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a wm delete` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
+`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a wm delete` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
 
 ```console
 $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
