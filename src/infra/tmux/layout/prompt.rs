@@ -12,6 +12,29 @@ pub(super) fn is_engine_command(command: &str, engine: Engine) -> bool {
     command.starts_with(engine.process_name())
 }
 
+/// Layouts are written for Claude Code, so a pane running plain `claude` (with
+/// or without arguments) stands for "the agent pane". Retargets it to `engine`'s
+/// CLI when a session for another engine is requested. Its arguments are
+/// dropped: they are Claude Code flags the other CLI would reject. Any other
+/// command is returned untouched.
+pub(super) fn retarget_agent_command(command: &str, engine: Engine) -> String {
+    let layout_engine = Engine::Claude;
+    if engine != layout_engine && strip_program(command, layout_engine.process_name()).is_some() {
+        engine.process_name().to_string()
+    } else {
+        command.to_string()
+    }
+}
+
+/// Returns the arguments after `program` when `command` is exactly `program`
+/// or `program` followed by a space; `None` for a differently-named command
+/// that merely starts with it (e.g. a "claude-code" wrapper script).
+fn strip_program<'a>(command: &'a str, program: &str) -> Option<&'a str> {
+    command
+        .strip_prefix(program)
+        .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+}
+
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
 /// engine's effort flag (`--effort` for claude, `-c model_reasoning_effort=` for
 /// codex) right after the program name
@@ -57,11 +80,9 @@ pub(super) fn apply_prompt_if_agent(
     // space-separated rest) so a differently-named pane command that merely
     // starts with it (e.g. a "claude-code" wrapper script) isn't mangled by
     // splicing flags into the middle of its name.
-    let command = match command.strip_prefix(program) {
-        Some(rest) if rest.is_empty() || rest.starts_with(' ') => {
-            format!("{program}{flags}{rest}")
-        }
-        _ => command.to_string(),
+    let command = match strip_program(command, program) {
+        Some(rest) => format!("{program}{flags}{rest}"),
+        None => command.to_string(),
     };
 
     match prompt_file {
@@ -85,6 +106,21 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::path::PathBuf;
+
+    #[rstest]
+    #[case::claude_to_codex(Engine::Codex, "claude", "codex")]
+    #[case::claude_args_dropped(Engine::Codex, "claude --dangerously-skip-permissions", "codex")]
+    #[case::claude_stays_claude(Engine::Claude, "claude --model opus", "claude --model opus")]
+    #[case::wrapper_untouched(Engine::Codex, "claude-code", "claude-code")]
+    #[case::other_command_untouched(Engine::Codex, "nvim", "nvim")]
+    #[case::codex_pane_untouched(Engine::Codex, "codex --search", "codex --search")]
+    fn test_retarget_agent_command(
+        #[case] engine: Engine,
+        #[case] command: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(retarget_agent_command(command, engine), expected);
+    }
 
     #[rstest]
     #[case::claude_without_prompt(Engine::Claude, "claude", None)]
