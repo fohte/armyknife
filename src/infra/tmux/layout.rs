@@ -6,7 +6,7 @@ use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod prompt;
-use prompt::{apply_prompt_if_agent, is_engine_command};
+use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +156,17 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
         1,
         &pane_prefix,
     );
+
+    // A layout that already has a pane for `engine` was written with that
+    // engine in mind, so leave its `claude` pane alone.
+    if !pane_entries
+        .iter()
+        .any(|e| is_engine_command(&e.command, engine))
+    {
+        for entry in &mut pane_entries {
+            entry.command = retarget_agent_command(&entry.command, engine);
+        }
+    }
 
     // Find the last agent pane index so only it performs temp file cleanup
     let last_agent_index = prompt_file.and_then(|_| {
@@ -1026,6 +1037,61 @@ mod tests {
                 ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
+            ]
+        );
+    }
+
+    // =========================================================================
+    // build_layout_commands: claude-only layout launched for another engine
+    // The `claude` pane becomes the engine's CLI and gets model, effort and
+    // the prompt; other panes are left as written.
+    // =========================================================================
+
+    #[test]
+    fn claude_layout_is_retargeted_to_codex_session() {
+        let prompt_path = PathBuf::from("/tmp/prompt.txt");
+        let pane = |command: &str| {
+            Box::new(LayoutNode::Pane(PaneConfig {
+                command: command.to_string(),
+                focus: false,
+            }))
+        };
+        let layout = LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: pane("claude --dangerously-skip-permissions"),
+            second: pane("nvim"),
+        });
+
+        let commands = build_layout_commands(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: Some("gpt-5"),
+            reasoning_effort: Some(ReasoningEffort::Max),
+            prompt_file: Some(&prompt_path),
+            engine: Engine::Codex,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        });
+
+        assert_eq!(
+            commands,
+            vec![
+                cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                cmd(&["split-window", "-h", "-t", "1", "-c", "/tmp"]),
+                cmd(&["select-pane", "-t", "1"]),
+                cmd(&[
+                    "send-keys",
+                    "-l",
+                    "--",
+                    "codex --model gpt-5 -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                ]),
+                cmd(&["send-keys", "C-m"]),
+                cmd(&["select-pane", "-t", "2"]),
+                cmd(&["send-keys", "-l", "--", "nvim"]),
+                cmd(&["send-keys", "C-m"]),
             ]
         );
     }

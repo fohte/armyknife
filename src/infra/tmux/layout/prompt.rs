@@ -12,6 +12,21 @@ pub(super) fn is_engine_command(command: &str, engine: Engine) -> bool {
     command.starts_with(engine.process_name())
 }
 
+/// Layouts are written for Claude Code, so a pane running plain `claude` (with
+/// or without arguments) stands for "the agent pane". Retargets it to `engine`'s
+/// CLI when a session for another engine is requested. Its arguments are
+/// dropped: they are Claude Code flags the other CLI would reject. Any other
+/// command is returned untouched.
+pub(super) fn retarget_agent_command(command: &str, engine: Engine) -> String {
+    let layout_engine = Engine::Claude;
+    match command.strip_prefix(layout_engine.process_name()) {
+        Some(rest) if engine != layout_engine && (rest.is_empty() || rest.starts_with(' ')) => {
+            engine.process_name().to_string()
+        }
+        _ => command.to_string(),
+    }
+}
+
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
 /// engine's effort flag (`--effort` for claude, `-c model_reasoning_effort=` for
 /// codex) right after the program name
@@ -85,6 +100,21 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::path::PathBuf;
+
+    #[rstest]
+    #[case::claude_to_codex(Engine::Codex, "claude", "codex")]
+    #[case::claude_args_dropped(Engine::Codex, "claude --dangerously-skip-permissions", "codex")]
+    #[case::claude_stays_claude(Engine::Claude, "claude --model opus", "claude --model opus")]
+    #[case::wrapper_untouched(Engine::Codex, "claude-code", "claude-code")]
+    #[case::other_command_untouched(Engine::Codex, "nvim", "nvim")]
+    #[case::codex_pane_untouched(Engine::Codex, "codex --search", "codex --search")]
+    fn test_retarget_agent_command(
+        #[case] engine: Engine,
+        #[case] command: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(retarget_agent_command(command, engine), expected);
+    }
 
     #[rstest]
     #[case::claude_without_prompt(Engine::Claude, "claude", None)]
