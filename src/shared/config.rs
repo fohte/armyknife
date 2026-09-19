@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::commands::agent::types::Engine;
 use crate::commands::ai::review::reviewer::Reviewer;
 
+mod codex;
 mod env_overlay;
+pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 
 /// Top-level configuration for armyknife.
@@ -122,22 +124,6 @@ pub struct AgentConfig {
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]
     pub codex: CodexConfig,
-}
-
-/// Per-invocation `codex` defaults. Passed on the command line rather than
-/// written to `~/.codex/config.toml`, so a hand-run `codex` is unaffected.
-#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct CodexConfig {
-    /// Model passed to `codex --model` when `--model` is omitted.
-    #[serde(default)]
-    pub model: Option<String>,
-
-    /// Value passed to `codex -c model_reasoning_effort=...` when
-    /// `--reasoning-effort` is omitted.
-    #[serde(default)]
-    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Worktree management configuration.
@@ -722,7 +708,8 @@ pub fn generate_schema() -> schemars::Schema {
 mod tests {
     use super::env_overlay::with_isolated_env_overlay;
     use super::*;
-    use indoc::indoc;
+    use crate::commands::agent::types::ReasoningEffort;
+    use indoc::{formatdoc, indoc};
     #[cfg(feature = "schema-gen")]
     use rstest::fixture;
     use rstest::rstest;
@@ -807,7 +794,11 @@ mod tests {
     #[case::misspelled_effort("maxx")]
     #[case::x_high_spelling("x-high")]
     fn parse_agent_codex_rejects_unknown_reasoning_effort(#[case] effort: &str) {
-        let yaml = format!("agent:\n  codex:\n    reasoning_effort: {effort}\n");
+        let yaml = formatdoc! {"
+            agent:
+              codex:
+                reasoning_effort: {effort}
+        "};
         assert!(serde_yaml::from_str::<Config>(&yaml).is_err());
     }
 
