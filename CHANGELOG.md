@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.308](https://github.com/fohte/armyknife/compare/v0.1.307...v0.1.308) (2026-09-19)
+
+
+### Features
+
+* **agent:** allow `--engine` together with `--worktree` ([#930](https://github.com/fohte/armyknife/issues/930)) ([fbd7815](https://github.com/fohte/armyknife/commit/fbd781509e6bea0330f1ccab916dca3a0875afb6))
+
 ## [0.1.307](https://github.com/fohte/armyknife/compare/v0.1.306...v0.1.307) (2026-09-19)
 
 
