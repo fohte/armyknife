@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::agent::types::Engine;
 use crate::commands::ai::review::reviewer::Reviewer;
 
+mod codex;
 mod env_overlay;
+pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 
 /// Top-level configuration for armyknife.
@@ -118,6 +120,10 @@ pub struct AgentConfig {
     /// `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
     #[serde(default)]
     pub default_engine: Engine,
+
+    /// Defaults applied to `a agent new --engine codex` sessions only.
+    #[serde(default)]
+    pub codex: CodexConfig,
 }
 
 /// Worktree management configuration.
@@ -702,7 +708,8 @@ pub fn generate_schema() -> schemars::Schema {
 mod tests {
     use super::env_overlay::with_isolated_env_overlay;
     use super::*;
-    use indoc::indoc;
+    use crate::commands::agent::types::ReasoningEffort;
+    use indoc::{formatdoc, indoc};
     #[cfg(feature = "schema-gen")]
     use rstest::fixture;
     use rstest::rstest;
@@ -760,6 +767,39 @@ mod tests {
         assert!(config.cc.auto_compact.enabled);
         assert_eq!(config.cc.auto_compact.idle_timeout, "3m");
         assert_eq!(config.cc.auto_compact.min_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn parse_agent_codex_yaml() {
+        let yaml = indoc! {"
+            agent:
+              codex:
+                model: gpt-5.6-luna
+                reasoning_effort: max
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.agent,
+            AgentConfig {
+                codex: CodexConfig {
+                    model: Some("gpt-5.6-luna".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::Max),
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::misspelled_effort("maxx")]
+    #[case::x_high_spelling("x-high")]
+    fn parse_agent_codex_rejects_unknown_reasoning_effort(#[case] effort: &str) {
+        let yaml = formatdoc! {"
+            agent:
+              codex:
+                reasoning_effort: {effort}
+        "};
+        assert!(serde_yaml::from_str::<Config>(&yaml).is_err());
     }
 
     #[test]
@@ -1363,6 +1403,7 @@ mod tests {
             Config {
                 agent: AgentConfig {
                     default_engine: Engine::Codex,
+                    ..Default::default()
                 },
                 ..Default::default()
             }

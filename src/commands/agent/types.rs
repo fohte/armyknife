@@ -32,6 +32,36 @@ impl Engine {
     }
 }
 
+/// Effort levels accepted by both `claude --effort` and codex's
+/// `model_reasoning_effort`. A closed set so a typo is rejected
+/// at parse time instead of reaching the CLI, which would silently fall back to
+/// its default effort.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    #[value(name = "xhigh")]
+    XHigh,
+    Max,
+}
+
+impl ReasoningEffort {
+    /// The value both `claude --effort` and codex's `model_reasoning_effort` expect.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
 /// Tmux user option name for storing Claude Code session ID.
 /// User options in tmux are prefixed with '@' and persist until explicitly unset.
 /// Uses a descriptive name to avoid conflicts with other potential armyknife options.
@@ -455,6 +485,28 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::path::PathBuf;
+
+    // The CLI flag, the YAML config, and the value handed to `codex` must all
+    // spell each effort the same way.
+    #[rstest]
+    #[case::low(ReasoningEffort::Low, "low")]
+    #[case::medium(ReasoningEffort::Medium, "medium")]
+    #[case::high(ReasoningEffort::High, "high")]
+    #[case::xhigh(ReasoningEffort::XHigh, "xhigh")]
+    #[case::max(ReasoningEffort::Max, "max")]
+    fn reasoning_effort_spelling_is_consistent(
+        #[case] effort: ReasoningEffort,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            (
+                effort.as_str(),
+                serde_yaml::to_string(&effort).unwrap(),
+                effort.to_possible_value().unwrap().get_name().to_string(),
+            ),
+            (expected, format!("{expected}\n"), expected.to_string(),),
+        );
+    }
 
     fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
         Session {

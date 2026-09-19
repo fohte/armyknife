@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod prompt;
@@ -43,6 +43,9 @@ pub struct LayoutCommandsSpec<'a> {
     pub layout: &'a LayoutNode,
     /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
+    /// Passed to `engine` panes as `--effort` (claude) or
+    /// `-c model_reasoning_effort=...` (codex).
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// When set, `engine` pane commands read the prompt from this file at
     /// shell execution time and delete it afterward.
     pub prompt_file: Option<&'a Path>,
@@ -87,6 +90,7 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
         window_name,
         layout,
         model,
+        reasoning_effort,
         prompt_file,
         engine,
         env_vars,
@@ -164,7 +168,14 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
     for (i, entry) in pane_entries.iter().enumerate() {
         let pane_target = format!("{pane_prefix}{}", i + 1);
         let cleanup = last_agent_index == Some(i);
-        let cmd = apply_prompt_if_agent(&entry.command, engine, model, prompt_file, cleanup);
+        let cmd = apply_prompt_if_agent(
+            &entry.command,
+            engine,
+            model,
+            reasoning_effort,
+            prompt_file,
+            cleanup,
+        );
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -305,6 +316,9 @@ pub struct TmuxSessionSpec<'a> {
     pub cwd: &'a str,
     /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
+    /// Passed to `engine` panes as `--effort` (claude) or
+    /// `-c model_reasoning_effort=...` (codex).
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Written to a temp file and passed to `engine` pane commands; the temp
     /// file is read and deleted by the shell command at execution time.
     pub prompt: Option<&'a str>,
@@ -341,6 +355,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
         session,
         cwd,
         model,
+        reasoning_effort,
         prompt,
         engine,
         env_vars,
@@ -355,6 +370,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<()> {
         window_name,
         layout,
         model,
+        reasoning_effort,
         prompt_file: prompt_path,
         engine,
         env_vars,
@@ -391,6 +407,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
                 session,
                 cwd,
                 model,
+                reasoning_effort,
                 prompt,
                 engine,
                 env_vars,
@@ -401,7 +418,14 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<String> {
     } = spec;
 
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let cmd = apply_prompt_if_agent(command, engine, model, prompt_file.as_deref(), true);
+    let cmd = apply_prompt_if_agent(
+        command,
+        engine,
+        model,
+        reasoning_effort,
+        prompt_file.as_deref(),
+        true,
+    );
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
         session,
@@ -570,6 +594,7 @@ mod tests {
             window_name: "editor",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -613,6 +638,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -660,6 +686,7 @@ mod tests {
             window_name: "monitor",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -715,6 +742,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -767,6 +795,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: Some(&prompt_path),
             engine: Engine::Claude,
             env_vars: &[],
@@ -820,6 +849,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -853,6 +883,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -899,6 +930,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -962,6 +994,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: Some(&prompt_path),
             engine: Engine::Claude,
             env_vars: &[],
@@ -1046,6 +1079,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: Some(model),
+            reasoning_effort: None,
             prompt_file: Some(&prompt_path),
             engine,
             env_vars: &[],
@@ -1086,6 +1120,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: Some("opus"),
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -1132,6 +1167,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &env_vars,
@@ -1184,6 +1220,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -1236,6 +1273,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &env_vars,
@@ -1259,6 +1297,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -1313,6 +1352,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -1341,6 +1381,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],
@@ -1470,6 +1511,7 @@ mod tests {
             window_name: "dev",
             layout: &layout,
             model: None,
+            reasoning_effort: None,
             prompt_file: None,
             engine: Engine::Claude,
             env_vars: &[],

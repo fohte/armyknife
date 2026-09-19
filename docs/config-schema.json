@@ -8,6 +8,10 @@
       "description": "`a agent` settings.",
       "$ref": "#/$defs/AgentConfig",
       "default": {
+        "codex": {
+          "model": null,
+          "reasoning_effort": null
+        },
         "default_engine": "claude"
       }
     },
@@ -86,6 +90,14 @@
       "description": "`a agent` settings.",
       "type": "object",
       "properties": {
+        "codex": {
+          "description": "Defaults applied to `a agent new --engine codex` sessions only.",
+          "$ref": "#/$defs/CodexConfig",
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
         "default_engine": {
           "description": "Coding agent CLI `a agent new` launches when `--engine` is omitted\n(default: \"claude\"). Overridable for a single invocation via\n`ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
@@ -191,6 +203,33 @@
       },
       "additionalProperties": false
     },
+    "CodexConfig": {
+      "description": "Per-invocation `codex` defaults. Passed on the command line rather than\nwritten to `~/.codex/config.toml`, so a hand-run `codex` is unaffected.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Model passed to `codex --model` when `--model` is omitted.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "reasoning_effort": {
+          "description": "Value passed to `codex -c model_reasoning_effort=...` when\n`--reasoning-effort` is omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
     "EditorConfig": {
       "description": "Terminal/editor configuration for human-in-the-loop reviews.",
       "type": "object",
@@ -287,6 +326,17 @@
       "additionalProperties": false,
       "required": [
         "command"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Effort levels accepted by both `claude --effort` and codex's\n`model_reasoning_effort`. A closed set so a typo is rejected\nat parse time instead of reaching the CLI, which would silently fall back to\nits default effort.",
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
       ]
     },
     "RepoConfig": {
