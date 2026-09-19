@@ -43,7 +43,8 @@ pub struct LayoutCommandsSpec<'a> {
     pub layout: &'a LayoutNode,
     /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
-    /// Codex only: passed as `-c model_reasoning_effort=...` to `engine` panes.
+    /// Passed to `engine` panes as `--effort` (claude) or
+    /// `-c model_reasoning_effort=...` (codex).
     pub reasoning_effort: Option<ReasoningEffort>,
     /// When set, `engine` pane commands read the prompt from this file at
     /// shell execution time and delete it afterward.
@@ -315,7 +316,8 @@ pub struct TmuxSessionSpec<'a> {
     pub cwd: &'a str,
     /// Inserted right after the program name in `engine` pane commands.
     pub model: Option<&'a str>,
-    /// Codex only: passed as `-c model_reasoning_effort=...` to `engine` panes.
+    /// Passed to `engine` panes as `--effort` (claude) or
+    /// `-c model_reasoning_effort=...` (codex).
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Written to a temp file and passed to `engine` pane commands; the temp
     /// file is read and deleted by the shell command at execution time.

@@ -50,7 +50,7 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    /// The value `codex` expects for `model_reasoning_effort`.
+    /// The value both `claude --effort` and codex's `model_reasoning_effort` expect.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Low => "low",
