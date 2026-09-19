@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.307](https://github.com/fohte/armyknife/compare/v0.1.306...v0.1.307) (2026-09-19)
+
+
+### Features
+
+* **agent:** allow configuring reasoning effort for session startup ([#928](https://github.com/fohte/armyknife/issues/928)) ([317cc3e](https://github.com/fohte/armyknife/commit/317cc3e8a6c89cdef01f2263f1c7f93191aa2fee))
+
 ## [0.1.306](https://github.com/fohte/armyknife/compare/v0.1.305...v0.1.306) (2026-09-19)
 
 
