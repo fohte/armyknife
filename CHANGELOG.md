@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.310](https://github.com/fohte/armyknife/compare/v0.1.309...v0.1.310) (2026-09-19)
+
+
+### Bug Fixes
+
+* **agent:** show Codex session again on resume ([#934](https://github.com/fohte/armyknife/issues/934)) ([31c80cc](https://github.com/fohte/armyknife/commit/31c80ccd7a1014a8974a98a157d4bf34cae8c290))
+
 ## [0.1.309](https://github.com/fohte/armyknife/compare/v0.1.308...v0.1.309) (2026-09-19)
 
 
