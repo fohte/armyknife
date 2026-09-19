@@ -194,7 +194,7 @@ pub(super) fn run_worktree_creation(
             window_name: &worktree_name,
             layout: &config.wm.layout,
             model: args.common.model.as_deref(),
-            reasoning_effort: None,
+            reasoning_effort: args.common.reasoning_effort,
             prompt: final_prompt.as_deref(),
             // `--engine` is rejected with `--worktree`, so `config.wm.layout`
             // is always a Claude Code session.

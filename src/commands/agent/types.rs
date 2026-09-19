@@ -32,8 +32,9 @@ impl Engine {
     }
 }
 
-/// Codex's `model_reasoning_effort` values. A closed set so a typo is rejected
-/// at parse time instead of reaching `codex`, which would silently fall back to
+/// Effort levels accepted by both `claude --effort` and codex's
+/// `model_reasoning_effort`. A closed set so a typo is rejected
+/// at parse time instead of reaching the CLI, which would silently fall back to
 /// its default effort.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]

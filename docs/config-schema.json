@@ -329,7 +329,7 @@
       ]
     },
     "ReasoningEffort": {
-      "description": "Codex's `model_reasoning_effort` values. A closed set so a typo is rejected\nat parse time instead of reaching `codex`, which would silently fall back to\nits default effort.",
+      "description": "Effort levels accepted by both `claude --effort` and codex's\n`model_reasoning_effort`. A closed set so a typo is rejected\nat parse time instead of reaching the CLI, which would silently fall back to\nits default effort.",
       "type": "string",
       "enum": [
         "low",

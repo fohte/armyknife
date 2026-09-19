@@ -12,8 +12,9 @@ pub(super) fn is_engine_command(command: &str, engine: Engine) -> bool {
     command.starts_with(engine.process_name())
 }
 
-/// If the command starts `engine`'s CLI, insert `--model <model>` (and, for
-/// codex, `-c model_reasoning_effort=<effort>`) right after the program name
+/// If the command starts `engine`'s CLI, insert `--model <model>` and the
+/// engine's effort flag (`--effort` for claude, `-c model_reasoning_effort=` for
+/// codex) right after the program name
 /// and append the prompt file path. Any other command is returned untouched,
 /// including another engine's CLI: `model` and `reasoning_effort` are only
 /// meaningful to the engine the session was started for.
@@ -42,10 +43,14 @@ pub(super) fn apply_prompt_if_agent(
             .unwrap_or_else(|_| model.to_string());
         flags.push_str(&format!(" --model {escaped_model}"));
     }
-    // `-c` overrides config.toml for this launch only, unlike editing
-    // `~/.codex/config.toml`, which a hand-run `codex` would also pick up.
-    if let (Engine::Codex, Some(effort)) = (engine, reasoning_effort) {
-        flags.push_str(&format!(" -c model_reasoning_effort={}", effort.as_str()));
+    if let Some(effort) = reasoning_effort {
+        let effort = effort.as_str();
+        match engine {
+            // `-c` overrides config.toml for this launch only, unlike editing
+            // `~/.codex/config.toml`, which a hand-run `codex` would also pick up.
+            Engine::Codex => flags.push_str(&format!(" -c model_reasoning_effort={effort}")),
+            Engine::Claude => flags.push_str(&format!(" --effort {effort}")),
+        }
     }
 
     // Restrict to the exact program name (optionally followed by a
@@ -195,13 +200,21 @@ mod tests {
         Some("/tmp/prompt.txt"),
         "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
     )]
-    #[case::claude_ignores_effort(
+    #[case::claude_with_effort(
         Engine::Claude,
         "claude",
         None,
         Some(ReasoningEffort::Max),
         None,
-        "claude"
+        "claude --effort max"
+    )]
+    #[case::claude_with_model_effort_and_prompt(
+        Engine::Claude,
+        "claude -p agent1",
+        Some("opus"),
+        Some(ReasoningEffort::XHigh),
+        Some("/tmp/prompt.txt"),
+        "claude --model opus --effort xhigh -p agent1 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
     )]
     #[case::codex_with_model_no_prompt(
         Engine::Codex,
