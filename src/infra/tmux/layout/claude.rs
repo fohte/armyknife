@@ -71,7 +71,6 @@ pub(super) struct RecoverySpec<'a> {
     pub command: &'a str,
     pub model: Option<&'a str>,
     pub pane_id: Option<&'a str>,
-    pub tmux_location: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
 }
 
@@ -121,18 +120,28 @@ impl Launch {
         self,
         spec: RecoverySpec<'_>,
     ) -> anyhow::Result<AgentLaunchRoute> {
-        self.finish_and_recover_with(spec, |pane_id, command, env_vars| {
-            tmux::respawn_pane_with_env(pane_id, command, env_vars).map_err(anyhow::Error::new)
-        })
+        self.finish_and_recover_with(
+            spec,
+            tmux::get_pane_registry_location,
+            |pane_id, command, env_vars| {
+                tmux::respawn_pane_with_env(pane_id, command, env_vars).map_err(anyhow::Error::new)
+            },
+        )
     }
 
     fn finish_and_recover_with(
         self,
         spec: RecoverySpec<'_>,
+        resolve_tmux_location: impl FnOnce(&str) -> Option<String>,
         respawn: impl FnOnce(&str, &str, &[(&str, &str)]) -> anyhow::Result<()>,
     ) -> anyhow::Result<AgentLaunchRoute> {
         let messaging_launch = self.uses_messaging();
-        let route = self.finish(spec.tmux_location);
+        let tmux_location = if messaging_launch {
+            spec.pane_id.and_then(resolve_tmux_location)
+        } else {
+            None
+        };
+        let route = self.finish(tmux_location.as_deref());
         match route {
             AgentLaunchRoute::ClaudeMessaging => {
                 if let Some(path) = spec.prompt_file {
@@ -377,9 +386,9 @@ mod tests {
                 command: "claude",
                 model: None,
                 pane_id: Some("%2"),
-                tmux_location: Some("example/repo:@1.%2"),
                 env_vars: &[],
             },
+            |_| Some("example/repo:@1.%2".to_string()),
             |_, _, _| panic!("respawn should not run"),
         );
 
@@ -415,9 +424,9 @@ mod tests {
                         command: "claude",
                         model: Some("example-model"),
                         pane_id: Some("%2"),
-                        tmux_location: Some("example/repo:@1.%2"),
                         env_vars: &[("EXAMPLE_KEY", "example-value")],
                     },
+                    |_| Some("example/repo:@1.%2".to_string()),
                     |pane_id, command, env_vars| {
                         respawned = Some((
                             pane_id.to_string(),

@@ -8,14 +8,14 @@ use crate::shared::config::{LayoutNode, SplitDirection};
 mod claude;
 mod codex;
 mod execution;
+mod launch;
 mod prompt;
 mod route;
 mod split;
-use claude::{Launch as ClaudeLaunch, RecoverySpec as ClaudeRecoverySpec};
-use codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use execution::{execute_commands, execute_layout};
 #[cfg(test)]
 use execution::{find_new_window_index, rewrite_pane_targets, with_window_id_capture};
+use launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
 use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
 pub use route::AgentLaunchRoute;
 #[cfg(test)]
@@ -404,19 +404,16 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
         restore_automatic_rename,
     });
-    let codex_launch = CodexLaunch::prepare(
+    let launch = AgentLaunch::prepare(
         engine,
         prompt,
         argv_plan.agent_commands.len(),
         Path::new(cwd),
     );
-    let claude_launch = ClaudeLaunch::prepare(engine, prompt, argv_plan.agent_commands.len());
-    let remote_launch = codex_launch.uses_daemon() || claude_launch.uses_messaging();
+    let remote_launch = launch.uses_remote();
     let plan = if remote_launch {
-        let (launch_effort, launch_prompt_file) = match engine {
-            Engine::Claude => claude_launch.command_options(reasoning_effort, prompt_path),
-            Engine::Codex => codex_launch.command_options(reasoning_effort, prompt_path),
-        };
+        let (launch_effort, launch_prompt_file) =
+            launch.command_options(reasoning_effort, prompt_path);
         build_layout_plan(LayoutCommandsSpec {
             session,
             cwd,
@@ -456,35 +453,15 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         .first()
         .map(|(_, command)| command.as_str())
         .unwrap_or_default();
-    match engine {
-        Engine::Claude => {
-            let tmux_location = if claude_launch.uses_messaging() {
-                agent_pane_id
-                    .as_deref()
-                    .and_then(crate::infra::tmux::get_pane_registry_location)
-            } else {
-                None
-            };
-            claude_launch.finish_and_recover(ClaudeRecoverySpec {
-                effort: reasoning_effort,
-                prompt_file: prompt_path,
-                command,
-                model,
-                pane_id: agent_pane_id.as_deref(),
-                tmux_location: tmux_location.as_deref(),
-                env_vars,
-            })
-        }
-        Engine::Codex => codex_launch.finish_and_recover(CodexRecoverySpec {
-            cwd: Path::new(cwd),
-            effort: reasoning_effort,
-            prompt_file: prompt_path,
-            command,
-            model,
-            pane_id: agent_pane_id.as_deref(),
-            env_vars,
-        }),
-    }
+    launch.finish_and_recover(AgentRecoverySpec {
+        cwd: Path::new(cwd),
+        effort: reasoning_effort,
+        prompt_file: prompt_path,
+        command,
+        model,
+        pane_id: agent_pane_id.as_deref(),
+        env_vars,
+    })
 }
 
 /// Write prompt to a temp file that persists until delivery succeeds.

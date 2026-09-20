@@ -1,14 +1,12 @@
 use std::path::Path;
 
-use super::claude::{Launch as ClaudeLaunch, RecoverySpec as ClaudeRecoverySpec};
-use super::codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use super::execution::{execute_commands, flatten_commands};
+use super::launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
 use super::prompt::apply_prompt_if_agent;
 use super::{
     AgentLaunchRoute, TmuxCommand, TmuxSessionSpec, set_environment_commands,
     unset_environment_commands, write_prompt_file,
 };
-use crate::commands::agent::types::Engine;
 
 /// Inputs for `build_split_pane_setup_commands`: the `set-environment` +
 /// `split-window` commands that must run before the new pane's id is known
@@ -72,13 +70,10 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         command,
     } = spec;
 
-    let codex_launch = CodexLaunch::prepare(engine, prompt, 1, Path::new(cwd));
-    let claude_launch = ClaudeLaunch::prepare(engine, prompt, 1);
+    let launch = AgentLaunch::prepare(engine, prompt, 1, Path::new(cwd));
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let (launch_effort, launch_prompt_file) = match engine {
-        Engine::Claude => claude_launch.command_options(reasoning_effort, prompt_file.as_deref()),
-        Engine::Codex => codex_launch.command_options(reasoning_effort, prompt_file.as_deref()),
-    };
+    let (launch_effort, launch_prompt_file) =
+        launch.command_options(reasoning_effort, prompt_file.as_deref());
     let cmd = apply_prompt_if_agent(
         command,
         engine,
@@ -120,33 +115,15 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         }
     })?;
 
-    let route = match engine {
-        Engine::Claude => {
-            let tmux_location = if claude_launch.uses_messaging() {
-                crate::infra::tmux::get_pane_registry_location(&new_pane_id)
-            } else {
-                None
-            };
-            claude_launch.finish_and_recover(ClaudeRecoverySpec {
-                effort: reasoning_effort,
-                prompt_file: prompt_file.as_deref(),
-                command,
-                model,
-                pane_id: Some(&new_pane_id),
-                tmux_location: tmux_location.as_deref(),
-                env_vars,
-            })?
-        }
-        Engine::Codex => codex_launch.finish_and_recover(CodexRecoverySpec {
-            cwd: Path::new(cwd),
-            effort: reasoning_effort,
-            prompt_file: prompt_file.as_deref(),
-            command,
-            model,
-            pane_id: Some(&new_pane_id),
-            env_vars,
-        })?,
-    };
+    let route = launch.finish_and_recover(AgentRecoverySpec {
+        cwd: Path::new(cwd),
+        effort: reasoning_effort,
+        prompt_file: prompt_file.as_deref(),
+        command,
+        model,
+        pane_id: Some(&new_pane_id),
+        env_vars,
+    })?;
 
     Ok(SplitResult {
         pane_id: new_pane_id,
