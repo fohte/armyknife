@@ -13,18 +13,19 @@ use crate::infra::{process, tmux};
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
+mod session_metadata;
+
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
     /// Agent session ID to resume. When omitted, the session ID is read from the
     /// current tmux pane's `@armyknife-last-agent-session-id` user option.
     pub session_id: Option<String>,
 
-    /// Comma-separated ancestor session IDs (root to immediate parent) to set as
-    /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` before exec'ing `claude`. `a agent resurrect
-    /// restore` passes this so the `SessionStart` hook can rebuild
-    /// `ancestor_session_ids` if the store JSON for this session was already
-    /// lost to `cleanup_stale_sessions` (see `resurrect.rs`), since a respawned
-    /// pane's environment otherwise carries no ancestor information.
+    /// Comma-separated ancestor session IDs (root to immediate parent) to restore.
+    /// `a agent resurrect restore` passes this because a respawned pane otherwise
+    /// carries no ancestor information. Codex records it before resuming because
+    /// a shared daemon cannot inherit this process's environment; Claude and an
+    /// embedded Codex process also receive it via `ARMYKNIFE_ANCESTOR_SESSION_IDS`.
     #[arg(long)]
     pub ancestor_session_ids: Option<String>,
 }
@@ -59,7 +60,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     // Codex delays its resume SessionStart hook until the first turn. Make
     // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
-        return run_codex_resume_with_status(&session_id, || {
+        return run_codex_resume_with_status(&session_id, ancestor_session_ids, || {
             run_codex_resume(&binary_path, resume_args, ancestor_session_ids)
         });
     }
@@ -113,18 +114,33 @@ struct ResumeStatusChange {
 /// visible in the session store.
 fn run_codex_resume_with_status(
     session_id: &str,
+    ancestor_session_ids: Option<&str>,
     launch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    run_codex_resume_with_status_in(&sessions_dir, session_id, current_tmux_info(), launch)
+    run_codex_resume_with_status_in(
+        &sessions_dir,
+        session_id,
+        ancestor_session_ids,
+        current_tmux_info(),
+        launch,
+    )
 }
 
 fn run_codex_resume_with_status_in(
     sessions_dir: &Path,
     session_id: &str,
+    ancestor_session_ids: Option<&str>,
     current_tmux_info: Option<TmuxInfo>,
     launch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    if let Some(ancestor_session_ids) = ancestor_session_ids {
+        session_metadata::record_ancestor_session_ids_if_empty(
+            sessions_dir,
+            session_id,
+            ancestor_session_ids,
+        )?;
+    }
     let status_change = mark_codex_session_resumed_in(sessions_dir, session_id, current_tmux_info)?;
     let result = launch();
     if let Err(error) = result {
@@ -510,10 +526,13 @@ mod tests {
             );
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
-            let result =
-                run_codex_resume_with_status_in(temp_dir.path(), "resume-target", None, || {
-                    Err(anyhow::anyhow!("resume failed"))
-                });
+            let result = run_codex_resume_with_status_in(
+                temp_dir.path(),
+                "resume-target",
+                None,
+                None,
+                || Err(anyhow::anyhow!("resume failed")),
+            );
 
             let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
                 .expect("load should succeed")
@@ -538,8 +557,12 @@ mod tests {
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
             let hook_updated_at = Utc::now();
-            let result =
-                run_codex_resume_with_status_in(temp_dir.path(), "resume-target", None, || {
+            let result = run_codex_resume_with_status_in(
+                temp_dir.path(),
+                "resume-target",
+                None,
+                None,
+                || {
                     let mut updated = store::load_session_from(temp_dir.path(), "resume-target")
                         .expect("load should succeed")
                         .expect("session should exist");
@@ -547,7 +570,8 @@ mod tests {
                     updated.updated_at = hook_updated_at;
                     store::save_session_to(temp_dir.path(), &updated).expect("save should succeed");
                     Err(anyhow::anyhow!("resume failed"))
-                });
+                },
+            );
 
             let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
                 .expect("load should succeed")
@@ -580,6 +604,7 @@ mod tests {
             let result = run_codex_resume_with_status_in(
                 temp_dir.path(),
                 "resume-target",
+                None,
                 current_tmux_info.clone(),
                 || Ok(()),
             );
@@ -595,6 +620,44 @@ mod tests {
                     reloaded.tmux_info,
                 ),
                 (true, SessionStatus::Stopped, None, current_tmux_info)
+            );
+        }
+
+        #[rstest]
+        #[case::fills_empty_chain(&[], &["root", "parent"])]
+        #[case::preserves_existing_chain(&["current-parent"], &["current-parent"])]
+        fn restores_ancestor_chain_without_overwriting_current_value(
+            temp_dir: TempDir,
+            #[case] existing_ancestors: &[&str],
+            #[case] expected_ancestors: &[&str],
+        ) {
+            let mut original = session(Engine::Codex, SessionStatus::Ended);
+            original.ancestor_session_ids = existing_ancestors
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect();
+            store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+
+            let result = run_codex_resume_with_status_in(
+                temp_dir.path(),
+                "resume-target",
+                Some("root, parent"),
+                None,
+                || Ok(()),
+            );
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+
+            assert_eq!(
+                (result.is_ok(), reloaded.ancestor_session_ids),
+                (
+                    true,
+                    expected_ancestors
+                        .iter()
+                        .map(|id| (*id).to_string())
+                        .collect::<Vec<_>>(),
+                )
             );
         }
     }
