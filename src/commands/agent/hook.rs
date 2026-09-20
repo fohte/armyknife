@@ -2070,9 +2070,9 @@ mod tests {
     ) {
         // A Paused session reaching SessionEnd is sweep's own shutdown path;
         // that Paused must be pushed through to tmux unchanged. So is a
-        // still-Stopped session with sweep_signaled set: sweep requested shutdown
-        // to it without confirming Paused yet (see `sweep/mod.rs`), and this
-        // SessionEnd is that confirmation. Neither must turn into Ended.
+        // still-Stopped session with sweep_signaled set: sweep requested
+        // shutdown without confirming Paused yet (see `sweep/mod.rs`), and
+        // this SessionEnd is that confirmation. Neither must turn into Ended.
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 

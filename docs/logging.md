@@ -115,8 +115,10 @@ Stop hook (parent process):
 | `agent.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)              |
 | `agent.sweep.signaled`       | Live pid resolved; shutdown requested, status may stay Stopped |
 | `agent.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                      |
-| `agent.sweep.paused`         | No resolvable pid; status confirmed Paused                     |
+| `agent.sweep.paused`         | Process exit confirmed; status changed to Paused               |
 | `agent.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`              |
+| `agent.sweep.ctrl_d_timeout` | Codex remained alive after Ctrl+D; falling back to SIGTERM     |
+| `agent.sweep.ctrl_d_failed`  | Sending Ctrl+D through tmux failed; falling back to SIGTERM    |
 | `agent.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                 |
 | `agent.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)   |
 
@@ -148,9 +150,10 @@ a agent sweep --dry-run --timeout 1s   # forces every Stopped session to be a ca
 jq -c 'select(.session == "<id>")' ~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 ```
 
-`agent.sweep.dry_run_pause` means the session has no live `claude` (probably
+`agent.sweep.dry_run_pause` means the session has no live agent process (probably
 already exited) and would be confirmed Paused; `agent.sweep.dry_run_signal`
-means a pid still resolves, so this pass can only (re-)send SIGTERM.
+means a pid still resolves, so this pass would request shutdown (Ctrl+D followed
+by SIGTERM for Codex, or SIGTERM directly for Claude Code).
 
 ## Adding new events
 

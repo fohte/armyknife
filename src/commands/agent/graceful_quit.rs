@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::signal::LibcSignalSender;
 
-const EXIT_GRACE_PERIOD: Duration = Duration::from_millis(500);
+const EXIT_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) trait GracefulQuitRequester {

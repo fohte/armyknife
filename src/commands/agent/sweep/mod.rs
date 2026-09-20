@@ -5,17 +5,14 @@
 //! periodically (e.g., by a launchd agent on a 1-minute interval) rather than
 //! spawned on demand from the Stop hook.
 //!
-//! Confirming a pause spans multiple sweep runs rather than happening on a
-//! single shutdown request. Claude Code (Node.js) can keep running for a long
-//! time after receiving SIGTERM while blocked in known-flaky code paths (a
-//! stalled SSE stream, a Bash-tool thread deadlock, a synchronous CPU spin during
-//! context compaction) -- sending the signal is not proof the process has
-//! exited. So when a session's timeout has elapsed and sweep can still
-//! resolve a live `claude` pid for it, sweep (re-)sends SIGTERM but leaves
-//! `session.status` as `Stopped`. Only once a later sweep run can no longer
-//! resolve a pid for that session -- meaning the process has actually
-//! exited -- does sweep flip the status to `Paused`. This repeats with no
-//! retry limit until the pid disappears.
+//! Claude Code (Node.js) can keep running for a long time after receiving
+//! SIGTERM while blocked in known-flaky code paths (a stalled SSE stream, a
+//! Bash-tool thread deadlock, or a synchronous CPU spin during context
+//! compaction). Sending the signal is not proof the process has exited, so
+//! its session stays `Stopped` until a later sweep can no longer resolve the
+//! pid. Codex can instead be confirmed `Paused` in the same run when it exits
+//! within the graceful Ctrl+D window. Remaining live processes receive
+//! SIGTERM again on later runs with no retry limit.
 //!
 //! While a session waits in that signaled-but-not-yet-Paused window, it is
 //! marked `Session::sweep_signaled`. Codex gets one chance to exit through
@@ -223,8 +220,8 @@ pub struct SweepReport {
     pub scanned: usize,
     /// Sessions confirmed as `Paused` (or that would have been, in
     /// --dry-run) this run. This means a prior sweep's SIGTERM (or the
-    /// process exiting on its own) has actually taken effect: sweep can no
-    /// longer resolve a live `claude` pid for the session.
+    /// process exiting on its own) has actually taken effect, including a
+    /// Codex process that exits within this run's graceful shutdown window.
     pub paused: usize,
     /// Sessions whose timeout has elapsed and received a shutdown request
     /// this run, but were not yet confirmed `Paused` because sweep can still
@@ -234,6 +231,11 @@ pub struct SweepReport {
     pub waiting: usize,
     /// Sessions in an active state (Running, WaitingInput, Paused).
     pub active: usize,
+}
+
+enum ShutdownOutcome {
+    Exited,
+    StillRunning,
 }
 
 /// Testable core of `run`. Reads every `*.json` session file under
@@ -351,12 +353,16 @@ where
                         session = %session.session_id,
                         pid = pid,
                     );
-                    let exited = signal_session(sessions_dir, &mut session, pid, sender)?;
-                    if exited {
-                        confirm_paused(sessions_dir, session, syncer)?;
-                        report.paused += 1;
-                    } else {
-                        report.signaled += 1;
+                    match signal_session(sessions_dir, &mut session, pid, sender)? {
+                        ShutdownOutcome::Exited => {
+                            tracing::info!(
+                                event = "agent.sweep.paused",
+                                session = %session.session_id,
+                            );
+                            confirm_paused(sessions_dir, session, syncer)?;
+                            report.paused += 1;
+                        }
+                        ShutdownOutcome::StillRunning => report.signaled += 1,
                     }
                 }
                 None => {
@@ -423,16 +429,25 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
     session: &mut Session,
     pid: u32,
     sender: &S,
-) -> Result<bool> {
+) -> Result<ShutdownOutcome> {
+    let first_request = !session.sweep_signaled;
+    session.sweep_signaled = true;
+    store::save_session_to(sessions_dir, session)?;
+
     if session.engine == Engine::Codex
-        && !session.sweep_signaled
+        && first_request
         && let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str())
     {
-        session.sweep_signaled = true;
-        store::save_session_to(sessions_dir, session)?;
         match sender.request_and_wait(pane_id, pid) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
+            Ok(true) => return Ok(ShutdownOutcome::Exited),
+            Ok(false) => {
+                tracing::info!(
+                    event = "agent.sweep.ctrl_d_timeout",
+                    session = %session.session_id,
+                    pane_id,
+                    pid,
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     event = "agent.sweep.ctrl_d_failed",
@@ -458,10 +473,7 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
         );
     }
 
-    session.sweep_signaled = true;
-    store::save_session_to(sessions_dir, session)?;
-
-    Ok(false)
+    Ok(ShutdownOutcome::StillRunning)
 }
 
 /// Flips the session status to Paused now that sweep can no longer resolve a
@@ -596,34 +608,54 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn codex_graceful_exit_restores_terminal_before_pause(test_dir: TestDir) {
-        let old = Utc::now() - TimeDelta::hours(1);
-        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
+    type SweepObservation = (
+        SweepReport,
+        Vec<String>,
+        Vec<(u32, i32)>,
+        SessionStatus,
+        bool,
+    );
 
-        let sender = RecordingSender::default();
-        sender.graceful_exit_result.replace(true);
+    fn observe_codex_sweep(
+        test_dir: &TestDir,
+        sender: &RecordingSender,
+        session: Session,
+        dry_run: bool,
+    ) -> SweepObservation {
+        let session_id = session.session_id.clone();
+        save_session_to(&test_dir.path, &session).expect("save");
         let report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
-            &sender,
-            &FakeProbe::with_pids(&[("codex", 4242)]),
+            sender,
+            &FakeProbe::with_pids(&[(&session_id, 4242)]),
             &RecordingTmuxStatusSyncer::default(),
-            false,
+            dry_run,
         )
         .expect("sweep");
-        let reloaded = store::load_session_from(&test_dir.path, "codex")
+        let reloaded = store::load_session_from(&test_dir.path, &session_id)
             .expect("load")
             .expect("session exists");
 
+        (
+            report,
+            sender.ctrl_d_calls.borrow().clone(),
+            sender.calls.borrow().clone(),
+            reloaded.status,
+            reloaded.sweep_signaled,
+        )
+    }
+
+    #[rstest]
+    fn codex_graceful_exit_restores_terminal_before_pause(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let sender = RecordingSender::default();
+        sender.graceful_exit_result.replace(true);
+        let actual =
+            observe_codex_sweep(&test_dir, &sender, make_codex_session("codex", old), false);
+
         assert_eq!(
-            (
-                report,
-                sender.ctrl_d_calls.into_inner(),
-                sender.calls.into_inner(),
-                reloaded.status,
-                reloaded.sweep_signaled,
-            ),
+            actual,
             (
                 SweepReport {
                     scanned: 1,
@@ -641,35 +673,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::grace_period_elapsed(false)]
-    #[case::tmux_request_failed(true)]
-    fn codex_falls_back_to_sigterm(test_dir: TestDir, #[case] ctrl_d_fails: bool) {
+    #[case::grace_period_elapsed(false, false, true)]
+    #[case::tmux_request_failed(true, false, true)]
+    #[case::already_signaled(false, true, false)]
+    #[case::pane_not_recorded(false, false, false)]
+    fn codex_falls_back_to_sigterm(
+        test_dir: TestDir,
+        #[case] ctrl_d_fails: bool,
+        #[case] already_signaled: bool,
+        #[case] has_tmux_info: bool,
+    ) {
         let old = Utc::now() - TimeDelta::hours(1);
-        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
+        let mut session = make_codex_session("codex", old);
+        session.sweep_signaled = already_signaled;
+        if !has_tmux_info {
+            session.tmux_info = None;
+        }
 
         let sender = RecordingSender::default();
         sender.fail_ctrl_d.replace(ctrl_d_fails);
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(1),
-            &sender,
-            &FakeProbe::with_pids(&[("codex", 4242)]),
-            &RecordingTmuxStatusSyncer::default(),
-            false,
-        )
-        .expect("sweep");
-        let reloaded = store::load_session_from(&test_dir.path, "codex")
-            .expect("load")
-            .expect("session exists");
+        let actual = observe_codex_sweep(&test_dir, &sender, session, false);
+        let expected_ctrl_d_calls = has_tmux_info
+            .then(|| "%42".to_string())
+            .filter(|_| !already_signaled)
+            .into_iter()
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            (
-                report,
-                sender.ctrl_d_calls.into_inner(),
-                sender.calls.into_inner(),
-                reloaded.status,
-                reloaded.sweep_signaled,
-            ),
+            actual,
             (
                 SweepReport {
                     scanned: 1,
@@ -678,7 +709,7 @@ mod tests {
                     waiting: 0,
                     active: 0,
                 },
-                vec!["%42".to_string()],
+                expected_ctrl_d_calls,
                 vec![(4242, libc::SIGTERM)],
                 SessionStatus::Stopped,
                 true,
@@ -689,30 +720,12 @@ mod tests {
     #[rstest]
     fn dry_run_does_not_request_codex_shutdown(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
-        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
-
         let sender = RecordingSender::default();
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(1),
-            &sender,
-            &FakeProbe::with_pids(&[("codex", 4242)]),
-            &RecordingTmuxStatusSyncer::default(),
-            true,
-        )
-        .expect("sweep");
-        let reloaded = store::load_session_from(&test_dir.path, "codex")
-            .expect("load")
-            .expect("session exists");
+        let actual =
+            observe_codex_sweep(&test_dir, &sender, make_codex_session("codex", old), true);
 
         assert_eq!(
-            (
-                report,
-                sender.ctrl_d_calls.into_inner(),
-                sender.calls.into_inner(),
-                reloaded.status,
-                reloaded.sweep_signaled,
-            ),
+            actual,
             (
                 SweepReport {
                     scanned: 1,

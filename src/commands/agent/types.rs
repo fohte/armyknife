@@ -204,9 +204,9 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
-    /// Stopped session that was automatically terminated (SIGTERM) after the
+    /// Stopped session that was automatically terminated after the
     /// `auto_pause` timeout elapsed. The session file is preserved so that
-    /// `agent resume` / `claude --resume` can restore the conversation.
+    /// `agent resume` can restore the conversation.
     Paused,
     /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
     /// resume can restore label and ancestor chain. Garbage-collected after

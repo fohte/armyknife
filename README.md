@@ -544,7 +544,7 @@ Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which 
 
 Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a agent resume` can restore the conversation.
 
-`a agent sweep` scans every session file once. For a live Codex session, it first sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Claude Code continues to receive SIGTERM directly. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
+`a agent sweep` scans every session file once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
 | Command                   | Description                                                       |
 | ------------------------- | ----------------------------------------------------------------- |
