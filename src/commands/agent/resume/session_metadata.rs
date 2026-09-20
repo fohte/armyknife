@@ -1,13 +1,17 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::Result;
+use chrono::Utc;
 
 use crate::commands::agent::store;
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::parse_ancestor_session_ids;
 
 pub(super) fn record_ancestor_session_ids_if_empty(
     sessions_dir: &Path,
     session_id: &str,
+    cwd: &Path,
     ancestor_session_ids: &str,
 ) -> Result<()> {
     let ancestor_session_ids = parse_ancestor_session_ids(ancestor_session_ids);
@@ -15,14 +19,35 @@ pub(super) fn record_ancestor_session_ids_if_empty(
         return Ok(());
     }
 
-    store::update_session_in(sessions_dir, session_id, |session| {
-        if !session.ancestor_session_ids.is_empty() {
-            return false;
-        }
+    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let now = Utc::now();
+    let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        session_id: session_id.to_string(),
+        cwd: cwd.to_path_buf(),
+        transcript_path: None,
+        tty: None,
+        tmux_info: None,
+        status: SessionStatus::Running,
+        created_at: now,
+        updated_at: now,
+        last_message: None,
+        current_tool: None,
+        label: None,
+        ancestor_session_ids: Vec::new(),
+        pending_bg_task_ids: BTreeSet::new(),
+        pending_agent_task_ids: BTreeSet::new(),
+        pending_permission_agent_ids: BTreeSet::new(),
+        read_at: None,
+        sweep_signaled: false,
+        engine: Engine::Codex,
+    });
 
-        session.ancestor_session_ids = ancestor_session_ids;
-        true
-    })
+    if !session.ancestor_session_ids.is_empty() {
+        return Ok(());
+    }
+
+    session.ancestor_session_ids = ancestor_session_ids;
+    session_lock.save(&session)
 }
 
 #[cfg(test)]
@@ -81,8 +106,13 @@ mod tests {
         store::save_session_to(sessions_dir.path(), &session(existing_ancestors))
             .expect("save should succeed");
 
-        record_ancestor_session_ids_if_empty(sessions_dir.path(), "resume-target", "root, parent")
-            .expect("record should succeed");
+        record_ancestor_session_ids_if_empty(
+            sessions_dir.path(),
+            "resume-target",
+            Path::new("/workspace/project"),
+            "root, parent",
+        )
+        .expect("record should succeed");
         let actual = store::load_session_from(sessions_dir.path(), "resume-target")
             .expect("load should succeed")
             .expect("session should exist")
@@ -94,6 +124,48 @@ mod tests {
                 .iter()
                 .map(|id| (*id).to_string())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[rstest]
+    fn creates_missing_session_with_ancestor_chain(sessions_dir: TempDir) {
+        record_ancestor_session_ids_if_empty(
+            sessions_dir.path(),
+            "missing-session",
+            Path::new("/workspace/resume"),
+            "root, parent",
+        )
+        .expect("record should succeed");
+
+        let session = store::load_session_from(sessions_dir.path(), "missing-session")
+            .expect("load should succeed")
+            .expect("session should exist");
+        let mut actual = serde_json::to_value(session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "session_id": "missing-session",
+                "cwd": "/workspace/resume",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "ancestor_session_ids": ["root", "parent"],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "codex"
+            })
         );
     }
 }

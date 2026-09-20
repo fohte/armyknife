@@ -61,9 +61,11 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
         if let Some(ancestor_session_ids) = ancestor_session_ids {
+            let cwd = std::env::current_dir()?;
             session_metadata::record_ancestor_session_ids_if_empty(
                 &store::sessions_dir()?,
                 &session_id,
+                &cwd,
                 ancestor_session_ids,
             )?;
         }
