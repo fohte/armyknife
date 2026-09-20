@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.314](https://github.com/fohte/armyknife/compare/v0.1.313...v0.1.314) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** associate Codex sessions launched via shared app-server with tmux panes ([#943](https://github.com/fohte/armyknife/issues/943)) ([c2c0b08](https://github.com/fohte/armyknife/commit/c2c0b08826bd0343c362479baa5ff77adc089560))
+
 ## [0.1.313](https://github.com/fohte/armyknife/compare/v0.1.312...v0.1.313) (2026-09-20)
 
 
