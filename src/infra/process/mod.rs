@@ -468,8 +468,10 @@ mod tests {
 
     use super::*;
 
+    // `setsid` is only observable after the spawn boundary, so this test uses
+    // the POSIX-guaranteed `sh` rather than an optional external tool.
     #[test]
-    fn spawn_detached_starts_child_in_a_new_process_group() {
+    fn spawn_detached_starts_child_in_a_new_session() {
         let pid_file = tempfile::NamedTempFile::new().expect("pid file should be created");
         let pid_path = pid_file.path().as_os_str();
 
@@ -503,24 +505,23 @@ mod tests {
         }
         .expect("child should write its pid promptly");
 
-        // SAFETY: both calls only query process group membership.
-        let (child_pgid, parent_pgid) = unsafe { (libc::getpgid(child_pid), libc::getpgrp()) };
+        // SAFETY: both calls only query process membership.
+        let (child_pgid, child_sid) =
+            unsafe { (libc::getpgid(child_pid), libc::getsid(child_pid)) };
         // SAFETY: the child is stopped and this pid came directly from that child.
         unsafe {
             libc::kill(child_pid, libc::SIGKILL);
         }
 
-        assert_eq!(
-            (child_pgid == child_pid, child_pgid != parent_pgid),
-            (true, true),
-        );
+        assert_eq!((child_pgid, child_sid), (child_pid, child_pid));
     }
 
-    // These tests spawn a real `sh` process rather than mocking the spawn/kill
-    // boundary. `run_with_timeout` wraps that exact boundary (spawn a `Command`, kill
-    // it if it overruns), so there is no logic to exercise without a real process on
-    // the other end; `sh` is a POSIX-guaranteed shell primitive, not an optional
-    // external tool like tmux/git/ps that may be absent or blocked in a sandbox.
+    // These `run_with_timeout` tests spawn a real `sh` process rather than mocking
+    // the spawn/kill boundary. `run_with_timeout` wraps that exact boundary (spawn a
+    // `Command`, kill it if it overruns), so there is no logic to exercise without a
+    // real process on the other end; `sh` is a POSIX-guaranteed shell primitive, not
+    // an optional external tool like tmux/git/ps that may be absent or blocked in a
+    // sandbox.
 
     #[test]
     fn run_with_timeout_returns_output_when_command_finishes_in_time() {
