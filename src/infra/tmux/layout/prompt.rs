@@ -43,7 +43,8 @@ fn strip_program<'a>(command: &'a str, program: &str) -> Option<&'a str> {
 /// meaningful to the engine the session was started for.
 ///
 /// Uses `$(cat <path>)` to read the prompt at shell execution time.
-/// If `cleanup` is true, also deletes the temp file after reading.
+/// If `cleanup` is true, also deletes the temp file after the agent exits
+/// successfully. A failed launch leaves the prompt recoverable.
 /// Only the last `engine` pane should set `cleanup = true` to avoid
 /// deleting the file before other panes have read it.
 pub(super) fn apply_prompt_if_agent(
@@ -92,7 +93,7 @@ pub(super) fn apply_prompt_if_agent(
                 .map(|c| c.into_owned())
                 .unwrap_or(path_str);
             if cleanup {
-                format!("{command} \"$(cat {escaped_path})\" ; rm {escaped_path}")
+                format!("{command} \"$(cat {escaped_path})\" && rm {escaped_path}")
             } else {
                 format!("{command} \"$(cat {escaped_path})\"")
             }
@@ -145,7 +146,7 @@ mod tests {
         "claude",
         "/tmp/prompt.txt",
         true,
-        "claude \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "claude \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::claude_without_cleanup(
         Engine::Claude,
@@ -159,7 +160,7 @@ mod tests {
         "codex",
         "/tmp/prompt.txt",
         true,
-        "codex \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "codex \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::codex_without_cleanup(
         Engine::Codex,
@@ -173,14 +174,14 @@ mod tests {
         "claude-code",
         "/tmp/prompt.txt",
         true,
-        "claude-code \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "claude-code \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::claude_code_with_cleanup(
         Engine::Claude,
         "claude code",
         "/tmp/prompt.txt",
         true,
-        "claude code \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "claude code \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     fn test_apply_prompt_if_agent_with_file(
         #[case] engine: Engine,
@@ -234,7 +235,7 @@ mod tests {
         Some("opus"),
         None,
         Some("/tmp/prompt.txt"),
-        "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "claude --model opus \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::claude_with_effort(
         Engine::Claude,
@@ -250,7 +251,7 @@ mod tests {
         Some("opus"),
         Some(ReasoningEffort::XHigh),
         Some("/tmp/prompt.txt"),
-        "claude --model opus --effort xhigh -p agent1 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "claude --model opus --effort xhigh -p agent1 \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::codex_with_model_no_prompt(
         Engine::Codex,
@@ -282,7 +283,7 @@ mod tests {
         Some("gpt-5"),
         None,
         Some("/tmp/prompt.txt"),
-        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::codex_effort_only(
         Engine::Codex,
@@ -306,7 +307,7 @@ mod tests {
         Some("gpt-5.6-luna"),
         Some(ReasoningEffort::Max),
         Some("/tmp/prompt.txt"),
-        "codex --model gpt-5.6-luna -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "codex --model gpt-5.6-luna -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     #[case::other_engine_pane_keeps_model_effort_and_prompt_off(
         Engine::Claude,

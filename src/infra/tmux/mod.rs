@@ -149,6 +149,11 @@ fn query_pane_value(pane_id: &str, format_string: &str) -> Option<String> {
     }
 }
 
+/// Returns the stable tmux location recorded by Claude Code's session registry.
+pub(crate) fn get_pane_registry_location(pane_id: &str) -> Option<String> {
+    query_pane_value(pane_id, "#{session_name}:#{window_id}.#{pane_id}")
+}
+
 // ============================================================================
 // Public API
 // ============================================================================

@@ -5,11 +5,12 @@ use std::path::Path;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
+mod claude;
 mod codex;
 mod execution;
 mod prompt;
 mod split;
-pub use codex::AgentLaunchRoute;
+use claude::{Launch as ClaudeLaunch, RecoverySpec as ClaudeRecoverySpec};
 use codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use execution::{execute_commands, execute_layout};
 #[cfg(test)]
@@ -18,6 +19,37 @@ use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
 #[cfg(test)]
 use split::{SplitPaneSetupSpec, build_split_pane_setup_commands};
 pub use split::{SplitResult, SplitSpec, split_pane};
+
+/// How an agent process received its initial prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentLaunchRoute {
+    /// No initial prompt was provided.
+    Standard,
+    /// Claude received its initial prompt through its messaging socket.
+    ClaudeMessaging,
+    /// Claude was launched with the prompt in argv because messaging failed.
+    ClaudeArgvFallback { reason: String },
+    /// Codex attached to the shared app-server and received its first turn by RPC.
+    CodexDaemon,
+    /// Codex was launched with the prompt in argv because the daemon path failed.
+    CodexArgvFallback { reason: String },
+}
+
+impl AgentLaunchRoute {
+    pub fn display_suffix(&self) -> String {
+        match self {
+            Self::Standard => String::new(),
+            Self::ClaudeMessaging => " (Claude messaging)".to_string(),
+            Self::ClaudeArgvFallback { reason } => {
+                format!(" (Claude argv fallback: {reason})")
+            }
+            Self::CodexDaemon => " (Codex daemon)".to_string(),
+            Self::CodexArgvFallback { reason } => {
+                format!(" (Codex argv fallback: {reason})")
+            }
+        }
+    }
+}
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +90,7 @@ pub struct LayoutCommandsSpec<'a> {
     /// `-c model_reasoning_effort=...` (codex).
     pub reasoning_effort: Option<ReasoningEffort>,
     /// When set, `engine` pane commands read the prompt from this file at
-    /// shell execution time and delete it afterward.
+    /// shell execution time and delete it after a successful exit.
     pub prompt_file: Option<&'a Path>,
     /// The agent CLI this session is for. `model` and `prompt_file` apply
     /// only to panes running it. A plain `claude` pane is retargeted to it
@@ -407,10 +439,13 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         argv_plan.agent_commands.len(),
         Path::new(cwd),
     );
-    let daemon_launch = codex_launch.uses_daemon();
-    let plan = if daemon_launch {
-        let (launch_effort, launch_prompt_file) =
-            codex_launch.command_options(reasoning_effort, prompt_path);
+    let claude_launch = ClaudeLaunch::prepare(engine, prompt, argv_plan.agent_commands.len());
+    let remote_launch = codex_launch.uses_daemon() || claude_launch.uses_messaging();
+    let plan = if remote_launch {
+        let (launch_effort, launch_prompt_file) = match engine {
+            Engine::Claude => claude_launch.command_options(reasoning_effort, prompt_path),
+            Engine::Codex => codex_launch.command_options(reasoning_effort, prompt_path),
+        };
         build_layout_plan(LayoutCommandsSpec {
             session,
             cwd,
@@ -428,7 +463,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         argv_plan
     };
 
-    let window_id = if background || daemon_launch {
+    let window_id = if background || remote_launch {
         Some(execute_layout(
             &plan.commands,
             session,
@@ -440,27 +475,48 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         None
     };
 
-    let fallback_pane_id = window_id.as_ref().and_then(|window_id| {
+    let agent_pane_id = window_id.as_ref().and_then(|window_id| {
         plan.agent_commands
             .first()
             .map(|(pane_index, _)| format!("{window_id}.{pane_index}"))
     });
-    codex_launch.finish_and_recover(CodexRecoverySpec {
-        cwd: Path::new(cwd),
-        effort: reasoning_effort,
-        prompt_file: prompt_path,
-        command: plan
-            .agent_commands
-            .first()
-            .map(|(_, command)| command.as_str())
-            .unwrap_or_default(),
-        model,
-        pane_id: fallback_pane_id.as_deref(),
-        env_vars,
-    })
+    let command = plan
+        .agent_commands
+        .first()
+        .map(|(_, command)| command.as_str())
+        .unwrap_or_default();
+    match engine {
+        Engine::Claude => {
+            let tmux_location = if claude_launch.uses_messaging() {
+                agent_pane_id
+                    .as_deref()
+                    .and_then(crate::infra::tmux::get_pane_registry_location)
+            } else {
+                None
+            };
+            claude_launch.finish_and_recover(ClaudeRecoverySpec {
+                effort: reasoning_effort,
+                prompt_file: prompt_path,
+                command,
+                model,
+                pane_id: agent_pane_id.as_deref(),
+                tmux_location: tmux_location.as_deref(),
+                env_vars,
+            })
+        }
+        Engine::Codex => codex_launch.finish_and_recover(CodexRecoverySpec {
+            cwd: Path::new(cwd),
+            effort: reasoning_effort,
+            prompt_file: prompt_path,
+            command,
+            model,
+            pane_id: agent_pane_id.as_deref(),
+            env_vars,
+        }),
+    }
 }
 
-/// Write prompt to a temp file that persists until the shell command reads it.
+/// Write prompt to a temp file that persists until delivery succeeds.
 pub(super) fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
     use anyhow::Context;
 
@@ -473,7 +529,7 @@ pub(super) fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathB
     std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt to temp file")?;
 
     // Keep the temp file so it persists after this function returns.
-    // The shell command will delete it after reading.
+    // Messaging delivery or a successful argv fallback will delete it.
     prompt_file
         .into_temp_path()
         .keep()
@@ -773,7 +829,7 @@ mod tests {
                     "send-keys",
                     "-l",
                     "--",
-                    "claude \"$(cat /tmp/claude-prompt-test.txt)\" ; rm /tmp/claude-prompt-test.txt",
+                    "claude \"$(cat /tmp/claude-prompt-test.txt)\" && rm /tmp/claude-prompt-test.txt",
                 ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
@@ -979,7 +1035,7 @@ mod tests {
                     "send-keys",
                     "-l",
                     "--",
-                    "claude -p agent2 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                    "claude -p agent2 \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt",
                 ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "1"]),
@@ -1026,7 +1082,7 @@ mod tests {
                     "send-keys",
                     "-l",
                     "--",
-                    "codex --model gpt-5 -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+                    "codex --model gpt-5 -c model_reasoning_effort=max \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt",
                 ]),
                 cmd(&["send-keys", "C-m"]),
                 cmd(&["select-pane", "-t", "2"]),
@@ -1047,14 +1103,14 @@ mod tests {
     #[case::claude_session(
         Engine::Claude,
         "opus",
-        "claude --model opus \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt",
+        "claude --model opus \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt",
         "codex"
     )]
     #[case::codex_session(
         Engine::Codex,
         "gpt-5",
         "claude",
-        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" ; rm /tmp/prompt.txt"
+        "codex --model gpt-5 \"$(cat /tmp/prompt.txt)\" && rm /tmp/prompt.txt"
     )]
     fn mixed_engine_layout_only_touches_session_engine_panes(
         #[case] engine: Engine,
