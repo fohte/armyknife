@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.312](https://github.com/fohte/armyknife/compare/v0.1.311...v0.1.312) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** interrupt running Codex sessions to deliver peer notifications ([#939](https://github.com/fohte/armyknife/issues/939)) ([73b4099](https://github.com/fohte/armyknife/commit/73b4099cbb737a721a68cced9f7270716ba8c322))
+* **hitl:** automatically close Ghostty PR review windows ([#938](https://github.com/fohte/armyknife/issues/938)) ([bcca43f](https://github.com/fohte/armyknife/commit/bcca43f5a0fa2436ff8cefb18b6e88d1cf68a004))
+
 ## [0.1.311](https://github.com/fohte/armyknife/compare/v0.1.310...v0.1.311) (2026-09-19)
 
 
