@@ -62,10 +62,24 @@ impl ReasoningEffort {
     }
 }
 
-/// Tmux user option name for storing Claude Code session ID.
+/// Tmux user option name for storing an agent session ID.
 /// User options in tmux are prefixed with '@' and persist until explicitly unset.
 /// Uses a descriptive name to avoid conflicts with other potential armyknife options.
-pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-claude-code-session-id";
+pub const TMUX_SESSION_OPTION: &str = "@armyknife-last-agent-session-id";
+
+/// Pre-rename name of [`TMUX_SESSION_OPTION`]. Panes that were already open
+/// when the rename shipped still carry it, and nothing rewrites the option
+/// for a session that is already running, so reads fall back to it.
+pub const TMUX_SESSION_OPTION_LEGACY: &str = "@armyknife-last-claude-code-session-id";
+
+/// Resolves an agent session-id pane option by trying [`TMUX_SESSION_OPTION`]
+/// first and falling back to [`TMUX_SESSION_OPTION_LEGACY`], so callers built
+/// on either a direct tmux lookup or an abstraction over one (e.g.
+/// `peer::wake`'s `Host` trait) share the same fallback order instead of
+/// each re-deriving it.
+pub fn resolve_session_option(read: impl Fn(&str) -> Option<String>) -> Option<String> {
+    read(TMUX_SESSION_OPTION).or_else(|| read(TMUX_SESSION_OPTION_LEGACY))
+}
 
 /// Tmux window-scoped user option holding the aggregated Claude Code status
 /// symbols for the window. `a agent hook` writes it whenever a session's state
@@ -520,6 +534,23 @@ mod tests {
             ),
             (expected, format!("{expected}\n"), expected.to_string(),),
         );
+    }
+
+    #[rstest]
+    #[case::prefers_current_key(Some("current"), Some("legacy"), Some("current"))]
+    #[case::falls_back_to_legacy_key(None, Some("legacy"), Some("legacy"))]
+    #[case::none_when_neither_set(None, None, None)]
+    fn resolve_session_option_cases(
+        #[case] current: Option<&'static str>,
+        #[case] legacy: Option<&'static str>,
+        #[case] expected: Option<&'static str>,
+    ) {
+        let resolved = resolve_session_option(|option| match option {
+            TMUX_SESSION_OPTION => current.map(str::to_string),
+            TMUX_SESSION_OPTION_LEGACY => legacy.map(str::to_string),
+            _ => None,
+        });
+        assert_eq!(resolved, expected.map(str::to_string));
     }
 
     fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {

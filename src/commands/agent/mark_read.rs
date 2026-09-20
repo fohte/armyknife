@@ -4,7 +4,7 @@ use clap::Args;
 
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
-use super::types::TMUX_SESSION_OPTION;
+use super::types::resolve_session_option;
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub fn run(args: &MarkReadArgs) -> Result<()> {
 
 fn lookup_session_id(pane_id: Option<&str>) -> Option<String> {
     match pane_id {
-        Some(id) => tmux::get_pane_option(id, TMUX_SESSION_OPTION),
-        None => tmux::get_current_pane_option(TMUX_SESSION_OPTION),
+        Some(id) => resolve_session_option(|option| tmux::get_pane_option(id, option)),
+        None => resolve_session_option(tmux::get_current_pane_option),
     }
 }

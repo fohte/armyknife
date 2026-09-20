@@ -9,8 +9,8 @@ use super::store;
 #[cfg(test)]
 use super::types::Engine;
 use super::types::{
-    Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_WINDOW_STATUS_OPTION,
-    TMUX_WINDOW_TITLE_OPTION,
+    Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY,
+    TMUX_WINDOW_STATUS_OPTION, TMUX_WINDOW_TITLE_OPTION,
 };
 use crate::infra::tmux;
 
@@ -97,7 +97,8 @@ pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
 /// the same session id (e.g. a split pane keeps the option), so duplicates are
 /// dropped to avoid rendering a session's symbol twice.
 fn load_window_sessions(window_id: &str, sessions_dir: &Path) -> Result<Vec<Session>> {
-    let session_ids = tmux::list_window_pane_options(window_id, TMUX_SESSION_OPTION);
+    let session_ids =
+        tmux::list_window_pane_options(window_id, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY);
 
     let mut seen = HashSet::new();
     let mut sessions = Vec::with_capacity(session_ids.len());

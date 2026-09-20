@@ -6,15 +6,17 @@ use clap::Args;
 use thiserror::Error;
 
 use super::store;
-use super::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo};
+use super::types::{
+    Engine, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo, resolve_session_option,
+};
 use crate::infra::{process, tmux};
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
-    /// Claude Code session ID to resume. When omitted, the session ID is read from
-    /// the current tmux pane's `@armyknife-last-claude-code-session-id` user option.
+    /// Agent session ID to resume. When omitted, the session ID is read from the
+    /// current tmux pane's `@armyknife-last-agent-session-id` user option.
     pub session_id: Option<String>,
 
     /// Comma-separated ancestor session IDs (root to immediate parent) to set as
@@ -219,7 +221,7 @@ fn resume_binary_and_args(engine: Engine, session_id: &str) -> (&'static str, Ve
 /// own pane, mirroring what `resume` does to find the session to relaunch.
 pub(crate) fn resolve_session_id_from_pane() -> Result<String> {
     let pane_id = current_pane_id()?;
-    let pane_option = tmux::get_pane_option(&pane_id, TMUX_SESSION_OPTION);
+    let pane_option = resolve_session_option(|option| tmux::get_pane_option(&pane_id, option));
     session_id_from_pane_option(&pane_id, pane_option.as_deref())
 }
 
@@ -232,7 +234,7 @@ fn session_id_from_pane_option(pane_id: &str, pane_option: Option<&str>) -> Resu
         .map(str::to_string)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "No Claude Code session ID found for pane {} (option '{}' not set or empty)",
+                "No agent session ID found for pane {} (option '{}' not set or empty)",
                 pane_id,
                 TMUX_SESSION_OPTION
             )
@@ -363,14 +365,14 @@ mod tests {
         #[case::errors_when_unset(
             None,
             Err(
-                "No Claude Code session ID found for pane %5 (option '@armyknife-last-claude-code-session-id' not set or empty)"
+                "No agent session ID found for pane %5 (option '@armyknife-last-agent-session-id' not set or empty)"
                     .to_string()
             )
         )]
         #[case::errors_when_empty(
             Some(""),
             Err(
-                "No Claude Code session ID found for pane %5 (option '@armyknife-last-claude-code-session-id' not set or empty)"
+                "No agent session ID found for pane %5 (option '@armyknife-last-agent-session-id' not set or empty)"
                     .to_string()
             )
         )]
