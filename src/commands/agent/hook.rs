@@ -29,6 +29,7 @@ use crate::shared::config::{self, Config, Terminal};
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
+mod pane_binding;
 pub(super) mod permission_notification;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -311,6 +312,15 @@ fn process_hook_event_impl(
         return Ok(ProcessResult::SessionEnded);
     }
 
+    // Resolved once and shared by the pane option, the pane takeover check and
+    // `Session::tmux_info` below: all three want the same pane, and the lookup
+    // shells out to tmux.
+    let pane_info = if side_effects.tmux {
+        pane_binding::resolve(&input)
+    } else {
+        None
+    };
+
     // Handle session start: skip "startup" events to avoid creating empty sessions.
     // When `claude -c` resumes a session, Claude Code fires two SessionStart hooks:
     // - "startup" with a new (unwanted) session_id
@@ -329,9 +339,7 @@ fn process_hook_event_impl(
             return Ok(ProcessResult::Skipped);
         }
 
-        if side_effects.tmux
-            && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
-        {
+        if let Some(pane_info) = pane_info.as_ref() {
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
@@ -350,14 +358,13 @@ fn process_hook_event_impl(
     // UserPromptSubmit is the earliest subsequent event where we can set it.
     // Skip once the session file exists: pane option and eviction only need to
     // run at the moment of pane handover (the first prompt of a new session),
-    // and re-running them on every prompt costs an O(N) disk scan plus a
-    // `tmux` process spawn for no behavioral effect.
-    if side_effects.tmux
-        && event == HookEvent::UserPromptSubmit
+    // and re-running them on every prompt costs an O(N) disk scan for no
+    // behavioral effect.
+    if event == HookEvent::UserPromptSubmit
         && !sessions_dir
             .join(format!("{}.json", input.session_id))
             .exists()
-        && let Some(pane_info) = tmux::get_pane_info_by_pid(std::process::id())
+        && let Some(pane_info) = pane_info.as_ref()
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
         evict_paused_sessions_on_pane_takeover(
@@ -368,17 +375,12 @@ fn process_hook_event_impl(
         );
     }
 
-    // Get tmux info by finding the pane that contains this process
-    let tmux_info = if side_effects.tmux {
-        tmux::get_pane_info_by_pid(std::process::id()).map(|info| TmuxInfo {
-            session_name: info.session_name,
-            window_name: info.window_name,
-            window_index: info.window_index,
-            pane_id: info.pane_id,
-        })
-    } else {
-        None
-    };
+    let tmux_info = pane_info.map(|info| TmuxInfo {
+        session_name: info.session_name,
+        window_name: info.window_name,
+        window_index: info.window_index,
+        pane_id: info.pane_id,
+    });
 
     let mut status = determine_status(event, &input);
 

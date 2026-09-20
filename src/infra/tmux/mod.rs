@@ -574,6 +574,61 @@ fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
     })
 }
 
+/// A pane's identity together with what it is currently running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneProcess {
+    pub info: PaneInfo,
+    pub current_command: String,
+    pub current_path: String,
+}
+
+/// Lists every pane with the command and working directory it is running.
+///
+/// For callers that need to locate a pane they have no process-ancestry link
+/// to, and so must recognize it by what it is running.
+///
+/// Returns an empty vec when tmux is unavailable or the command fails.
+pub fn list_pane_processes() -> Vec<PaneProcess> {
+    let output = match run_tmux_output(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}",
+    ]) {
+        Ok(output) => output,
+        Err(e) => {
+            tracing::warn!("tmux list-panes failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    output.lines().filter_map(parse_pane_process_line).collect()
+}
+
+/// Parses a single line from the `list_pane_processes` format.
+/// Returns None if the line is malformed.
+fn parse_pane_process_line(line: &str) -> Option<PaneProcess> {
+    let mut parts = line.split('\t');
+
+    let session_name = parts.next()?.to_string();
+    let window_name = parts.next()?.to_string();
+    let window_index = parts.next()?.parse::<u32>().ok()?;
+    let pane_id = parts.next()?.to_string();
+    let current_command = parts.next()?.to_string();
+    let current_path = parts.next()?.to_string();
+
+    Some(PaneProcess {
+        info: PaneInfo {
+            session_name,
+            window_name,
+            window_index,
+            pane_id,
+        },
+        current_command,
+        current_path,
+    })
+}
+
 /// Returns the PID of the process running in the given tmux pane.
 /// Returns None if the pane doesn't exist or the PID can't be parsed.
 pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
