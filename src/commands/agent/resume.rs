@@ -13,18 +13,19 @@ use crate::infra::{process, tmux};
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
+mod session_metadata;
+
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
     /// Agent session ID to resume. When omitted, the session ID is read from the
     /// current tmux pane's `@armyknife-last-agent-session-id` user option.
     pub session_id: Option<String>,
 
-    /// Comma-separated ancestor session IDs (root to immediate parent) to set as
-    /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` before exec'ing `claude`. `a agent resurrect
-    /// restore` passes this so the `SessionStart` hook can rebuild
-    /// `ancestor_session_ids` if the store JSON for this session was already
-    /// lost to `cleanup_stale_sessions` (see `resurrect.rs`), since a respawned
-    /// pane's environment otherwise carries no ancestor information.
+    /// Comma-separated ancestor session IDs (root to immediate parent) to restore.
+    /// `a agent resurrect restore` passes this because a respawned pane otherwise
+    /// carries no ancestor information. Codex records it before resuming because
+    /// a shared daemon cannot inherit this process's environment; Claude and an
+    /// embedded Codex process also receive it via `ARMYKNIFE_ANCESTOR_SESSION_IDS`.
     #[arg(long)]
     pub ancestor_session_ids: Option<String>,
 }
@@ -59,6 +60,13 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     // Codex delays its resume SessionStart hook until the first turn. Make
     // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
+        if let Some(ancestor_session_ids) = ancestor_session_ids {
+            session_metadata::record_ancestor_session_ids_if_empty(
+                &store::sessions_dir()?,
+                &session_id,
+                ancestor_session_ids,
+            )?;
+        }
         return run_codex_resume_with_status(&session_id, || {
             run_codex_resume(&binary_path, resume_args, ancestor_session_ids)
         });
