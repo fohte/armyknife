@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tungstenite::{Message, WebSocket, client};
 
+use crate::commands::agent::types::ReasoningEffort;
+
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,10 +45,73 @@ struct RpcRequest {
     payload: Value,
 }
 
+/// An initialized connection to the persistent Codex app-server.
+///
+/// Connect before launching a Codex pane so `thread/started` cannot be emitted
+/// before this client begins listening for it.
+pub struct Client {
+    socket: WebSocket<UnixStream>,
+}
+
+impl Client {
+    /// Connects to the control socket and completes the app-server handshake.
+    pub fn connect() -> anyhow::Result<Self> {
+        let socket_path = control_socket_path()?;
+        Self::connect_to(&socket_path)
+    }
+
+    fn connect_to(socket_path: &Path) -> anyhow::Result<Self> {
+        let stream = UnixStream::connect(socket_path).with_context(|| {
+            format!(
+                "failed to connect to Codex app-server control socket {}",
+                socket_path.display()
+            )
+        })?;
+        stream
+            .set_read_timeout(Some(RESPONSE_TIMEOUT))
+            .context("failed to set Codex app-server read timeout")?;
+        stream
+            .set_write_timeout(Some(RESPONSE_TIMEOUT))
+            .context("failed to set Codex app-server write timeout")?;
+
+        let (mut socket, _) = client("ws://localhost/rpc", stream)
+            .map_err(|error| anyhow!(error))
+            .context("Codex app-server WebSocket handshake failed")?;
+
+        send_request(&mut socket, &initialize_request()).map_err(|error| match error {
+            RequestError::Rejected(error) | RequestError::Transport(error) => error,
+        })?;
+
+        Ok(Self { socket })
+    }
+
+    /// Waits for the top-level thread created in `cwd` and returns its ID.
+    pub fn wait_for_thread_started(&mut self, cwd: &Path) -> anyhow::Result<String> {
+        wait_for_thread_started(|| self.socket.read(), cwd)
+    }
+
+    /// Starts the initial turn, applying `effort` to this and subsequent turns.
+    pub fn start_turn(
+        &mut self,
+        thread_id: &str,
+        content: &str,
+        effort: Option<ReasoningEffort>,
+    ) -> Result<()> {
+        send_request(
+            &mut self.socket,
+            &turn_start_request(thread_id, content, effort),
+        )
+        .map_err(|error| match error {
+            RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
+            RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
+        })
+    }
+}
+
 /// Sends `content` to the Codex thread identified by `thread_id`.
 pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
-    let socket_path = control_socket_path().map_err(DeliveryError::NotDelivered)?;
-    send_message_to(&socket_path, thread_id, content)
+    let mut client = Client::connect().map_err(DeliveryError::NotDelivered)?;
+    client.start_turn(thread_id, content, None)
 }
 
 fn control_socket_path() -> anyhow::Result<PathBuf> {
@@ -58,42 +123,6 @@ fn control_socket_path() -> anyhow::Result<PathBuf> {
     Ok(codex_home
         .join("app-server-control")
         .join("app-server-control.sock"))
-}
-
-fn send_message_to(socket_path: &Path, thread_id: &str, content: &str) -> Result<()> {
-    let stream = UnixStream::connect(socket_path)
-        .with_context(|| {
-            format!(
-                "failed to connect to Codex app-server control socket {}",
-                socket_path.display()
-            )
-        })
-        .map_err(DeliveryError::NotDelivered)?;
-    stream
-        .set_read_timeout(Some(RESPONSE_TIMEOUT))
-        .context("failed to set Codex app-server read timeout")
-        .map_err(DeliveryError::NotDelivered)?;
-    stream
-        .set_write_timeout(Some(RESPONSE_TIMEOUT))
-        .context("failed to set Codex app-server write timeout")
-        .map_err(DeliveryError::NotDelivered)?;
-
-    let (mut socket, _) = client("ws://localhost/rpc", stream)
-        .map_err(|error| anyhow!(error))
-        .context("Codex app-server WebSocket handshake failed")
-        .map_err(DeliveryError::NotDelivered)?;
-
-    send_request(&mut socket, &initialize_request()).map_err(|error| match error {
-        RequestError::Rejected(error) | RequestError::Transport(error) => {
-            DeliveryError::NotDelivered(error)
-        }
-    })?;
-    send_request(&mut socket, &turn_start_request(thread_id, content)).map_err(
-        |error| match error {
-            RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
-            RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
-        },
-    )
 }
 
 fn initialize_request() -> RpcRequest {
@@ -114,22 +143,82 @@ fn initialize_request() -> RpcRequest {
     }
 }
 
-fn turn_start_request(thread_id: &str, content: &str) -> RpcRequest {
+fn turn_start_request(
+    thread_id: &str,
+    content: &str,
+    effort: Option<ReasoningEffort>,
+) -> RpcRequest {
+    let mut params = json!({
+        "threadId": thread_id,
+        "input": [{
+            "type": "text",
+            "text": content,
+            "textElements": [],
+        }],
+    });
+    if let Some(effort) = effort {
+        params["effort"] = json!(effort.as_str());
+    }
+
     RpcRequest {
         id: TURN_START_REQUEST_ID,
         method: "turn/start",
         payload: json!({
             "id": TURN_START_REQUEST_ID,
             "method": "turn/start",
-            "params": {
-                "threadId": thread_id,
-                "input": [{
-                    "type": "text",
-                    "text": content,
-                    "textElements": [],
-                }],
-            },
+            "params": params,
         }),
+    }
+}
+
+fn wait_for_thread_started<R>(mut read: R, cwd: &Path) -> anyhow::Result<String>
+where
+    R: FnMut() -> tungstenite::Result<Message>,
+{
+    loop {
+        let message =
+            read().context("failed to read Codex app-server `thread/started` notification")?;
+        match message {
+            Message::Text(text) => {
+                let notification: Value = serde_json::from_str(&text)
+                    .context("invalid JSON in `thread/started` notification")?;
+                if let Some(thread_id) = thread_started_id(&notification, cwd) {
+                    return Ok(thread_id);
+                }
+            }
+            Message::Close(frame) => {
+                return Err(anyhow!(
+                    "Codex app-server closed while waiting for `thread/started`: {frame:?}"
+                ));
+            }
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
+}
+
+fn thread_started_id(notification: &Value, cwd: &Path) -> Option<String> {
+    if notification.get("method").and_then(Value::as_str) != Some("thread/started") {
+        return None;
+    }
+
+    let thread = notification.get("params")?.get("thread")?;
+    if thread
+        .get("parentThreadId")
+        .is_some_and(|parent| !parent.is_null())
+    {
+        return None;
+    }
+    if !paths_refer_to_same_location(Path::new(thread.get("cwd")?.as_str()?), cwd) {
+        return None;
+    }
+
+    thread.get("id")?.as_str().map(str::to_string)
+}
+
+fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 
@@ -235,22 +324,167 @@ mod tests {
         );
     }
 
-    #[test]
-    fn builds_turn_start_request() {
+    #[rstest]
+    #[case::without_effort(
+        None,
+        json!({
+            "id": 2,
+            "method": "turn/start",
+            "params": {
+                "threadId": "thread-a",
+                "input": [{
+                    "type": "text",
+                    "text": "hello there",
+                    "textElements": [],
+                }],
+            },
+        })
+    )]
+    #[case::with_effort(
+        Some(ReasoningEffort::Max),
+        json!({
+            "id": 2,
+            "method": "turn/start",
+            "params": {
+                "threadId": "thread-a",
+                "input": [{
+                    "type": "text",
+                    "text": "hello there",
+                    "textElements": [],
+                }],
+                "effort": "max",
+            },
+        })
+    )]
+    fn builds_turn_start_request(#[case] effort: Option<ReasoningEffort>, #[case] expected: Value) {
         assert_eq!(
-            turn_start_request("thread-a", "hello there").payload,
+            turn_start_request("thread-a", "hello there", effort).payload,
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::matching_top_level_thread(
+        json!({
+            "method": "thread/started",
+            "params": {"thread": {
+                "id": "thread-a",
+                "cwd": "/workspace/project-a",
+                "parentThreadId": null,
+                "status": {"type": "idle"},
+            }},
+        }),
+        Some("thread-a")
+    )]
+    #[case::matching_thread_without_parent_field(
+        json!({
+            "method": "thread/started",
+            "params": {"thread": {
+                "id": "thread-a",
+                "cwd": "/workspace/project-a",
+            }},
+        }),
+        Some("thread-a")
+    )]
+    #[case::different_cwd(
+        json!({
+            "method": "thread/started",
+            "params": {"thread": {
+                "id": "thread-b",
+                "cwd": "/workspace/project-b",
+                "parentThreadId": null,
+            }},
+        }),
+        None
+    )]
+    #[case::subagent_thread(
+        json!({
+            "method": "thread/started",
+            "params": {"thread": {
+                "id": "thread-child",
+                "cwd": "/workspace/project-a",
+                "parentThreadId": "thread-parent",
+            }},
+        }),
+        None
+    )]
+    #[case::different_notification(
+        json!({
+            "method": "turn/started",
+            "params": {"thread": {
+                "id": "thread-a",
+                "cwd": "/workspace/project-a",
+                "parentThreadId": null,
+            }},
+        }),
+        None
+    )]
+    #[case::missing_thread(json!({"method": "thread/started", "params": {}}), None)]
+    fn selects_started_top_level_thread_in_cwd(
+        #[case] notification: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            thread_started_id(&notification, Path::new("/workspace/project-a")),
+            expected.map(str::to_string),
+        );
+    }
+
+    #[test]
+    fn waits_through_unrelated_notifications_for_started_thread() {
+        let mut messages = [
+            json!({"method": "turn/started", "params": {}}),
             json!({
-                "id": 2,
-                "method": "turn/start",
-                "params": {
-                    "threadId": "thread-a",
-                    "input": [{
-                        "type": "text",
-                        "text": "hello there",
-                        "textElements": [],
-                    }],
-                },
+                "method": "thread/started",
+                "params": {"thread": {
+                    "id": "thread-b",
+                    "cwd": "/workspace/project-b",
+                    "parentThreadId": null,
+                }},
             }),
+            json!({
+                "method": "thread/started",
+                "params": {"thread": {
+                    "id": "thread-a",
+                    "cwd": "/workspace/project-a",
+                    "parentThreadId": null,
+                }},
+            }),
+        ]
+        .into_iter()
+        .map(|value| Ok(Message::Text(value.to_string().into())));
+
+        let actual = wait_for_thread_started(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            Path::new("/workspace/project-a"),
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok("thread-a".to_string())
+        );
+    }
+
+    #[rstest]
+    #[case::closed(
+        Message::Close(None),
+        "Codex app-server closed while waiting for `thread/started`: None"
+    )]
+    #[case::invalid_json(
+        Message::Text("not-json".into()),
+        "invalid JSON in `thread/started` notification"
+    )]
+    fn reports_thread_notification_read_failure(#[case] message: Message, #[case] expected: &str) {
+        let actual =
+            wait_for_thread_started(|| Ok(message.clone()), Path::new("/workspace/project-a"));
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Err(expected.to_string())
         );
     }
 

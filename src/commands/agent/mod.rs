@@ -5,7 +5,7 @@ mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
 mod codex_queue;
-mod codex_steer;
+pub(crate) mod codex_steer;
 mod delete_tq_session_detached;
 mod error;
 mod focus;

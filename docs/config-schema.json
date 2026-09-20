@@ -216,7 +216,7 @@
           "default": null
         },
         "reasoning_effort": {
-          "description": "Value passed to `codex -c model_reasoning_effort=...` when\n`--reasoning-effort` is omitted.",
+          "description": "Effort applied to the launched Codex session when `--reasoning-effort`\nis omitted.",
           "anyOf": [
             {
               "$ref": "#/$defs/ReasoningEffort"
@@ -329,7 +329,7 @@
       ]
     },
     "ReasoningEffort": {
-      "description": "Effort levels accepted by both `claude --effort` and codex's\n`model_reasoning_effort`. A closed set so a typo is rejected\nat parse time instead of reaching the CLI, which would silently fall back to\nits default effort.",
+      "description": "Effort levels accepted by both `claude --effort` and Codex `turn/start`.\nA closed set so a typo is rejected\nat parse time instead of reaching the CLI, which would silently fall back to\nits default effort.",
       "type": "string",
       "enum": [
         "low",
