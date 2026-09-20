@@ -391,7 +391,7 @@ Layouts with multiple Claude panes use the argv route. If the pane's tmux locati
 
 With `--worktree`, the session runs in `config.wm.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. Layouts with multiple Codex panes use the argv route because `thread/started` does not identify its originating pane.
 
-A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. `resume` always follows that recorded engine, never `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
+A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
 Set `agent.default_engine: codex` in config, or prefix a single invocation with `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` (see [Environment variable overrides](#environment-variable-overrides)), to change what an omitted `--engine` resolves to (with `--worktree` too, so a `codex` default replaces the layout's `claude` pane); an explicit `--engine` on the command line always wins over both.
 
@@ -531,9 +531,9 @@ $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
 
 #### tmux-resurrect integration
 
-Pane user options are not preserved by tmux-resurrect, so `a agent resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a agent resurrect restore` re-applies them and types `a agent resume <session-id>` into each pane, so Claude Code comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live `claude` process, so re-running it against a session that is already active does not retype the command into its input box.
+Pane user options are not preserved by tmux-resurrect, so `a agent resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a agent resurrect restore` re-applies them and types `a agent resume <session-id>` into each pane, so the coding agent comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live process for the selected engine, so re-running it against a session that is already active does not retype the command into its input box.
 
-`a agent resurrect save` also records each session's `ancestor_session_ids` (used by `a agent peer parent`/`children`, see above) alongside its session ID, since a tmux server restart can wipe the session's store JSON -- and the `ancestor_session_ids` it carried -- before restore runs. `a agent resurrect restore` passes any recorded ancestors to `a agent resume --ancestor-session-ids`, so `a agent peer parent`/`children` keep working across a restart even if the store JSON had to be rebuilt from scratch.
+`a agent resurrect save` also records each session's engine and `ancestor_session_ids` (used by `a agent peer parent`/`children`, see above) alongside its session ID, since a tmux server restart can wipe the session's store JSON before restore runs. `a agent resurrect restore` passes the snapshot to `a agent resume --engine ... --ancestor-session-ids ...`, so the correct agent is relaunched and `a agent peer parent`/`children` keep working even if the store JSON has to be rebuilt from scratch.
 
 Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
 

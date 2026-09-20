@@ -28,6 +28,11 @@ pub struct ResumeArgs {
     /// embedded Codex process also receive it via `ARMYKNIFE_ANCESTOR_SESSION_IDS`.
     #[arg(long)]
     pub ancestor_session_ids: Option<String>,
+
+    /// Coding agent CLI to resume. Falls back to the stored session engine,
+    /// then to Claude when no session record exists.
+    #[arg(long, value_enum)]
+    pub engine: Option<Engine>,
 }
 
 /// Runs the resume command.
@@ -39,13 +44,8 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         _ => resolve_session_id_from_pane()?,
     };
 
-    // A missing store record (e.g. a tmux-resurrect restore racing
-    // `cleanup_stale_sessions`, see `resurrect.rs`) must not block resuming
-    // -- fall back to the default engine and let `claude --resume` itself
-    // report an unknown session ID.
-    let engine = store::load_session(&session_id)?
-        .map(|s| s.engine)
-        .unwrap_or_default();
+    let stored_engine = store::load_session(&session_id)?.map(|session| session.engine);
+    let engine = resolve_resume_engine(args.engine, stored_engine);
 
     let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
 
@@ -61,9 +61,11 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
         if let Some(ancestor_session_ids) = ancestor_session_ids {
+            let cwd = std::env::current_dir()?;
             session_metadata::record_ancestor_session_ids_if_empty(
                 &store::sessions_dir()?,
                 &session_id,
+                &cwd,
                 ancestor_session_ids,
             )?;
         }
@@ -82,6 +84,12 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     };
 
     bail!("Failed to exec {}: {}", binary_name, err)
+}
+
+/// Resolves the resume engine without allowing a stale store record to
+/// override an explicit engine supplied by a restore state file or the user.
+fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> Engine {
+    explicit.or(stored).unwrap_or_default()
 }
 
 /// Runs Codex as a child so an unsuccessful resume can restore the ended
@@ -411,6 +419,24 @@ mod tests {
         }
     }
 
+    mod resolve_resume_engine_tests {
+        use rstest::rstest;
+
+        use super::*;
+
+        #[rstest]
+        #[case::explicit_engine_wins(Some(Engine::Codex), Some(Engine::Claude), Engine::Codex)]
+        #[case::stored_engine_is_used(None, Some(Engine::Codex), Engine::Codex)]
+        #[case::claude_is_default(None, None, Engine::Claude)]
+        fn resolves_in_priority_order(
+            #[case] explicit: Option<Engine>,
+            #[case] stored: Option<Engine>,
+            #[case] expected: Engine,
+        ) {
+            assert_eq!(resolve_resume_engine(explicit, stored), expected);
+        }
+    }
+
     mod resume_binary_and_args_tests {
         use super::*;
 
@@ -435,7 +461,7 @@ mod tests {
     }
 
     mod codex_resume_status_tests {
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
 
         use rstest::{fixture, rstest};
         use tempfile::TempDir;
@@ -603,6 +629,48 @@ mod tests {
                     reloaded.tmux_info,
                 ),
                 (true, SessionStatus::Stopped, None, current_tmux_info)
+            );
+        }
+
+        #[rstest]
+        fn missing_record_is_marked_as_resumed(temp_dir: TempDir) {
+            session_metadata::record_ancestor_session_ids_if_empty(
+                temp_dir.path(),
+                "resume-target",
+                Path::new("/tmp/test"),
+                "root",
+            )
+            .expect("metadata should be recorded");
+            let current_tmux_info = Some(TmuxInfo {
+                session_name: "resumed-session".to_string(),
+                window_name: "resumed-window".to_string(),
+                window_index: 2,
+                pane_id: "%9".to_string(),
+            });
+
+            let change = mark_codex_session_resumed_in(
+                temp_dir.path(),
+                "resume-target",
+                current_tmux_info.clone(),
+            )
+            .expect("mark should succeed");
+            let reloaded = store::load_session_from(temp_dir.path(), "resume-target")
+                .expect("load should succeed")
+                .expect("session should exist");
+
+            assert_eq!(
+                (
+                    change.is_some(),
+                    reloaded.status,
+                    reloaded.tmux_info,
+                    reloaded.ancestor_session_ids,
+                ),
+                (
+                    true,
+                    SessionStatus::Stopped,
+                    current_tmux_info,
+                    vec!["root".to_string()],
+                )
             );
         }
     }
