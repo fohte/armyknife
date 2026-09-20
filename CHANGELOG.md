@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.316](https://github.com/fohte/armyknife/compare/v0.1.315...v0.1.316) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** prevent loss of initial prompt on Claude launch failure ([#947](https://github.com/fohte/armyknife/issues/947)) ([e42038f](https://github.com/fohte/armyknife/commit/e42038f3977cd48fb10f8eb93c82bb2979ac948e))
+
 ## [0.1.315](https://github.com/fohte/armyknife/compare/v0.1.314...v0.1.315) (2026-09-20)
 
 
