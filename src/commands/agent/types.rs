@@ -174,12 +174,12 @@ pub struct Session {
     /// `status == Stopped`; other statuses ignore it.
     #[serde(default)]
     pub read_at: Option<DateTime<Utc>>,
-    /// Set by `sweep::signal_session` when it (re-)sends SIGTERM without yet
-    /// confirming the session as `Paused` (a live `claude` pid still
-    /// resolved at signal time), so `status` stays `Stopped` in the
+    /// Set by `sweep::signal_session` when it requests shutdown without yet
+    /// confirming the session as `Paused` (a live agent pid still resolved
+    /// at request time), so `status` stays `Stopped` in the
     /// meantime. While set, a `SessionEnd` hook firing on the still-Stopped
-    /// session means the just-signaled process is exiting as a result of
-    /// that signal, not that the user ended it themselves -- see the
+    /// session means the process is exiting as a result of that request,
+    /// not that the user ended it themselves -- see the
     /// `SessionEnd` handler in `hook.rs`. Cleared by any other hook event
     /// (the process is still responding, so sweep's earlier signal is no
     /// longer relevant) and by `sweep::confirm_paused`.
@@ -204,9 +204,9 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
-    /// Stopped session that was automatically terminated (SIGTERM) after the
+    /// Stopped session that was automatically terminated after the
     /// `auto_pause` timeout elapsed. The session file is preserved so that
-    /// `agent resume` / `claude --resume` can restore the conversation.
+    /// `agent resume` can restore the conversation.
     Paused,
     /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
     /// resume can restore label and ancestor chain. Garbage-collected after

@@ -272,7 +272,7 @@ fn process_hook_event_impl(
     // Claude Code process, its shutdown fires SessionEnd, which would
     // otherwise clobber the Paused marker and break `a agent resume`. Sessions
     // still `Stopped` with `sweep_signaled` set get the same treatment:
-    // sweep re-sends SIGTERM without confirming Paused until a later sweep
+    // sweep requests shutdown without confirming Paused until a later sweep
     // sees the pid disappear (see `sweep/mod.rs`), so this SessionEnd IS
     // that confirmation, arriving before sweep's next pass gets to it.
     if event == HookEvent::SessionEnd {
@@ -1971,7 +1971,7 @@ mod tests {
     #[case::stop(HookEvent::Stop)]
     #[case::pre_tool_use(HookEvent::PreToolUse)]
     fn non_session_end_event_clears_sweep_signaled(#[case] event: HookEvent) {
-        // sweep_signaled marks "sweep sent SIGTERM and is awaiting
+        // sweep_signaled marks "sweep requested shutdown and is awaiting
         // confirmation via a later sweep pass or SessionEnd" (see
         // `sweep/mod.rs`). Any other hook event firing means the process is
         // still responding on its own, so that pending signal is stale and
@@ -2070,9 +2070,9 @@ mod tests {
     ) {
         // A Paused session reaching SessionEnd is sweep's own shutdown path;
         // that Paused must be pushed through to tmux unchanged. So is a
-        // still-Stopped session with sweep_signaled set: sweep sent SIGTERM
-        // to it without confirming Paused yet (see `sweep/mod.rs`), and this
-        // SessionEnd is that confirmation. Neither must turn into Ended.
+        // still-Stopped session with sweep_signaled set: sweep requested
+        // shutdown without confirming Paused yet (see `sweep/mod.rs`), and
+        // this SessionEnd is that confirmation. Neither must turn into Ended.
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
 

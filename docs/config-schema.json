@@ -163,7 +163,7 @@
       "additionalProperties": false
     },
     "AutoPauseConfig": {
-      "description": "Configuration for automatically pausing sessions that stay in the Stopped\nstate for longer than `timeout`.\n\nA periodic `a agent sweep` run (typically driven by launchd) scans all sessions,\nsends SIGTERM to any Claude Code process whose session has been Stopped for\nlonger than `timeout`, and flips the session status to Paused so that\n`a agent resume` can restore it later.",
+      "description": "Configuration for automatically pausing sessions that stay in the Stopped\nstate for longer than `timeout`.\n\nA periodic `a agent sweep` run (typically driven by launchd) scans all sessions,\nrequests shutdown of any agent process whose session has been Stopped for\nlonger than `timeout`, and flips the session status to Paused so that\n`a agent resume` can restore it later.",
       "type": "object",
       "properties": {
         "enabled": {
