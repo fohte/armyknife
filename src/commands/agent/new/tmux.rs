@@ -5,6 +5,8 @@ use crate::infra::tmux;
 use crate::infra::tmux::layout::AgentLaunchRoute;
 use crate::shared::config::{Config, LayoutNode};
 
+use super::session_metadata::record_codex_daemon_metadata;
+
 /// Inputs for setting up a tmux window, grouped to keep `setup_tmux_window`'s
 /// argument count in check.
 pub(super) struct TmuxWindowSpec<'a> {
@@ -52,6 +54,8 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     })
     .context("Failed to create tmux layout")?;
 
+    record_codex_daemon_metadata(&route, spec.cwd, spec.env_vars);
+
     if !spec.background {
         tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
     }
@@ -97,6 +101,8 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRou
         command: spec.engine.process_name(),
     })
     .context("Failed to split tmux pane")?;
+
+    record_codex_daemon_metadata(&result.route, spec.cwd, spec.env_vars);
 
     if !spec.background {
         tmux::focus_pane(&result.pane_id).context("Failed to focus new pane")?;

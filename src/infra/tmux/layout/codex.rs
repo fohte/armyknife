@@ -122,13 +122,13 @@ impl Launch {
         let daemon_launch = self.uses_daemon();
         let route = self.finish(spec.cwd, spec.effort);
         match route {
-            AgentLaunchRoute::CodexDaemon => {
+            AgentLaunchRoute::CodexDaemon { thread_id } => {
                 if let Some(path) = spec.prompt_file {
                     std::fs::remove_file(path).with_context(|| {
                         format!("Failed to remove prompt file {}", path.display())
                     })?;
                 }
-                Ok(AgentLaunchRoute::CodexDaemon)
+                Ok(AgentLaunchRoute::CodexDaemon { thread_id })
             }
             AgentLaunchRoute::CodexArgvFallback { reason } if daemon_launch => {
                 let pane_id = spec
@@ -161,14 +161,15 @@ impl Launch {
                 prompt,
                 _lock,
             } => {
-                let result = (|| {
+                let result: anyhow::Result<String> = (|| {
                     let thread_id = client.wait_for_thread_started(cwd)?;
                     client
                         .start_turn(&thread_id, &prompt, effort)
-                        .map_err(anyhow::Error::new)
+                        .map_err(anyhow::Error::new)?;
+                    Ok(thread_id)
                 })();
                 match result {
-                    Ok(()) => AgentLaunchRoute::CodexDaemon,
+                    Ok(thread_id) => AgentLaunchRoute::CodexDaemon { thread_id },
                     Err(error) => AgentLaunchRoute::CodexArgvFallback {
                         reason: error.to_string(),
                     },
@@ -258,7 +259,9 @@ mod tests {
     #[rstest]
     #[case::success(
         StubClient { thread: Ok("thread-a".to_string()), turn: Some(Ok(())) },
-        AgentLaunchRoute::CodexDaemon
+        AgentLaunchRoute::CodexDaemon {
+            thread_id: "thread-a".to_string(),
+        }
     )]
     #[case::notification_failure(
         StubClient { thread: Err(anyhow::anyhow!("notification unavailable")), turn: None },
