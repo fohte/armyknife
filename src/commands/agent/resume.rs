@@ -15,8 +15,8 @@ use crate::shared::env_var::EnvVars;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
-    /// Claude Code session ID to resume. When omitted, the session ID is read from
-    /// the current tmux pane's [`TMUX_SESSION_OPTION`] user option.
+    /// Agent session ID to resume. When omitted, the session ID is read from the
+    /// current tmux pane's `@armyknife-last-agent-session-id` user option.
     pub session_id: Option<String>,
 
     /// Comma-separated ancestor session IDs (root to immediate parent) to set as
