@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::ExitStatus;
 
@@ -261,11 +262,26 @@ fn launch_ghostty_macos(
             end try
         end tell'"};
 
-    command::new("bash")
+    let mut watcher = command::new("bash");
+    watcher
         .args(["-c", &watcher_sh])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
+        .stderr(std::process::Stdio::null());
+
+    // SAFETY: `setsid` only manipulates the calling process's session
+    // membership; it is async-signal-safe and documented as one of the
+    // operations safe to call in `pre_exec`. The watcher must outlive this
+    // process, but agents such as Codex kill the whole process group once the
+    // command returns, so it has to leave our process group.
+    unsafe {
+        watcher.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    watcher.spawn()?;
 
     Ok(output.status)
 }
