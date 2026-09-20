@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.317](https://github.com/fohte/armyknife/compare/v0.1.316...v0.1.317) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** restore terminal display corruption after pausing Codex sessions ([#949](https://github.com/fohte/armyknife/issues/949)) ([32dd9e6](https://github.com/fohte/armyknife/commit/32dd9e69d57dfb0003254364f0fbf2ea98c17b55))
+
 ## [0.1.316](https://github.com/fohte/armyknife/compare/v0.1.315...v0.1.316) (2026-09-20)
 
 
