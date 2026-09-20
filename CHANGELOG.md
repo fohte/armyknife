@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.313](https://github.com/fohte/armyknife/compare/v0.1.312...v0.1.313) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** allow interrupting delegated Codex sessions ([#941](https://github.com/fohte/armyknife/issues/941)) ([17ad64c](https://github.com/fohte/armyknife/commit/17ad64c6082781024410a5b38e69262c02500180))
+
 ## [0.1.312](https://github.com/fohte/armyknife/compare/v0.1.311...v0.1.312) (2026-09-20)
 
 
