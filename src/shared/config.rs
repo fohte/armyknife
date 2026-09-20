@@ -386,7 +386,7 @@ pub struct CcConfig {
 /// state for longer than `timeout`.
 ///
 /// A periodic `a agent sweep` run (typically driven by launchd) scans all sessions,
-/// sends SIGTERM to any Claude Code process whose session has been Stopped for
+/// requests shutdown of any agent process whose session has been Stopped for
 /// longer than `timeout`, and flips the session status to Paused so that
 /// `a agent resume` can restore it later.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]

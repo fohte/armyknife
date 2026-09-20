@@ -110,15 +110,15 @@ Stop hook (parent process):
 
 ### `agent sweep`
 
-| event                        | meaning                                                          |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `agent.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)                |
-| `agent.sweep.signaled`       | Live pid still resolves; SIGTERM (re-)sent, status stays Stopped |
-| `agent.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                        |
-| `agent.sweep.paused`         | No resolvable pid; status confirmed Paused                       |
-| `agent.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`                |
-| `agent.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                   |
-| `agent.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)     |
+| event                        | meaning                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| `agent.sweep.start`          | One sweep pass is starting (`timeout`, `dry_run`)              |
+| `agent.sweep.signaled`       | Live pid resolved; shutdown requested, status may stay Stopped |
+| `agent.sweep.dry_run_signal` | Would have signaled if not in `--dry-run`                      |
+| `agent.sweep.paused`         | No resolvable pid; status confirmed Paused                     |
+| `agent.sweep.dry_run_pause`  | Would have confirmed Paused if not in `--dry-run`              |
+| `agent.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                 |
+| `agent.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)   |
 
 ## Debugging recipes
 

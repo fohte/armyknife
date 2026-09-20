@@ -6,9 +6,9 @@
 //! spawned on demand from the Stop hook.
 //!
 //! Confirming a pause spans multiple sweep runs rather than happening on a
-//! single SIGTERM. Claude Code (Node.js) can keep running for a long time
-//! after receiving SIGTERM while blocked in known-flaky code paths (a stalled
-//! SSE stream, a Bash-tool thread deadlock, a synchronous CPU spin during
+//! single shutdown request. Claude Code (Node.js) can keep running for a long
+//! time after receiving SIGTERM while blocked in known-flaky code paths (a
+//! stalled SSE stream, a Bash-tool thread deadlock, a synchronous CPU spin during
 //! context compaction) -- sending the signal is not proof the process has
 //! exited. So when a session's timeout has elapsed and sweep can still
 //! resolve a live `claude` pid for it, sweep (re-)sends SIGTERM but leaves
@@ -18,8 +18,10 @@
 //! retry limit until the pid disappears.
 //!
 //! While a session waits in that signaled-but-not-yet-Paused window, it is
-//! marked `Session::sweep_signaled`. This lets the `SessionEnd` hook (see
-//! `hook.rs`) recognize a process exiting in response to sweep's own SIGTERM
+//! marked `Session::sweep_signaled`. Codex gets one chance to exit through
+//! Ctrl+D so it can restore the terminal before the same sweep falls back to
+//! SIGTERM. The flag also lets the `SessionEnd` hook (see `hook.rs`) recognize
+//! a process exiting in response to sweep's own shutdown request
 //! and confirm it as `Paused` there and then, rather than misreading the
 //! still-`Stopped` status as the user manually ending the session.
 //!
@@ -37,12 +39,11 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 
 use super::auto_pause::{self, PauseDecision};
+use super::graceful_quit::GracefulQuitRequester;
 use super::signal::{LibcSignalSender, SignalSender};
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
-#[cfg(test)]
-use super::types::Engine;
-use super::types::{Session, SessionStatus};
+use super::types::{Engine, Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
 use crate::shared::active_session::{ActivityProbe, TmuxActivityProbe, effective_updated_at};
 use crate::shared::config;
@@ -225,10 +226,9 @@ pub struct SweepReport {
     /// process exiting on its own) has actually taken effect: sweep can no
     /// longer resolve a live `claude` pid for the session.
     pub paused: usize,
-    /// Sessions whose timeout has elapsed and were (re-)sent SIGTERM this
-    /// run, but not yet confirmed `Paused` because sweep can still resolve a
-    /// live `claude` pid for them. Status stays `Stopped`; a later sweep
-    /// that finds no resolvable pid is what confirms the pause.
+    /// Sessions whose timeout has elapsed and received a shutdown request
+    /// this run, but were not yet confirmed `Paused` because sweep can still
+    /// resolve a live agent pid for them.
     pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
@@ -249,7 +249,7 @@ pub(crate) fn sweep_impl<S, P, T>(
     dry_run: bool,
 ) -> Result<SweepReport>
 where
-    S: SignalSender,
+    S: SignalSender + GracefulQuitRequester,
     P: SessionProbe,
     T: TmuxStatusSyncer,
 {
@@ -329,11 +329,10 @@ where
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => match probe.resolve_pid(&session) {
                 Some(pid) => {
-                    // Still resolves to a live claude pid -- SIGTERM does not
-                    // guarantee prompt exit (see module docs), so we cannot
-                    // confirm Paused yet. (Re-)send SIGTERM and leave status
-                    // as Stopped; a later sweep that finds no resolvable pid
-                    // is what confirms the process has actually exited.
+                    // Still resolves to a live agent pid -- a shutdown request
+                    // does not guarantee prompt exit (see module docs), so we
+                    // cannot confirm Paused yet. Request shutdown and leave
+                    // status as Stopped unless graceful exit is observed.
                     if dry_run {
                         tracing::info!(
                             event = "agent.sweep.dry_run_signal",
@@ -352,8 +351,13 @@ where
                         session = %session.session_id,
                         pid = pid,
                     );
-                    signal_session(sessions_dir, session, pid, sender)?;
-                    report.signaled += 1;
+                    let exited = signal_session(sessions_dir, &mut session, pid, sender)?;
+                    if exited {
+                        confirm_paused(sessions_dir, session, syncer)?;
+                        report.paused += 1;
+                    } else {
+                        report.signaled += 1;
+                    }
                 }
                 None => {
                     // No live claude process found -- the process has
@@ -400,21 +404,46 @@ where
     Ok(report)
 }
 
-/// Sends SIGTERM to `pid` and marks the session as `sweep_signaled`. Does not
-/// touch `session.status` -- SIGTERM is not proof the process has exited
+/// Requests shutdown and marks the session as `sweep_signaled`. Does not
+/// touch `session.status` -- a request is not proof the process has exited
 /// (see module docs), so the session stays `Stopped` until a later sweep
 /// observes that no `claude` pid resolves for it anymore (see
 /// `confirm_paused`).
 ///
+/// Codex first receives Ctrl+D through tmux so its normal exit path restores
+/// terminal modes. If it remains alive after a short grace period, or the tmux
+/// request fails, SIGTERM guarantees the pause can still make progress.
+/// Claude Code continues to receive SIGTERM immediately.
+///
 /// `sweep_signaled` lets the `SessionEnd` hook (in `hook.rs`) recognize a
-/// process that exits in response to this signal instead of misreading the
+/// process that exits in response to this request instead of misreading the
 /// still-`Stopped` status as the user manually ending the session.
-fn signal_session<S: SignalSender>(
+fn signal_session<S: SignalSender + GracefulQuitRequester>(
     sessions_dir: &Path,
-    mut session: Session,
+    session: &mut Session,
     pid: u32,
     sender: &S,
-) -> Result<()> {
+) -> Result<bool> {
+    if session.engine == Engine::Codex
+        && !session.sweep_signaled
+        && let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str())
+    {
+        session.sweep_signaled = true;
+        store::save_session_to(sessions_dir, session)?;
+        match sender.request_and_wait(pane_id, pid) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    event = "agent.sweep.ctrl_d_failed",
+                    session = %session.session_id,
+                    pane_id,
+                    error = %e,
+                );
+            }
+        }
+    }
+
     // Best-effort SIGTERM. ESRCH (process already gone) is not fatal --
     // resolve_pid raced with the process exiting; the next sweep will find
     // no resolvable pid and confirm the pause then.
@@ -430,9 +459,9 @@ fn signal_session<S: SignalSender>(
     }
 
     session.sweep_signaled = true;
-    store::save_session_to(sessions_dir, &session)?;
+    store::save_session_to(sessions_dir, session)?;
 
-    Ok(())
+    Ok(false)
 }
 
 /// Flips the session status to Paused now that sweep can no longer resolve a
@@ -552,6 +581,152 @@ mod tests {
             sweep_signaled: false,
             engine: Engine::Claude,
         }
+    }
+
+    fn make_codex_session(id: &str, updated_at: DateTime<Utc>) -> Session {
+        Session {
+            engine: Engine::Codex,
+            tmux_info: Some(TmuxInfo {
+                session_name: "example-session".to_string(),
+                window_name: "example-window".to_string(),
+                window_index: 1,
+                pane_id: "%42".to_string(),
+            }),
+            ..make_session(id, SessionStatus::Stopped, updated_at)
+        }
+    }
+
+    #[rstest]
+    fn codex_graceful_exit_restores_terminal_before_pause(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
+
+        let sender = RecordingSender::default();
+        sender.graceful_exit_result.replace(true);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::with_pids(&[("codex", 4242)]),
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "codex")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.ctrl_d_calls.into_inner(),
+                sender.calls.into_inner(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 1,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 0,
+                },
+                vec!["%42".to_string()],
+                Vec::new(),
+                SessionStatus::Paused,
+                false,
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::grace_period_elapsed(false)]
+    #[case::tmux_request_failed(true)]
+    fn codex_falls_back_to_sigterm(test_dir: TestDir, #[case] ctrl_d_fails: bool) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
+
+        let sender = RecordingSender::default();
+        sender.fail_ctrl_d.replace(ctrl_d_fails);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::with_pids(&[("codex", 4242)]),
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "codex")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.ctrl_d_calls.into_inner(),
+                sender.calls.into_inner(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 1,
+                    waiting: 0,
+                    active: 0,
+                },
+                vec!["%42".to_string()],
+                vec![(4242, libc::SIGTERM)],
+                SessionStatus::Stopped,
+                true,
+            )
+        );
+    }
+
+    #[rstest]
+    fn dry_run_does_not_request_codex_shutdown(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        save_session_to(&test_dir.path, &make_codex_session("codex", old)).expect("save");
+
+        let sender = RecordingSender::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::with_pids(&[("codex", 4242)]),
+            &RecordingTmuxStatusSyncer::default(),
+            true,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "codex")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.ctrl_d_calls.into_inner(),
+                sender.calls.into_inner(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 1,
+                    waiting: 0,
+                    active: 0,
+                },
+                Vec::new(),
+                Vec::new(),
+                SessionStatus::Stopped,
+                false,
+            )
+        );
     }
 
     #[rstest]

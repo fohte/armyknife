@@ -10,6 +10,7 @@ mod delete_tq_session_detached;
 mod error;
 mod focus;
 mod generate_title_detached;
+mod graceful_quit;
 mod hook;
 mod list;
 mod mark_read;
@@ -86,7 +87,7 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Peer(PeerCommands),
 
-    /// Pause long-stopped sessions by sending SIGTERM (run periodically)
+    /// Pause long-stopped sessions by requesting agent shutdown (run periodically)
     Sweep(SweepArgs),
 
     /// Schedule a `/compact` for an idle session while the prompt cache is warm.
