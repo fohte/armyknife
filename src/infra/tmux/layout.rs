@@ -2,15 +2,13 @@
 
 use std::path::Path;
 
-use anyhow::Context;
-
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod codex;
 mod prompt;
 pub use codex::AgentLaunchRoute;
-use codex::Launch as CodexLaunch;
+use codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
 
 /// A single tmux command represented as a list of arguments.
@@ -34,7 +32,7 @@ struct PaneEntry {
 }
 
 /// The pane-targeting prefix used to address panes in a background-created
-/// window before its real window ID is known (see `execute_background_layout`).
+/// window before its real window ID is known (see `execute_layout`).
 fn background_pane_prefix(session: &str, window_name: &str) -> String {
     format!("{session}:={window_name}.")
 }
@@ -91,6 +89,15 @@ fn unset_environment_commands(session: &str, env_vars: &[(&str, &str)]) -> Vec<T
 /// Returns a list of tmux commands to create the window and configure panes.
 /// The first command creates a new window, subsequent commands split panes.
 pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
+    build_layout_plan(spec).commands
+}
+
+struct LayoutPlan {
+    commands: Vec<TmuxCommand>,
+    agent_commands: Vec<(usize, String)>,
+}
+
+fn build_layout_plan(spec: LayoutCommandsSpec) -> LayoutPlan {
     let LayoutCommandsSpec {
         session,
         cwd,
@@ -133,7 +140,7 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
     commands.push(TmuxCommand::new(&new_window_args));
 
     // Placed right after `new-window`, before any pane targets get rewritten
-    // to a captured window ID (see `execute_background_layout`), so this can
+    // to a captured window ID (see `execute_layout`), so this can
     // always address the window by its just-created, still-unrenamed name.
     if restore_automatic_rename {
         let window_target = format!("{session}:={window_name}");
@@ -232,7 +239,17 @@ pub fn build_layout_commands(spec: LayoutCommandsSpec) -> Vec<TmuxCommand> {
     // prevent leaking into subsequent windows in the same tmux session.
     commands.extend(unset_environment_commands(session, env_vars));
 
-    commands
+    let agent_commands = pane_entries
+        .into_iter()
+        .enumerate()
+        .filter(|(_, entry)| is_engine_command(&entry.command, engine))
+        .map(|(index, entry)| (index + 1, entry.command))
+        .collect();
+
+    LayoutPlan {
+        commands,
+        agent_commands,
+    }
 }
 
 /// Recursively collect split commands and pane entries from the layout tree.
@@ -303,7 +320,7 @@ fn count_panes(node: &LayoutNode) -> usize {
 
 /// Inputs for `build_split_pane_setup_commands`: the `set-environment` +
 /// `split-window` commands that must run before the new pane's id is known
-/// (mirrors `execute_background_layout`'s new-window capture).
+/// (mirrors `execute_layout`'s new-window capture).
 struct SplitPaneSetupSpec<'a> {
     session: &'a str,
     target_pane: &'a str,
@@ -359,36 +376,9 @@ pub struct LayoutSpec<'a> {
     pub restore_automatic_rename: bool,
 }
 
-fn layout_agent_commands(layout: &LayoutNode, cwd: &str, engine: Engine) -> Vec<(usize, String)> {
-    let mut commands = Vec::new();
-    let mut pane_entries = Vec::new();
-    collect_layout(layout, &mut commands, &mut pane_entries, cwd, 1, "");
-
-    if !pane_entries
-        .iter()
-        .any(|entry| is_engine_command(&entry.command, engine))
-    {
-        for entry in &mut pane_entries {
-            entry.command = retarget_agent_command(&entry.command, engine);
-        }
-    }
-
-    pane_entries
-        .into_iter()
-        .enumerate()
-        .filter(|(_, entry)| is_engine_command(&entry.command, engine))
-        .map(|(index, entry)| (index + 1, entry.command))
-        .collect()
-}
-
-fn remove_prompt_file(path: &Path) -> anyhow::Result<()> {
-    std::fs::remove_file(path)
-        .with_context(|| format!("Failed to remove prompt file {}", path.display()))
-}
-
 /// Build and execute tmux layout from a LayoutNode tree.
 ///
-/// Creates a new tmux window and configures panes according to the layout.
+/// Creates a new tmux window and returns the route used for the initial prompt.
 pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
     let LayoutSpec {
         common,
@@ -407,59 +397,78 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
     } = common;
 
-    let agent_commands = layout_agent_commands(layout, cwd, engine);
-    let codex_launch = CodexLaunch::prepare(engine, prompt, agent_commands.len());
-
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
-    let daemon_launch = codex_launch.uses_daemon();
-    let commands = build_layout_commands(LayoutCommandsSpec {
+    let argv_plan = build_layout_plan(LayoutCommandsSpec {
         session,
         cwd,
         window_name,
         layout,
         model,
-        reasoning_effort: if daemon_launch {
-            None
-        } else {
-            reasoning_effort
-        },
-        prompt_file: if daemon_launch { None } else { prompt_path },
+        reasoning_effort,
+        prompt_file: prompt_path,
         engine,
         env_vars,
         background,
         restore_automatic_rename,
     });
-
-    let window_id = if background || daemon_launch {
-        execute_layout(&commands, session, window_name, background)?
+    let codex_launch = CodexLaunch::prepare(
+        engine,
+        prompt,
+        argv_plan.agent_commands.len(),
+        Path::new(cwd),
+    );
+    let daemon_launch = codex_launch.uses_daemon();
+    let plan = if daemon_launch {
+        let (launch_effort, launch_prompt_file) =
+            codex_launch.command_options(reasoning_effort, prompt_path);
+        build_layout_plan(LayoutCommandsSpec {
+            session,
+            cwd,
+            window_name,
+            layout,
+            model,
+            reasoning_effort: launch_effort,
+            prompt_file: launch_prompt_file,
+            engine,
+            env_vars,
+            background,
+            restore_automatic_rename,
+        })
     } else {
-        execute_commands(&commands)?;
-        String::new()
+        argv_plan
     };
 
-    let route = codex_launch.finish(Path::new(cwd), prompt, reasoning_effort);
-    match route {
-        AgentLaunchRoute::CodexDaemon => {
-            if let Some(path) = prompt_path {
-                remove_prompt_file(path)?;
-            }
-            Ok(AgentLaunchRoute::CodexDaemon)
-        }
-        AgentLaunchRoute::CodexArgvFallback { reason } if daemon_launch => {
-            let (pane_index, command) = agent_commands
-                .first()
-                .context("Codex fallback pane disappeared from the layout")?;
-            let fallback_command =
-                apply_prompt_if_agent(command, engine, model, reasoning_effort, prompt_path, true);
-            let pane_id = format!("{window_id}.{pane_index}");
-            super::respawn_pane(&pane_id, &fallback_command).with_context(|| {
-                format!("Codex daemon launch failed ({reason}); argv fallback also failed")
-            })?;
-            Ok(AgentLaunchRoute::CodexArgvFallback { reason })
-        }
-        route => Ok(route),
-    }
+    let window_id = if background || daemon_launch {
+        Some(execute_layout(
+            &plan.commands,
+            session,
+            window_name,
+            background,
+        )?)
+    } else {
+        execute_commands(&plan.commands)?;
+        None
+    };
+
+    let fallback_pane_id = window_id.as_ref().and_then(|window_id| {
+        plan.agent_commands
+            .first()
+            .map(|(pane_index, _)| format!("{window_id}.{pane_index}"))
+    });
+    codex_launch.finish_and_recover(CodexRecoverySpec {
+        cwd: Path::new(cwd),
+        effort: reasoning_effort,
+        prompt_file: prompt_path,
+        command: plan
+            .agent_commands
+            .first()
+            .map(|(_, command)| command.as_str())
+            .unwrap_or_default(),
+        model,
+        pane_id: fallback_pane_id.as_deref(),
+        env_vars,
+    })
 }
 
 /// Inputs for `split_pane`.
@@ -469,13 +478,15 @@ pub struct SplitSpec<'a> {
     pub command: &'a str,
 }
 
+/// The created pane and the route used for its initial prompt.
 pub struct SplitResult {
     pub pane_id: String,
     pub route: AgentLaunchRoute,
 }
 
 /// Splits `target_pane` into a new pane within the same window and starts
-/// `command` there (typically `claude` or `codex`). Returns the new pane's id.
+/// `command` there (typically `claude` or `codex`). Returns the new pane's id
+/// and the route used for the initial prompt.
 ///
 /// Unlike `build_layout`, this never creates a window: `a agent new` without
 /// `--worktree` uses it to keep a handoff session visually attached to the
@@ -497,23 +508,16 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         command,
     } = spec;
 
-    let codex_launch = CodexLaunch::prepare(engine, prompt, 1);
+    let codex_launch = CodexLaunch::prepare(engine, prompt, 1, Path::new(cwd));
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let daemon_launch = codex_launch.uses_daemon();
+    let (launch_effort, launch_prompt_file) =
+        codex_launch.command_options(reasoning_effort, prompt_file.as_deref());
     let cmd = apply_prompt_if_agent(
         command,
         engine,
         model,
-        if daemon_launch {
-            None
-        } else {
-            reasoning_effort
-        },
-        if daemon_launch {
-            None
-        } else {
-            prompt_file.as_deref()
-        },
+        launch_effort,
+        launch_prompt_file,
         true,
     );
 
@@ -549,29 +553,15 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         }
     })?;
 
-    let route = match codex_launch.finish(Path::new(cwd), prompt, reasoning_effort) {
-        AgentLaunchRoute::CodexDaemon => {
-            if let Some(path) = prompt_file.as_deref() {
-                remove_prompt_file(path)?;
-            }
-            AgentLaunchRoute::CodexDaemon
-        }
-        AgentLaunchRoute::CodexArgvFallback { reason } if daemon_launch => {
-            let fallback_command = apply_prompt_if_agent(
-                command,
-                engine,
-                model,
-                reasoning_effort,
-                prompt_file.as_deref(),
-                true,
-            );
-            super::respawn_pane(&new_pane_id, &fallback_command).with_context(|| {
-                format!("Codex daemon launch failed ({reason}); argv fallback also failed")
-            })?;
-            AgentLaunchRoute::CodexArgvFallback { reason }
-        }
-        route => route,
-    };
+    let route = codex_launch.finish_and_recover(CodexRecoverySpec {
+        cwd: Path::new(cwd),
+        effort: reasoning_effort,
+        prompt_file: prompt_file.as_deref(),
+        command,
+        model,
+        pane_id: Some(&new_pane_id),
+        env_vars,
+    })?;
 
     Ok(SplitResult {
         pane_id: new_pane_id,
@@ -616,12 +606,7 @@ fn execute_layout(
     })?;
 
     if !background {
-        let mut commands = commands.to_vec();
-        commands[new_window_idx].args.extend([
-            "-P".to_string(),
-            "-F".to_string(),
-            "#{window_id}".to_string(),
-        ]);
+        let commands = with_window_id_capture(commands, new_window_idx);
         return super::run_tmux_output(&flatten_commands(&commands));
     }
 
@@ -636,6 +621,16 @@ fn execute_layout(
     let new_prefix = format!("{window_id}.");
     execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))?;
     Ok(window_id)
+}
+
+fn with_window_id_capture(commands: &[TmuxCommand], new_window_idx: usize) -> Vec<TmuxCommand> {
+    let mut commands = commands.to_vec();
+    commands[new_window_idx].args.extend([
+        "-P".to_string(),
+        "-F".to_string(),
+        "#{window_id}".to_string(),
+    ]);
+    commands
 }
 
 /// Finds the index of the `new-window` command in a layout's command list.
@@ -713,27 +708,36 @@ mod tests {
         }))
     }
 
-    #[test]
-    fn layout_agent_commands_retargets_the_default_agent_pane() {
-        let layout = LayoutNode::default();
-
-        assert_eq!(
-            layout_agent_commands(&layout, "/workspace/project-a", Engine::Codex),
-            vec![(2, "codex".to_string())],
-        );
-    }
-
-    #[test]
-    fn layout_agent_commands_preserves_explicit_codex_panes() {
-        let layout = LayoutNode::Split(SplitConfig {
+    #[rstest]
+    #[case::default_layout(LayoutNode::default(), vec![(2, "codex".to_string())])]
+    #[case::explicit_codex_pane(
+        LayoutNode::Split(SplitConfig {
             direction: SplitDirection::Horizontal,
             first: pane("codex --search"),
             second: pane("claude"),
-        });
-
+        }),
+        vec![(1, "codex --search".to_string())]
+    )]
+    fn layout_plan_identifies_agent_panes(
+        #[case] layout: LayoutNode,
+        #[case] expected: Vec<(usize, String)>,
+    ) {
         assert_eq!(
-            layout_agent_commands(&layout, "/workspace/project-a", Engine::Codex),
-            vec![(1, "codex --search".to_string())],
+            build_layout_plan(LayoutCommandsSpec {
+                session: "session-a",
+                cwd: "/workspace/project-a",
+                window_name: "window-a",
+                layout: &layout,
+                model: None,
+                reasoning_effort: None,
+                prompt_file: None,
+                engine: Engine::Codex,
+                env_vars: &[],
+                background: false,
+                restore_automatic_rename: false,
+            })
+            .agent_commands,
+            expected,
         );
     }
 
@@ -1568,7 +1572,7 @@ mod tests {
 
     #[test]
     fn restore_automatic_rename_lands_outside_background_window_id_capture() {
-        // execute_background_layout runs everything up to and including
+        // execute_layout runs everything up to and including
         // new-window with `-P -F "#{window_id}"` appended to capture the real
         // window ID, so the restore command must come strictly after
         // new-window or it would be swept into that capture invocation
@@ -1698,6 +1702,39 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "new-window command not found in layout"
+        );
+    }
+
+    #[test]
+    fn window_id_capture_preserves_the_command_sequence() {
+        let commands = vec![
+            cmd(&["set-environment", "-t", "session-a", "KEY", "value"]),
+            cmd(&[
+                "new-window",
+                "-t",
+                "session-a",
+                "-c",
+                "/workspace/project-a",
+            ]),
+            cmd(&["send-keys", "agent", "C-m"]),
+        ];
+
+        assert_eq!(
+            with_window_id_capture(&commands, 1),
+            vec![
+                cmd(&["set-environment", "-t", "session-a", "KEY", "value"]),
+                cmd(&[
+                    "new-window",
+                    "-t",
+                    "session-a",
+                    "-c",
+                    "/workspace/project-a",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                ]),
+                cmd(&["send-keys", "agent", "C-m"]),
+            ],
         );
     }
 

@@ -65,9 +65,10 @@ pub struct CommonNewArgs {
     #[arg(long, value_enum)]
     pub engine: Option<Engine>,
 
-    /// Reasoning effort for the new session. Passed as `claude --effort` or
-    /// in the first Codex `turn/start` request. For `--engine codex`, falls
-    /// back to `agent.codex.reasoning_effort` when omitted.
+    /// Reasoning effort for the new session. Passed as `claude --effort`.
+    /// For Codex, sent in the first `turn/start` on the daemon route and as
+    /// `-c model_reasoning_effort=...` otherwise. Falls back to
+    /// `agent.codex.reasoning_effort` when omitted.
     #[arg(long, value_enum)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }

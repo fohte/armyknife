@@ -1,7 +1,14 @@
+use std::collections::hash_map::DefaultHasher;
+use std::fs::{File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
+use anyhow::Context;
+
+use super::prompt::apply_prompt_if_agent;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::infra::tmux;
 
 /// How an agent process received its initial prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,18 +33,75 @@ impl AgentLaunchRoute {
     }
 }
 
+trait AppServerClient {
+    fn wait_for_thread_started(&mut self, cwd: &Path) -> anyhow::Result<String>;
+    fn start_turn(
+        &mut self,
+        thread_id: &str,
+        prompt: &str,
+        effort: Option<ReasoningEffort>,
+    ) -> codex_steer::Result<()>;
+}
+
+impl AppServerClient for codex_steer::Client {
+    fn wait_for_thread_started(&mut self, cwd: &Path) -> anyhow::Result<String> {
+        self.wait_for_thread_started(cwd)
+    }
+
+    fn start_turn(
+        &mut self,
+        thread_id: &str,
+        prompt: &str,
+        effort: Option<ReasoningEffort>,
+    ) -> codex_steer::Result<()> {
+        self.start_turn(thread_id, prompt, effort)
+    }
+}
+
 pub(super) struct Launch {
     state: LaunchState,
 }
 
 enum LaunchState {
     Standard,
-    Connected(Box<codex_steer::Client>),
+    Connected {
+        client: Box<dyn AppServerClient>,
+        prompt: String,
+        _lock: Option<File>,
+    },
     Fallback(String),
 }
 
+pub(super) struct RecoverySpec<'a> {
+    pub cwd: &'a Path,
+    pub effort: Option<ReasoningEffort>,
+    pub prompt_file: Option<&'a Path>,
+    pub command: &'a str,
+    pub model: Option<&'a str>,
+    pub pane_id: Option<&'a str>,
+    pub env_vars: &'a [(&'a str, &'a str)],
+}
+
 impl Launch {
-    pub(super) fn prepare(engine: Engine, prompt: Option<&str>, pane_count: usize) -> Self {
+    pub(super) fn prepare(
+        engine: Engine,
+        prompt: Option<&str>,
+        pane_count: usize,
+        cwd: &Path,
+    ) -> Self {
+        Self::prepare_with(engine, prompt, pane_count, || {
+            let launch_lock = acquire_launch_lock(cwd)?;
+            let client = codex_steer::Client::connect()?;
+            Ok((Box::new(client), Some(launch_lock)))
+        })
+    }
+
+    fn prepare_with(
+        engine: Engine,
+        prompt: Option<&str>,
+        pane_count: usize,
+        connect: impl FnOnce() -> anyhow::Result<(Box<dyn AppServerClient>, Option<File>)>,
+    ) -> Self {
         let state = if engine != Engine::Codex || prompt.is_none() {
             LaunchState::Standard
         } else if pane_count != 1 {
@@ -45,8 +109,12 @@ impl Launch {
                 "daemon launch requires exactly one Codex pane, found {pane_count}"
             ))
         } else {
-            match codex_steer::Client::connect() {
-                Ok(client) => LaunchState::Connected(Box::new(client)),
+            match connect() {
+                Ok((client, launch_lock)) => LaunchState::Connected {
+                    client,
+                    prompt: prompt.unwrap_or_default().to_string(),
+                    _lock: launch_lock,
+                },
                 Err(error) => LaunchState::Fallback(error.to_string()),
             }
         };
@@ -54,28 +122,71 @@ impl Launch {
     }
 
     pub(super) fn uses_daemon(&self) -> bool {
-        matches!(self.state, LaunchState::Connected(_))
+        matches!(self.state, LaunchState::Connected { .. })
     }
 
-    pub(super) fn finish(
-        self,
-        cwd: &Path,
-        prompt: Option<&str>,
+    pub(super) fn command_options<'a>(
+        &self,
         effort: Option<ReasoningEffort>,
-    ) -> AgentLaunchRoute {
+        prompt_file: Option<&'a Path>,
+    ) -> (Option<ReasoningEffort>, Option<&'a Path>) {
+        if self.uses_daemon() {
+            (None, None)
+        } else {
+            (effort, prompt_file)
+        }
+    }
+
+    pub(super) fn finish_and_recover(
+        self,
+        spec: RecoverySpec<'_>,
+    ) -> anyhow::Result<AgentLaunchRoute> {
+        let daemon_launch = self.uses_daemon();
+        let route = self.finish(spec.cwd, spec.effort);
+        match route {
+            AgentLaunchRoute::CodexDaemon => {
+                if let Some(path) = spec.prompt_file {
+                    std::fs::remove_file(path).with_context(|| {
+                        format!("Failed to remove prompt file {}", path.display())
+                    })?;
+                }
+                Ok(AgentLaunchRoute::CodexDaemon)
+            }
+            AgentLaunchRoute::CodexArgvFallback { reason } if daemon_launch => {
+                let pane_id = spec
+                    .pane_id
+                    .context("Codex argv fallback has no pane target")?;
+                let command = apply_prompt_if_agent(
+                    spec.command,
+                    Engine::Codex,
+                    spec.model,
+                    spec.effort,
+                    spec.prompt_file,
+                    true,
+                );
+                let wrapped = wrap_in_interactive_shell(&command)?;
+                tmux::respawn_pane_with_env(pane_id, &wrapped, spec.env_vars).with_context(
+                    || format!("Codex daemon launch failed ({reason}); argv fallback also failed"),
+                )?;
+                Ok(AgentLaunchRoute::CodexArgvFallback { reason })
+            }
+            route => Ok(route),
+        }
+    }
+
+    fn finish(self, cwd: &Path, effort: Option<ReasoningEffort>) -> AgentLaunchRoute {
         match self.state {
             LaunchState::Standard => AgentLaunchRoute::Standard,
             LaunchState::Fallback(reason) => AgentLaunchRoute::CodexArgvFallback { reason },
-            LaunchState::Connected(mut client) => {
-                let Some(prompt) = prompt else {
-                    return AgentLaunchRoute::CodexArgvFallback {
-                        reason: "Codex daemon launch lost its initial prompt".to_string(),
-                    };
-                };
+            LaunchState::Connected {
+                mut client,
+                prompt,
+                _lock,
+            } => {
                 let result = (|| {
                     let thread_id = client.wait_for_thread_started(cwd)?;
                     client
-                        .start_turn(&thread_id, prompt, effort)
+                        .start_turn(&thread_id, &prompt, effort)
                         .map_err(anyhow::Error::new)
                 })();
                 match result {
@@ -89,23 +200,147 @@ impl Launch {
     }
 }
 
+fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
+    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical_cwd.hash(&mut hasher);
+    let lock_dir = crate::shared::dirs::cache_dir()
+        .context("could not determine cache directory for Codex launch lock")?
+        .join("armyknife")
+        .join("codex-launch-locks");
+    std::fs::create_dir_all(&lock_dir).context("failed to create Codex launch lock directory")?;
+    let lock_path = lock_dir.join(format!("{:016x}.lock", hasher.finish()));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open Codex launch lock {}", lock_path.display()))?;
+
+    // The protocol has no launch token, so serialize armyknife launches that
+    // would otherwise match the same cwd-only `thread/started` notification.
+    file.lock()
+        .with_context(|| format!("failed to lock Codex launch {}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn wrap_in_interactive_shell(command: &str) -> anyhow::Result<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let exec_shell = shlex::try_join([shell.as_str(), "-i"])
+        .context("failed to quote the interactive fallback shell")?;
+    let script = format!("{command}; exec {exec_shell}");
+    shlex::try_join([shell.as_str(), "-i", "-c", &script])
+        .context("failed to quote the Codex argv fallback command")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn standard_route_has_no_suffix() {
-        assert_eq!(AgentLaunchRoute::Standard.display_suffix(), "");
+    struct StubClient {
+        thread: anyhow::Result<String>,
+        turn: Option<codex_steer::Result<()>>,
+    }
+
+    impl AppServerClient for StubClient {
+        fn wait_for_thread_started(&mut self, _cwd: &Path) -> anyhow::Result<String> {
+            std::mem::replace(&mut self.thread, Ok(String::new()))
+        }
+
+        fn start_turn(
+            &mut self,
+            _thread_id: &str,
+            _prompt: &str,
+            _effort: Option<ReasoningEffort>,
+        ) -> codex_steer::Result<()> {
+            self.turn.take().unwrap_or(Ok(()))
+        }
+    }
+
+    #[rstest]
+    #[case::standard(AgentLaunchRoute::Standard, "")]
+    #[case::daemon(AgentLaunchRoute::CodexDaemon, " (Codex daemon)")]
+    #[case::fallback(
+        AgentLaunchRoute::CodexArgvFallback {
+            reason: "daemon unavailable".to_string(),
+        },
+        " (Codex argv fallback: daemon unavailable)"
+    )]
+    fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
+        assert_eq!(route.display_suffix(), expected);
+    }
+
+    #[rstest]
+    #[case::non_codex(Engine::Claude, Some("prompt"), 1, AgentLaunchRoute::Standard)]
+    #[case::missing_prompt(Engine::Codex, None, 1, AgentLaunchRoute::Standard)]
+    #[case::multiple_panes(
+        Engine::Codex,
+        Some("prompt"),
+        2,
+        AgentLaunchRoute::CodexArgvFallback {
+            reason: "daemon launch requires exactly one Codex pane, found 2".to_string(),
+        }
+    )]
+    fn preflight_routes(
+        #[case] engine: Engine,
+        #[case] prompt: Option<&str>,
+        #[case] pane_count: usize,
+        #[case] expected: AgentLaunchRoute,
+    ) {
+        let launch = Launch::prepare_with(engine, prompt, pane_count, || {
+            Err(anyhow::anyhow!("connect should not run"))
+        });
+
+        assert_eq!(
+            launch.finish(Path::new("/workspace/project-a"), None),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::success(
+        StubClient { thread: Ok("thread-a".to_string()), turn: Some(Ok(())) },
+        AgentLaunchRoute::CodexDaemon
+    )]
+    #[case::notification_failure(
+        StubClient { thread: Err(anyhow::anyhow!("notification unavailable")), turn: None },
+        AgentLaunchRoute::CodexArgvFallback { reason: "notification unavailable".to_string() }
+    )]
+    #[case::turn_rejected(
+        StubClient {
+            thread: Ok("thread-a".to_string()),
+            turn: Some(Err(codex_steer::DeliveryError::NotDelivered(anyhow::anyhow!("rejected")))),
+        },
+        AgentLaunchRoute::CodexArgvFallback { reason: "rejected".to_string() }
+    )]
+    fn connected_routes(#[case] client: StubClient, #[case] expected: AgentLaunchRoute) {
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((Box::new(client), None))
+        });
+
+        assert_eq!(
+            launch.finish(
+                Path::new("/workspace/project-a"),
+                Some(ReasoningEffort::Low)
+            ),
+            expected,
+        );
     }
 
     #[test]
-    fn fallback_route_reports_its_reason() {
+    fn wraps_fallback_in_interactive_shell() {
+        let actual = temp_env::with_var("SHELL", Some("/bin/example-shell"), || {
+            wrap_in_interactive_shell("codex 'example prompt'")
+        });
+
         assert_eq!(
-            AgentLaunchRoute::CodexArgvFallback {
-                reason: "daemon unavailable".to_string(),
-            }
-            .display_suffix(),
-            " (Codex argv fallback: daemon unavailable)",
+            actual.map_err(|error| error.to_string()),
+            Ok(
+                "/bin/example-shell -i -c \"codex 'example prompt'; exec /bin/example-shell -i\""
+                    .to_string()
+            ),
         );
     }
 }

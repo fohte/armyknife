@@ -12,8 +12,8 @@ pub struct CodexConfig {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Value passed in the first Codex `turn/start` request when
-    /// `--reasoning-effort` is omitted.
+    /// Effort applied to the launched Codex session when `--reasoning-effort`
+    /// is omitted.
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
