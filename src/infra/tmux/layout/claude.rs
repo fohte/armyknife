@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 
 use super::AgentLaunchRoute;
-use super::codex::wrap_in_interactive_shell;
-use super::prompt::apply_prompt_if_agent;
+use super::prompt::{apply_prompt_if_agent, wrap_in_interactive_shell};
 use crate::commands::agent::claude_registry::PeerConnection;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{claude_messaging, claude_registry};
