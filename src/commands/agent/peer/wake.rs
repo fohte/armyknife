@@ -17,8 +17,8 @@
 //!
 //! A Codex session has no `SendMessage` name to wait for, so waking one only
 //! respawns the pane and returns no name. That is enough for
-//! `peer::notify`: `codex queue` persists to a DB under `$CODEX_HOME`, and
-//! the resumed `codex` dispatches any pending queue when it loads the thread.
+//! `peer::notify`: it first attempts app-server delivery, then falls back to
+//! the persistent `codex queue` if the resumed thread is not registered yet.
 
 use std::path::{Path, PathBuf};
 use std::thread;

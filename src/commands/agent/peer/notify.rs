@@ -6,8 +6,8 @@
 //! `SendMessage` tool). Some notifications have no session in the loop --
 //! e.g. reporting that a delegated PR merged from inside `a wm delete`
 //! itself. This command is that missing send path: a Claude Code target gets
-//! `claude_messaging`'s direct socket write, a Codex target gets
-//! `codex_queue`'s `codex queue`.
+//! `claude_messaging`'s direct socket write, while a Codex target is steered
+//! through its app-server and falls back to `codex queue` when unavailable.
 
 use anyhow::Result;
 use clap::Args;
@@ -16,6 +16,7 @@ use super::wake;
 use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
 use crate::commands::agent::codex_queue;
+use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
@@ -34,14 +35,18 @@ pub struct NotifyArgs {
 
 /// What a successful [`notify`] guarantees -- callers must not report more
 /// than this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     /// Written to the target's messaging socket.
     Sent,
+    /// Injected into the Codex thread's active turn.
+    Steered,
+    /// Started a new turn in an idle Codex thread.
+    Started,
     /// Appended to the target Codex session's queue. The running `codex`
     /// injects it later (polls every ~10s, and only once the session is
     /// idle), so it may not have reached the session yet.
-    Queued,
+    Queued { reason: String },
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
@@ -49,19 +54,31 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
-    match notify(
+    let delivery = notify(
         &args.session_id,
         &args.message,
         from.as_deref(),
         from_engine_hint,
-    )? {
-        Delivery::Sent => {}
-        Delivery::Queued => println!(
-            "Queued for Codex session {}. Not delivered yet: it is injected once that session's codex is running and idle (polled about every 10s).",
-            args.session_id
-        ),
+    )?;
+    if let Some(output) = delivery_output(&args.session_id, &delivery) {
+        println!("{output}");
     }
     Ok(())
+}
+
+fn delivery_output(session_id: &str, delivery: &Delivery) -> Option<String> {
+    match delivery {
+        Delivery::Sent => None,
+        Delivery::Steered => Some(format!(
+            "Injected into the running turn of Codex session {session_id}."
+        )),
+        Delivery::Started => Some(format!(
+            "Started a new turn in idle Codex session {session_id}."
+        )),
+        Delivery::Queued { reason } => Some(format!(
+            "Queued for Codex session {session_id}. Direct delivery failed: {reason}. Not delivered yet: the current turn must finish and the session must become idle before `codex queue` can start the queued turn (polled about every 10s)."
+        )),
+    }
 }
 
 /// Resolves this process's own session_id for the `<peer-message>` sender
@@ -141,9 +158,43 @@ pub fn notify(
             send_to_claude(session_id, &content)?;
             Ok(Delivery::Sent)
         }
-        Engine::Codex => {
-            codex_queue::queue_message(session_id, &content)?;
-            Ok(Delivery::Queued)
+        Engine::Codex => send_to_codex(
+            session_id,
+            &content,
+            session.status,
+            codex_steer::send_message,
+            codex_queue::queue_message,
+        ),
+    }
+}
+
+fn send_to_codex<S, Q>(
+    session_id: &str,
+    content: &str,
+    status: SessionStatus,
+    steer: S,
+    queue: Q,
+) -> Result<Delivery>
+where
+    S: FnOnce(&str, &str) -> Result<()>,
+    Q: FnOnce(&str, &str) -> Result<()>,
+{
+    match steer(session_id, content) {
+        Ok(()) => Ok(match status {
+            SessionStatus::Running | SessionStatus::WaitingInput => Delivery::Steered,
+            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => {
+                Delivery::Started
+            }
+        }),
+        Err(direct_error) => {
+            queue(session_id, content).map_err(|queue_error| {
+                anyhow::anyhow!(
+                    "direct Codex delivery failed: {direct_error}; queue fallback failed: {queue_error}"
+                )
+            })?;
+            Ok(Delivery::Queued {
+                reason: direct_error.to_string(),
+            })
         }
     }
 }
@@ -215,6 +266,75 @@ mod tests {
     #[case::ended(SessionStatus::Ended, NotifyReadiness::Refused)]
     fn notify_readiness_cases(#[case] status: SessionStatus, #[case] expected: NotifyReadiness) {
         assert_eq!(notify_readiness(status), expected);
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, Delivery::Steered)]
+    #[case::waiting_input(SessionStatus::WaitingInput, Delivery::Steered)]
+    #[case::stopped(SessionStatus::Stopped, Delivery::Started)]
+    #[case::paused_after_wake(SessionStatus::Paused, Delivery::Started)]
+    fn direct_codex_delivery_uses_tracked_status(
+        #[case] status: SessionStatus,
+        #[case] expected: Delivery,
+    ) {
+        let actual = send_to_codex(
+            "thread-a",
+            "hello",
+            status,
+            |_, _| Ok(()),
+            |_, _| Err(anyhow::anyhow!("queue must not run")),
+        );
+        assert_eq!(actual.map_err(|error| error.to_string()), Ok(expected));
+    }
+
+    #[test]
+    fn codex_delivery_falls_back_to_queue_with_reason() {
+        let actual = send_to_codex(
+            "thread-a",
+            "hello",
+            SessionStatus::Running,
+            |_, _| Err(anyhow::anyhow!("thread not found")),
+            |_, _| Ok(()),
+        );
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok(Delivery::Queued {
+                reason: "thread not found".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn codex_delivery_reports_direct_and_queue_failures() {
+        let actual = send_to_codex(
+            "thread-a",
+            "hello",
+            SessionStatus::Running,
+            |_, _| Err(anyhow::anyhow!("daemon unavailable")),
+            |_, _| Err(anyhow::anyhow!("thread archived")),
+        );
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Err("direct Codex delivery failed: daemon unavailable; queue fallback failed: thread archived".to_string()),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Delivery::Sent, None)]
+    #[case::steered(
+        Delivery::Steered,
+        Some("Injected into the running turn of Codex session thread-a.".to_string())
+    )]
+    #[case::started(
+        Delivery::Started,
+        Some("Started a new turn in idle Codex session thread-a.".to_string())
+    )]
+    #[case::queued(
+        Delivery::Queued { reason: "thread not found".to_string() },
+        Some("Queued for Codex session thread-a. Direct delivery failed: thread not found. Not delivered yet: the current turn must finish and the session must become idle before `codex queue` can start the queued turn (polled about every 10s).".to_string())
+    )]
+    fn delivery_output_cases(#[case] delivery: Delivery, #[case] expected: Option<String>) {
+        assert_eq!(delivery_output("thread-a", &delivery), expected);
     }
 
     #[rstest]

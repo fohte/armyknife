@@ -54,10 +54,9 @@ pub enum PeerCommands {
     /// module doc for why this isn't a flag on `a agent resume`)
     Wake(WakeArgs),
 
-    /// Send a message to another session without going through any
-    /// session's own SendMessage tool call (SendMessage socket for Claude
-    /// Code, `codex queue` for Codex -- a Codex message is only queued, and
-    /// delivered later)
+    /// Send a message to another session without going through any session's
+    /// own SendMessage tool call (SendMessage socket for Claude Code,
+    /// app-server turn steering for Codex, with `codex queue` as a fallback)
     Notify(NotifyArgs),
 }
 

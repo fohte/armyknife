@@ -19,8 +19,7 @@ use crate::shared::command;
 /// Queues `content` as a user message on the Codex thread `session_id`.
 ///
 /// Every failure is surfaced, including the ones `codex queue` itself
-/// reports: the thread is archived, or a local app-server daemon is running
-/// (it cannot queue through the embedded app server in that case).
+/// reports, such as an archived thread or an unavailable daemon.
 pub fn queue_message(session_id: &str, content: &str) -> Result<()> {
     let output = command::new("codex")
         .args(queue_args(session_id, content))
