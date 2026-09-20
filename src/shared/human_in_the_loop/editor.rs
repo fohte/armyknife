@@ -268,11 +268,9 @@ fn launch_ghostty_macos(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
-    // SAFETY: `setsid` only manipulates the calling process's session
-    // membership; it is async-signal-safe and documented as one of the
-    // operations safe to call in `pre_exec`. The watcher must outlive this
-    // process, but agents such as Codex kill the whole process group once the
-    // command returns, so it has to leave our process group.
+    // SAFETY: `setsid` is async-signal-safe, so it is safe to call in `pre_exec`.
+    // Leaves our process group so the watcher survives runners that kill the
+    // whole group when the command returns.
     unsafe {
         watcher.pre_exec(|| {
             if libc::setsid() == -1 {
