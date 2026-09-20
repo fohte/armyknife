@@ -162,10 +162,10 @@ impl CleanProgress {
 /// Returns the `run_id` so the caller can tail the shared log for
 /// matching events.
 pub fn spawn_detached_clean(paths: &[PathBuf]) -> Result<String> {
-    use std::os::unix::process::CommandExt;
-    use std::process::Stdio;
+    use std::ffi::OsString;
+    use std::path::Path;
 
-    use crate::shared::command;
+    use crate::infra::process::spawn_detached;
 
     let exe = std::env::current_exe().context("failed to resolve current exe")?;
     let run_id = short_run_id();
@@ -182,33 +182,17 @@ pub fn spawn_detached_clean(paths: &[PathBuf]) -> Result<String> {
         .keep()
         .map_err(|e| anyhow::anyhow!("failed to persist paths file: {e}"))?;
 
-    let mut cmd = command::new(&exe);
-    cmd.arg("agent")
-        .arg("clean-detached")
-        .arg("--paths-file")
-        .arg(&file_path)
-        .arg("--run-id")
-        .arg(&run_id)
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let args = [
+        OsString::from("agent"),
+        OsString::from("clean-detached"),
+        OsString::from("--paths-file"),
+        file_path.clone().into_os_string(),
+        OsString::from("--run-id"),
+        OsString::from(&run_id),
+    ];
 
-    // SAFETY: `setsid` only manipulates the calling process's session
-    // membership; it is async-signal-safe and documented as one of the
-    // operations safe to call in `pre_exec`. Detaching here is what
-    // prevents the parent TTY's HUP / SIGINT from reaching the child.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    match cmd.spawn() {
-        Ok(_child) => Ok(run_id),
+    match spawn_detached(&exe, &args, Some(Path::new("/")), &[]) {
+        Ok(()) => Ok(run_id),
         Err(e) => {
             // Roll back the persisted paths file; without the child it
             // would only ever be cleaned up by the OS `/tmp` GC.
