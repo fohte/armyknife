@@ -9,6 +9,7 @@ use crate::shared::env_var::EnvVars;
 
 mod delegation;
 mod prompt;
+mod session_metadata;
 mod session_mode;
 mod tmux;
 mod worktree;
