@@ -513,10 +513,16 @@ fn resolve_option_with_legacy(line: &str) -> Option<String> {
     let mut parts = line.split('\t');
     let current = parts.next().unwrap_or("");
     let legacy = parts.next().unwrap_or("");
-    [current, legacy]
-        .into_iter()
+    first_non_empty(&[current, legacy])
+}
+
+/// Shared by every parser that reads a current/legacy option pair, so the
+/// precedence between the two keys is defined once.
+fn first_non_empty(values: &[&str]) -> Option<String> {
+    values
+        .iter()
         .find(|v| !v.is_empty())
-        .map(str::to_string)
+        .map(|v| (*v).to_string())
 }
 
 /// Information about a tmux pane.
@@ -584,10 +590,7 @@ fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
     let option = parts.next()?;
     let legacy_option = parts.next().unwrap_or("");
 
-    let option_value = [option, legacy_option]
-        .into_iter()
-        .find(|v| !v.is_empty())
-        .map(str::to_string)?;
+    let option_value = first_non_empty(&[option, legacy_option])?;
 
     Some(PaneInfoWithOption {
         session_name,
@@ -598,27 +601,30 @@ fn parse_pane_with_option_line(line: &str) -> Option<PaneInfoWithOption> {
     })
 }
 
-/// A pane's identity together with what it is currently running.
+/// A pane's identity, what it is currently running, and the value it carries
+/// for the option pair passed to [`list_pane_processes`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneProcess {
     pub info: PaneInfo,
     pub current_command: String,
     pub current_path: String,
+    pub option_value: Option<String>,
 }
 
-/// Lists every pane with the command and working directory it is running.
+/// Lists every pane with the command and working directory it is running,
+/// plus its value for `option` (falling back to `legacy_option`).
 ///
 /// For callers that need to locate a pane they have no process-ancestry link
-/// to, and so must recognize it by what it is running.
+/// to, and so must recognize it by what it is running. The option comes along
+/// in the same `-F` format string because such a caller also has to tell an
+/// unclaimed pane from one another session already owns.
 ///
 /// Returns an empty vec when tmux is unavailable or the command fails.
-pub fn list_pane_processes() -> Vec<PaneProcess> {
-    let output = match run_tmux_output(&[
-        "list-panes",
-        "-a",
-        "-F",
-        "#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}",
-    ]) {
+pub fn list_pane_processes(option: &str, legacy_option: &str) -> Vec<PaneProcess> {
+    let format = format!(
+        "#{{session_name}}\t#{{window_name}}\t#{{window_index}}\t#{{pane_id}}\t#{{pane_current_command}}\t#{{pane_current_path}}\t#{{{option}}}\t#{{{legacy_option}}}"
+    );
+    let output = match run_tmux_output(&["list-panes", "-a", "-F", &format]) {
         Ok(output) => output,
         Err(e) => {
             tracing::warn!("tmux list-panes failed: {e}");
@@ -640,6 +646,8 @@ fn parse_pane_process_line(line: &str) -> Option<PaneProcess> {
     let pane_id = parts.next()?.to_string();
     let current_command = parts.next()?.to_string();
     let current_path = parts.next()?.to_string();
+    let option = parts.next()?;
+    let legacy_option = parts.next()?;
 
     Some(PaneProcess {
         info: PaneInfo {
@@ -650,6 +658,7 @@ fn parse_pane_process_line(line: &str) -> Option<PaneProcess> {
         },
         current_command,
         current_path,
+        option_value: first_non_empty(&[option, legacy_option]),
     })
 }
 
@@ -982,5 +991,78 @@ mod tests {
         #[case] expected: Option<PaneInfoWithOption>,
     ) {
         assert_eq!(parse_pane_with_option_line(line), expected);
+    }
+
+    fn pane_process(
+        session_name: &str,
+        window_name: &str,
+        window_index: u32,
+        pane_id: &str,
+        current_command: &str,
+        current_path: &str,
+        option_value: Option<&str>,
+    ) -> Option<PaneProcess> {
+        Some(PaneProcess {
+            info: PaneInfo {
+                session_name: session_name.to_string(),
+                window_name: window_name.to_string(),
+                window_index,
+                pane_id: pane_id.to_string(),
+            },
+            current_command: current_command.to_string(),
+            current_path: current_path.to_string(),
+            option_value: option_value.map(|v| v.to_string()),
+        })
+    }
+
+    #[rstest]
+    #[case::current_option(
+        "main\teditor\t0\t%5\tvim\t/home/user/project\tabc-123\t",
+        pane_process(
+            "main",
+            "editor",
+            0,
+            "%5",
+            "vim",
+            "/home/user/project",
+            Some("abc-123")
+        )
+    )]
+    #[case::legacy_option_only(
+        "main\teditor\t0\t%5\tvim\t/home/user/project\t\tlegacy-456",
+        pane_process(
+            "main",
+            "editor",
+            0,
+            "%5",
+            "vim",
+            "/home/user/project",
+            Some("legacy-456")
+        )
+    )]
+    #[case::current_option_preferred_over_legacy(
+        "main\teditor\t0\t%5\tvim\t/home/user/project\tcurrent-1\tlegacy-2",
+        pane_process(
+            "main",
+            "editor",
+            0,
+            "%5",
+            "vim",
+            "/home/user/project",
+            Some("current-1")
+        )
+    )]
+    #[case::both_options_empty(
+        "main\teditor\t0\t%5\tvim\t/home/user/project\t\t",
+        pane_process("main", "editor", 0, "%5", "vim", "/home/user/project", None)
+    )]
+    #[case::invalid_window_index("main\teditor\tabc\t%5\tvim\t/home/user/project\tabc-123\t", None)]
+    #[case::missing_legacy_option_field(
+        "main\teditor\t0\t%5\tvim\t/home/user/project\tabc-123",
+        None
+    )]
+    #[case::empty_line("", None)]
+    fn test_parse_pane_process_line(#[case] line: &str, #[case] expected: Option<PaneProcess>) {
+        assert_eq!(parse_pane_process_line(line), expected);
     }
 }
