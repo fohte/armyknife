@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.318](https://github.com/fohte/armyknife/compare/v0.1.317...v0.1.318) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** preserve parent session for Codex delegates spawned via shared daemon ([#952](https://github.com/fohte/armyknife/issues/952)) ([c80857b](https://github.com/fohte/armyknife/commit/c80857bcd2a6aa50de02244b8da8799a92223370))
+* **agent:** update notification conditions in delegate prompt ([#951](https://github.com/fohte/armyknife/issues/951)) ([cbdf5ea](https://github.com/fohte/armyknife/commit/cbdf5eaf7933b37f72be92e9f25dcdcce9b1f0cd))
+
 ## [0.1.317](https://github.com/fohte/armyknife/compare/v0.1.316...v0.1.317) (2026-09-20)
 
 
