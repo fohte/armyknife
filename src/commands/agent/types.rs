@@ -32,8 +32,8 @@ impl Engine {
     }
 }
 
-/// Effort levels accepted by both `claude --effort` and codex's
-/// `model_reasoning_effort`. A closed set so a typo is rejected
+/// Effort levels accepted by both `claude --effort` and Codex `turn/start`.
+/// A closed set so a typo is rejected
 /// at parse time instead of reaching the CLI, which would silently fall back to
 /// its default effort.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
@@ -50,7 +50,7 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    /// The value both `claude --effort` and codex's `model_reasoning_effort` expect.
+    /// The wire value accepted by both Claude and Codex.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Low => "low",

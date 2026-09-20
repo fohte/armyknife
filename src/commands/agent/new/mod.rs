@@ -65,10 +65,10 @@ pub struct CommonNewArgs {
     #[arg(long, value_enum)]
     pub engine: Option<Engine>,
 
-    /// Reasoning effort for the new session. Passed as `claude --effort` or,
-    /// for `--engine codex`, as `codex -c model_reasoning_effort=...` (which
-    /// overrides config for this launch only). For `--engine codex`, falls
-    /// back to `agent.codex.reasoning_effort` when omitted.
+    /// Reasoning effort for the new session. Passed as `claude --effort`.
+    /// For Codex, sent in the first `turn/start` on the daemon route and as
+    /// `-c model_reasoning_effort=...` otherwise. Falls back to
+    /// `agent.codex.reasoning_effort` when omitted.
     #[arg(long, value_enum)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -320,7 +320,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
     // caller isn't running inside one ($TMUX_PANE unset).
     match crate::infra::tmux::current_pane_id_from_env() {
         Some(target_pane) if !differs => {
-            setup_split_pane(TmuxSplitPaneSpec {
+            let route = setup_split_pane(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
                 cwd: &cwd,
                 model: model.as_deref(),
@@ -330,7 +330,10 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 env_vars: &env_refs,
                 background,
             })?;
-            println!("Split tmux pane in '{cwd}'{suffix}");
+            println!(
+                "Split tmux pane in '{cwd}'{suffix}{}",
+                route.display_suffix()
+            );
         }
         _ => {
             // PID-based placeholder: there's no worktree/branch name to use
@@ -343,7 +346,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 focus: true,
             });
 
-            setup_tmux_window(
+            let route = setup_tmux_window(
                 TmuxWindowSpec {
                     repo_root,
                     cwd: &cwd,
@@ -359,7 +362,10 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
                 },
                 config,
             )?;
-            println!("Opened tmux window in '{cwd}'{suffix}");
+            println!(
+                "Opened tmux window in '{cwd}'{suffix}{}",
+                route.display_suffix()
+            );
         }
     }
 

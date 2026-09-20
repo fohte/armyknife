@@ -372,6 +372,30 @@ pub fn respawn_pane(pane_id: &str, command: &str) -> Result<()> {
     run_tmux(&["respawn-pane", "-k", "-t", pane_id, command])
 }
 
+/// Kills the process in the pane and restarts it with per-process environment variables.
+pub fn respawn_pane_with_env(
+    pane_id: &str,
+    command: &str,
+    env_vars: &[(&str, &str)],
+) -> Result<()> {
+    let args = respawn_pane_args(pane_id, command, env_vars);
+    run_tmux(&args.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+fn respawn_pane_args(pane_id: &str, command: &str, env_vars: &[(&str, &str)]) -> Vec<String> {
+    let mut args = vec![
+        "respawn-pane".to_string(),
+        "-k".to_string(),
+        "-t".to_string(),
+        pane_id.to_string(),
+    ];
+    for (key, value) in env_vars {
+        args.extend(["-e".to_string(), format!("{key}={value}")]);
+    }
+    args.push(command.to_string());
+    args
+}
+
 /// Set a user option on a specific tmux pane.
 /// User options are prefixed with '@' (e.g., "@armyknife-session-id").
 /// This does not require being inside tmux, as it targets a specific pane ID.
@@ -729,6 +753,28 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[test]
+    fn respawn_pane_args_include_each_environment_variable() {
+        assert_eq!(
+            respawn_pane_args(
+                "%7",
+                "agent --flag",
+                &[("SESSION_LABEL", "example"), ("ANCESTORS", "a,b")],
+            ),
+            vec![
+                "respawn-pane",
+                "-k",
+                "-t",
+                "%7",
+                "-e",
+                "SESSION_LABEL=example",
+                "-e",
+                "ANCESTORS=a,b",
+                "agent --flag",
+            ],
+        );
+    }
 
     #[rstest]
     #[case::returns_value_when_set(Some("%12"), Some("%12".to_string()))]
