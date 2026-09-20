@@ -379,6 +379,10 @@ Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the 
 
 `a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
 
+For the default Claude engine, `--prompt` normally launches `claude [--model <model>] [--effort <effort>]` without putting the prompt on the pane's command line. With exactly one Claude pane, armyknife identifies the new session by its tmux location in Claude Code's session registry and delivers the prompt through its messaging socket.
+
+Layouts with multiple Claude panes use the argv route. If the pane's tmux location cannot be resolved, the messaging socket does not appear within 20 seconds, or delivery fails, armyknife restarts the pane with the prompt in argv and includes the fallback reason in the command output. The fallback command removes its temporary prompt file only after a successful agent exit, so a failed launch leaves the prompt recoverable.
+
 `--engine codex` launches `codex` instead of `claude` (pane command and, without `--worktree`, window-name placeholder). The launch route depends on the prompt and app-server availability:
 
 - Without `--prompt`, armyknife runs `codex [--model <model>] [-c model_reasoning_effort=<effort>]`.

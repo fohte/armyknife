@@ -5,33 +5,11 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use super::prompt::apply_prompt_if_agent;
+use super::AgentLaunchRoute;
+use super::prompt::{apply_prompt_if_agent, wrap_in_interactive_shell};
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::tmux;
-
-/// How an agent process received its initial prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentLaunchRoute {
-    /// No initial prompt was provided, or the engine is not Codex.
-    Standard,
-    /// Codex attached to the shared app-server and received its first turn by RPC.
-    CodexDaemon,
-    /// Codex was launched with the prompt in argv because the daemon path failed.
-    CodexArgvFallback { reason: String },
-}
-
-impl AgentLaunchRoute {
-    pub fn display_suffix(&self) -> String {
-        match self {
-            Self::Standard => String::new(),
-            Self::CodexDaemon => " (Codex daemon)".to_string(),
-            Self::CodexArgvFallback { reason } => {
-                format!(" (Codex argv fallback: {reason})")
-            }
-        }
-    }
-}
 
 trait AppServerClient {
     fn wait_for_thread_started(&mut self, cwd: &Path) -> anyhow::Result<String>;
@@ -225,15 +203,6 @@ fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 
-fn wrap_in_interactive_shell(command: &str) -> anyhow::Result<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let exec_shell = shlex::try_join([shell.as_str(), "-i"])
-        .context("failed to quote the interactive fallback shell")?;
-    let script = format!("{command}; exec {exec_shell}");
-    shlex::try_join([shell.as_str(), "-i", "-c", &script])
-        .context("failed to quote the Codex argv fallback command")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,19 +226,6 @@ mod tests {
         ) -> codex_steer::Result<()> {
             self.turn.take().unwrap_or(Ok(()))
         }
-    }
-
-    #[rstest]
-    #[case::standard(AgentLaunchRoute::Standard, "")]
-    #[case::daemon(AgentLaunchRoute::CodexDaemon, " (Codex daemon)")]
-    #[case::fallback(
-        AgentLaunchRoute::CodexArgvFallback {
-            reason: "daemon unavailable".to_string(),
-        },
-        " (Codex argv fallback: daemon unavailable)"
-    )]
-    fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
-        assert_eq!(route.display_suffix(), expected);
     }
 
     #[rstest]
@@ -326,21 +282,6 @@ mod tests {
                 Some(ReasoningEffort::Low)
             ),
             expected,
-        );
-    }
-
-    #[test]
-    fn wraps_fallback_in_interactive_shell() {
-        let actual = temp_env::with_var("SHELL", Some("/bin/example-shell"), || {
-            wrap_in_interactive_shell("codex 'example prompt'")
-        });
-
-        assert_eq!(
-            actual.map_err(|error| error.to_string()),
-            Ok(
-                "/bin/example-shell -i -c \"codex 'example prompt'; exec /bin/example-shell -i\""
-                    .to_string()
-            ),
         );
     }
 }

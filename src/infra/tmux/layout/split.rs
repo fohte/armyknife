@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use super::codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use super::execution::{execute_commands, flatten_commands};
+use super::launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
 use super::prompt::apply_prompt_if_agent;
 use super::{
     AgentLaunchRoute, TmuxCommand, TmuxSessionSpec, set_environment_commands,
@@ -70,10 +70,10 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         command,
     } = spec;
 
-    let codex_launch = CodexLaunch::prepare(engine, prompt, 1, Path::new(cwd));
+    let launch = AgentLaunch::prepare(engine, prompt, 1, Path::new(cwd));
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let (launch_effort, launch_prompt_file) =
-        codex_launch.command_options(reasoning_effort, prompt_file.as_deref());
+        launch.command_options(reasoning_effort, prompt_file.as_deref());
     let cmd = apply_prompt_if_agent(
         command,
         engine,
@@ -115,7 +115,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         }
     })?;
 
-    let route = codex_launch.finish_and_recover(CodexRecoverySpec {
+    let route = launch.finish_and_recover(AgentRecoverySpec {
         cwd: Path::new(cwd),
         effort: reasoning_effort,
         prompt_file: prompt_file.as_deref(),

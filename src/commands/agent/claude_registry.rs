@@ -30,6 +30,8 @@ struct RegistryEntry {
     started_at: Option<u64>,
     #[serde(default, rename = "messagingSocketPath")]
     messaging_socket_path: Option<String>,
+    #[serde(default)]
+    tmux: Option<String>,
 }
 
 /// Reads every `~/.claude/sessions/*.json` file into a `session_id ->
@@ -111,6 +113,24 @@ pub struct PeerConnection {
 pub fn load_peer_connection(session_id: &str) -> Option<PeerConnection> {
     let home = crate::shared::dirs::home_dir()?;
     load_peer_connection_in(&home, session_id)
+}
+
+/// Looks up the newest registry entry whose tmux location exactly matches
+/// `tmux`, such as `session:@12.%34`.
+pub fn load_peer_connection_by_tmux(tmux: &str) -> Option<PeerConnection> {
+    let home = crate::shared::dirs::home_dir()?;
+    load_peer_connection_by_tmux_in(&home, tmux)
+}
+
+fn load_peer_connection_by_tmux_in(home: &Path, tmux: &str) -> Option<PeerConnection> {
+    load_registry_entries_in(home)
+        .into_values()
+        .filter(|entry| entry.tmux.as_deref() == Some(tmux))
+        .max_by_key(|entry| entry.started_at)
+        .map(|entry| PeerConnection {
+            pid: entry.pid,
+            messaging_socket_path: entry.messaging_socket_path,
+        })
 }
 
 fn load_peer_connection_in(home: &Path, session_id: &str) -> Option<PeerConnection> {
@@ -261,5 +281,69 @@ mod tests {
         let connection = load_peer_connection_in(home.path(), "aaa");
 
         assert_eq!(connection, None);
+    }
+
+    #[rstest]
+    #[case::finds_exact_tmux_location(
+        &[
+            (
+                "111.json",
+                r#"{"pid":111,"sessionId":"aaa","tmux":"example/repo:@1.%2","messagingSocketPath":"/tmp/cc-socks/111.sock"}"#,
+            ),
+            (
+                "222.json",
+                r#"{"pid":222,"sessionId":"bbb","tmux":"example/repo:@1.%3","messagingSocketPath":"/tmp/cc-socks/222.sock"}"#,
+            ),
+        ],
+        "example/repo:@1.%2",
+        Some(PeerConnection {
+            pid: 111,
+            messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
+        })
+    )]
+    #[case::none_when_tmux_location_is_unknown(
+        &[(
+            "111.json",
+            r#"{"pid":111,"sessionId":"aaa","tmux":"example/repo:@1.%2"}"#,
+        )],
+        "example/repo:@1.%9",
+        None
+    )]
+    #[case::does_not_partially_match_pane_id(
+        &[(
+            "111.json",
+            r#"{"pid":111,"sessionId":"aaa","tmux":"example/repo:@1.%30"}"#,
+        )],
+        "example/repo:@1.%3",
+        None
+    )]
+    #[case::prefers_newest_entry_when_tmux_location_is_reused(
+        &[
+            (
+                "111.json",
+                r#"{"pid":111,"sessionId":"aaa","tmux":"example/repo:@1.%2","startedAt":1000,"messagingSocketPath":"/tmp/cc-socks/111.sock"}"#,
+            ),
+            (
+                "222.json",
+                r#"{"pid":222,"sessionId":"bbb","tmux":"example/repo:@1.%2","startedAt":2000,"messagingSocketPath":"/tmp/cc-socks/222.sock"}"#,
+            ),
+        ],
+        "example/repo:@1.%2",
+        Some(PeerConnection {
+            pid: 222,
+            messaging_socket_path: Some("/tmp/cc-socks/222.sock".to_string()),
+        })
+    )]
+    fn load_peer_connection_by_tmux_in_cases(
+        #[case] files: &[(&str, &str)],
+        #[case] tmux: &str,
+        #[case] expected: Option<PeerConnection>,
+    ) {
+        let home = TempDir::new().unwrap();
+        write_files(home.path(), files);
+
+        let connection = load_peer_connection_by_tmux_in(home.path(), tmux);
+
+        assert_eq!(connection, expected);
     }
 }
