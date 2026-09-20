@@ -189,7 +189,7 @@ pub(super) fn run_worktree_creation(
     let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
 
     // Setup tmux window using config layout
-    setup_tmux_window(
+    let route = setup_tmux_window(
         TmuxWindowSpec {
             repo_root,
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
@@ -208,8 +208,10 @@ pub(super) fn run_worktree_creation(
 
     let suffix = if background { " (background)" } else { "" };
     println!(
-        "Created worktree '{}' and opened tmux window{}",
-        worktree_name, suffix
+        "Created worktree '{}' and opened tmux window{}{}",
+        worktree_name,
+        suffix,
+        route.display_suffix()
     );
 
     Ok(())

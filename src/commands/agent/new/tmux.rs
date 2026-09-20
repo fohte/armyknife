@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::tmux;
+use crate::infra::tmux::layout::AgentLaunchRoute;
 use crate::shared::config::{Config, LayoutNode};
 
 /// Inputs for setting up a tmux window, grouped to keep `setup_tmux_window`'s
@@ -28,13 +29,13 @@ pub(super) struct TmuxWindowSpec<'a> {
 }
 
 /// Setup a tmux window with the given layout.
-pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result<()> {
+pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result<AgentLaunchRoute> {
     let target_session = tmux::get_session_name(spec.repo_root, &config.wm.worktrees_dir);
 
     tmux::ensure_session(&target_session, spec.repo_root)
         .context("Failed to ensure tmux session")?;
 
-    tmux::layout::build_layout(tmux::layout::LayoutSpec {
+    let route = tmux::layout::build_layout(tmux::layout::LayoutSpec {
         common: tmux::layout::TmuxSessionSpec {
             session: &target_session,
             cwd: spec.cwd,
@@ -55,7 +56,7 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
         tmux::switch_to_session(&target_session).context("Failed to switch to tmux session")?;
     }
 
-    Ok(())
+    Ok(route)
 }
 
 /// Inputs for `setup_split_pane`, grouped to keep its argument count in check.
@@ -73,7 +74,7 @@ pub(super) struct TmuxSplitPaneSpec<'a> {
 
 /// Splits `spec.target_pane` — the tmux pane the invoking process is running
 /// in — into a new pane in the same window and starts `spec.engine`'s CLI there.
-pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
+pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRoute> {
     let session = tmux::get_session_name_for_pane(spec.target_pane).with_context(|| {
         format!(
             "Failed to resolve tmux session for pane '{}'",
@@ -81,7 +82,7 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
         )
     })?;
 
-    let new_pane_id = tmux::layout::split_pane(tmux::layout::SplitSpec {
+    let result = tmux::layout::split_pane(tmux::layout::SplitSpec {
         common: tmux::layout::TmuxSessionSpec {
             session: &session,
             cwd: spec.cwd,
@@ -98,8 +99,8 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<()> {
     .context("Failed to split tmux pane")?;
 
     if !spec.background {
-        tmux::focus_pane(&new_pane_id).context("Failed to focus new pane")?;
+        tmux::focus_pane(&result.pane_id).context("Failed to focus new pane")?;
     }
 
-    Ok(())
+    Ok(result.route)
 }
