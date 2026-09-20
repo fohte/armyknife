@@ -96,11 +96,11 @@ pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> S
 /// (never unlinked -- relies on OS `/tmp` GC, same policy as the
 /// clean-detached paths file) since it can exceed a comfortable argv size.
 pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationRequest) -> Result<()> {
+    use std::ffi::OsString;
     use std::io::Write;
-    use std::os::unix::process::CommandExt;
-    use std::process::Stdio;
+    use std::path::Path;
 
-    use crate::shared::command;
+    use crate::infra::process::spawn_detached;
 
     let exe = std::env::current_exe().context("failed to resolve current exe")?;
 
@@ -116,35 +116,20 @@ pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationReque
         .keep()
         .map_err(|e| anyhow::anyhow!("failed to persist prompt file: {e}"))?;
 
-    let mut cmd = command::new(&exe);
-    cmd.arg("agent")
-        .arg("generate-title-detached")
-        .arg(&request.session_id)
-        .arg("--prompt-file")
-        .arg(&file_path)
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let mut args = vec![
+        OsString::from("agent"),
+        OsString::from("generate-title-detached"),
+        OsString::from(&request.session_id),
+        OsString::from("--prompt-file"),
+        file_path.clone().into_os_string(),
+    ];
     if let Some(label) = &request.previous_label {
-        cmd.arg("--previous-label").arg(label);
+        args.push(OsString::from("--previous-label"));
+        args.push(OsString::from(label));
     }
 
-    // SAFETY: `setsid` only manipulates the calling process's session
-    // membership; it is async-signal-safe and documented as one of the
-    // operations safe to call in `pre_exec`. Detaching here is what
-    // prevents the parent TTY's HUP / SIGINT from reaching the child.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    match cmd.spawn() {
-        Ok(_child) => Ok(()),
+    match spawn_detached(&exe, &args, Some(Path::new("/")), &[]) {
+        Ok(()) => Ok(()),
         Err(e) => {
             // Roll back the persisted prompt file; without the child it
             // would only ever be cleaned up by the OS `/tmp` GC.
