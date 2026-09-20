@@ -121,9 +121,8 @@ where
     cmd.exec()
 }
 
-/// Spawns `program args...` with stdio redirected to `/dev/null` and the
-/// child detached from our stdio handles, then returns immediately without
-/// waiting.
+/// Spawns `program args...` in a new session with stdio redirected to
+/// `/dev/null`, then returns immediately without waiting.
 ///
 /// Used for fire-and-forget background workers (e.g., the auto-compact
 /// schedule worker spawned from the Stop hook): the parent process must be
@@ -154,6 +153,20 @@ where
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
+
+    // SAFETY: `setsid` only manipulates the calling process's session
+    // membership; it is async-signal-safe and documented as one of the
+    // operations safe to call in `pre_exec`. A separate session keeps
+    // fire-and-forget workers out of the hook runner's process group.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
     cmd.spawn().map(|_| ())
 }
 
@@ -455,11 +468,60 @@ mod tests {
 
     use super::*;
 
-    // These two tests spawn a real `sh` process rather than mocking the spawn/kill
-    // boundary. `run_with_timeout` wraps that exact boundary (spawn a `Command`, kill
-    // it if it overruns), so there is no logic to exercise without a real process on
-    // the other end; `sh` is a POSIX-guaranteed shell primitive, not an optional
-    // external tool like tmux/git/ps that may be absent or blocked in a sandbox.
+    // `setsid` is only observable after the spawn boundary, so this test uses
+    // the POSIX-guaranteed `sh` rather than an optional external tool.
+    #[test]
+    fn spawn_detached_starts_child_in_a_new_session() {
+        let pid_file = tempfile::NamedTempFile::new().expect("pid file should be created");
+        let pid_path = pid_file.path().as_os_str();
+
+        spawn_detached(
+            "sh",
+            [
+                "-c".as_ref(),
+                "printf %s \"$$\" > \"$1\"; kill -STOP $$".as_ref(),
+                "sh".as_ref(),
+                pid_path,
+            ],
+            None,
+            &[],
+        )
+        .expect("child should spawn");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let child_pid = loop {
+            let contents =
+                std::fs::read_to_string(pid_file.path()).expect("pid file should be readable");
+            if let Ok(pid) = contents.parse::<libc::pid_t>() {
+                break Ok(pid);
+            }
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "child did not write its pid promptly",
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        .expect("child should write its pid promptly");
+
+        // SAFETY: both calls only query process membership.
+        let (child_pgid, child_sid) =
+            unsafe { (libc::getpgid(child_pid), libc::getsid(child_pid)) };
+        // SAFETY: the child is stopped and this pid came directly from that child.
+        unsafe {
+            libc::kill(child_pid, libc::SIGKILL);
+        }
+
+        assert_eq!((child_pgid, child_sid), (child_pid, child_pid));
+    }
+
+    // These `run_with_timeout` tests spawn a real `sh` process rather than mocking
+    // the spawn/kill boundary. `run_with_timeout` wraps that exact boundary (spawn a
+    // `Command`, kill it if it overruns), so there is no logic to exercise without a
+    // real process on the other end; `sh` is a POSIX-guaranteed shell primitive, not
+    // an optional external tool like tmux/git/ps that may be absent or blocked in a
+    // sandbox.
 
     #[test]
     fn run_with_timeout_returns_output_when_command_finishes_in_time() {
