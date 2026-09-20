@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.315](https://github.com/fohte/armyknife/compare/v0.1.314...v0.1.315) (2026-09-20)
+
+
+### Bug Fixes
+
+* **process:** start fire-and-forget workers in a new session ([#945](https://github.com/fohte/armyknife/issues/945)) ([ded9346](https://github.com/fohte/armyknife/commit/ded934678e62eca316a6c99aaa45bc9ac28f8fd8))
+
 ## [0.1.314](https://github.com/fohte/armyknife/compare/v0.1.313...v0.1.314) (2026-09-20)
 
 
