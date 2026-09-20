@@ -337,26 +337,26 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                  | Aliases | Description                                                              |
-| --------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                |
-| `hook <event>`                          |         | Record session events (called from Claude Code hooks)                    |
-| `list`                                  | `ls`    | List all Claude Code sessions with status                                |
-| `focus <session_id>`                    |         | Focus on a session's tmux pane                                           |
-| `mark-read [-t <pane_id>]`              |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)         |
-| `resume [session_id]`                   | `r`     | Resume the pane's Claude Code session (reads pane option if no argument) |
-| `resurrect save`                        |         | Save pane session IDs for tmux-resurrect (run from post-save hook)       |
-| `resurrect restore`                     |         | Restore pane session IDs and relaunch Claude Code (from post-restore)    |
-| `peer parent`                           |         | List the session that delegated to this one, if any (JSON)               |
-| `peer children`                         |         | List the sessions this one delegated to (JSON)                           |
-| `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)               |
-| `peer me`                               |         | Print the session running in the caller's own tmux pane (JSON)           |
-| `peer wake <session_id>`                |         | Resume a paused peer session; print its SendMessage name (Claude only)   |
-| `peer notify <session_id> -m <text>`    |         | Send a message to another session (SendMessage socket / `codex queue`)   |
-| `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                 |
-| `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)            |
-| `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                   |
-| `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty   |
+| Action                                  | Aliases | Description                                                               |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                 |
+| `hook <event>`                          |         | Record session events (called from Claude Code hooks)                     |
+| `list`                                  | `ls`    | List all Claude Code sessions with status                                 |
+| `focus <session_id>`                    |         | Focus on a session's tmux pane                                            |
+| `mark-read [-t <pane_id>]`              |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
+| `resume [session_id]`                   | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
+| `resurrect save`                        |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
+| `resurrect restore`                     |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
+| `peer parent`                           |         | List the session that delegated to this one, if any (JSON)                |
+| `peer children`                         |         | List the sessions this one delegated to (JSON)                            |
+| `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)                |
+| `peer me`                               |         | Print the session running in the caller's own tmux pane (JSON)            |
+| `peer wake <session_id>`                |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
+| `peer notify <session_id> -m <text>`    |         | Send a message to another session (SendMessage socket / Codex app-server) |
+| `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                  |
+| `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)             |
+| `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                    |
+| `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
 `new` options:
 
@@ -507,7 +507,7 @@ myproject-7e
 
 `a agent peer notify <session_id> -m <text>` delivers a message to a Claude Code session's `SendMessage` socket directly (for a Codex target, see below), without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
 
-For a Codex target (see `engine` above), `notify` runs `codex queue --thread <session_id>` instead, so `codex` must be in `PATH` and share the target's `$CODEX_HOME`. This only _queues_ the message: the running `codex` polls the queue about every 10 seconds and injects it as a user turn once the session is idle, so it can arrive later than the command returns (e.g. while a turn is running, or after a turn the user interrupted completes). `notify` prints `Queued for Codex session ...` rather than claiming delivery. A `Paused` Codex target is resumed first (the pane is respawned, without waiting for anything to register); the queued message is picked up once the resumed `codex` loads the thread. `codex queue` failures (archived thread, a running local app-server daemon, ...) are returned as errors with `codex`'s own message.
+For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If the app-server is unavailable, the thread belongs to an embedded app-server, or the server rejects the request, `notify` falls back to `codex queue --thread <session_id>` and prints the direct-delivery failure. The fallback requires `codex` in `PATH` with the target's `$CODEX_HOME`. A queued message is not delivered yet: the running `codex` polls about every 10 seconds and can start it only after the current turn finishes and the thread is idle. If both direct delivery and queueing fail, the command returns both errors. A `Paused` Codex target is resumed before delivery is attempted; if its thread is not registered yet, the resumed `codex` picks up the queued message when it loads the thread.
 
 `notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a wm delete` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
 
