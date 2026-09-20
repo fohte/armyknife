@@ -26,7 +26,7 @@ use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
 use crate::shared::config::{self, Config, Terminal};
-use crate::shared::env_var::EnvVars;
+use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
 
 mod pane_binding;
@@ -254,6 +254,11 @@ fn evict_paused_sessions_on_pane_takeover(
     }
 }
 
+fn session_needs_pane_binding(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    Ok(store::load_session_from(sessions_dir, session_id)?
+        .is_none_or(|session| session.tmux_info.is_none()))
+}
+
 /// Internal implementation that returns ProcessResult for testing.
 /// Accepts sessions_dir as a parameter to allow testing with temporary directories.
 fn process_hook_event_impl(
@@ -356,14 +361,11 @@ fn process_hook_event_impl(
     // When `claude` is started without `-c`, only SessionStart(startup) fires,
     // which skips setting the pane option to avoid wrong session_id on resume.
     // UserPromptSubmit is the earliest subsequent event where we can set it.
-    // Skip once the session file exists: pane option and eviction only need to
-    // run at the moment of pane handover (the first prompt of a new session),
-    // and re-running them on every prompt costs an O(N) disk scan for no
-    // behavioral effect.
+    // Skip once the session is bound: pane option and eviction only need to run
+    // at pane handover. The launcher may create the record before this hook to
+    // preserve metadata that is unavailable inside the shared daemon.
     if event == HookEvent::UserPromptSubmit
-        && !sessions_dir
-            .join(format!("{}.json", input.session_id))
-            .exists()
+        && session_needs_pane_binding(sessions_dir, &input.session_id)?
         && let Some(pane_info) = pane_info.as_ref()
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
@@ -399,7 +401,7 @@ fn process_hook_event_impl(
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()
-            .map(|s| s.split(',').map(|id| id.trim().to_string()).collect())
+            .map(|s| parse_ancestor_session_ids(s))
             .unwrap_or_default();
 
         Session {
@@ -2578,6 +2580,35 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[rstest]
+    #[case::missing_session(false, true)]
+    #[case::provisional_session(true, true)]
+    #[case::bound_session(true, false)]
+    fn pane_binding_requirement_tracks_tmux_info(
+        #[case] session_exists: bool,
+        #[case] expected: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        if session_exists {
+            save_test_session(temp_dir.path(), "test-123", |session| {
+                if !expected {
+                    session.tmux_info = Some(TmuxInfo {
+                        session_name: "example".to_string(),
+                        window_name: "delegate".to_string(),
+                        window_index: 1,
+                        pane_id: "%1".to_string(),
+                    });
+                }
+            });
+        }
+
+        assert_eq!(
+            session_needs_pane_binding(temp_dir.path(), "test-123")
+                .expect("binding check should succeed"),
+            expected
+        );
     }
 
     mod hook_log_tests {

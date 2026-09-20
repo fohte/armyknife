@@ -7,7 +7,7 @@ use chrono::Utc;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::tmux::layout::AgentLaunchRoute;
-use crate::shared::env_var::EnvVars;
+use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 
 pub(super) fn record_codex_daemon_metadata(
     route: &AgentLaunchRoute,
@@ -26,16 +26,10 @@ pub(super) fn record_codex_daemon_metadata(
 }
 
 fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
-    let label = env_vars
-        .iter()
-        .find(|(key, _)| *key == EnvVars::session_label_name())
-        .map(|(_, value)| *value)
-        .filter(|value| !value.is_empty());
-    let ancestor_session_ids = env_vars
-        .iter()
-        .find(|(key, _)| *key == EnvVars::ancestor_session_ids_name())
-        .map(|(_, value)| parse_ancestor_session_ids(value))
-        .unwrap_or_default();
+    let (label, ancestor_session_ids) = metadata_from_env(env_vars);
+    if label.is_none() && ancestor_session_ids.is_empty() {
+        return Ok(());
+    }
 
     record_in(
         &store::sessions_dir()?,
@@ -46,13 +40,18 @@ fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> R
     )
 }
 
-fn parse_ancestor_session_ids(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .collect()
+fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> (Option<&'a str>, Vec<String>) {
+    let label = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::session_label_name())
+        .map(|(_, value)| *value)
+        .filter(|value| !value.is_empty());
+    let ancestor_session_ids = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::ancestor_session_ids_name())
+        .map(|(_, value)| parse_ancestor_session_ids(value))
+        .unwrap_or_default();
+    (label, ancestor_session_ids)
 }
 
 fn record_in(
@@ -262,5 +261,22 @@ mod tests {
     #[case::empty_value("", &[])]
     fn parses_ancestor_session_ids(#[case] input: &str, #[case] expected: &[&str]) {
         assert_eq!(parse_ancestor_session_ids(input), expected);
+    }
+
+    #[rstest]
+    fn extracts_delegation_metadata_from_env() {
+        let env_vars = [
+            ("UNRELATED", "value"),
+            (EnvVars::session_label_name(), "delegate label"),
+            (EnvVars::ancestor_session_ids_name(), "root, parent"),
+        ];
+
+        assert_eq!(
+            metadata_from_env(&env_vars),
+            (
+                Some("delegate label"),
+                vec!["root".to_string(), "parent".to_string()]
+            )
+        );
     }
 }

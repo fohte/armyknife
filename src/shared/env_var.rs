@@ -52,6 +52,15 @@ fn non_empty_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
 
+pub(crate) fn parse_ancestor_session_ids(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 impl EnvVars {
     /// Read all ARMYKNIFE_* environment variables from the current process.
     pub fn load() -> Self {
