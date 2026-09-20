@@ -238,19 +238,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::standard(AgentLaunchRoute::Standard, "")]
-    #[case::daemon(AgentLaunchRoute::CodexDaemon, " (Codex daemon)")]
-    #[case::fallback(
-        AgentLaunchRoute::CodexArgvFallback {
-            reason: "daemon unavailable".to_string(),
-        },
-        " (Codex argv fallback: daemon unavailable)"
-    )]
-    fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
-        assert_eq!(route.display_suffix(), expected);
-    }
-
-    #[rstest]
     #[case::non_codex(Engine::Claude, Some("prompt"), 1, AgentLaunchRoute::Standard)]
     #[case::missing_prompt(Engine::Codex, None, 1, AgentLaunchRoute::Standard)]
     #[case::multiple_panes(

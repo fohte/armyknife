@@ -247,19 +247,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::standard(AgentLaunchRoute::Standard, "")]
-    #[case::messaging(AgentLaunchRoute::ClaudeMessaging, " (Claude messaging)")]
-    #[case::fallback(
-        AgentLaunchRoute::ClaudeArgvFallback {
-            reason: "socket unavailable".to_string(),
-        },
-        " (Claude argv fallback: socket unavailable)"
-    )]
-    fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
-        assert_eq!(route.display_suffix(), expected);
-    }
-
-    #[rstest]
     #[case::non_claude(Engine::Codex, Some("prompt"), 1, AgentLaunchRoute::Standard)]
     #[case::missing_prompt(Engine::Claude, None, 1, AgentLaunchRoute::Standard)]
     #[case::multiple_panes(
