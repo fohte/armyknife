@@ -33,15 +33,16 @@ pub struct NotifyArgs {
     pub message: String,
 }
 
-/// What a successful [`notify`] guarantees -- callers must not report more
-/// than this.
+/// The delivery path used by [`notify`]. Codex reports `Steered` versus
+/// `Started` from armyknife's tracked pre-delivery status because app-server
+/// returns the same response for both outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     /// Written to the target's messaging socket.
     Sent,
-    /// Injected into the Codex thread's active turn.
+    /// Delivered through app-server while armyknife tracked an active turn.
     Steered,
-    /// Started a new turn in an idle Codex thread.
+    /// Delivered through app-server while armyknife tracked an idle thread.
     Started,
     /// Appended to the target Codex session's queue. The running `codex`
     /// injects it later (polls every ~10s, and only once the session is
@@ -161,7 +162,10 @@ pub fn notify(
         Engine::Codex => send_to_codex(
             session_id,
             &content,
-            session.status,
+            matches!(
+                session.status,
+                SessionStatus::Running | SessionStatus::WaitingInput
+            ),
             codex_steer::send_message,
             codex_queue::queue_message,
         ),
@@ -171,22 +175,18 @@ pub fn notify(
 fn send_to_codex<S, Q>(
     session_id: &str,
     content: &str,
-    status: SessionStatus,
+    was_active: bool,
     steer: S,
     queue: Q,
 ) -> Result<Delivery>
 where
-    S: FnOnce(&str, &str) -> Result<()>,
+    S: FnOnce(&str, &str) -> codex_steer::Result<()>,
     Q: FnOnce(&str, &str) -> Result<()>,
 {
     match steer(session_id, content) {
-        Ok(()) => Ok(match status {
-            SessionStatus::Running | SessionStatus::WaitingInput => Delivery::Steered,
-            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended => {
-                Delivery::Started
-            }
-        }),
-        Err(direct_error) => {
+        Ok(()) if was_active => Ok(Delivery::Steered),
+        Ok(()) => Ok(Delivery::Started),
+        Err(codex_steer::DeliveryError::NotDelivered(direct_error)) => {
             queue(session_id, content).map_err(|queue_error| {
                 anyhow::anyhow!(
                     "direct Codex delivery failed: {direct_error}; queue fallback failed: {queue_error}"
@@ -196,6 +196,7 @@ where
                 reason: direct_error.to_string(),
             })
         }
+        Err(error @ codex_steer::DeliveryError::Unconfirmed(_)) => Err(error.into()),
     }
 }
 
@@ -280,42 +281,69 @@ mod tests {
         let actual = send_to_codex(
             "thread-a",
             "hello",
-            status,
+            matches!(status, SessionStatus::Running | SessionStatus::WaitingInput),
             |_, _| Ok(()),
             |_, _| Err(anyhow::anyhow!("queue must not run")),
         );
         assert_eq!(actual.map_err(|error| error.to_string()), Ok(expected));
     }
 
-    #[test]
-    fn codex_delivery_falls_back_to_queue_with_reason() {
+    #[rstest]
+    #[case::queued(
+        "thread not found",
+        None,
+        Ok(Delivery::Queued { reason: "thread not found".to_string() })
+    )]
+    #[case::both_failed(
+        "daemon unavailable",
+        Some("thread archived"),
+        Err("direct Codex delivery failed: daemon unavailable; queue fallback failed: thread archived".to_string())
+    )]
+    fn codex_delivery_fallback(
+        #[case] direct_error: &str,
+        #[case] queue_error: Option<&str>,
+        #[case] expected: std::result::Result<Delivery, String>,
+    ) {
         let actual = send_to_codex(
             "thread-a",
             "hello",
-            SessionStatus::Running,
-            |_, _| Err(anyhow::anyhow!("thread not found")),
-            |_, _| Ok(()),
+            true,
+            |_, _| {
+                Err(codex_steer::DeliveryError::NotDelivered(anyhow::anyhow!(
+                    direct_error.to_string()
+                )))
+            },
+            |_, _| match queue_error {
+                Some(error) => Err(anyhow::anyhow!(error.to_string())),
+                None => Ok(()),
+            },
         );
-        assert_eq!(
-            actual.map_err(|error| error.to_string()),
-            Ok(Delivery::Queued {
-                reason: "thread not found".to_string(),
-            }),
-        );
+        assert_eq!(actual.map_err(|error| error.to_string()), expected,);
     }
 
     #[test]
-    fn codex_delivery_reports_direct_and_queue_failures() {
+    fn codex_delivery_does_not_queue_when_direct_outcome_is_unknown() {
+        let queue_called = std::cell::Cell::new(false);
         let actual = send_to_codex(
             "thread-a",
             "hello",
-            SessionStatus::Running,
-            |_, _| Err(anyhow::anyhow!("daemon unavailable")),
-            |_, _| Err(anyhow::anyhow!("thread archived")),
+            true,
+            |_, _| {
+                Err(codex_steer::DeliveryError::Unconfirmed(anyhow::anyhow!(
+                    "response timed out"
+                )))
+            },
+            |_, _| {
+                queue_called.set(true);
+                Ok(())
+            },
         );
         assert_eq!(
-            actual.map_err(|error| error.to_string()),
-            Err("direct Codex delivery failed: daemon unavailable; queue fallback failed: thread archived".to_string()),
+            (actual.map_err(|error| error.to_string()), queue_called.get()),
+            (
+                Err("Codex app-server delivery is unconfirmed; not queueing to avoid a duplicate: response timed out".to_string()),
+                false,
+            ),
         );
     }
 

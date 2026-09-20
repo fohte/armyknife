@@ -8,21 +8,48 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
+use thiserror::Error;
 use tungstenite::{Message, WebSocket, client};
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub type Result<T> = std::result::Result<T, DeliveryError>;
+
+#[derive(Debug, Error)]
+pub enum DeliveryError {
+    /// The app-server did not accept `turn/start`, so queue fallback is safe.
+    #[error("{0:#}")]
+    NotDelivered(anyhow::Error),
+    /// `turn/start` was written but no authoritative response arrived.
+    #[error("Codex app-server delivery is unconfirmed; not queueing to avoid a duplicate: {0:#}")]
+    Unconfirmed(anyhow::Error),
+}
+
+#[derive(Debug, Error)]
+enum RequestError {
+    #[error("{0:#}")]
+    Rejected(anyhow::Error),
+    #[error("{0:#}")]
+    Transport(anyhow::Error),
+}
+
+struct RpcRequest {
+    id: u64,
+    method: &'static str,
+    payload: Value,
+}
+
 /// Sends `content` to the Codex thread identified by `thread_id`.
 pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
-    let socket_path = control_socket_path()?;
+    let socket_path = control_socket_path().map_err(DeliveryError::NotDelivered)?;
     send_message_to(&socket_path, thread_id, content)
 }
 
-fn control_socket_path() -> Result<PathBuf> {
+fn control_socket_path() -> anyhow::Result<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -34,114 +61,145 @@ fn control_socket_path() -> Result<PathBuf> {
 }
 
 fn send_message_to(socket_path: &Path, thread_id: &str, content: &str) -> Result<()> {
-    let stream = UnixStream::connect(socket_path).with_context(|| {
-        format!(
-            "failed to connect to Codex app-server control socket {}",
-            socket_path.display()
-        )
-    })?;
+    let stream = UnixStream::connect(socket_path)
+        .with_context(|| {
+            format!(
+                "failed to connect to Codex app-server control socket {}",
+                socket_path.display()
+            )
+        })
+        .map_err(DeliveryError::NotDelivered)?;
     stream
         .set_read_timeout(Some(RESPONSE_TIMEOUT))
-        .context("failed to set Codex app-server read timeout")?;
+        .context("failed to set Codex app-server read timeout")
+        .map_err(DeliveryError::NotDelivered)?;
     stream
         .set_write_timeout(Some(RESPONSE_TIMEOUT))
-        .context("failed to set Codex app-server write timeout")?;
+        .context("failed to set Codex app-server write timeout")
+        .map_err(DeliveryError::NotDelivered)?;
 
     let (mut socket, _) = client("ws://localhost/rpc", stream)
         .map_err(|error| anyhow!(error))
-        .context("Codex app-server WebSocket handshake failed")?;
+        .context("Codex app-server WebSocket handshake failed")
+        .map_err(DeliveryError::NotDelivered)?;
 
-    send_request(
-        &mut socket,
-        &initialize_request(),
-        INITIALIZE_REQUEST_ID,
-        "initialize",
-    )?;
-    send_request(
-        &mut socket,
-        &turn_start_request(thread_id, content),
-        TURN_START_REQUEST_ID,
-        "turn/start",
+    send_request(&mut socket, &initialize_request()).map_err(|error| match error {
+        RequestError::Rejected(error) | RequestError::Transport(error) => {
+            DeliveryError::NotDelivered(error)
+        }
+    })?;
+    send_request(&mut socket, &turn_start_request(thread_id, content)).map_err(
+        |error| match error {
+            RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
+            RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
+        },
     )
 }
 
-fn initialize_request() -> Value {
-    json!({
-        "id": INITIALIZE_REQUEST_ID,
-        "method": "initialize",
-        "params": {
-            "clientInfo": {
-                "name": "armyknife",
-                "title": "armyknife",
-                "version": env!("CARGO_PKG_VERSION"),
+fn initialize_request() -> RpcRequest {
+    RpcRequest {
+        id: INITIALIZE_REQUEST_ID,
+        method: "initialize",
+        payload: json!({
+            "id": INITIALIZE_REQUEST_ID,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "armyknife",
+                    "title": "armyknife",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
             },
-        },
-    })
+        }),
+    }
 }
 
-fn turn_start_request(thread_id: &str, content: &str) -> Value {
-    json!({
-        "id": TURN_START_REQUEST_ID,
-        "method": "turn/start",
-        "params": {
-            "threadId": thread_id,
-            "input": [{
-                "type": "text",
-                "text": content,
-                "textElements": [],
-            }],
-        },
-    })
+fn turn_start_request(thread_id: &str, content: &str) -> RpcRequest {
+    RpcRequest {
+        id: TURN_START_REQUEST_ID,
+        method: "turn/start",
+        payload: json!({
+            "id": TURN_START_REQUEST_ID,
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "input": [{
+                    "type": "text",
+                    "text": content,
+                    "textElements": [],
+                }],
+            },
+        }),
+    }
 }
 
 fn send_request(
     socket: &mut WebSocket<UnixStream>,
-    request: &Value,
-    request_id: u64,
-    method: &str,
-) -> Result<()> {
+    request: &RpcRequest,
+) -> std::result::Result<(), RequestError> {
     socket
-        .send(Message::Text(request.to_string().into()))
-        .with_context(|| format!("failed to send Codex app-server `{method}` request"))?;
-    wait_for_response(socket, request_id, method)
+        .send(Message::Text(request.payload.to_string().into()))
+        .with_context(|| {
+            format!(
+                "failed to send Codex app-server `{}` request",
+                request.method
+            )
+        })
+        .map_err(RequestError::Transport)?;
+    wait_for_response(|| socket.read(), request.id, request.method)
 }
 
-fn wait_for_response(
-    socket: &mut WebSocket<UnixStream>,
+fn wait_for_response<R>(
+    mut read: R,
     request_id: u64,
     method: &str,
-) -> Result<()> {
+) -> std::result::Result<(), RequestError>
+where
+    R: FnMut() -> tungstenite::Result<Message>,
+{
     loop {
-        let message = socket
-            .read()
-            .with_context(|| format!("failed to read Codex app-server `{method}` response"))?;
+        let message = read()
+            .with_context(|| format!("failed to read Codex app-server `{method}` response"))
+            .map_err(RequestError::Transport)?;
         match message {
             Message::Text(text) => {
                 let response: Value = serde_json::from_str(&text)
-                    .with_context(|| format!("invalid JSON in `{method}` response"))?;
-                if response_for_request(&response, request_id, method)?.is_some() {
+                    .with_context(|| format!("invalid JSON in `{method}` response"))
+                    .map_err(RequestError::Transport)?;
+                if is_response_to(&response, request_id, method)? {
                     return Ok(());
                 }
             }
             Message::Close(frame) => {
-                bail!("Codex app-server closed during `{method}`: {frame:?}");
+                return Err(RequestError::Transport(anyhow!(
+                    "Codex app-server closed during `{method}`: {frame:?}"
+                )));
             }
             Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
         }
     }
 }
 
-fn response_for_request(response: &Value, request_id: u64, method: &str) -> Result<Option<()>> {
+fn is_response_to(
+    response: &Value,
+    request_id: u64,
+    method: &str,
+) -> std::result::Result<bool, RequestError> {
     if response.get("id").and_then(Value::as_u64) != Some(request_id) {
-        return Ok(None);
+        return Ok(false);
     }
     if let Some(error) = response.get("error") {
-        bail!("Codex app-server `{method}` failed: {}", rpc_error(error));
+        return Err(RequestError::Rejected(anyhow!(
+            "Codex app-server `{method}` failed: {}",
+            rpc_error(error)
+        )));
     }
     if response.get("result").is_none() {
-        bail!("Codex app-server `{method}` returned no result");
+        return Err(RequestError::Transport(anyhow!(
+            "Codex app-server `{method}` returned no result"
+        )));
     }
-    Ok(Some(()))
+    Ok(true)
 }
 
 fn rpc_error(error: &Value) -> String {
@@ -162,7 +220,7 @@ mod tests {
     #[test]
     fn builds_initialize_request() {
         assert_eq!(
-            initialize_request(),
+            initialize_request().payload,
             json!({
                 "id": 1,
                 "method": "initialize",
@@ -180,7 +238,7 @@ mod tests {
     #[test]
     fn builds_turn_start_request() {
         assert_eq!(
-            turn_start_request("thread-a", "hello there"),
+            turn_start_request("thread-a", "hello there").payload,
             json!({
                 "id": 2,
                 "method": "turn/start",
@@ -205,9 +263,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matching_success(json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}), Ok(Some(())))]
-    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(None))]
-    #[case::different_request(json!({"id": 1, "result": {}}), Ok(None))]
+    #[case::matching_success(json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}), Ok(true))]
+    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(false))]
+    #[case::different_request(json!({"id": 1, "result": {}}), Ok(false))]
     #[case::server_error(
         json!({"id": 2, "error": {"code": -32600, "message": "thread not found"}}),
         Err("Codex app-server `turn/start` failed: thread not found (code -32600)")
@@ -218,12 +276,37 @@ mod tests {
     )]
     fn selects_matching_rpc_response(
         #[case] response: Value,
-        #[case] expected: std::result::Result<Option<()>, &str>,
+        #[case] expected: std::result::Result<bool, &str>,
     ) {
         assert_eq!(
-            response_for_request(&response, 2, "turn/start").map_err(|error| error.to_string()),
+            is_response_to(&response, 2, "turn/start").map_err(|error| error.to_string()),
             expected.map_err(str::to_string),
         );
+    }
+
+    #[test]
+    fn waits_through_notifications_for_matching_response() {
+        let mut messages = [
+            Ok(Message::Text(
+                json!({"method": "turn/started", "params": {}})
+                    .to_string()
+                    .into(),
+            )),
+            Ok(Message::Text(
+                json!({"id": 2, "result": {}}).to_string().into(),
+            )),
+        ]
+        .into_iter();
+        let actual = wait_for_response(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            2,
+            "turn/start",
+        );
+        assert_eq!(actual.map_err(|error| error.to_string()), Ok(()));
     }
 
     #[rstest]
