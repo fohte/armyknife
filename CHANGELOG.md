@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.320](https://github.com/fohte/armyknife/compare/v0.1.319...v0.1.320) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** preserve ancestors and engine when resuming after session deletion ([#956](https://github.com/fohte/armyknife/issues/956)) ([a3a9c00](https://github.com/fohte/armyknife/commit/a3a9c00aa02c1241558c0d36622601e0306a3656))
+
 ## [0.1.319](https://github.com/fohte/armyknife/compare/v0.1.318...v0.1.319) (2026-09-20)
 
 
