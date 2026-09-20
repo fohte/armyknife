@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::ExitStatus;
 
@@ -261,11 +262,24 @@ fn launch_ghostty_macos(
             end try
         end tell'"};
 
-    command::new("bash")
+    let mut watcher = command::new("bash");
+    watcher
         .args(["-c", &watcher_sh])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
+        .stderr(std::process::Stdio::null());
+
+    // SAFETY: `setsid` is async-signal-safe, so it is safe to call in `pre_exec`.
+    // Leaves our process group so the watcher survives runners that kill the
+    // whole group when the command returns.
+    unsafe {
+        watcher.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    watcher.spawn()?;
 
     Ok(output.status)
 }
