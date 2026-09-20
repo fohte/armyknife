@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.319](https://github.com/fohte/armyknife/compare/v0.1.318...v0.1.319) (2026-09-20)
+
+
+### Bug Fixes
+
+* **agent:** preserve delegation ancestry when resuming codex sessions ([#954](https://github.com/fohte/armyknife/issues/954)) ([27e837b](https://github.com/fohte/armyknife/commit/27e837b5aecb4fdeae9a7c12e957adfb1253ade6))
+
 ## [0.1.318](https://github.com/fohte/armyknife/compare/v0.1.317...v0.1.318) (2026-09-20)
 
 
