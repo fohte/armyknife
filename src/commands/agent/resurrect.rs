@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 
 use super::pane;
 use super::store;
-use super::types::{Engine, Session, TMUX_SESSION_OPTION};
+use super::types::{Engine, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY};
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -154,7 +154,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
     let span = tracing::info_span!("agent.resurrect.save", run_id = %run_id);
     let _entered = span.enter();
 
-    let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION);
+    let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY);
     let state_file = state_file_path()?;
     let sessions_dir = store::sessions_dir()?;
 

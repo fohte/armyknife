@@ -33,7 +33,7 @@ use crate::commands::agent::claude_registry;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::resume::{RespawnError, respawn_paused_session};
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, Session, SessionStatus, TMUX_SESSION_OPTION};
+use crate::commands::agent::types::{Engine, Session, SessionStatus, resolve_session_option};
 use crate::infra::tmux;
 
 /// How often to poll Claude Code's session registry for the resumed
@@ -171,7 +171,7 @@ fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
         .tmux_info
         .as_ref()
         .ok_or_else(|| CcError::NoTmuxInfo(session_id.to_string()))?;
-    let recorded = host.pane_option(&tmux_info.pane_id, TMUX_SESSION_OPTION);
+    let recorded = resolve_session_option(|option| host.pane_option(&tmux_info.pane_id, option));
     check_pane_matches_target(recorded.as_deref(), session_id)?;
 
     let pane_id = &tmux_info.pane_id;
@@ -326,7 +326,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::commands::agent::types::TmuxInfo;
+    use crate::commands::agent::types::{TMUX_SESSION_OPTION, TmuxInfo};
 
     const SESSION_ID: &str = "s1";
     const PANE_ID: &str = "%0";
