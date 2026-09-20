@@ -6,10 +6,18 @@ use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{LayoutNode, SplitDirection};
 
 mod codex;
+mod execution;
 mod prompt;
+mod split;
 pub use codex::AgentLaunchRoute;
 use codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
+use execution::{execute_commands, execute_layout};
+#[cfg(test)]
+use execution::{find_new_window_index, rewrite_pane_targets, with_window_id_capture};
 use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
+#[cfg(test)]
+use split::{SplitPaneSetupSpec, build_split_pane_setup_commands};
+pub use split::{SplitResult, SplitSpec, split_pane};
 
 /// A single tmux command represented as a list of arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +26,7 @@ pub struct TmuxCommand {
 }
 
 impl TmuxCommand {
-    fn new(args: &[&str]) -> Self {
+    pub(super) fn new(args: &[&str]) -> Self {
         Self {
             args: args.iter().map(|s| s.to_string()).collect(),
         }
@@ -33,7 +41,7 @@ struct PaneEntry {
 
 /// The pane-targeting prefix used to address panes in a background-created
 /// window before its real window ID is known (see `execute_layout`).
-fn background_pane_prefix(session: &str, window_name: &str) -> String {
+pub(super) fn background_pane_prefix(session: &str, window_name: &str) -> String {
     format!("{session}:={window_name}.")
 }
 
@@ -69,7 +77,10 @@ pub struct LayoutCommandsSpec<'a> {
 }
 
 /// Builds `set-environment -t <session> <key> <value>` for each env var.
-fn set_environment_commands(session: &str, env_vars: &[(&str, &str)]) -> Vec<TmuxCommand> {
+pub(super) fn set_environment_commands(
+    session: &str,
+    env_vars: &[(&str, &str)],
+) -> Vec<TmuxCommand> {
     env_vars
         .iter()
         .map(|(key, value)| TmuxCommand::new(&["set-environment", "-t", session, key, value]))
@@ -77,7 +88,10 @@ fn set_environment_commands(session: &str, env_vars: &[(&str, &str)]) -> Vec<Tmu
 }
 
 /// Builds `set-environment -u -t <session> <key>` for each env var.
-fn unset_environment_commands(session: &str, env_vars: &[(&str, &str)]) -> Vec<TmuxCommand> {
+pub(super) fn unset_environment_commands(
+    session: &str,
+    env_vars: &[(&str, &str)],
+) -> Vec<TmuxCommand> {
     env_vars
         .iter()
         .map(|(key, _)| TmuxCommand::new(&["set-environment", "-u", "-t", session, key]))
@@ -318,31 +332,6 @@ fn count_panes(node: &LayoutNode) -> usize {
     }
 }
 
-/// Inputs for `build_split_pane_setup_commands`: the `set-environment` +
-/// `split-window` commands that must run before the new pane's id is known
-/// (mirrors `execute_layout`'s new-window capture).
-struct SplitPaneSetupSpec<'a> {
-    session: &'a str,
-    target_pane: &'a str,
-    cwd: &'a str,
-    env_vars: &'a [(&'a str, &'a str)],
-    background: bool,
-}
-
-/// Builds the `set-environment` (if any) + `split-window` command sequence.
-/// Always splits horizontally (side-by-side): this path has no layout
-/// config, unlike `--worktree`'s `config.wm.layout`.
-fn build_split_pane_setup_commands(spec: SplitPaneSetupSpec) -> Vec<TmuxCommand> {
-    let mut commands = set_environment_commands(spec.session, spec.env_vars);
-    let mut split_args = vec!["split-window"];
-    if spec.background {
-        split_args.push("-d");
-    }
-    split_args.extend(["-h", "-t", spec.target_pane, "-c", spec.cwd]);
-    commands.push(TmuxCommand::new(&split_args));
-    commands
-}
-
 /// Tmux session config shared by both `build_layout` and `split_pane`.
 pub struct TmuxSessionSpec<'a> {
     /// Target tmux session name.
@@ -471,199 +460,8 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
     })
 }
 
-/// Inputs for `split_pane`.
-pub struct SplitSpec<'a> {
-    pub common: TmuxSessionSpec<'a>,
-    pub target_pane: &'a str,
-    pub command: &'a str,
-}
-
-/// The created pane and the route used for its initial prompt.
-pub struct SplitResult {
-    pub pane_id: String,
-    pub route: AgentLaunchRoute,
-}
-
-/// Splits `target_pane` into a new pane within the same window and starts
-/// `command` there (typically `claude` or `codex`). Returns the new pane's id
-/// and the route used for the initial prompt.
-///
-/// Unlike `build_layout`, this never creates a window: `a agent new` without
-/// `--worktree` uses it to keep a handoff session visually attached to the
-/// pane it continues, instead of opening in a separate window.
-pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
-    let SplitSpec {
-        common:
-            TmuxSessionSpec {
-                session,
-                cwd,
-                model,
-                reasoning_effort,
-                prompt,
-                engine,
-                env_vars,
-                background,
-            },
-        target_pane,
-        command,
-    } = spec;
-
-    let codex_launch = CodexLaunch::prepare(engine, prompt, 1, Path::new(cwd));
-    let prompt_file = prompt.map(write_prompt_file).transpose()?;
-    let (launch_effort, launch_prompt_file) =
-        codex_launch.command_options(reasoning_effort, prompt_file.as_deref());
-    let cmd = apply_prompt_if_agent(
-        command,
-        engine,
-        model,
-        launch_effort,
-        launch_prompt_file,
-        true,
-    );
-
-    let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
-        session,
-        target_pane,
-        cwd,
-        env_vars,
-        background,
-    });
-
-    let mut capture_args = flatten_commands(&setup);
-    capture_args.extend(["-P", "-F", "#{pane_id}"]);
-    let new_pane_id = super::run_tmux_output(&capture_args)?;
-
-    let mut remaining = vec![
-        TmuxCommand::new(&[
-            "send-keys",
-            "-t",
-            new_pane_id.as_str(),
-            "-l",
-            "--",
-            cmd.as_str(),
-        ]),
-        TmuxCommand::new(&["send-keys", "-t", new_pane_id.as_str(), "C-m"]),
-    ];
-    remaining.extend(unset_environment_commands(session, env_vars));
-    execute_commands(&remaining).inspect_err(|_| {
-        // Best-effort: if send-keys/unset itself failed partway, don't
-        // leave session-level env vars leaked past this call's lifetime.
-        for (key, _) in env_vars {
-            let _ = super::run_tmux(&["set-environment", "-u", "-t", session, key]);
-        }
-    })?;
-
-    let route = codex_launch.finish_and_recover(CodexRecoverySpec {
-        cwd: Path::new(cwd),
-        effort: reasoning_effort,
-        prompt_file: prompt_file.as_deref(),
-        command,
-        model,
-        pane_id: Some(&new_pane_id),
-        env_vars,
-    })?;
-
-    Ok(SplitResult {
-        pane_id: new_pane_id,
-        route,
-    })
-}
-
-/// Flattens a sequence of `TmuxCommand` into a single arg list joined by `;`,
-/// the wire format tmux uses to chain multiple commands in one invocation.
-fn flatten_commands(commands: &[TmuxCommand]) -> Vec<&str> {
-    let mut args: Vec<&str> = Vec::new();
-    for (i, cmd) in commands.iter().enumerate() {
-        if i > 0 {
-            args.push(";");
-        }
-        for arg in &cmd.args {
-            args.push(arg);
-        }
-    }
-    args
-}
-
-/// Executes a layout and captures the stable window ID for launch fallback.
-/// Background layouts run `new-window` first, then rewrite the remaining
-/// `{session}:={window_name}.` pane targets to `{window_id}.` before running
-/// them. Foreground layouts keep the existing single tmux command sequence.
-///
-/// This indirection exists because tmux's target parser splits on `.` to
-/// separate window from pane, so a session-qualified target is ambiguous when
-/// the window name itself contains a `.` (e.g. a branch name like
-/// `copier-update/v0.8.13` becomes window name `copier-update-v0.8.13`).
-/// Window IDs (e.g. `@42`) never contain `.`, so targeting by ID sidesteps the
-/// ambiguity entirely.
-fn execute_layout(
-    commands: &[TmuxCommand],
-    session: &str,
-    window_name: &str,
-    background: bool,
-) -> super::Result<String> {
-    let new_window_idx = find_new_window_index(commands).ok_or_else(|| {
-        super::TmuxError::Internal("new-window command not found in layout".to_string())
-    })?;
-
-    if !background {
-        let commands = with_window_id_capture(commands, new_window_idx);
-        return super::run_tmux_output(&flatten_commands(&commands));
-    }
-
-    let setup = &commands[..=new_window_idx];
-    let rest = &commands[new_window_idx + 1..];
-
-    let mut setup_args = flatten_commands(setup);
-    setup_args.extend(["-P", "-F", "#{window_id}"]);
-    let window_id = super::run_tmux_output(&setup_args)?;
-
-    let old_prefix = background_pane_prefix(session, window_name);
-    let new_prefix = format!("{window_id}.");
-    execute_commands(&rewrite_pane_targets(rest, &old_prefix, &new_prefix))?;
-    Ok(window_id)
-}
-
-fn with_window_id_capture(commands: &[TmuxCommand], new_window_idx: usize) -> Vec<TmuxCommand> {
-    let mut commands = commands.to_vec();
-    commands[new_window_idx].args.extend([
-        "-P".to_string(),
-        "-F".to_string(),
-        "#{window_id}".to_string(),
-    ]);
-    commands
-}
-
-/// Finds the index of the `new-window` command in a layout's command list.
-fn find_new_window_index(commands: &[TmuxCommand]) -> Option<usize> {
-    commands
-        .iter()
-        .position(|cmd| cmd.args.first().map(String::as_str) == Some("new-window"))
-}
-
-/// Rewrites pane-targeting command args from `{old_prefix}{pane}` to
-/// `{new_prefix}{pane}`.
-fn rewrite_pane_targets(
-    commands: &[TmuxCommand],
-    old_prefix: &str,
-    new_prefix: &str,
-) -> Vec<TmuxCommand> {
-    commands
-        .iter()
-        .map(|cmd| TmuxCommand {
-            args: cmd
-                .args
-                .iter()
-                .map(|arg| match arg.strip_prefix(old_prefix) {
-                    Some(rest) => format!("{new_prefix}{rest}"),
-                    None => arg.clone(),
-                })
-                .collect(),
-        })
-        .collect()
-}
-
 /// Write prompt to a temp file that persists until the shell command reads it.
-fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
+pub(super) fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
     use anyhow::Context;
 
     let prompt_file = tempfile::Builder::new()
@@ -680,11 +478,6 @@ fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
         .into_temp_path()
         .keep()
         .context("Failed to persist prompt temp file")
-}
-
-/// Execute a sequence of TmuxCommand by chaining them with ";".
-fn execute_commands(commands: &[TmuxCommand]) -> super::Result<()> {
-    super::run_tmux(&flatten_commands(commands))
 }
 
 #[cfg(test)]
