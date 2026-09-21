@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -36,6 +36,10 @@ pub struct DelayedPermissionNotificationArgs {
     #[arg(long)]
     pub agent_key: String,
 
+    /// ID identifying the permission request that spawned this worker.
+    #[arg(long)]
+    pub request_id: String,
+
     /// Already-formatted permission message, including tool details.
     #[arg(long, allow_hyphen_values = true)]
     pub message: String,
@@ -44,6 +48,11 @@ pub struct DelayedPermissionNotificationArgs {
 /// Starts a detached worker so the synchronous hook is not held open
 /// while waiting for a possible follow-up event.
 pub(super) fn spawn(session: &Session, agent_key: &str, message: &str) {
+    let request_id = session
+        .pending_permission_request_ids
+        .get(agent_key)
+        .cloned()
+        .unwrap_or_default();
     let args = [
         "agent",
         "permission-notification",
@@ -51,6 +60,8 @@ pub(super) fn spawn(session: &Session, agent_key: &str, message: &str) {
         session.session_id.as_str(),
         "--agent-key",
         agent_key,
+        "--request-id",
+        request_id.as_str(),
         "--message",
         message,
     ];
@@ -66,43 +77,29 @@ pub(crate) fn run(args: &DelayedPermissionNotificationArgs) -> Result<()> {
     thread::sleep(PERMISSION_NOTIFICATION_GRACE);
 
     let sessions_dir = store::sessions_dir()?;
-    let Some(session) = store::load_session_from(&sessions_dir, &args.session)? else {
-        tracing::info!(
-            event = "agent.permission_notification.exit",
-            session = %args.session,
-            reason = "session_missing",
-        );
+    let Some(session) = load_current_session(&sessions_dir, args, "session_missing", "resolved")?
+    else {
         return Ok(());
     };
-    if !is_current(&session, &args.agent_key) {
-        tracing::info!(
-            event = "agent.permission_notification.exit",
-            session = %args.session,
-            reason = "resolved",
-        );
-        return Ok(());
-    }
 
     let session = if should_defer_for_codex_auto_review(&session) {
+        tracing::info!(
+            event = "agent.permission_notification.deferred",
+            session = %args.session,
+            reason = "codex_auto_review",
+            delay_secs = CODEX_AUTO_REVIEW_RECHECK_GRACE.as_secs(),
+        );
         thread::sleep(CODEX_AUTO_REVIEW_RECHECK_GRACE);
 
-        let Some(rechecked_session) = store::load_session_from(&sessions_dir, &args.session)?
+        let Some(rechecked_session) = load_current_session(
+            &sessions_dir,
+            args,
+            "session_missing_after_codex_review_grace",
+            "resolved_after_codex_review_grace",
+        )?
         else {
-            tracing::info!(
-                event = "agent.permission_notification.exit",
-                session = %args.session,
-                reason = "session_missing_after_codex_review_grace",
-            );
             return Ok(());
         };
-        if !is_current(&rechecked_session, &args.agent_key) {
-            tracing::info!(
-                event = "agent.permission_notification.exit",
-                session = %args.session,
-                reason = "resolved_after_codex_review_grace",
-            );
-            return Ok(());
-        }
         rechecked_session
     } else {
         session
@@ -138,6 +135,39 @@ pub(super) fn is_current(session: &Session, agent_key: &str) -> bool {
         && session.pending_permission_agent_ids.contains(agent_key)
 }
 
+fn load_current_session(
+    sessions_dir: &Path,
+    args: &DelayedPermissionNotificationArgs,
+    missing_reason: &'static str,
+    resolved_reason: &'static str,
+) -> Result<Option<Session>> {
+    let Some(session) = store::load_session_from(sessions_dir, &args.session)? else {
+        tracing::info!(
+            event = "agent.permission_notification.exit",
+            session = %args.session,
+            reason = missing_reason,
+        );
+        return Ok(None);
+    };
+    if !is_current_request(&session, &args.agent_key, &args.request_id) {
+        tracing::info!(
+            event = "agent.permission_notification.exit",
+            session = %args.session,
+            reason = resolved_reason,
+        );
+        return Ok(None);
+    }
+    Ok(Some(session))
+}
+
+fn is_current_request(session: &Session, agent_key: &str, request_id: &str) -> bool {
+    is_current(session, agent_key)
+        && session
+            .pending_permission_request_ids
+            .get(agent_key)
+            .is_some_and(|current_id| current_id == request_id)
+}
+
 fn should_defer_for_codex_auto_review(session: &Session) -> bool {
     // The current app-server thread/resume APIs join a running thread. If a
     // side-effect-free subscription exposes item/.../requestApproval later,
@@ -152,8 +182,16 @@ fn codex_uses_auto_review() -> bool {
     let Some(config_path) = codex_config_path() else {
         return false;
     };
-    let Ok(content) = fs::read_to_string(config_path) else {
-        return false;
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::debug!(
+                event = "agent.permission_notification.codex_config_unreadable",
+                path = %config_path.display(),
+                error = %error,
+            );
+            return false;
+        }
     };
     approvals_reviewer_is_auto_review(&content)
 }
@@ -168,56 +206,20 @@ fn codex_config_path() -> Option<PathBuf> {
 }
 
 fn approvals_reviewer_is_auto_review(content: &str) -> bool {
-    let mut in_root_table = true;
-    for line in content.lines() {
-        let line = strip_toml_comment(line).trim();
-        if line.starts_with('[') {
-            in_root_table = false;
-            continue;
-        }
-        if !in_root_table {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "approvals_reviewer" {
-            return toml_string_value(value.trim()) == Some("auto_review");
-        }
-    }
-    false
-}
-
-fn strip_toml_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, character) in line.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match (quote, character) {
-            (Some('"'), '\\') => escaped = true,
-            (Some(current), character) if current == character => quote = None,
-            (None, '"' | '\'') => quote = Some(character),
-            (None, '#') => return &line[..index],
-            _ => {}
-        }
-    }
-    line
-}
-
-fn toml_string_value(value: &str) -> Option<&str> {
-    let quote = value.as_bytes().first().copied()?;
-    if !matches!(quote, b'"' | b'\'') || value.as_bytes().last().copied()? != quote {
-        return None;
-    }
-    Some(&value[1..value.len() - 1])
+    content
+        .parse::<toml_edit::DocumentMut>()
+        .ok()
+        .is_some_and(|document| {
+            document
+                .get("approvals_reviewer")
+                .and_then(|item| item.as_str())
+                == Some("auto_review")
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use chrono::Utc;
     use rstest::{fixture, rstest};
@@ -243,6 +245,10 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]),
+            pending_permission_request_ids: BTreeMap::from([(
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "request-id".to_string(),
+            )]),
             read_at: None,
             sweep_signaled: false,
             engine: Engine::Codex,
@@ -300,6 +306,7 @@ mod tests {
     #[rstest]
     #[case::top_level_auto_review("approvals_reviewer = \"auto_review\"", true)]
     #[case::top_level_user("approvals_reviewer = \"user\"", false)]
+    #[case::quoted_key("\"approvals_reviewer\" = \"auto_review\"", true)]
     #[case::nested_auto_review(
         indoc::indoc!("\
             [profiles.default]
@@ -307,9 +314,44 @@ mod tests {
         "),
         false
     )]
+    #[case::multiline_array_before_setting(
+        indoc::indoc!("\
+            values = [
+                [\"first\"],
+            ]
+            approvals_reviewer = \"auto_review\"
+        "),
+        true
+    )]
     #[case::commented_auto_review("# approvals_reviewer = \"auto_review\"", false)]
     #[case::quoted_comment("approvals_reviewer = \"auto_review#user\" # comment", false)]
+    #[case::lone_quote("approvals_reviewer = \"", false)]
     fn reads_only_top_level_auto_review_setting(#[case] content: &str, #[case] expected: bool) {
         assert_eq!(approvals_reviewer_is_auto_review(content), expected);
+    }
+
+    #[rstest]
+    #[case::same_request(true)]
+    #[case::stale_request(false)]
+    fn only_the_original_permission_request_is_current(
+        mut session: Session,
+        #[case] same_request: bool,
+    ) {
+        let request_id = session
+            .pending_permission_request_ids
+            .get(MAIN_THREAD_AGENT_KEY)
+            .cloned()
+            .expect("fixture has a request ID");
+        if !same_request {
+            session.pending_permission_request_ids.insert(
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "stale-request-id".to_string(),
+            );
+        }
+
+        assert_eq!(
+            is_current_request(&session, MAIN_THREAD_AGENT_KEY, &request_id),
+            same_request,
+        );
     }
 }

@@ -173,6 +173,7 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
             engine: Engine::Claude,
