@@ -420,6 +420,7 @@ fn process_hook_event_impl(
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
             engine: input.engine,
@@ -455,11 +456,18 @@ fn process_hook_event_impl(
             session
                 .pending_permission_agent_ids
                 .insert(permission_agent_key.clone());
+            session.pending_permission_request_ids.insert(
+                permission_agent_key.clone(),
+                uuid::Uuid::new_v4().to_string(),
+            );
         }
         HookEvent::Notification => {}
         _ => {
             session
                 .pending_permission_agent_ids
+                .remove(&permission_agent_key);
+            session
+                .pending_permission_request_ids
                 .remove(&permission_agent_key);
         }
     }
@@ -495,6 +503,9 @@ fn process_hook_event_impl(
         session
             .pending_permission_agent_ids
             .retain(|key| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
+        session
+            .pending_permission_request_ids
+            .retain(|key, _| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
     }
 
     // At least one agent (main thread or subagent) is still blocked on a
@@ -1661,6 +1672,7 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
             engine: Engine::Claude,
@@ -2029,6 +2041,7 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
             engine: Engine::Claude,
@@ -2291,8 +2304,14 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(
-            (reloaded.status, reloaded.pending_permission_agent_ids),
-            (SessionStatus::WaitingInput, set_of(&["agent-a"])),
+            (
+                reloaded.status,
+                reloaded.pending_permission_agent_ids,
+                reloaded
+                    .pending_permission_request_ids
+                    .contains_key("agent-a"),
+            ),
+            (SessionStatus::WaitingInput, set_of(&["agent-a"]), true,),
         );
     }
 
@@ -2569,6 +2588,7 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
             engine: Engine::Claude,
@@ -2914,6 +2934,7 @@ mod tests {
                 pending_bg_task_ids: BTreeSet::new(),
                 pending_agent_task_ids: BTreeSet::new(),
                 pending_permission_agent_ids: BTreeSet::new(),
+                pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
                 engine: Engine::Claude,

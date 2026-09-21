@@ -447,6 +447,7 @@ mod tests {
             pending_bg_task_ids: std::collections::BTreeSet::new(),
             pending_agent_task_ids: std::collections::BTreeSet::new(),
             pending_permission_agent_ids: std::collections::BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
             engine: Engine::Claude,

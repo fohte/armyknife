@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::error::CcError;
@@ -166,6 +166,11 @@ pub struct Session {
     /// See the insert/remove/reconcile logic in `hook.rs`.
     #[serde(default)]
     pub pending_permission_agent_ids: BTreeSet<String>,
+    /// Opaque ID for the latest permission request from each agent. The
+    /// delayed notification worker uses this to distinguish a newer request
+    /// for the same agent from the request that spawned it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_permission_request_ids: BTreeMap<String, String>,
     /// Timestamp the user last focused this session via `a agent focus`.
     /// `None` means the session has never been focused since its last
     /// transition to `Stopped` (i.e. unread); `Some(_)` means read.
@@ -570,6 +575,7 @@ mod tests {
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
             read_at,
             sweep_signaled: false,
             engine: Engine::Claude,
