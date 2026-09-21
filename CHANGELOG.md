@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.321](https://github.com/fohte/armyknife/compare/v0.1.320...v0.1.321) (2026-09-21)
+
+
+### Bug Fixes
+
+* **agent:** prevent false notifications when auto_review is enabled for Codex ([#959](https://github.com/fohte/armyknife/issues/959)) ([6f94ec0](https://github.com/fohte/armyknife/commit/6f94ec0c38cbac6d2b72f0a49230beb27806b079))
+
 ## [0.1.320](https://github.com/fohte/armyknife/compare/v0.1.319...v0.1.320) (2026-09-20)
 
 
