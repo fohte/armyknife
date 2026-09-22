@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.322](https://github.com/fohte/armyknife/compare/v0.1.321...v0.1.322) (2026-09-22)
+
+
+### Features
+
+* **agent:** associate Codex session with originating tmux pane ([#961](https://github.com/fohte/armyknife/issues/961)) ([2835062](https://github.com/fohte/armyknife/commit/2835062fbcf76277c7110d200fffe07792bda68d))
+
 ## [0.1.321](https://github.com/fohte/armyknife/compare/v0.1.320...v0.1.321) (2026-09-21)
 
 
