@@ -340,6 +340,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | Action                                  | Aliases | Description                                                               |
 | --------------------------------------- | ------- | ------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                 |
+| `codex [<args>...]`                     |         | Start Codex and bind its thread ID to the current tmux pane               |
 | `hook <event>`                          |         | Record session events (called from Claude Code hooks)                     |
 | `list`                                  | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id>`                    |         | Focus on a session's tmux pane                                            |
@@ -357,6 +358,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)             |
 | `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+
+`a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
 `new` options:
 

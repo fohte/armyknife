@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
+use std::fs::File;
 use std::path::Path;
 
 use anyhow::Context;
@@ -8,7 +6,7 @@ use anyhow::Context;
 use super::AgentLaunchRoute;
 use super::prompt::{apply_prompt_if_agent, wrap_in_interactive_shell};
 use crate::commands::agent::codex_steer;
-use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::commands::agent::types::{Engine, ReasoningEffort, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
 
 trait AppServerClient {
@@ -68,7 +66,7 @@ impl Launch {
         cwd: &Path,
     ) -> Self {
         Self::prepare_with(engine, prompt, pane_count, || {
-            let launch_lock = acquire_launch_lock(cwd)?;
+            let launch_lock = codex_steer::acquire_launch_lock(cwd)?;
             let client = codex_steer::Client::connect()?;
             Ok((Box::new(client), Some(launch_lock)))
         })
@@ -123,6 +121,12 @@ impl Launch {
         let route = self.finish(spec.cwd, spec.effort);
         match route {
             AgentLaunchRoute::CodexDaemon { thread_id } => {
+                let pane_id = spec
+                    .pane_id
+                    .context("Codex daemon launch has no pane target")?;
+                tmux::set_pane_option(pane_id, TMUX_SESSION_OPTION, &thread_id).with_context(
+                    || format!("Failed to bind Codex session {thread_id} to pane {pane_id}"),
+                )?;
                 if let Some(path) = spec.prompt_file {
                     std::fs::remove_file(path).with_context(|| {
                         format!("Failed to remove prompt file {}", path.display())
@@ -177,31 +181,6 @@ impl Launch {
             }
         }
     }
-}
-
-fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
-    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let mut hasher = DefaultHasher::new();
-    canonical_cwd.hash(&mut hasher);
-    let lock_dir = crate::shared::dirs::cache_dir()
-        .context("could not determine cache directory for Codex launch lock")?
-        .join("armyknife")
-        .join("codex-launch-locks");
-    std::fs::create_dir_all(&lock_dir).context("failed to create Codex launch lock directory")?;
-    let lock_path = lock_dir.join(format!("{:016x}.lock", hasher.finish()));
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open Codex launch lock {}", lock_path.display()))?;
-
-    // The protocol has no launch token, so serialize armyknife launches that
-    // would otherwise match the same cwd-only `thread/started` notification.
-    file.lock()
-        .with_context(|| format!("failed to lock Codex launch {}", lock_path.display()))?;
-    Ok(file)
 }
 
 #[cfg(test)]

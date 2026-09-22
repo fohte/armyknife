@@ -4,6 +4,7 @@ pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
+mod codex;
 mod codex_queue;
 pub(crate) mod codex_steer;
 mod delete_tq_session_detached;
@@ -32,6 +33,7 @@ use clap::Subcommand;
 
 pub use auto_compact::AutoCompactArgs;
 pub use clean_detached::CleanDetachedArgs;
+pub use codex::CodexArgs;
 pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
@@ -52,6 +54,9 @@ pub use window_status::WindowStatusArgs;
 pub enum AgentCommands {
     /// Start a Claude Code session in a new worktree
     New(NewArgs),
+
+    /// Start Codex and bind its thread ID to the current tmux pane
+    Codex(CodexArgs),
 
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
@@ -123,6 +128,7 @@ impl AgentCommands {
     pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::New(args) => new::run(args)?,
+            Self::Codex(args) => codex::run(args)?,
             Self::Hook(args) => hook::run(args)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
             Self::List(args) => list::run(args)?,
