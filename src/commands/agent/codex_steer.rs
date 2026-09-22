@@ -5,7 +5,7 @@
 //! starts a turn for an idle thread or injects input into its active turn.
 
 use std::collections::hash_map::DefaultHasher;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::{Hash, Hasher};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -117,20 +117,8 @@ impl Client {
                 .socket
                 .read()
                 .context("failed to read Codex app-server `thread/started` notification")?;
-            match message {
-                Message::Text(text) => {
-                    let notification: Value = serde_json::from_str(&text)
-                        .context("invalid JSON in `thread/started` notification")?;
-                    if let Some(thread_id) = thread_started_id(&notification, cwd) {
-                        return Ok(thread_id);
-                    }
-                }
-                Message::Close(frame) => {
-                    return Err(anyhow!(
-                        "Codex app-server closed while waiting for `thread/started`: {frame:?}"
-                    ));
-                }
-                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            if let Some(thread_id) = thread_started_from_message(message, cwd)? {
+                return Ok(thread_id);
             }
         }
     }
@@ -156,6 +144,42 @@ impl Client {
 /// Serializes armyknife launches that would otherwise match the same cwd-only
 /// `thread/started` notification.
 pub fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
+    let (file, lock_path) = open_launch_lock(cwd)?;
+
+    file.lock()
+        .with_context(|| format!("failed to lock Codex launch {}", lock_path.display()))?;
+    Ok(file)
+}
+
+/// Acquires the per-cwd launch lock before `timeout` elapses.
+pub fn acquire_launch_lock_with_timeout(cwd: &Path, timeout: Duration) -> anyhow::Result<File> {
+    let (file, lock_path) = open_launch_lock(cwd)?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .context("Codex launch-lock timeout is out of range")?;
+
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(anyhow!(
+                        "timed out waiting for another Codex launch in the same directory"
+                    ));
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(50)));
+            }
+            Err(TryLockError::Error(error)) => {
+                return Err(error).with_context(|| {
+                    format!("failed to lock Codex launch {}", lock_path.display())
+                });
+            }
+        }
+    }
+}
+
+fn open_launch_lock(cwd: &Path) -> anyhow::Result<(File, PathBuf)> {
     let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let mut hasher = DefaultHasher::new();
     canonical_cwd.hash(&mut hasher);
@@ -173,9 +197,7 @@ pub fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
         .open(&lock_path)
         .with_context(|| format!("failed to open Codex launch lock {}", lock_path.display()))?;
 
-    file.lock()
-        .with_context(|| format!("failed to lock Codex launch {}", lock_path.display()))?;
-    Ok(file)
+    Ok((file, lock_path))
 }
 
 /// Sends `content` to the Codex thread identified by `thread_id`.
@@ -249,21 +271,23 @@ where
     loop {
         let message =
             read().context("failed to read Codex app-server `thread/started` notification")?;
-        match message {
-            Message::Text(text) => {
-                let notification: Value = serde_json::from_str(&text)
-                    .context("invalid JSON in `thread/started` notification")?;
-                if let Some(thread_id) = thread_started_id(&notification, cwd) {
-                    return Ok(thread_id);
-                }
-            }
-            Message::Close(frame) => {
-                return Err(anyhow!(
-                    "Codex app-server closed while waiting for `thread/started`: {frame:?}"
-                ));
-            }
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        if let Some(thread_id) = thread_started_from_message(message, cwd)? {
+            return Ok(thread_id);
         }
+    }
+}
+
+fn thread_started_from_message(message: Message, cwd: &Path) -> anyhow::Result<Option<String>> {
+    match message {
+        Message::Text(text) => {
+            let notification: Value = serde_json::from_str(&text)
+                .context("invalid JSON in `thread/started` notification")?;
+            Ok(thread_started_id(&notification, cwd))
+        }
+        Message::Close(frame) => Err(anyhow!(
+            "Codex app-server closed while waiting for `thread/started`: {frame:?}"
+        )),
+        Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => Ok(None),
     }
 }
 

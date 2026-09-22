@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
 
 const THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 #[command(disable_help_flag = true)]
@@ -38,8 +40,21 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     };
 
     let cwd = std::env::current_dir().context("Failed to determine current directory")?;
-    let launch_lock = codex_steer::acquire_launch_lock(&cwd)?;
-    let mut client = codex_steer::Client::connect()?;
+    let launch_lock = codex_steer::acquire_launch_lock_with_timeout(&cwd, LAUNCH_LOCK_TIMEOUT)
+        .context("Another Codex launch in this directory is still starting; retry shortly")?;
+    let mut client = match codex_steer::Client::connect() {
+        Ok(client) => client,
+        Err(error) => {
+            drop(launch_lock);
+            tracing::warn!(
+                event = "agent.codex.thread_binding.err",
+                error = %error,
+                "Codex app-server is unavailable; starting Codex without pane binding"
+            );
+            return finish_child_status(command.status().context("Failed to start codex")?);
+        }
+    };
+    let (child_finished_tx, child_finished_rx) = mpsc::channel();
 
     let _watcher = thread::Builder::new()
         .name("codex-thread-binding".to_string())
@@ -51,13 +66,22 @@ pub fn run(args: &CodexArgs) -> Result<()> {
                     if let Err(error) =
                         tmux::set_pane_option(&pane_id, TMUX_SESSION_OPTION, &thread_id)
                     {
-                        eprintln!(
-                            "[armyknife] warning: failed to record Codex thread ID in pane {pane_id}: {error}"
+                        tracing::warn!(
+                            event = "agent.codex.thread_binding.err",
+                            pane_id,
+                            thread_id,
+                            error = %error,
+                            "failed to record Codex thread ID in tmux pane"
                         );
                     }
                 }
                 Err(error) => {
-                    eprintln!("[armyknife] warning: failed to capture Codex thread ID: {error:#}");
+                    tracing::warn!(
+                        event = "agent.codex.thread_binding.err",
+                        error = %error,
+                        "failed to capture Codex thread ID"
+                    );
+                    let _ = child_finished_rx.recv();
                 }
             }
             drop(launch_lock);
@@ -65,7 +89,9 @@ pub fn run(args: &CodexArgs) -> Result<()> {
         .context("Failed to start Codex thread-binding watcher")?;
 
     let mut child = command.spawn().context("Failed to start codex")?;
-    finish_child_status(child.wait().context("Failed to wait for codex")?)
+    let status = child.wait().context("Failed to wait for codex")?;
+    let _ = child_finished_tx.send(());
+    finish_child_status(status)
 }
 
 fn finish_child_status(status: ExitStatus) -> Result<()> {
