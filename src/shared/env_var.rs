@@ -8,6 +8,7 @@ const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
+const CODEX_MANAGED_LAUNCH: &str = "ARMYKNIFE_CODEX_MANAGED_LAUNCH";
 const CC_HOOK_LOG: &str = "ARMYKNIFE_CC_HOOK_LOG";
 const CC_NOTIFY: &str = "ARMYKNIFE_CC_NOTIFY";
 const WORKTREE_PATH: &str = "ARMYKNIFE_WORKTREE_PATH";
@@ -98,6 +99,12 @@ impl EnvVars {
     /// Returns the env var name for ANCESTOR_SESSION_IDS (used as key in env var pairs).
     pub fn ancestor_session_ids_name() -> &'static str {
         ANCESTOR_SESSION_IDS
+    }
+
+    /// Returns the env var name that marks a Codex process launched by the
+    /// shared app-server route.
+    pub fn codex_managed_launch_name() -> &'static str {
+        CODEX_MANAGED_LAUNCH
     }
 
     /// Returns the env var name for WORKTREE_PATH (used as key in env var pairs).

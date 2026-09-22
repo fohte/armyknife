@@ -12,11 +12,15 @@ mod launch;
 mod prompt;
 mod route;
 mod split;
+use crate::shared::env_var::EnvVars;
 use execution::{execute_commands, execute_layout};
 #[cfg(test)]
 use execution::{find_new_window_index, rewrite_pane_targets, with_window_id_capture};
 use launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
-use prompt::{apply_prompt_if_agent, is_engine_command, retarget_agent_command};
+use prompt::{
+    apply_prompt_if_agent, clear_managed_codex_launch_env, is_engine_command,
+    retarget_agent_command,
+};
 pub use route::AgentLaunchRoute;
 #[cfg(test)]
 use split::{SplitPaneSetupSpec, build_split_pane_setup_commands};
@@ -101,6 +105,20 @@ pub(super) fn unset_environment_commands(
         .collect()
 }
 
+fn launch_env_vars<'a>(
+    env_vars: &[(&'a str, &'a str)],
+    engine: Engine,
+    managed_codex_launch: bool,
+) -> Vec<(&'a str, &'a str)> {
+    let mut launch_env_vars = env_vars.to_vec();
+    if managed_codex_launch && engine == Engine::Codex {
+        // The wrapper may be reached through a shell alias, so the marker
+        // must be present before the shell expands the pane command.
+        launch_env_vars.push((EnvVars::codex_managed_launch_name(), "1"));
+    }
+    launch_env_vars
+}
+
 /// Build tmux command sequence from a LayoutNode tree.
 ///
 /// Returns a list of tmux commands to create the window and configure panes.
@@ -115,6 +133,13 @@ struct LayoutPlan {
 }
 
 fn build_layout_plan(spec: LayoutCommandsSpec) -> LayoutPlan {
+    build_layout_plan_with_managed_codex(spec, false)
+}
+
+fn build_layout_plan_with_managed_codex(
+    spec: LayoutCommandsSpec,
+    managed_codex_launch: bool,
+) -> LayoutPlan {
     let LayoutCommandsSpec {
         session,
         cwd,
@@ -218,6 +243,7 @@ fn build_layout_plan(spec: LayoutCommandsSpec) -> LayoutPlan {
             prompt_file,
             cleanup,
         );
+        let cmd = clear_managed_codex_launch_env(&cmd, engine, managed_codex_launch);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -411,22 +437,26 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         Path::new(cwd),
     );
     let remote_launch = launch.uses_remote();
+    let launch_env_vars = launch_env_vars(env_vars, engine, remote_launch);
     let plan = if remote_launch {
         let (launch_effort, launch_prompt_file) =
             launch.command_options(reasoning_effort, prompt_path);
-        build_layout_plan(LayoutCommandsSpec {
-            session,
-            cwd,
-            window_name,
-            layout,
-            model,
-            reasoning_effort: launch_effort,
-            prompt_file: launch_prompt_file,
-            engine,
-            env_vars,
-            background,
-            restore_automatic_rename,
-        })
+        build_layout_plan_with_managed_codex(
+            LayoutCommandsSpec {
+                session,
+                cwd,
+                window_name,
+                layout,
+                model,
+                reasoning_effort: launch_effort,
+                prompt_file: launch_prompt_file,
+                engine,
+                env_vars: &launch_env_vars,
+                background,
+                restore_automatic_rename,
+            },
+            true,
+        )
     } else {
         argv_plan
     };
@@ -460,7 +490,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         command,
         model,
         pane_id: agent_pane_id.as_deref(),
-        env_vars,
+        env_vars: &launch_env_vars,
     })
 }
 
@@ -1408,6 +1438,68 @@ mod tests {
                 "automatic-rename",
                 "on"
             ])
+        );
+    }
+
+    #[rstest]
+    #[case::managed_codex(Engine::Codex, true, true)]
+    #[case::unmanaged_codex(Engine::Codex, false, false)]
+    #[case::managed_claude(Engine::Claude, true, false)]
+    fn launch_env_vars_marks_only_managed_codex(
+        #[case] engine: Engine,
+        #[case] managed_codex_launch: bool,
+        #[case] expect_marker: bool,
+    ) {
+        let env_vars = [("EXAMPLE_KEY", "example-value")];
+        let mut expected = env_vars.to_vec();
+        if expect_marker {
+            expected.push((EnvVars::codex_managed_launch_name(), "1"));
+        }
+
+        assert_eq!(
+            launch_env_vars(&env_vars, engine, managed_codex_launch),
+            expected,
+        );
+    }
+
+    #[test]
+    fn managed_codex_plan_clears_marker_after_pane_command() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "codex".to_string(),
+            focus: true,
+        });
+        let marker = EnvVars::codex_managed_launch_name();
+        let plan = build_layout_plan_with_managed_codex(
+            LayoutCommandsSpec {
+                session: "sess",
+                cwd: "/tmp",
+                window_name: "dev",
+                layout: &layout,
+                model: None,
+                reasoning_effort: None,
+                prompt_file: None,
+                engine: Engine::Codex,
+                env_vars: &[(marker, "1")],
+                background: false,
+                restore_automatic_rename: false,
+            },
+            true,
+        );
+
+        assert_eq!(
+            (plan.commands, plan.agent_commands),
+            (
+                vec![
+                    cmd(&["set-environment", "-t", "sess", marker, "1"]),
+                    cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                    cmd(&["select-pane", "-t", "1"]),
+                    cmd(&["send-keys", "-l", "--", &format!("codex; unset {marker}")]),
+                    cmd(&["send-keys", "C-m"]),
+                    cmd(&["select-pane", "-t", "1"]),
+                    cmd(&["set-environment", "-u", "-t", "sess", marker]),
+                ],
+                vec![(1, "codex".to_string())],
+            ),
         );
     }
 

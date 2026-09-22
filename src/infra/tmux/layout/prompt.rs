@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::shared::env_var::EnvVars;
 
 /// Whether a pane command starts `engine`'s CLI. Both `claude` and `codex`
 /// take the session prompt as a trailing positional argument and
@@ -44,6 +45,20 @@ pub(super) fn wrap_in_interactive_shell(command: &str) -> anyhow::Result<String>
     let script = format!("{command}; exec {exec_shell}");
     shlex::try_join([shell.as_str(), "-i", "-c", &script])
         .context("failed to quote the argv fallback command")
+}
+
+/// Removes the marker after the Codex command so a later manual launch in the
+/// same interactive pane still uses the wrapper's normal binding behavior.
+pub(super) fn clear_managed_codex_launch_env(
+    command: &str,
+    engine: Engine,
+    managed_launch: bool,
+) -> String {
+    if !managed_launch || engine != Engine::Codex || !is_engine_command(command, engine) {
+        return command.to_string();
+    }
+
+    format!("{command}; unset {}", EnvVars::codex_managed_launch_name())
 }
 
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
@@ -132,6 +147,27 @@ mod tests {
                     .to_string()
             ),
         );
+    }
+
+    #[rstest]
+    #[case::managed_codex(Engine::Codex, "codex", true, "codex; unset ")]
+    #[case::unmanaged_codex(Engine::Codex, "codex", false, "codex")]
+    #[case::managed_claude(Engine::Claude, "claude", true, "claude")]
+    #[case::managed_non_agent(Engine::Codex, "nvim", true, "nvim")]
+    fn clear_managed_codex_launch_env_cases(
+        #[case] engine: Engine,
+        #[case] command: &str,
+        #[case] managed_launch: bool,
+        #[case] expected_prefix: &str,
+    ) {
+        let actual = clear_managed_codex_launch_env(command, engine, managed_launch);
+        let expected = if expected_prefix.ends_with("unset ") {
+            format!("{expected_prefix}{}", EnvVars::codex_managed_launch_name())
+        } else {
+            expected_prefix.to_string()
+        };
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
