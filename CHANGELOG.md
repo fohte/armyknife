@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.323](https://github.com/fohte/armyknife/compare/v0.1.322...v0.1.323) (2026-09-23)
+
+
+### Bug Fixes
+
+* **agent:** deliver peer notify to daemon-launched Codex instances ([#963](https://github.com/fohte/armyknife/issues/963)) ([2104a37](https://github.com/fohte/armyknife/commit/2104a373b67641c73f2a9216f072ce5a569535a3))
+
 ## [0.1.322](https://github.com/fohte/armyknife/compare/v0.1.321...v0.1.322) (2026-09-22)
 
 
