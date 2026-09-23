@@ -2,9 +2,9 @@ use std::path::Path;
 
 use super::execution::{execute_commands, flatten_commands};
 use super::launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
-use super::prompt::apply_prompt_if_agent;
+use super::prompt::{apply_prompt_if_agent, clear_managed_codex_launch_env};
 use super::{
-    AgentLaunchRoute, TmuxCommand, TmuxSessionSpec, set_environment_commands,
+    AgentLaunchRoute, TmuxCommand, TmuxSessionSpec, launch_env_vars, set_environment_commands,
     unset_environment_commands, write_prompt_file,
 };
 
@@ -71,6 +71,8 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
     } = spec;
 
     let launch = AgentLaunch::prepare(engine, prompt, 1, Path::new(cwd));
+    let managed_codex_launch = launch.uses_remote();
+    let launch_env_vars = launch_env_vars(env_vars, engine, managed_codex_launch);
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let (launch_effort, launch_prompt_file) =
         launch.command_options(reasoning_effort, prompt_file.as_deref());
@@ -82,12 +84,13 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         launch_prompt_file,
         true,
     );
+    let cmd = clear_managed_codex_launch_env(&cmd, engine, managed_codex_launch);
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
         session,
         target_pane,
         cwd,
-        env_vars,
+        env_vars: &launch_env_vars,
         background,
     });
 
@@ -106,11 +109,11 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         ]),
         TmuxCommand::new(&["send-keys", "-t", new_pane_id.as_str(), "C-m"]),
     ];
-    remaining.extend(unset_environment_commands(session, env_vars));
+    remaining.extend(unset_environment_commands(session, &launch_env_vars));
     execute_commands(&remaining).inspect_err(|_| {
         // Best-effort: if send-keys/unset itself failed partway, don't
         // leave session-level env vars leaked past this call's lifetime.
-        for (key, _) in env_vars {
+        for (key, _) in &launch_env_vars {
             let _ = crate::infra::tmux::run_tmux(&["set-environment", "-u", "-t", session, key]);
         }
     })?;
@@ -122,7 +125,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         command,
         model,
         pane_id: Some(&new_pane_id),
-        env_vars,
+        env_vars: &launch_env_vars,
     })?;
 
     Ok(SplitResult {

@@ -4,7 +4,9 @@ use std::path::Path;
 use anyhow::Context;
 
 use super::AgentLaunchRoute;
-use super::prompt::{apply_prompt_if_agent, wrap_in_interactive_shell};
+use super::prompt::{
+    apply_prompt_if_agent, clear_managed_codex_launch_env, wrap_in_interactive_shell,
+};
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::types::{Engine, ReasoningEffort, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
@@ -146,6 +148,8 @@ impl Launch {
                     spec.prompt_file,
                     true,
                 );
+                let command =
+                    clear_managed_codex_launch_env(&command, Engine::Codex, daemon_launch);
                 let wrapped = wrap_in_interactive_shell(&command)?;
                 tmux::respawn_pane_with_env(pane_id, &wrapped, spec.env_vars).with_context(
                     || format!("Codex daemon launch failed ({reason}); argv fallback also failed"),

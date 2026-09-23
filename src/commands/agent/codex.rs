@@ -14,6 +14,7 @@ use super::codex_steer;
 use super::types::TMUX_SESSION_OPTION;
 use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
+use crate::shared::env_var::EnvVars;
 
 const THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,10 +33,11 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     let mut command = command::new(&binary_path);
     command.args(&args.args);
 
-    let Some(pane_id) = std::env::var("TMUX_PANE")
+    let pane_id = std::env::var("TMUX_PANE")
         .ok()
-        .filter(|pane_id| !pane_id.is_empty())
-    else {
+        .filter(|pane_id| !pane_id.is_empty());
+    let managed_launch = std::env::var_os(EnvVars::codex_managed_launch_name()).is_some();
+    let Some(pane_id) = pane_id_for_binding(pane_id, managed_launch) else {
         return finish_child_status(command.status().context("Failed to start codex")?);
     };
 
@@ -94,6 +96,10 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     finish_child_status(status)
 }
 
+fn pane_id_for_binding(pane_id: Option<String>, managed_launch: bool) -> Option<String> {
+    if managed_launch { None } else { pane_id }
+}
+
 fn finish_child_status(status: ExitStatus) -> Result<()> {
     if status.success() {
         Ok(())
@@ -102,6 +108,27 @@ fn finish_child_status(status: ExitStatus) -> Result<()> {
             status
                 .code()
                 .unwrap_or_else(|| status.signal().map_or(1, |signal| 128 + signal)),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pane_id_for_binding;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::managed_launch_skips_binding(Some("%pane-a"), true, None)]
+    #[case::manual_tmux_launch_binds(Some("%pane-a"), false, Some("%pane-a"))]
+    #[case::outside_tmux_skips_binding(None, false, None)]
+    fn pane_binding_cases(
+        #[case] pane_id: Option<&str>,
+        #[case] managed_launch: bool,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            pane_id_for_binding(pane_id.map(str::to_owned), managed_launch),
+            expected.map(str::to_owned),
         );
     }
 }

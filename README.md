@@ -392,6 +392,8 @@ Layouts with multiple Claude panes use the argv route. If the pane's tmux locati
 - With `--prompt`, exactly one Codex pane, and a running shared Codex app-server that exposes its control socket, armyknife connects before opening the pane. It launches `codex [--model <model>]` without config overrides, then sends the prompt and reasoning effort in the first `turn/start` request.
 - If the daemon route is unavailable, armyknife delivers the prompt and effort through argv. A failure after the pane opens restarts that pane, and the command output includes the fallback reason.
 
+The daemon route marks its Codex pane as armyknife-managed, so an environment where `codex` is aliased to `a agent codex` does not perform pane binding twice. A hand-run `a agent codex` keeps its normal pane binding behavior.
+
 With `--worktree`, the session runs in `config.wm.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. Layouts with multiple Codex panes use the argv route because `thread/started` does not identify its originating pane.
 
 A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
