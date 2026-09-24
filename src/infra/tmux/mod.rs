@@ -681,6 +681,14 @@ pub fn capture_pane(pane_id: &str) -> Option<String> {
     run_tmux_output(&["capture-pane", "-p", "-t", pane_id]).ok()
 }
 
+/// Captures the current visible contents of `pane_id` with ANSI styling.
+///
+/// Thin wrapper over `tmux capture-pane -p -e -t <pane>`. Returns `None`
+/// under the same conditions as [`capture_pane`].
+pub fn capture_pane_with_escapes(pane_id: &str) -> Option<String> {
+    run_tmux_output(&["capture-pane", "-p", "-e", "-t", pane_id]).ok()
+}
+
 /// Parses a single line from tmux list-panes output for PID matching.
 /// Format: "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
 fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {

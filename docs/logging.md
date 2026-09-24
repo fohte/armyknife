@@ -57,7 +57,7 @@ Top-level fields:
   (`agent.sweep` / `agent.auto_compact.schedule` / `agent.hook`)
 
 Other fields are event-specific. `session` is present whenever an event
-relates to a single Claude Code session.
+relates to one agent session.
 
 ## Querying with jq
 
@@ -67,7 +67,7 @@ LOG=~/.cache/armyknife/logs/armyknife.log.$(date +%F)
 # All events from one sweep run
 jq -c 'select(.span.run_id == "6ac23df6")' "$LOG"
 
-# Lifecycle of a specific Claude Code session
+# Lifecycle of a specific agent session
 jq -c 'select(.session == "ec2143e0-…")' "$LOG"
 
 # Decision distribution across schedule workers
@@ -121,6 +121,13 @@ Stop hook (parent process):
 | `agent.sweep.ctrl_d_failed`  | Sending Ctrl+D through tmux failed; falling back to SIGTERM    |
 | `agent.sweep.sigterm_failed` | SIGTERM to the resolved pid failed (non-ESRCH)                 |
 | `agent.sweep.summary`        | End-of-pass counters (`scanned` / `paused` / `signaled` / …)   |
+
+### `agent composer`
+
+| event                            | meaning                                                     |
+| -------------------------------- | ----------------------------------------------------------- |
+| `agent.composer.draft_protected` | An unsent composer draft keeps the session active           |
+| `agent.composer.unrecognized`    | The composer could not be parsed; timeout uses `updated_at` |
 
 ## Debugging recipes
 

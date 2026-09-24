@@ -699,13 +699,17 @@ Deletion also sends SIGTERM to any process group still rooted in the worktree (e
 
 `clean` options:
 
-| Option          | Description                                                                             |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `-n, --dry-run` | Show what would be deleted without actually deleting                                    |
-| `--all`         | Clean worktrees across all repositories under `repos_root`                              |
-| `--force`       | Delete even worktrees that currently host an active Claude Code session (default: keep) |
+| Option          | Description                                                                       |
+| --------------- | --------------------------------------------------------------------------------- |
+| `-n, --dry-run` | Show what would be deleted without actually deleting                              |
+| `--all`         | Clean worktrees across all repositories under `repos_root`                        |
+| `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
 
-Worktrees that contain an active Claude Code session (any session not paused/ended, with pending background tasks, or with recent tmux pane input) are kept by default regardless of merge status. The `STATUS` column shows `active session` for those entries. Pass `--force` to override.
+Worktrees with an active agent session (not paused or ended, with pending
+background tasks, or with an unsent composer draft) are kept by default
+regardless of merge status. A draft keeps the worktree active until it is
+submitted or cleared. The `STATUS` column shows `active session` for those
+entries. Pass `--force` to override.
 
 ### Hooks
 

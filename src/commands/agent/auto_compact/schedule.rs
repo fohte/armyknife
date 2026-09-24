@@ -131,10 +131,8 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         let _ = tmux::set_pane_option(pane_id, TIMER_PID_OPTION, &pid);
     }
 
-    // Snapshot the input box now (before sleeping). The TUI redraw
-    // chatter that plagued the cursor-based probe doesn't matter here:
-    // input box text is content, not layout, so it stays stable across
-    // frames as long as the user isn't typing.
+    // Snapshot the input box before sleeping. TUI layout redraws do not
+    // change its text, so a later difference indicates a user edit.
     let arm_input = pane_id
         .as_deref()
         .and_then(pane::input::get_pane_input_text);
