@@ -32,10 +32,11 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let executable =
         std::env::current_exe().context("failed to resolve the armyknife executable")?;
     let task_id = Uuid::new_v4().to_string();
-    let output_dir = output::output_dir()?;
+    let output_dir = output::output_dir(&task_id)?;
     let stdout_path = output_dir.join(format!("{task_id}.stdout"));
     let stderr_path = output_dir.join(format!("{task_id}.stderr"));
     let mut guard = BackgroundRunGuard::new(&session_id, &task_id);
+    guard.track_output_dir(output_dir);
     output::create_output_file(&stdout_path)
         .with_context(|| format!("failed to create stdout file: {}", stdout_path.display()))?;
     guard.track_output(stdout_path.clone());
@@ -75,6 +76,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
 struct BackgroundRunGuard {
     session_id: String,
     task_id: String,
+    output_dir: Option<PathBuf>,
     output_paths: Vec<PathBuf>,
     task_registered: bool,
     armed: bool,
@@ -85,6 +87,7 @@ impl BackgroundRunGuard {
         Self {
             session_id: session_id.to_string(),
             task_id: task_id.to_string(),
+            output_dir: None,
             output_paths: Vec::new(),
             task_registered: false,
             armed: true,
@@ -93,6 +96,10 @@ impl BackgroundRunGuard {
 
     fn track_output(&mut self, path: PathBuf) {
         self.output_paths.push(path);
+    }
+
+    fn track_output_dir(&mut self, dir: PathBuf) {
+        self.output_dir = Some(dir);
     }
 
     fn mark_task_registered(&mut self) {
@@ -115,6 +122,9 @@ impl Drop for BackgroundRunGuard {
         }
         for path in &self.output_paths {
             let _ = fs::remove_file(path);
+        }
+        if let Some(dir) = &self.output_dir {
+            let _ = fs::remove_dir(dir);
         }
     }
 }

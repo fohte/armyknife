@@ -5,11 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-pub(super) fn output_dir() -> Result<PathBuf> {
-    let dir = std::env::temp_dir()
-        .join("armyknife")
-        .join("agent-bg")
-        .join("output");
+pub(super) fn output_dir(task_id: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("armyknife-agent-bg-{task_id}"));
     create_dir_secure(&dir)
         .with_context(|| format!("failed to create output directory: {}", dir.display()))?;
     Ok(dir)

@@ -369,8 +369,8 @@ Run this command inside a tracked Claude Code or Codex session. The session must
 ```console
 $ a agent bg run -- printf 'ready\n'
 Started background task <task-id>
-stdout: <system-temp-dir>/armyknife/agent-bg/output/<task-id>.stdout
-stderr: <system-temp-dir>/armyknife/agent-bg/output/<task-id>.stderr
+stdout: <system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stdout
+stderr: <system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stderr
 ```
 
 The completion message has this form:
@@ -380,8 +380,8 @@ The completion message has this form:
 - Task ID: <task-id>
 - Command argv: ["printf", "ready\\n"]
 - Exit code: 0
-- stdout: "<system-temp-dir>/armyknife/agent-bg/output/<task-id>.stdout"
-- stderr: "<system-temp-dir>/armyknife/agent-bg/output/<task-id>.stderr"
+- stdout: "<system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stdout"
+- stderr: "<system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stderr"
 </background-task-complete>
 ```
 
