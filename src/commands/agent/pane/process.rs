@@ -10,13 +10,12 @@ use crate::infra::process::ProcessSnapshot;
 const MAX_DESCENDANT_NODES: usize = 64;
 
 /// Returns whether `pane_pid`'s process tree -- the pane's own process or
-/// any descendant -- currently has a running process for `engine`. Used to
-/// decide whether it is safe to type a resume command into the pane.
+/// any descendant -- currently has a running process for `engine`.
 ///
 /// Fails closed: an unavailable `snapshot` (e.g. `ps` failed) is treated as
-/// "has a live process", not "no live process", since the risk this guards
-/// against is retyping into a live conversation, not skipping a resume that
-/// turns out to be safe.
+/// "has a live process" so callers do not mistake an unknown process tree for
+/// an idle pane. Callers that need positive confirmation must handle snapshot
+/// failure before calling this function.
 pub fn pane_has_live_agent_process(
     pane_pid: u32,
     engine: Engine,
