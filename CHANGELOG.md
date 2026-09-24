@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.326](https://github.com/fohte/armyknife/compare/v0.1.325...v0.1.326) (2026-09-24)
+
+
+### Bug Fixes
+
+* **agent:** remove contact condition injection into delegate prompt ([#970](https://github.com/fohte/armyknife/issues/970)) ([958c4ff](https://github.com/fohte/armyknife/commit/958c4ff2bbc98bf2b82e6025ccfa037d5ba98de3))
+
 ## [0.1.325](https://github.com/fohte/armyknife/compare/v0.1.324...v0.1.325) (2026-09-24)
 
 
