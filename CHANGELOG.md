@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.327](https://github.com/fohte/armyknife/compare/v0.1.326...v0.1.327) (2026-09-24)
+
+
+### Bug Fixes
+
+* **agent:** display sessions running `a agent bg run` as background ([#972](https://github.com/fohte/armyknife/issues/972)) ([ac216df](https://github.com/fohte/armyknife/commit/ac216df991bcca9606bfe0a3d173d29d13475d64))
+
 ## [0.1.326](https://github.com/fohte/armyknife/compare/v0.1.325...v0.1.326) (2026-09-24)
 
 
