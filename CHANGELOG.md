@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.328](https://github.com/fohte/armyknife/compare/v0.1.327...v0.1.328) (2026-09-24)
+
+
+### Bug Fixes
+
+* **update:** wait for assets to finish uploading ([#974](https://github.com/fohte/armyknife/issues/974)) ([d2f1922](https://github.com/fohte/armyknife/commit/d2f19225af5016f231db061bbc3cd1e43190c616))
+
 ## [0.1.327](https://github.com/fohte/armyknife/compare/v0.1.326...v0.1.327) (2026-09-24)
 
 
