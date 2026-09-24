@@ -42,7 +42,7 @@ use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{Engine, Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
-use crate::shared::active_session::{ActivityProbe, TmuxActivityProbe, effective_updated_at};
+use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_updated_at};
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
@@ -117,7 +117,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     let snapshot = ProcessSnapshot::capture();
     let probe = TmuxSessionProbe {
         snapshot: snapshot.as_ref(),
-        activity: TmuxActivityProbe,
+        drafts: TmuxDraftProbe,
         tasks_dir,
     };
     tracing::info!(
@@ -168,10 +168,10 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
-/// `ActivityProbe`. Sweep is the only caller that needs to actually kill a
-/// process; wm clean can use a plain `ActivityProbe` and skip the snapshot
+/// `DraftProbe`. Sweep is the only caller that needs to actually kill a
+/// process; wm clean can use a plain `DraftProbe` and skip the snapshot
 /// walk entirely.
-pub(crate) trait SessionProbe: ActivityProbe {
+pub(crate) trait SessionProbe: DraftProbe {
     /// Returns the pid of the live process hosting `session` (per
     /// `session.engine`), if one can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
@@ -183,9 +183,9 @@ pub(crate) trait SessionProbe: ActivityProbe {
     }
 }
 
-struct TmuxSessionProbe<'a, A: ActivityProbe> {
+struct TmuxSessionProbe<'a, A: DraftProbe> {
     snapshot: Option<&'a ProcessSnapshot>,
-    activity: A,
+    drafts: A,
     tasks_dir: PathBuf,
 }
 
@@ -194,13 +194,13 @@ struct TmuxSessionProbe<'a, A: ActivityProbe> {
 /// than an expected limit.
 const MAX_DESCENDANT_NODES: usize = 64;
 
-impl<A: ActivityProbe> ActivityProbe for TmuxSessionProbe<'_, A> {
-    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        self.activity.last_activity_at(session, now)
+impl<A: DraftProbe> DraftProbe for TmuxSessionProbe<'_, A> {
+    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.drafts.draft_observed_at(session, now)
     }
 }
 
-impl<A: ActivityProbe> SessionProbe for TmuxSessionProbe<'_, A> {
+impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
     fn has_pending_bg_run(&self, session: &Session) -> bool {
         match super::bg_tasks::has_pending_in(&self.tasks_dir, &session.session_id) {
             Ok(pending) => pending,
@@ -534,7 +534,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::{BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
     use chrono::{DateTime, TimeDelta, Utc};
@@ -560,14 +560,12 @@ mod tests {
         TestDir { temp, path }
     }
 
-    /// Test double: looks up pids and pane observation timestamps by
-    /// session_id from caller-populated maps, so tests can simulate
-    /// "claude is alive" vs "pane is gone" and "user is typing" vs
-    /// "pane is idle" without actually spawning processes or touching tmux.
+    /// Test double: maps session IDs to pids and draft presence without
+    /// spawning processes or touching tmux.
     #[derive(Default)]
     struct FakeProbe {
         pids: RefCell<HashMap<String, u32>>,
-        activity: RefCell<HashMap<String, DateTime<Utc>>>,
+        drafts: RefCell<HashSet<String>>,
     }
 
     impl FakeProbe {
@@ -579,21 +577,24 @@ mod tests {
             r
         }
 
-        fn with_last_activity(mut self, pairs: &[(&str, DateTime<Utc>)]) -> Self {
-            for (id, ts) in pairs {
-                self.activity.get_mut().insert((*id).to_string(), *ts);
+        fn with_drafts(mut self, session_ids: &[&str]) -> Self {
+            for session_id in session_ids {
+                self.drafts.get_mut().insert((*session_id).to_string());
             }
             self
         }
     }
 
-    impl ActivityProbe for FakeProbe {
-        fn last_activity_at(
+    impl DraftProbe for FakeProbe {
+        fn draft_observed_at(
             &self,
             session: &Session,
-            _now: DateTime<Utc>,
+            now: DateTime<Utc>,
         ) -> Option<DateTime<Utc>> {
-            self.activity.borrow().get(&session.session_id).copied()
+            self.drafts
+                .borrow()
+                .contains(&session.session_id)
+                .then_some(now)
         }
     }
 
@@ -1052,9 +1053,7 @@ mod tests {
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let draft_observed_at = Utc::now() - TimeDelta::seconds(5);
-        let probe = FakeProbe::with_pids(&[("typing", 4242)])
-            .with_last_activity(&[("typing", draft_observed_at)]);
+        let probe = FakeProbe::with_pids(&[("typing", 4242)]).with_drafts(&["typing"]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -1077,72 +1076,6 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
-    }
-
-    #[rstest]
-    fn activity_timestamp_is_not_persisted_as_updated_at(test_dir: TestDir) {
-        // Even when the pane observation extends the effective timeout, the
-        // persisted updated_at must remain unchanged (the observation time is
-        // only for the decision, not for the on-disk record).
-        let old = Utc::now() - TimeDelta::hours(2);
-        let session = make_session("persist-check", SessionStatus::Stopped, old);
-        save_session_to(&test_dir.path, &session).expect("save");
-
-        let sender = RecordingSender::default();
-        // The pane observation is old enough that the session still gets paused.
-        // No resolvable pid, so this run confirms Paused directly.
-        let stale_activity = Utc::now() - TimeDelta::hours(1);
-        let probe = FakeProbe::default().with_last_activity(&[("persist-check", stale_activity)]);
-
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(30 * 60),
-            &sender,
-            &probe,
-            &RecordingTmuxStatusSyncer::default(),
-            false,
-        )
-        .expect("sweep");
-
-        assert_eq!(report.paused, 1);
-
-        let reloaded = store::load_session_from(&test_dir.path, "persist-check")
-            .expect("load")
-            .expect("session exists");
-        assert_eq!(reloaded.status, SessionStatus::Paused);
-        // The persisted updated_at must be the original session time, not
-        // the pane observation timestamp.
-        assert_eq!(
-            reloaded.updated_at, old,
-            "updated_at must not be overwritten with pane observation timestamp"
-        );
-    }
-
-    #[rstest]
-    fn stale_pane_observation_does_not_block_pause(test_dir: TestDir) {
-        // Session updated an hour ago AND the window has been idle for
-        // longer than the timeout. Normal pause path.
-        let old = Utc::now() - TimeDelta::hours(1);
-        let session = make_session("idle", SessionStatus::Stopped, old);
-        save_session_to(&test_dir.path, &session).expect("save");
-
-        let sender = RecordingSender::default();
-        let stale_activity = Utc::now() - TimeDelta::minutes(45);
-        let probe =
-            FakeProbe::with_pids(&[("idle", 4242)]).with_last_activity(&[("idle", stale_activity)]);
-
-        let report = sweep_impl(
-            &test_dir.path,
-            Duration::from_secs(30 * 60),
-            &sender,
-            &probe,
-            &RecordingTmuxStatusSyncer::default(),
-            false,
-        )
-        .expect("sweep");
-
-        assert_eq!(report.signaled, 1);
-        assert_eq!(*sender.calls.borrow(), vec![(4242, libc::SIGTERM)]);
     }
 
     #[rstest]

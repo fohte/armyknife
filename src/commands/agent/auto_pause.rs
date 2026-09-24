@@ -44,8 +44,8 @@ pub fn decide_pause(session: &Session, now: DateTime<Utc>, timeout: Duration) ->
     decide_pause_with_effective(session, now, timeout, session.updated_at)
 }
 
-/// Like [`decide_pause`] but uses an externally-supplied "last touched"
-/// timestamp instead of `session.updated_at`. Sweep passes in
+/// Like [`decide_pause`] but uses an externally-supplied effective timestamp
+/// instead of `session.updated_at`. Sweep passes in
 /// `effective_updated_at` (the max of session.updated_at and the time a
 /// composer draft was observed) so it can protect drafts without mutating
 /// the session on disk.

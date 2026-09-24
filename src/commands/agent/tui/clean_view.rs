@@ -20,7 +20,7 @@ use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
 use crate::infra::git::MergeStatus;
 use crate::infra::github::PrState;
-use crate::shared::active_session::{NoActivityProbe, is_session_active};
+use crate::shared::active_session::{NoDraftProbe, is_session_active};
 
 /// Top-level state of the clean view.
 ///
@@ -463,7 +463,7 @@ pub fn build_clean_rows(
             let has_active = canonical_sessions
                 .iter()
                 .filter(|(c, _)| c.starts_with(&row.path))
-                .any(|(_, s)| is_session_active(s, &NoActivityProbe, now, timeout));
+                .any(|(_, s)| is_session_active(s, &NoDraftProbe, now, timeout));
 
             let pr_merged = matches!(merge_status, Some(MergeStatus::Merged { .. }));
             let status_label = if pr_loaded {

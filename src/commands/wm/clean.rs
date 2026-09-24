@@ -21,7 +21,7 @@ use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{
-    ActivityProbe, NoActivityProbe, TmuxActivityProbe, contains_active_session,
+    DraftProbe, NoDraftProbe, TmuxDraftProbe, contains_active_session,
 };
 use crate::shared::config::load_config;
 use crate::shared::merge_notify::notify_delegator_of_merge;
@@ -310,16 +310,16 @@ fn apply_active_session_protection(
     // wm clean may be invoked from a non-tmux context (cron, plain shell);
     // fall back to the no-op probe so we never block on tmux calls.
     if std::env::var_os("TMUX").is_some() {
-        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxActivityProbe);
+        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
     } else {
-        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &NoActivityProbe);
+        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &NoDraftProbe);
     }
 }
 
 /// Pure core of [`apply_active_session_protection`]. Exposed for tests so the
 /// session list, timeout, and activity probe can be injected without
 /// touching disk or tmux.
-fn protect_active_worktrees<P: ActivityProbe>(
+fn protect_active_worktrees<P: DraftProbe>(
     to_delete: &mut Vec<CleanWorktreeInfo>,
     to_keep: &mut Vec<CleanWorktreeInfo>,
     sessions: &[Session],
@@ -626,7 +626,7 @@ async fn collect_worktrees(
 mod tests {
     use super::*;
     use crate::commands::agent::types::SessionStatus;
-    use crate::shared::active_session::NoActivityProbe;
+    use crate::shared::active_session::NoDraftProbe;
     use crate::shared::testing::TestRepo;
     use chrono::Utc;
     use indoc::indoc;
@@ -987,7 +987,7 @@ mod tests {
             &mut to_keep,
             &sessions,
             Duration::from_secs(60),
-            &NoActivityProbe,
+            &NoDraftProbe,
         );
 
         assert!(to_delete.is_empty(), "active worktree must not be deleted");
@@ -1021,7 +1021,7 @@ mod tests {
             &mut to_keep,
             &sessions,
             Duration::from_secs(60),
-            &NoActivityProbe,
+            &NoDraftProbe,
         );
 
         assert_eq!(to_delete.len(), 1);
@@ -1048,7 +1048,7 @@ mod tests {
             &mut to_keep,
             &sessions,
             Duration::from_secs(60),
-            &NoActivityProbe,
+            &NoDraftProbe,
         );
 
         assert_eq!(to_keep.len(), 1);

@@ -15,7 +15,7 @@ use super::worktree_session_children::{SessionChild, sessions_under_worktree_fro
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
-use crate::shared::active_session::{NoActivityProbe, is_session_active};
+use crate::shared::active_session::{NoDraftProbe, is_session_active};
 
 /// One discovered linked worktree, combined with how many cc sessions
 /// currently live inside it.
@@ -132,7 +132,7 @@ impl WorktreeView {
         };
         let now = Utc::now();
         let timeout = Duration::from_secs(60);
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
 
         // Canonicalize once per session so an N-rows × M-sessions refresh
         // does not hit the filesystem N×M times.

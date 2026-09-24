@@ -1,16 +1,11 @@
-//! Reads the user-visible text inside the Claude Code or Codex composer for
-//! a given tmux pane.
+//! Detects unsent composer drafts in Claude Code and Codex panes.
 //!
-//! The Claude Code input extractor also serves `auto_compact`.
-//!
-//! The Claude Code TUI draws an input region delimited by two horizontal
-//! rules of `─` (U+2500). We capture the pane via `tmux capture-pane -p`,
-//! find the bottom-most pair of rule lines, and return the body lines
-//! between them with the prompt decoration stripped. When the bottom of
-//! the pane shows something other than the input box (permission prompt,
-//! mode picker, startup splash) no rule pair is present and we return
-//! `None` — callers must treat that as "no observation" rather than
-//! "input is empty".
+//! Claude Code text is extracted from between its `─` rules by
+//! [`get_pane_input_text`], which is also used by `auto_compact`. Codex is
+//! detected from the `›` line in an ANSI-styled capture; its dim placeholder
+//! marks an empty composer without depending on placeholder wording.
+//! [`pane_has_draft`] returns `None` when capture or layout cannot be parsed;
+//! callers then use `session.updated_at` as the fallback.
 
 use crate::commands::agent::types::Engine;
 use crate::infra::tmux;
@@ -88,14 +83,52 @@ fn extract_codex_composer_has_draft(raw: &str) -> Option<bool> {
 }
 
 fn parse_codex_composer_line(line: &str) -> Option<bool> {
-    let mut visible = Vec::new();
+    let styled_line = parse_codex_sgr(line)?;
+    if !styled_line.has_sgr {
+        return None;
+    }
+
+    // Placeholder wording can change or be localized; the dim SGR style is
+    // the signal that distinguishes it from user-entered text.
+    let prompt_index = styled_line
+        .characters
+        .iter()
+        .position(|character| character.value == '›')?;
+    if styled_line.characters[..prompt_index]
+        .iter()
+        .any(|character| !character.value.is_whitespace())
+    {
+        return None;
+    }
+
+    let body = styled_line.characters[prompt_index + 1..]
+        .iter()
+        .find(|character| !character.value.is_whitespace())?;
+    Some(!body.dim)
+}
+
+struct StyledCharacter {
+    value: char,
+    dim: bool,
+}
+
+struct StyledLine {
+    characters: Vec<StyledCharacter>,
+    has_sgr: bool,
+}
+
+fn parse_codex_sgr(line: &str) -> Option<StyledLine> {
+    let mut characters = Vec::new();
     let mut dim = false;
-    let mut saw_sgr = false;
-    let mut chars = line.chars().peekable();
+    let mut has_sgr = false;
+    let mut chars = line.chars();
 
     while let Some(character) = chars.next() {
         if character != '\u{1b}' {
-            visible.push((character, dim, saw_sgr));
+            characters.push(StyledCharacter {
+                value: character,
+                dim,
+            });
             continue;
         }
 
@@ -107,16 +140,8 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
         loop {
             let character = chars.next()?;
             if character == 'm' {
-                saw_sgr = true;
-                for parameter in parameters.split(';') {
-                    let parameter = if parameter.is_empty() { "0" } else { parameter };
-                    match parameter.parse::<u16>().ok()? {
-                        0 => dim = false,
-                        2 => dim = true,
-                        22 => dim = false,
-                        _ => {}
-                    }
-                }
+                has_sgr = true;
+                apply_codex_sgr(&parameters, &mut dim)?;
                 break;
             }
             if !character.is_ascii_digit() && character != ';' {
@@ -126,25 +151,35 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
         }
     }
 
-    // Placeholder wording can change or be localized; the dim SGR style is
-    // the signal that distinguishes it from user-entered text.
-    let prompt_index = visible
-        .iter()
-        .position(|(character, _, _)| *character == '›')?;
-    if !visible[prompt_index].2 {
-        return None;
-    }
-    if visible[..prompt_index]
-        .iter()
-        .any(|(character, _, _)| !character.is_whitespace())
-    {
-        return None;
-    }
+    Some(StyledLine {
+        characters,
+        has_sgr,
+    })
+}
 
-    let (_, is_dim, _) = visible[prompt_index + 1..]
-        .iter()
-        .find(|(character, _, _)| !character.is_whitespace())?;
-    Some(!is_dim)
+fn apply_codex_sgr(parameters: &str, dim: &mut bool) -> Option<()> {
+    let mut parameters = parameters.split(';');
+    while let Some(parameter) = parameters.next() {
+        let parameter = if parameter.is_empty() { "0" } else { parameter };
+        match parameter.parse::<u16>().ok()? {
+            0 => *dim = false,
+            2 => *dim = true,
+            22 => *dim = false,
+            38 | 48 | 58 => match parameters.next()? {
+                "5" => {
+                    parameters.next()?;
+                }
+                "2" => {
+                    parameters.next()?;
+                    parameters.next()?;
+                    parameters.next()?;
+                }
+                _ => return None,
+            },
+            _ => {}
+        }
+    }
+    Some(())
 }
 
 #[cfg(test)]
@@ -309,6 +344,22 @@ mod tests {
     #[case::normal_text_is_a_draft(
         format!("{ESC}[1m›{ESC}[0m draft text"),
         Some(true),
+    )]
+    #[case::indexed_colour_argument_is_not_dim(
+        format!("{ESC}[1m›{ESC}[0m {ESC}[38;5;2mdraft text{ESC}[0m"),
+        Some(true),
+    )]
+    #[case::truecolour_arguments_are_not_sgr_attributes(
+        format!("{ESC}[1m›{ESC}[0m {ESC}[48;2;40;44;52mdraft text{ESC}[0m"),
+        Some(true),
+    )]
+    #[case::dim_survives_truecolour_arguments(
+        format!("{ESC}[1m›{ESC}[0m {ESC}[2;38;2;40;44;52mplaceholder{ESC}[0m"),
+        Some(false),
+    )]
+    #[case::rgb_values_do_not_reset_dim(
+        format!("{ESC}[1m›{ESC}[0m {ESC}[2;38;2;40;0;22mplaceholder{ESC}[0m"),
+        Some(false),
     )]
     #[case::last_composer_is_used(
         format!("{ESC}[1m›{ESC}[0m stale text\n{ESC}[1m›{ESC}[0m {ESC}[2mplaceholder{ESC}[0m"),

@@ -21,45 +21,61 @@ use crate::commands::agent::pane;
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 
-/// Source of the timestamp that should keep a stopped session from pausing.
+/// Source of the observation time for a session with an unsent composer draft.
 ///
 /// Pulled out as a trait so tests can inject deterministic timestamps
 /// instead of poking real tmux panes.
-pub trait ActivityProbe {
-    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>>;
+pub trait DraftProbe {
+    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>>;
 }
 
-/// Probe that always reports "no observation". Useful when tmux is not
-/// available or when the caller does not want activity to influence the
+/// Probe that reports no observed composer draft. Useful when tmux is not
+/// available or when the caller does not want composer state to influence the
 /// decision (e.g., a non-interactive sweep over disk only).
-pub struct NoActivityProbe;
+pub struct NoDraftProbe;
 
-impl ActivityProbe for NoActivityProbe {
-    fn last_activity_at(&self, _: &Session, _: DateTime<Utc>) -> Option<DateTime<Utc>> {
+impl DraftProbe for NoDraftProbe {
+    fn draft_observed_at(&self, _: &Session, _: DateTime<Utc>) -> Option<DateTime<Utc>> {
         None
     }
 }
 
 /// Production probe that checks whether the live composer contains a draft.
-pub struct TmuxActivityProbe;
+pub struct TmuxDraftProbe;
 
-impl ActivityProbe for TmuxActivityProbe {
-    fn last_activity_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+impl DraftProbe for TmuxDraftProbe {
+    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        pane::input::pane_has_draft(pane_id, session.engine)
-            .filter(|has_draft| *has_draft)
-            .map(|_| now)
+        match pane::input::pane_has_draft(pane_id, session.engine) {
+            Some(true) => {
+                tracing::debug!(
+                    event = "agent.composer.draft_protected",
+                    session = %session.session_id,
+                    engine = session.engine.process_name(),
+                );
+                Some(now)
+            }
+            Some(false) => None,
+            None => {
+                tracing::debug!(
+                    event = "agent.composer.unrecognized",
+                    session = %session.session_id,
+                    engine = session.engine.process_name(),
+                );
+                None
+            }
+        }
     }
 }
 
 /// Returns the later of `session.updated_at` and the time a composer draft
 /// was observed. Falls back to `session.updated_at` when no draft is known.
-pub fn effective_updated_at<P: ActivityProbe>(
+pub fn effective_updated_at<P: DraftProbe>(
     session: &Session,
     probe: &P,
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    match probe.last_activity_at(session, now) {
+    match probe.draft_observed_at(session, now) {
         Some(activity_at) if activity_at > session.updated_at => activity_at,
         _ => session.updated_at,
     }
@@ -71,7 +87,7 @@ pub fn effective_updated_at<P: ActivityProbe>(
 /// are never active. Paused sessions stay paused -- they don't currently
 /// host a live agent process, so treat them as inactive for the purposes
 /// of worktree protection.
-pub fn is_session_active<P: ActivityProbe>(
+pub fn is_session_active<P: DraftProbe>(
     session: &Session,
     probe: &P,
     now: DateTime<Utc>,
@@ -89,7 +105,7 @@ pub fn is_session_active<P: ActivityProbe>(
 
 /// Whether any session in `sessions` is active and lives inside
 /// `worktree_path` (i.e. its cwd is the worktree or a descendant).
-pub fn contains_active_session<P: ActivityProbe>(
+pub fn contains_active_session<P: DraftProbe>(
     worktree_path: &Path,
     sessions: &[Session],
     probe: &P,
@@ -116,7 +132,7 @@ pub fn contains_active_session<P: ActivityProbe>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::{BTreeSet, HashSet};
     use std::path::PathBuf;
 
     use chrono::TimeDelta;
@@ -125,27 +141,30 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    pub(crate) struct FakeActivityProbe {
-        activity: RefCell<HashMap<String, DateTime<Utc>>>,
+    pub(crate) struct FakeDraftProbe {
+        drafts: RefCell<HashSet<String>>,
     }
 
-    impl FakeActivityProbe {
-        pub(crate) fn with(pairs: &[(&str, DateTime<Utc>)]) -> Self {
+    impl FakeDraftProbe {
+        pub(crate) fn with_drafts(session_ids: &[&str]) -> Self {
             let p = Self::default();
-            for (id, ts) in pairs {
-                p.activity.borrow_mut().insert((*id).to_string(), *ts);
+            for session_id in session_ids {
+                p.drafts.borrow_mut().insert((*session_id).to_string());
             }
             p
         }
     }
 
-    impl ActivityProbe for FakeActivityProbe {
-        fn last_activity_at(
+    impl DraftProbe for FakeDraftProbe {
+        fn draft_observed_at(
             &self,
             session: &Session,
-            _now: DateTime<Utc>,
+            now: DateTime<Utc>,
         ) -> Option<DateTime<Utc>> {
-            self.activity.borrow().get(&session.session_id).copied()
+            self.drafts
+                .borrow()
+                .contains(&session.session_id)
+                .then_some(now)
         }
     }
 
@@ -189,7 +208,7 @@ mod tests {
     fn active_when_status_or_recent(#[case] status: SessionStatus, #[case] expected: bool) {
         let now = Utc::now();
         let session = make_session("s", status, now);
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
         assert_eq!(
             is_session_active(&session, &probe, now, Duration::from_secs(60)),
             expected
@@ -202,7 +221,7 @@ mod tests {
     fn paused_and_ended_are_not_active(#[case] status: SessionStatus) {
         let now = Utc::now();
         let session = make_session("s", status, now - TimeDelta::hours(1));
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
         assert!(!is_session_active(
             &session,
             &probe,
@@ -215,7 +234,7 @@ mod tests {
     fn stopped_past_timeout_is_inactive() {
         let now = Utc::now();
         let session = make_session("s", SessionStatus::Stopped, now - TimeDelta::hours(1));
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
         assert!(!is_session_active(
             &session,
             &probe,
@@ -229,7 +248,7 @@ mod tests {
         let now = Utc::now();
         let mut session = make_session("s", SessionStatus::Stopped, now - TimeDelta::hours(1));
         session.pending_bg_task_ids.insert("bg".to_string());
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
         assert!(is_session_active(
             &session,
             &probe,
@@ -242,8 +261,7 @@ mod tests {
     fn recent_draft_observation_keeps_stopped_active() {
         let now = Utc::now();
         let session = make_session("s", SessionStatus::Stopped, now - TimeDelta::hours(1));
-        let recent = now - TimeDelta::seconds(5);
-        let probe = FakeActivityProbe::with(&[("s", recent)]);
+        let probe = FakeDraftProbe::with_drafts(&["s"]);
         assert!(is_session_active(
             &session,
             &probe,
@@ -264,7 +282,7 @@ mod tests {
         // Inactive session inside the worktree -- must not block deletion.
         let s_ended = make_session_at("c", SessionStatus::Ended, now, wt.clone());
 
-        let probe = NoActivityProbe;
+        let probe = NoDraftProbe;
         let timeout = Duration::from_secs(60);
 
         assert!(contains_active_session(
