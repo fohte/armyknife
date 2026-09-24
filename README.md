@@ -360,7 +360,28 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
-`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths; paused sessions are resumed before delivery. While the worker is active, `a agent sweep` leaves the session alone. Run this command inside a tracked Claude Code or Codex session.
+`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active, `a agent sweep` leaves the session alone.
+
+Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files remain in the armyknife cache.
+
+```console
+$ a agent bg run -- printf 'ready\n'
+Started background task <task-id>
+stdout: <armyknife-cache-dir>/agent-bg/output/<task-id>.stdout
+stderr: <armyknife-cache-dir>/agent-bg/output/<task-id>.stderr
+```
+
+The completion message has this form:
+
+```text
+<background-task-complete>
+- Task ID: <task-id>
+- Command argv: ["printf", "ready\\n"]
+- Exit code: 0
+- stdout: "<armyknife-cache-dir>/agent-bg/output/<task-id>.stdout"
+- stderr: "<armyknife-cache-dir>/agent-bg/output/<task-id>.stderr"
+</background-task-complete>
+```
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 

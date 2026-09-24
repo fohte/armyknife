@@ -142,6 +142,40 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    detached_command(program, args, cwd, extra_env)
+        .spawn()
+        .map(|_| ())
+}
+
+/// Like [`spawn_detached`], but returns the detached child PID so callers can
+/// track its lifetime without keeping a pipe or waiting on the child.
+pub fn spawn_detached_with_pid<P, I, S>(
+    program: P,
+    args: I,
+    cwd: Option<&Path>,
+    extra_env: &[(&str, &str)],
+) -> io::Result<u32>
+where
+    P: AsRef<OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    detached_command(program, args, cwd, extra_env)
+        .spawn()
+        .map(|child| child.id())
+}
+
+fn detached_command<P, I, S>(
+    program: P,
+    args: I,
+    cwd: Option<&Path>,
+    extra_env: &[(&str, &str)],
+) -> Command
+where
+    P: AsRef<OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
@@ -166,8 +200,7 @@ where
             Ok(())
         });
     }
-
-    cmd.spawn().map(|_| ())
+    cmd
 }
 
 /// Spawns a detached invocation of the current binary (`std::env::current_exe`)

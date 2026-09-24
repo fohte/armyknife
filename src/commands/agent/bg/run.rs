@@ -1,6 +1,6 @@
 use std::ffi::OsString;
-use std::fs::{self, File};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -8,8 +8,9 @@ use uuid::Uuid;
 
 use super::super::{bg_tasks, store, types::SessionStatus};
 use crate::infra::process;
-use crate::shared::cache;
 use crate::shared::env_var::EnvVars;
+
+use super::output;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct RunArgs {
@@ -31,31 +32,19 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let executable =
         std::env::current_exe().context("failed to resolve the armyknife executable")?;
     let task_id = Uuid::new_v4().to_string();
-    let output_dir = cache::base_dir()
-        .context("Unable to determine cache directory")?
-        .join("agent-bg")
-        .join("output");
-    fs::create_dir_all(&output_dir).with_context(|| {
-        format!(
-            "failed to create background command output directory: {}",
-            output_dir.display()
-        )
-    })?;
+    let output_dir = output::output_dir()?;
     let stdout_path = output_dir.join(format!("{task_id}.stdout"));
     let stderr_path = output_dir.join(format!("{task_id}.stderr"));
-    File::create(&stdout_path)
+    let mut guard = BackgroundRunGuard::new(&session_id, &task_id);
+    output::create_output_file(&stdout_path)
         .with_context(|| format!("failed to create stdout file: {}", stdout_path.display()))?;
-    if let Err(error) = File::create(&stderr_path) {
-        let _ = fs::remove_file(&stdout_path);
-        return Err(error)
-            .with_context(|| format!("failed to create stderr file: {}", stderr_path.display()));
-    }
+    guard.track_output(stdout_path.clone());
+    output::create_output_file(&stderr_path)
+        .with_context(|| format!("failed to create stderr file: {}", stderr_path.display()))?;
+    guard.track_output(stderr_path.clone());
 
-    if let Err(error) = bg_tasks::register(&session_id, &task_id) {
-        let _ = fs::remove_file(&stdout_path);
-        let _ = fs::remove_file(&stderr_path);
-        return Err(error);
-    }
+    bg_tasks::register(&session_id, &task_id)?;
+    guard.mark_task_registered();
     let worker_args = worker_args(
         &session_id,
         &task_id,
@@ -63,15 +52,69 @@ pub fn run(args: &RunArgs) -> Result<()> {
         &stderr_path,
         &args.command,
     );
-    if let Err(error) = process::spawn_detached(executable, worker_args, None, &[]) {
-        clear_after_spawn_failure(&session_id, &task_id, &stdout_path, &stderr_path);
-        return Err(error).context("failed to start the detached background command worker");
+    let worker_pid = process::spawn_detached_with_pid(executable, worker_args, None, &[])
+        .context("failed to start the detached background command worker")?;
+    guard.disarm();
+    if let Err(error) = bg_tasks::set_worker_pid(&session_id, &task_id, worker_pid) {
+        tracing::warn!(
+            event = "agent.bg_run.worker_pid_record_failed",
+            session = %session_id,
+            task = %task_id,
+            worker_pid,
+            error = %error,
+        );
     }
 
     println!("Started background task {task_id}");
     println!("stdout: {}", stdout_path.display());
     println!("stderr: {}", stderr_path.display());
     Ok(())
+}
+
+struct BackgroundRunGuard {
+    session_id: String,
+    task_id: String,
+    output_paths: Vec<PathBuf>,
+    task_registered: bool,
+    armed: bool,
+}
+
+impl BackgroundRunGuard {
+    fn new(session_id: &str, task_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            task_id: task_id.to_string(),
+            output_paths: Vec::new(),
+            task_registered: false,
+            armed: true,
+        }
+    }
+
+    fn track_output(&mut self, path: PathBuf) {
+        self.output_paths.push(path);
+    }
+
+    fn mark_task_registered(&mut self) {
+        self.task_registered = true;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BackgroundRunGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self.task_registered {
+            bg_tasks::clear_best_effort(&self.session_id, &self.task_id);
+        }
+        for path in &self.output_paths {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn worker_args(
@@ -98,22 +141,4 @@ fn worker_args(
     ]);
     args.extend(command.iter().cloned());
     args
-}
-
-fn clear_after_spawn_failure(
-    session_id: &str,
-    task_id: &str,
-    stdout_path: &Path,
-    stderr_path: &Path,
-) {
-    if let Err(error) = bg_tasks::clear(session_id, task_id) {
-        tracing::warn!(
-            event = "agent.bg_run.task_clear_failed",
-            session = session_id,
-            task = task_id,
-            error = %error,
-        );
-    }
-    let _ = fs::remove_file(stdout_path);
-    let _ = fs::remove_file(stderr_path);
 }
