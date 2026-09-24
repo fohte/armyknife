@@ -2,6 +2,7 @@
 
 mod batch;
 pub mod layout;
+mod pane_info;
 
 use std::fmt;
 use std::path::Path;
@@ -11,6 +12,7 @@ use indoc::writedoc;
 use thiserror::Error;
 
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
+pub use pane_info::get_pane_info_by_pane_id;
 
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
@@ -612,23 +614,6 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
     query_pane_value(pane_id, "#{pane_pid}")?
         .parse::<u32>()
         .ok()
-}
-
-/// Gets tmux pane information for a pane ID.
-/// Returns None if the pane doesn't exist or tmux is unavailable.
-pub fn get_pane_info_by_pane_id(pane_id: &str) -> Option<PaneInfo> {
-    let output = query_pane_value(
-        pane_id,
-        "#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
-    )?;
-    let mut parts = output.split('\t');
-
-    Some(PaneInfo {
-        session_name: parts.next()?.to_string(),
-        window_name: parts.next()?.to_string(),
-        window_index: parts.next()?.parse::<u32>().ok()?,
-        pane_id: parts.next()?.to_string(),
-    })
 }
 
 /// Sends SIGTERM to the process running in the given tmux pane.
