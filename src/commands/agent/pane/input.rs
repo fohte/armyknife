@@ -1,12 +1,7 @@
-//! Reads the user-visible text inside the Claude Code TUI input box for a
-//! given tmux pane.
+//! Reads the user-visible text inside the Claude Code or Codex composer for
+//! a given tmux pane.
 //!
-//! Used by `auto_compact` and `sweep` as a "did the user type something"
-//! probe: comparing two captures over time tells us whether a Stopped
-//! session is being touched without depending on the terminal cursor
-//! (which moves with every TUI redraw and is structurally tied to layout
-//! rather than user input) or pty atime (which drifted on macOS devfs in
-//! ways unrelated to keystrokes).
+//! The Claude Code input extractor also serves `auto_compact`.
 //!
 //! The Claude Code TUI draws an input region delimited by two horizontal
 //! rules of `─` (U+2500). We capture the pane via `tmux capture-pane -p`,
@@ -17,6 +12,7 @@
 //! `None` — callers must treat that as "no observation" rather than
 //! "input is empty".
 
+use crate::commands::agent::types::Engine;
 use crate::infra::tmux;
 
 /// Returns the text the user has typed into the Claude Code TUI input
@@ -24,6 +20,18 @@ use crate::infra::tmux;
 pub fn get_pane_input_text(pane_id: &str) -> Option<String> {
     let raw = tmux::capture_pane(pane_id)?;
     extract_input_text(&raw)
+}
+
+/// Returns whether `pane_id` contains an unsent composer draft for `engine`.
+/// Returns `None` when the composer cannot be recognized.
+pub fn pane_has_draft(pane_id: &str, engine: Engine) -> Option<bool> {
+    match engine {
+        Engine::Claude => get_pane_input_text(pane_id).map(|text| !text.is_empty()),
+        Engine::Codex => {
+            let raw = tmux::capture_pane_with_escapes(pane_id)?;
+            extract_codex_composer_has_draft(&raw)
+        }
+    }
 }
 
 fn extract_input_text(raw: &str) -> Option<String> {
@@ -74,11 +82,75 @@ fn strip_decoration(line: &str) -> &str {
         .unwrap_or(line)
 }
 
+fn extract_codex_composer_has_draft(raw: &str) -> Option<bool> {
+    let line = raw.lines().rev().find(|line| line.contains('›'))?;
+    parse_codex_composer_line(line)
+}
+
+fn parse_codex_composer_line(line: &str) -> Option<bool> {
+    let mut visible = Vec::new();
+    let mut dim = false;
+    let mut saw_sgr = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character != '\u{1b}' {
+            visible.push((character, dim, saw_sgr));
+            continue;
+        }
+
+        if chars.next()? != '[' {
+            return None;
+        }
+
+        let mut parameters = String::new();
+        loop {
+            let character = chars.next()?;
+            if character == 'm' {
+                saw_sgr = true;
+                for parameter in parameters.split(';') {
+                    let parameter = if parameter.is_empty() { "0" } else { parameter };
+                    match parameter.parse::<u16>().ok()? {
+                        0 => dim = false,
+                        2 => dim = true,
+                        22 => dim = false,
+                        _ => {}
+                    }
+                }
+                break;
+            }
+            if !character.is_ascii_digit() && character != ';' {
+                return None;
+            }
+            parameters.push(character);
+        }
+    }
+
+    // Placeholder wording can change or be localized; the dim SGR style is
+    // the signal that distinguishes it from user-entered text.
+    let prompt_index = visible
+        .iter()
+        .position(|(character, _, _)| *character == '›')?;
+    if !visible[prompt_index].2 {
+        return None;
+    }
+    if visible[..prompt_index]
+        .iter()
+        .any(|(character, _, _)| !character.is_whitespace())
+    {
+        return None;
+    }
+
+    let (_, is_dim, _) = visible[prompt_index + 1..]
+        .iter()
+        .find(|(character, _, _)| !character.is_whitespace())?;
+    Some(!is_dim)
+}
+
 #[cfg(test)]
 mod tests {
-    //! Samples below mirror real `tmux capture-pane -p` output from
-    //! Claude Code TUI v2.1.x; the rule character is U+2500 BOX DRAWINGS
-    //! LIGHT HORIZONTAL and rule width follows pane width.
+    //! Claude fixtures mirror `tmux capture-pane -p` output from v2.1.x;
+    //! Codex fixtures model the composer styling returned by `capture-pane -e`.
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
@@ -86,6 +158,8 @@ mod tests {
     // 60-char rule to mimic a moderate-width pane without making the
     // literal unwieldy.
     const RULE: &str = "────────────────────────────────────────────────────────────";
+
+    const ESC: char = '\u{1b}';
 
     /// Builds a capture body by substituting `{rule}` with the test's
     /// horizontal-rule fixture. Lets each parameterised case stay readable
@@ -225,5 +299,26 @@ mod tests {
     #[case::empty("")]
     fn rule_detector_rejects(#[case] line: &str) {
         assert!(!is_horizontal_rule(line));
+    }
+
+    #[rstest]
+    #[case::dim_placeholder_is_empty(
+        format!("{ESC}[1m›{ESC}[0m {ESC}[2mplaceholder text{ESC}[0m"),
+        Some(false),
+    )]
+    #[case::normal_text_is_a_draft(
+        format!("{ESC}[1m›{ESC}[0m draft text"),
+        Some(true),
+    )]
+    #[case::last_composer_is_used(
+        format!("{ESC}[1m›{ESC}[0m stale text\n{ESC}[1m›{ESC}[0m {ESC}[2mplaceholder{ESC}[0m"),
+        Some(false),
+    )]
+    #[case::no_prompt_is_unknown("ordinary output".to_string(), None)]
+    #[case::missing_body_is_unknown(format!("{ESC}[1m›{ESC}[0m"), None)]
+    #[case::unstyled_prompt_is_unknown("› placeholder text".to_string(), None)]
+    #[case::malformed_escape_is_unknown(format!("{ESC}[1m›{ESC}[2"), None)]
+    fn detects_codex_composer_draft(#[case] raw: String, #[case] expected: Option<bool>) {
+        assert_eq!(extract_codex_composer_has_draft(&raw), expected);
     }
 }

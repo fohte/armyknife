@@ -351,10 +351,9 @@ where
             }
         }
 
-        // Fold the pane's last observed cursor-movement time into the
-        // effective "last touched" time so a user who's still typing into a
-        // Stopped pane (or a claude that's still streaming output) doesn't
-        // get paused mid-stream.
+        // Use the current time while the composer contains an unsent draft,
+        // so sweep cannot terminate a session whose prompt is still being
+        // composed.
         // N.B. We intentionally do NOT mutate session.updated_at here --
         // the effective timestamp is only for the timeout decision, not for
         // persisting to disk.
@@ -561,7 +560,7 @@ mod tests {
         TestDir { temp, path }
     }
 
-    /// Test double: looks up pids and tmux activity timestamps by
+    /// Test double: looks up pids and pane observation timestamps by
     /// session_id from caller-populated maps, so tests can simulate
     /// "claude is alive" vs "pane is gone" and "user is typing" vs
     /// "pane is idle" without actually spawning processes or touching tmux.
@@ -1045,19 +1044,17 @@ mod tests {
     }
 
     #[rstest]
-    fn recent_tmux_activity_blocks_pause(test_dir: TestDir) {
+    fn composer_draft_blocks_pause(test_dir: TestDir) {
         // Session was marked Stopped an hour ago, so the naive timeout
-        // check would pause it. But the pane's input box text changed a
-        // few seconds ago -- the user is composing a follow-up prompt --
-        // and must not be killed.
+        // check would pause it, but its composer still contains a draft.
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("typing", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        let recent_activity = Utc::now() - TimeDelta::seconds(5);
+        let draft_observed_at = Utc::now() - TimeDelta::seconds(5);
         let probe = FakeProbe::with_pids(&[("typing", 4242)])
-            .with_last_activity(&[("typing", recent_activity)]);
+            .with_last_activity(&[("typing", draft_observed_at)]);
 
         let report = sweep_impl(
             &test_dir.path,
@@ -1083,16 +1080,16 @@ mod tests {
     }
 
     #[rstest]
-    fn tmux_activity_is_not_persisted_as_updated_at(test_dir: TestDir) {
-        // Even when tmux pane activity extends the effective timeout, the
-        // persisted updated_at must remain unchanged (the tmux timestamp is
+    fn activity_timestamp_is_not_persisted_as_updated_at(test_dir: TestDir) {
+        // Even when the pane observation extends the effective timeout, the
+        // persisted updated_at must remain unchanged (the observation time is
         // only for the decision, not for the on-disk record).
         let old = Utc::now() - TimeDelta::hours(2);
         let session = make_session("persist-check", SessionStatus::Stopped, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
-        // Tmux activity is old enough that the session still gets paused.
+        // The pane observation is old enough that the session still gets paused.
         // No resolvable pid, so this run confirms Paused directly.
         let stale_activity = Utc::now() - TimeDelta::hours(1);
         let probe = FakeProbe::default().with_last_activity(&[("persist-check", stale_activity)]);
@@ -1114,15 +1111,15 @@ mod tests {
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Paused);
         // The persisted updated_at must be the original session time, not
-        // the tmux pane activity timestamp.
+        // the pane observation timestamp.
         assert_eq!(
             reloaded.updated_at, old,
-            "updated_at must not be overwritten with tmux activity timestamp"
+            "updated_at must not be overwritten with pane observation timestamp"
         );
     }
 
     #[rstest]
-    fn stale_tmux_activity_does_not_block_pause(test_dir: TestDir) {
+    fn stale_pane_observation_does_not_block_pause(test_dir: TestDir) {
         // Session updated an hour ago AND the window has been idle for
         // longer than the timeout. Normal pause path.
         let old = Utc::now() - TimeDelta::hours(1);

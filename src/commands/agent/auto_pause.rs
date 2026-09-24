@@ -1,4 +1,4 @@
-//! Logic for automatically pausing long-stopped Claude Code sessions.
+//! Logic for automatically pausing long-stopped agent sessions.
 //!
 //! The actual side effects (signal delivery, store update) live in `sweep.rs`;
 //! this module only contains pure functions so they can be unit-tested without
@@ -46,8 +46,8 @@ pub fn decide_pause(session: &Session, now: DateTime<Utc>, timeout: Duration) ->
 
 /// Like [`decide_pause`] but uses an externally-supplied "last touched"
 /// timestamp instead of `session.updated_at`. Sweep passes in
-/// `effective_updated_at` (the max of session.updated_at and the tmux pane's
-/// last input) so it can account for recent user activity without mutating
+/// `effective_updated_at` (the max of session.updated_at and the time a
+/// composer draft was observed) so it can protect drafts without mutating
 /// the session on disk.
 pub fn decide_pause_with_effective(
     session: &Session,
