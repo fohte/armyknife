@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.329](https://github.com/fohte/armyknife/compare/v0.1.328...v0.1.329) (2026-09-24)
+
+
+### Bug Fixes
+
+* **agent:** prevent auto-termination of Codex sessions with unsent drafts ([#976](https://github.com/fohte/armyknife/issues/976)) ([3ec4bf8](https://github.com/fohte/armyknife/commit/3ec4bf810bfa799092b8903232b360a9acbc497b))
+
 ## [0.1.328](https://github.com/fohte/armyknife/compare/v0.1.327...v0.1.328) (2026-09-24)
 
 
