@@ -1,7 +1,7 @@
 use self_update::cargo_crate_version;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::shared::cache;
 use crate::shared::command;
@@ -11,6 +11,8 @@ const REPO_NAME: &str = "armyknife";
 const BIN_NAME: &str = "a";
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
+const RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const RELEASE_ASSET_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
     fs::read_to_string(path)
@@ -154,13 +156,62 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+fn is_release_assets_pending(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<self_update::errors::Error>()
+        .is_some_and(|error| match error {
+            self_update::errors::Error::Release(message) => {
+                message == "No assets found"
+                    || (message.starts_with("No asset found for target: `")
+                        && message.ends_with('`'))
+            }
+            _ => false,
+        })
+}
+
+fn update_with_retry<T, U, W, N>(mut update: U, mut wait: W, mut now: N) -> anyhow::Result<T>
+where
+    U: FnMut() -> anyhow::Result<T>,
+    W: FnMut(Duration),
+    N: FnMut() -> Duration,
+{
+    let started_at = now();
+
+    loop {
+        match update() {
+            Ok(result) => return Ok(result),
+            Err(error) if is_release_assets_pending(&error) => {
+                let elapsed = now().saturating_sub(started_at);
+                if elapsed >= RELEASE_ASSET_MAX_WAIT {
+                    return Err(error);
+                }
+
+                let wait_duration = RELEASE_ASSET_RETRY_INTERVAL
+                    .min(RELEASE_ASSET_MAX_WAIT.saturating_sub(elapsed));
+                wait(wait_duration);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub fn do_update() -> anyhow::Result<()> {
-    let mut builder = base_update_builder();
-    let status = builder
+    let updater = base_update_builder()
         .show_download_progress(true)
         .no_confirm(true)
-        .build()?
-        .update()?;
+        .build()?;
+    let started_at = Instant::now();
+    let status = update_with_retry(
+        || updater.update().map_err(anyhow::Error::new),
+        |duration| {
+            println!(
+                "Release assets are not available yet. Retrying in {} seconds...",
+                duration.as_secs()
+            );
+            std::thread::sleep(duration);
+        },
+        || started_at.elapsed(),
+    )?;
 
     if status.updated() {
         println!("Updated to version {}!", status.version());
@@ -175,6 +226,7 @@ pub fn do_update() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::cell::{Cell, RefCell};
     use std::fs;
     use tempfile::TempDir;
 
@@ -259,5 +311,115 @@ mod tests {
         write_last_check_time(&path, 1234567890).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "1234567890");
+    }
+
+    #[rstest]
+    #[case::empty_release_assets("No assets found", true)]
+    #[case::missing_target_asset("No asset found for target: `example-target`", true)]
+    #[case::no_release("No releases found", false)]
+    #[case::other_release_error("release API failed", false)]
+    fn is_release_assets_pending_cases(#[case] message: &str, #[case] expected: bool) {
+        let error = anyhow::Error::new(self_update::errors::Error::Release(message.to_string()));
+
+        assert_eq!(is_release_assets_pending(&error), expected);
+    }
+
+    #[test]
+    fn update_retries_pending_release_assets_until_success() {
+        let attempts = Cell::new(0);
+        let elapsed = Cell::new(Duration::ZERO);
+        let waits = RefCell::new(Vec::new());
+
+        let result = update_with_retry(
+            || {
+                let attempt = attempts.get();
+                attempts.set(attempt + 1);
+                if attempt < 2 {
+                    Err(anyhow::Error::new(self_update::errors::Error::Release(
+                        "No assets found".to_string(),
+                    )))
+                } else {
+                    Ok("updated")
+                }
+            },
+            |duration| {
+                waits.borrow_mut().push(duration);
+                elapsed.set(elapsed.get() + duration);
+            },
+            || elapsed.get(),
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                attempts.get(),
+                waits.into_inner(),
+            ),
+            (Ok("updated"), 3, vec![Duration::from_secs(30); 2],),
+        );
+    }
+
+    #[test]
+    fn update_returns_non_asset_errors_without_waiting() {
+        let attempts = Cell::new(0);
+        let waits = RefCell::new(Vec::new());
+
+        let result: anyhow::Result<()> = update_with_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(anyhow::Error::new(self_update::errors::Error::Release(
+                    "No releases found".to_string(),
+                )))
+            },
+            |duration| waits.borrow_mut().push(duration),
+            || Duration::ZERO,
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                attempts.get(),
+                waits.into_inner()
+            ),
+            (
+                Err("ReleaseError: No releases found".to_string()),
+                1,
+                vec![]
+            ),
+        );
+    }
+
+    #[test]
+    fn update_returns_last_asset_error_after_max_wait() {
+        let attempts = Cell::new(0);
+        let elapsed = Cell::new(Duration::ZERO);
+        let waits = RefCell::new(Vec::new());
+
+        let result: anyhow::Result<()> = update_with_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(anyhow::Error::new(self_update::errors::Error::Release(
+                    "No assets found".to_string(),
+                )))
+            },
+            |duration| {
+                waits.borrow_mut().push(duration);
+                elapsed.set(elapsed.get() + duration);
+            },
+            || elapsed.get(),
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                attempts.get(),
+                waits.into_inner(),
+            ),
+            (
+                Err("ReleaseError: No assets found".to_string()),
+                61,
+                vec![Duration::from_secs(30); 60],
+            ),
+        );
     }
 }
