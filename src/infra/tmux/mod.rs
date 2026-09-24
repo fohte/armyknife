@@ -614,6 +614,23 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
         .ok()
 }
 
+/// Gets tmux pane information for a pane ID.
+/// Returns None if the pane doesn't exist or tmux is unavailable.
+pub fn get_pane_info_by_pane_id(pane_id: &str) -> Option<PaneInfo> {
+    let output = query_pane_value(
+        pane_id,
+        "#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
+    )?;
+    let mut parts = output.split('\t');
+
+    Some(PaneInfo {
+        session_name: parts.next()?.to_string(),
+        window_name: parts.next()?.to_string(),
+        window_index: parts.next()?.parse::<u32>().ok()?,
+        pane_id: parts.next()?.to_string(),
+    })
+}
+
 /// Sends SIGTERM to the process running in the given tmux pane.
 /// No-op if the pane doesn't exist or the PID can't be resolved.
 pub fn send_sigterm_to_pane(pane_id: &str) {
