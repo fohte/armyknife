@@ -35,14 +35,11 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let output_dir = output::output_dir(&task_id)?;
     let stdout_path = output_dir.join(format!("{task_id}.stdout"));
     let stderr_path = output_dir.join(format!("{task_id}.stderr"));
-    let mut guard = BackgroundRunGuard::new(&session_id, &task_id);
-    guard.track_output_dir(output_dir);
+    let mut guard = BackgroundRunGuard::new(&session_id, &task_id, output_dir);
     output::create_output_file(&stdout_path)
         .with_context(|| format!("failed to create stdout file: {}", stdout_path.display()))?;
-    guard.track_output(stdout_path.clone());
     output::create_output_file(&stderr_path)
         .with_context(|| format!("failed to create stderr file: {}", stderr_path.display()))?;
-    guard.track_output(stderr_path.clone());
 
     bg_tasks::register(&session_id, &task_id)?;
     guard.mark_task_registered();
@@ -76,30 +73,20 @@ pub fn run(args: &RunArgs) -> Result<()> {
 struct BackgroundRunGuard {
     session_id: String,
     task_id: String,
-    output_dir: Option<PathBuf>,
-    output_paths: Vec<PathBuf>,
+    output_dir: PathBuf,
     task_registered: bool,
     armed: bool,
 }
 
 impl BackgroundRunGuard {
-    fn new(session_id: &str, task_id: &str) -> Self {
+    fn new(session_id: &str, task_id: &str, output_dir: PathBuf) -> Self {
         Self {
             session_id: session_id.to_string(),
             task_id: task_id.to_string(),
-            output_dir: None,
-            output_paths: Vec::new(),
+            output_dir,
             task_registered: false,
             armed: true,
         }
-    }
-
-    fn track_output(&mut self, path: PathBuf) {
-        self.output_paths.push(path);
-    }
-
-    fn track_output_dir(&mut self, dir: PathBuf) {
-        self.output_dir = Some(dir);
     }
 
     fn mark_task_registered(&mut self) {
@@ -120,12 +107,7 @@ impl Drop for BackgroundRunGuard {
             bg_tasks::clear_best_effort(&self.session_id, &self.task_id);
             window_status::sync_window_status_for_session(&self.session_id);
         }
-        for path in &self.output_paths {
-            let _ = fs::remove_file(path);
-        }
-        if let Some(dir) = &self.output_dir {
-            let _ = fs::remove_dir(dir);
-        }
+        let _ = fs::remove_dir_all(&self.output_dir);
     }
 }
 
