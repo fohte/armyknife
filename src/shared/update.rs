@@ -1,7 +1,7 @@
 use self_update::cargo_crate_version;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::shared::cache;
 use crate::shared::command;
@@ -9,8 +9,17 @@ use crate::shared::command;
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
 const BIN_NAME: &str = "a";
+// Only retry targets that this repository can eventually publish.
+const RELEASE_TARGETS: &[&str] = &[
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+];
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
+const AUTHENTICATED_RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+const ANONYMOUS_RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+const RELEASE_ASSET_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
     fs::read_to_string(path)
@@ -126,17 +135,32 @@ fn resolve_github_token() -> Option<String> {
     resolve_github_token_with(env_var, gh_auth_token)
 }
 
-fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
+fn base_update_builder_with_authentication() -> (self_update::backends::github::UpdateBuilder, bool)
+{
     let mut builder = self_update::backends::github::Update::configure();
     builder
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
         .current_version(cargo_crate_version!());
-    if let Some(token) = resolve_github_token() {
+    let token = resolve_github_token();
+    let is_authenticated = token.is_some();
+    if let Some(token) = token {
         builder.auth_token(&token);
     }
-    builder
+    (builder, is_authenticated)
+}
+
+fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
+    base_update_builder_with_authentication().0
+}
+
+fn release_asset_retry_interval(is_authenticated: bool) -> Duration {
+    if is_authenticated {
+        AUTHENTICATED_RELEASE_ASSET_RETRY_INTERVAL
+    } else {
+        ANONYMOUS_RELEASE_ASSET_RETRY_INTERVAL
+    }
 }
 
 fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -154,13 +178,97 @@ fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+fn is_release_assets_pending(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<self_update::errors::Error>()
+        .is_some_and(|error| match error {
+            self_update::errors::Error::Release(message) => {
+                message.starts_with("No asset found for target: `")
+            }
+            _ => false,
+        })
+}
+
+fn should_retry_release_asset_error(
+    error: &anyhow::Error,
+    target: &str,
+    release_targets: &[&str],
+) -> bool {
+    release_targets.contains(&target) && is_release_assets_pending(error)
+}
+
+fn update_with_retry<T, U, W, N, P>(
+    mut update: U,
+    mut wait: W,
+    mut now: N,
+    should_retry: P,
+    retry_interval: Duration,
+) -> anyhow::Result<T>
+where
+    U: FnMut() -> anyhow::Result<T>,
+    W: FnMut(Duration),
+    N: FnMut() -> Duration,
+    P: Fn(&anyhow::Error) -> bool,
+{
+    let started_at = now();
+    let mut pending_error = None;
+
+    loop {
+        if let Some(error) = pending_error
+            .take()
+            .filter(|_| now().saturating_sub(started_at) >= RELEASE_ASSET_MAX_WAIT)
+        {
+            return Err(error);
+        }
+
+        match update() {
+            Ok(result) => return Ok(result),
+            Err(error) if should_retry(&error) => {
+                let elapsed = now().saturating_sub(started_at);
+                if elapsed >= RELEASE_ASSET_MAX_WAIT {
+                    return Err(error);
+                }
+
+                let wait_duration =
+                    retry_interval.min(RELEASE_ASSET_MAX_WAIT.saturating_sub(elapsed));
+                wait(wait_duration);
+                pending_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub fn do_update() -> anyhow::Result<()> {
-    let mut builder = base_update_builder();
-    let status = builder
-        .show_download_progress(true)
-        .no_confirm(true)
-        .build()?
-        .update()?;
+    let (mut builder, is_authenticated) = base_update_builder_with_authentication();
+    builder.show_download_progress(true).no_confirm(true);
+    let initial_updater = builder.build()?;
+    builder.show_output(false);
+    let retry_updater = builder.build()?;
+    let started_at = Instant::now();
+    let mut first_attempt = true;
+    let retry_interval = release_asset_retry_interval(is_authenticated);
+    let status = update_with_retry(
+        || {
+            let updater = if first_attempt {
+                first_attempt = false;
+                &initial_updater
+            } else {
+                &retry_updater
+            };
+            updater.update().map_err(anyhow::Error::new)
+        },
+        |duration| {
+            println!(
+                "Release assets are not available yet. Waiting {} seconds...",
+                duration.as_secs()
+            );
+            std::thread::sleep(duration);
+        },
+        || started_at.elapsed(),
+        |error| should_retry_release_asset_error(error, self_update::get_target(), RELEASE_TARGETS),
+        retry_interval,
+    )?;
 
     if status.updated() {
         println!("Updated to version {}!", status.version());
@@ -175,6 +283,7 @@ pub fn do_update() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::cell::{Cell, RefCell};
     use std::fs;
     use tempfile::TempDir;
 
@@ -259,5 +368,123 @@ mod tests {
         write_last_check_time(&path, 1234567890).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "1234567890");
+    }
+
+    #[rstest]
+    #[case::missing_target_asset("No asset found for target: `example-target`", true)]
+    #[case::missing_assets_array("No assets found", false)]
+    #[case::no_release("No releases found", false)]
+    #[case::other_release_error("release API failed", false)]
+    fn is_release_assets_pending_cases(#[case] message: &str, #[case] expected: bool) {
+        let error = anyhow::Error::new(self_update::errors::Error::Release(message.to_string()));
+
+        assert_eq!(is_release_assets_pending(&error), expected);
+    }
+
+    #[rstest]
+    #[case::authenticated(true, Duration::from_secs(10))]
+    #[case::anonymous(false, Duration::from_secs(60))]
+    fn release_asset_retry_interval_cases(
+        #[case] is_authenticated: bool,
+        #[case] expected: Duration,
+    ) {
+        assert_eq!(release_asset_retry_interval(is_authenticated), expected);
+    }
+
+    #[test]
+    fn release_asset_errors_are_retried_only_for_published_targets() {
+        let error = anyhow::Error::new(self_update::errors::Error::Release(
+            "No asset found for target: `example-target`".to_string(),
+        ));
+
+        assert_eq!(
+            (
+                should_retry_release_asset_error(&error, "example-target", &["example-target"]),
+                should_retry_release_asset_error(&error, "unsupported-target", &["example-target"]),
+            ),
+            (true, false),
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct RetryOutcome {
+        result: Result<String, String>,
+        attempts: usize,
+        waits: Vec<Duration>,
+    }
+
+    #[rstest]
+    #[case::succeeds_after_retries(
+        "No asset found for target: `example-target`",
+        Some(2),
+        Duration::ZERO,
+        RetryOutcome {
+            result: Ok("updated".to_string()),
+            attempts: 3,
+            waits: vec![Duration::from_secs(10); 2],
+        },
+    )]
+    #[case::non_asset_error_returns_immediately(
+        "No releases found",
+        None,
+        Duration::ZERO,
+        RetryOutcome {
+            result: Err("ReleaseError: No releases found".to_string()),
+            attempts: 1,
+            waits: vec![],
+        },
+    )]
+    #[case::deadline_caps_final_wait(
+        "No asset found for target: `example-target`",
+        None,
+        Duration::from_secs(1795),
+        RetryOutcome {
+            result: Err("ReleaseError: No asset found for target: `example-target`".to_string()),
+            attempts: 1,
+            waits: vec![Duration::from_secs(5)],
+        },
+    )]
+    fn update_with_retry_cases(
+        #[case] error_message: &str,
+        #[case] failures_before_success: Option<usize>,
+        #[case] attempt_duration: Duration,
+        #[case] expected: RetryOutcome,
+    ) {
+        let attempts = Cell::new(0);
+        let elapsed = Cell::new(Duration::ZERO);
+        let waits = RefCell::new(Vec::new());
+
+        let result = update_with_retry(
+            || {
+                let attempt = attempts.get();
+                attempts.set(attempt + 1);
+                elapsed.set(elapsed.get() + attempt_duration);
+                if failures_before_success.is_some_and(|failures| attempt >= failures) {
+                    return Ok("updated");
+                }
+
+                Err(anyhow::Error::new(self_update::errors::Error::Release(
+                    error_message.to_string(),
+                )))
+            },
+            |duration| {
+                waits.borrow_mut().push(duration);
+                elapsed.set(elapsed.get() + duration);
+            },
+            || elapsed.get(),
+            |error| should_retry_release_asset_error(error, "example-target", &["example-target"]),
+            release_asset_retry_interval(true),
+        );
+
+        assert_eq!(
+            RetryOutcome {
+                result: result
+                    .map(|value| value.to_string())
+                    .map_err(|error| error.to_string()),
+                attempts: attempts.get(),
+                waits: waits.into_inner(),
+            },
+            expected,
+        );
     }
 }
