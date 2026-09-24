@@ -9,7 +9,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use super::error::CcError;
 #[cfg(test)]
 use super::types::Engine;
-use super::types::{Session, SessionStatus};
+use super::types::{BG_RUN_PENDING_TASK_MARKER, Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
 
@@ -229,7 +229,7 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     acquire_lock(&lock_file)?;
 
     // Serialize content
-    let content = serde_json::to_string_pretty(session)?;
+    let content = serialize_session(session)?;
 
     // Write to temporary file first for atomic operation
     let temp_path = path.with_extension("json.tmp");
@@ -312,7 +312,7 @@ impl SessionLock {
     /// Writes the session atomically under the lock already held by this
     /// guard, matching `save_session_to`.
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
-        let content = serde_json::to_string_pretty(session)?;
+        let content = serialize_session(session)?;
         let temp_path = self.path.with_extension("json.tmp");
         let mut temp_file = File::create(&temp_path)?;
         temp_file.write_all(content.as_bytes())?;
@@ -360,7 +360,7 @@ pub(crate) fn update_session_in(
         return Ok(());
     }
 
-    let new_content = serde_json::to_string_pretty(&session)?;
+    let new_content = serialize_session(&session)?;
     let temp_path = path.with_extension("json.tmp");
     let mut temp_file = File::create(&temp_path)?;
     temp_file.write_all(new_content.as_bytes())?;
@@ -564,6 +564,14 @@ pub fn list_all_sessions() -> Result<Vec<Session>> {
     let mut sessions = read_all_sessions()?;
     sort_sessions(&mut sessions);
     Ok(sessions)
+}
+
+fn serialize_session(session: &Session) -> Result<String> {
+    let mut persisted = session.clone();
+    persisted
+        .pending_bg_task_ids
+        .remove(BG_RUN_PENDING_TASK_MARKER);
+    Ok(serde_json::to_string_pretty(&persisted)?)
 }
 
 /// Removes stale sessions from disk.

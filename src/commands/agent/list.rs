@@ -5,6 +5,7 @@ use chrono::Utc;
 use clap::Args;
 
 use super::claude_sessions;
+use super::session_status;
 use super::store;
 #[cfg(test)]
 use super::types::Engine;
@@ -37,7 +38,7 @@ pub fn run(args: &ListArgs) -> Result<()> {
     store::cleanup_stale_sessions()?;
 
     // Load all sessions
-    let sessions = store::list_sessions()?;
+    let sessions = session_status::list_sessions_with_bg_run_status()?;
 
     if args.tmux {
         let mut stdout = io::stdout().lock();

@@ -37,6 +37,7 @@ use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::agent::auto_pause;
 use crate::commands::agent::claude_sessions;
 use crate::commands::agent::pane;
+use crate::commands::agent::session_status;
 use crate::commands::agent::signal::{LibcSignalSender, SignalSender};
 use crate::commands::agent::store;
 #[cfg(test)]
@@ -108,7 +109,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
             )
         })?;
 
-    let session = match store::load_session(&args.session)? {
+    let session = match session_status::load_session_with_bg_run_status(&args.session)? {
         Some(s) => s,
         None => {
             tracing::info!(
@@ -174,7 +175,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
 
     // Reload the session: it may have moved out of Stopped (user resumed,
     // sweep paused it, …) while we slept.
-    let session = match store::load_session(&args.session)? {
+    let session = match session_status::load_session_with_bg_run_status(&args.session)? {
         Some(s) => s,
         None => {
             tracing::info!(

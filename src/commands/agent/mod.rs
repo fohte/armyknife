@@ -22,6 +22,7 @@ pub(crate) mod pane;
 pub(crate) mod peer;
 mod resume;
 mod resurrect;
+pub(crate) mod session_status;
 mod signal;
 pub(crate) mod store;
 mod sweep;

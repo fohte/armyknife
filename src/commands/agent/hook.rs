@@ -13,6 +13,7 @@ use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
 use super::auto_compact;
+use super::bg_tasks;
 use super::claude_sessions;
 use super::delete_tq_session_detached;
 use super::error::CcError;
@@ -115,7 +116,7 @@ enum ProcessResult {
 
 /// Controls which side effects `process_hook_event_impl` executes.
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
-/// to avoid calling external commands (tmux, hammerspoon, etc.).
+/// to avoid external commands and the shared background-task registry.
 struct SideEffects {
     /// Call tmux commands (get_pane_info_by_pid, set_pane_option, refresh_status)
     tmux: bool,
@@ -127,6 +128,10 @@ struct SideEffects {
     /// Spawn the detached `a agent delete-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
     tq_delete: bool,
+    /// Include `a agent bg run` state in Stop processing.
+    track_bg_run_tasks: bool,
+    /// Registry root used to include `a agent bg run` tasks in Stop handling.
+    bg_tasks_dir: Option<PathBuf>,
     /// Test-only sink that records the group ids passed to
     /// `remove_notification_group`. Lets tests assert the call happened
     /// without invoking hammerspoon.
@@ -145,12 +150,14 @@ type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
 
 impl SideEffects {
-    fn all() -> Self {
+    fn all(bg_tasks_dir: Option<PathBuf>) -> Self {
         Self {
             tmux: true,
             notifications: true,
             auto_compact: true,
             tq_delete: true,
+            track_bg_run_tasks: true,
+            bg_tasks_dir,
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
@@ -165,6 +172,8 @@ impl SideEffects {
             notifications: false,
             auto_compact: false,
             tq_delete: false,
+            track_bg_run_tasks: false,
+            bg_tasks_dir: None,
             removed_notification_groups: None,
             tmux_sync_calls: None,
         }
@@ -204,7 +213,21 @@ impl SideEffects {
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
+    let tasks_dir = if event == HookEvent::Stop {
+        match bg_tasks::tasks_dir() {
+            Ok(dir) => Some(dir),
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.bg_run.registry_path_unavailable",
+                    error = %error,
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all(tasks_dir)).map(|_| ())
 }
 
 /// Ends any Paused sessions that were attached to `pane_id` but belong to a
@@ -491,6 +514,14 @@ fn process_hook_event_impl(
     if event == HookEvent::Stop {
         session.pending_bg_task_ids = input.pending_bg_task_ids();
         session.pending_agent_task_ids = input.pending_agent_task_ids();
+        // `a agent bg run` tasks live in armyknife's registry and aren't
+        // included in Claude Code's `background_tasks` input.
+        if side_effects.track_bg_run_tasks {
+            match &side_effects.bg_tasks_dir {
+                Some(tasks_dir) => bg_tasks::include_pending_status_in(&mut session, tasks_dir),
+                None => bg_tasks::mark_pending_status(&mut session),
+            }
+        }
 
         // Drop permission waits for subagents no longer in Claude Code's
         // task registry. A subagent whose permission request was denied
@@ -650,9 +681,9 @@ fn process_hook_event_impl(
     //
     // Skip while any background task launched in this session has not
     // reported completion: the user is still mid-task even if Claude's
-    // main loop went idle (the post-launch Stop is synthetic). This reads
-    // `pending_bg_task_ids` as refreshed from `background_tasks` a few
-    // lines above, not any state accumulated across separate hook events.
+    // main loop went idle (the post-launch Stop is synthetic). Claude Code
+    // task IDs are refreshed from `background_tasks`; armyknife's task marker
+    // is read from its separate registry for this Stop event.
     if side_effects.auto_compact && event == HookEvent::Stop {
         if session.engine != Engine::Claude {
             tracing::info!(
@@ -2054,6 +2085,8 @@ mod tests {
             notifications: false,
             auto_compact: false,
             tq_delete: false,
+            track_bg_run_tasks: false,
+            bg_tasks_dir: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };
@@ -2108,6 +2141,8 @@ mod tests {
             notifications: false,
             auto_compact: false,
             tq_delete: false,
+            track_bg_run_tasks: false,
+            bg_tasks_dir: None,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
         };
@@ -2498,6 +2533,8 @@ mod tests {
             notifications: false,
             auto_compact: false,
             tq_delete: false,
+            track_bg_run_tasks: false,
+            bg_tasks_dir: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };
