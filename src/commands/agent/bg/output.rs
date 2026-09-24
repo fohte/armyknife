@@ -5,11 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::shared::cache;
-
 pub(super) fn output_dir() -> Result<PathBuf> {
-    let dir = cache::base_dir()
-        .context("Unable to determine cache directory")?
+    let dir = std::env::temp_dir()
+        .join("armyknife")
         .join("agent-bg")
         .join("output");
     create_dir_secure(&dir)
