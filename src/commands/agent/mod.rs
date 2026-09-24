@@ -1,5 +1,7 @@
 mod auto_compact;
 pub(crate) mod auto_pause;
+mod bg;
+pub(crate) mod bg_tasks;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;
@@ -32,6 +34,7 @@ mod window_status;
 use clap::Subcommand;
 
 pub use auto_compact::AutoCompactArgs;
+pub use bg::BgCommands;
 pub use clean_detached::CleanDetachedArgs;
 pub use codex::CodexArgs;
 pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
@@ -95,6 +98,10 @@ pub enum AgentCommands {
     /// Pause long-stopped sessions by requesting agent shutdown (run periodically)
     Sweep(SweepArgs),
 
+    /// Run a command in the background and notify this session when it finishes
+    #[command(subcommand)]
+    Bg(BgCommands),
+
     /// Schedule a `/compact` for an idle session while the prompt cache is warm.
     #[command(name = "auto-compact")]
     AutoCompact(AutoCompactArgs),
@@ -139,6 +146,7 @@ impl AgentCommands {
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
             Self::Sweep(args) => sweep::run(args)?,
+            Self::Bg(cmd) => bg::run(cmd)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
             Self::PaneHasPaused(args) => pane::status::run(args)?,

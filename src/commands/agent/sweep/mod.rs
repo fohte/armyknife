@@ -294,6 +294,17 @@ where
             continue;
         }
 
+        report.scanned += 1;
+
+        if super::bg_tasks::has_pending(&session.session_id)? {
+            tracing::info!(
+                event = "agent.sweep.bg_run_pending",
+                session = %session.session_id,
+            );
+            report.active += 1;
+            continue;
+        }
+
         // `pending_bg_task_ids` / `pending_agent_task_ids` are only ever
         // refreshed by a future `Stop` hook (see `hook.rs`). If the `claude`
         // process backing this session crashed or was killed outside of
@@ -316,8 +327,6 @@ where
                 store::save_session_to(sessions_dir, &session)?;
             }
         }
-
-        report.scanned += 1;
 
         // Fold the pane's last observed cursor-movement time into the
         // effective "last touched" time so a user who's still typing into a
