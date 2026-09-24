@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.325](https://github.com/fohte/armyknife/compare/v0.1.324...v0.1.325) (2026-09-24)
+
+
+### Bug Fixes
+
+* **agent:** associate panes by detecting child Codex processes ([#968](https://github.com/fohte/armyknife/issues/968)) ([82bd704](https://github.com/fohte/armyknife/commit/82bd704f6ccac260941482c667d3c72a6c25d2f8))
+
 ## [0.1.324](https://github.com/fohte/armyknife/compare/v0.1.323...v0.1.324) (2026-09-24)
 
 
