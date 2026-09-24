@@ -127,6 +127,8 @@ Update to the latest version.
 
 The CLI automatically checks for updates and prompts you to update when a new version is available.
 
+When a release asset for a published target is still uploading, `a update` retries every 30 seconds for up to 30 minutes.
+
 Version checks and release downloads hit the GitHub REST API, which limits anonymous requests to 60 per hour per IP. To authenticate and raise that limit, `a update` picks the first non-empty token from the following sources:
 
 1. `ARMYKNIFE_GITHUB_TOKEN` environment variable

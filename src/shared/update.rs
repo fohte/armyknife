@@ -9,6 +9,12 @@ use crate::shared::command;
 const REPO_OWNER: &str = "fohte";
 const REPO_NAME: &str = "armyknife";
 const BIN_NAME: &str = "a";
+// Only retry targets that this repository can eventually publish.
+const RELEASE_TARGETS: &[&str] = &[
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+];
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
 const RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(30);
@@ -161,26 +167,46 @@ fn is_release_assets_pending(error: &anyhow::Error) -> bool {
         .downcast_ref::<self_update::errors::Error>()
         .is_some_and(|error| match error {
             self_update::errors::Error::Release(message) => {
-                message == "No assets found"
-                    || (message.starts_with("No asset found for target: `")
-                        && message.ends_with('`'))
+                message.starts_with("No asset found for target: `")
             }
             _ => false,
         })
 }
 
-fn update_with_retry<T, U, W, N>(mut update: U, mut wait: W, mut now: N) -> anyhow::Result<T>
+fn should_retry_release_asset_error(
+    error: &anyhow::Error,
+    target: &str,
+    release_targets: &[&str],
+) -> bool {
+    release_targets.contains(&target) && is_release_assets_pending(error)
+}
+
+fn update_with_retry<T, U, W, N, P>(
+    mut update: U,
+    mut wait: W,
+    mut now: N,
+    should_retry: P,
+) -> anyhow::Result<T>
 where
     U: FnMut() -> anyhow::Result<T>,
     W: FnMut(Duration),
     N: FnMut() -> Duration,
+    P: Fn(&anyhow::Error) -> bool,
 {
     let started_at = now();
+    let mut pending_error = None;
 
     loop {
+        if let Some(error) = pending_error
+            .take()
+            .filter(|_| now().saturating_sub(started_at) >= RELEASE_ASSET_MAX_WAIT)
+        {
+            return Err(error);
+        }
+
         match update() {
             Ok(result) => return Ok(result),
-            Err(error) if is_release_assets_pending(&error) => {
+            Err(error) if should_retry(&error) => {
                 let elapsed = now().saturating_sub(started_at);
                 if elapsed >= RELEASE_ASSET_MAX_WAIT {
                     return Err(error);
@@ -189,6 +215,7 @@ where
                 let wait_duration = RELEASE_ASSET_RETRY_INTERVAL
                     .min(RELEASE_ASSET_MAX_WAIT.saturating_sub(elapsed));
                 wait(wait_duration);
+                pending_error = Some(error);
             }
             Err(error) => return Err(error),
         }
@@ -205,12 +232,13 @@ pub fn do_update() -> anyhow::Result<()> {
         || updater.update().map_err(anyhow::Error::new),
         |duration| {
             println!(
-                "Release assets are not available yet. Retrying in {} seconds...",
+                "Release assets are not available yet. Waiting {} seconds...",
                 duration.as_secs()
             );
             std::thread::sleep(duration);
         },
         || started_at.elapsed(),
+        |error| should_retry_release_asset_error(error, self_update::get_target(), RELEASE_TARGETS),
     )?;
 
     if status.updated() {
@@ -314,8 +342,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty_release_assets("No assets found", true)]
     #[case::missing_target_asset("No asset found for target: `example-target`", true)]
+    #[case::missing_assets_array("No assets found", false)]
     #[case::no_release("No releases found", false)]
     #[case::other_release_error("release API failed", false)]
     fn is_release_assets_pending_cases(#[case] message: &str, #[case] expected: bool) {
@@ -325,7 +353,64 @@ mod tests {
     }
 
     #[test]
-    fn update_retries_pending_release_assets_until_success() {
+    fn release_asset_errors_are_retried_only_for_published_targets() {
+        let error = anyhow::Error::new(self_update::errors::Error::Release(
+            "No asset found for target: `example-target`".to_string(),
+        ));
+
+        assert_eq!(
+            (
+                should_retry_release_asset_error(&error, "example-target", &["example-target"]),
+                should_retry_release_asset_error(&error, "unsupported-target", &["example-target"]),
+            ),
+            (true, false),
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct RetryOutcome {
+        result: Result<String, String>,
+        attempts: usize,
+        waits: Vec<Duration>,
+    }
+
+    #[rstest]
+    #[case::succeeds_after_retries(
+        "No asset found for target: `example-target`",
+        Some(2),
+        Duration::ZERO,
+        RetryOutcome {
+            result: Ok("updated".to_string()),
+            attempts: 3,
+            waits: vec![Duration::from_secs(30); 2],
+        },
+    )]
+    #[case::non_asset_error_returns_immediately(
+        "No releases found",
+        None,
+        Duration::ZERO,
+        RetryOutcome {
+            result: Err("ReleaseError: No releases found".to_string()),
+            attempts: 1,
+            waits: vec![],
+        },
+    )]
+    #[case::deadline_caps_final_wait(
+        "No asset found for target: `example-target`",
+        None,
+        Duration::from_secs(1795),
+        RetryOutcome {
+            result: Err("ReleaseError: No asset found for target: `example-target`".to_string()),
+            attempts: 1,
+            waits: vec![Duration::from_secs(5)],
+        },
+    )]
+    fn update_with_retry_cases(
+        #[case] error_message: &str,
+        #[case] failures_before_success: Option<usize>,
+        #[case] attempt_duration: Duration,
+        #[case] expected: RetryOutcome,
+    ) {
         let attempts = Cell::new(0);
         let elapsed = Cell::new(Duration::ZERO);
         let waits = RefCell::new(Vec::new());
@@ -334,72 +419,13 @@ mod tests {
             || {
                 let attempt = attempts.get();
                 attempts.set(attempt + 1);
-                if attempt < 2 {
-                    Err(anyhow::Error::new(self_update::errors::Error::Release(
-                        "No assets found".to_string(),
-                    )))
-                } else {
-                    Ok("updated")
+                elapsed.set(elapsed.get() + attempt_duration);
+                if failures_before_success.is_some_and(|failures| attempt >= failures) {
+                    return Ok("updated");
                 }
-            },
-            |duration| {
-                waits.borrow_mut().push(duration);
-                elapsed.set(elapsed.get() + duration);
-            },
-            || elapsed.get(),
-        );
 
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                attempts.get(),
-                waits.into_inner(),
-            ),
-            (Ok("updated"), 3, vec![Duration::from_secs(30); 2],),
-        );
-    }
-
-    #[test]
-    fn update_returns_non_asset_errors_without_waiting() {
-        let attempts = Cell::new(0);
-        let waits = RefCell::new(Vec::new());
-
-        let result: anyhow::Result<()> = update_with_retry(
-            || {
-                attempts.set(attempts.get() + 1);
                 Err(anyhow::Error::new(self_update::errors::Error::Release(
-                    "No releases found".to_string(),
-                )))
-            },
-            |duration| waits.borrow_mut().push(duration),
-            || Duration::ZERO,
-        );
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                attempts.get(),
-                waits.into_inner()
-            ),
-            (
-                Err("ReleaseError: No releases found".to_string()),
-                1,
-                vec![]
-            ),
-        );
-    }
-
-    #[test]
-    fn update_returns_last_asset_error_after_max_wait() {
-        let attempts = Cell::new(0);
-        let elapsed = Cell::new(Duration::ZERO);
-        let waits = RefCell::new(Vec::new());
-
-        let result: anyhow::Result<()> = update_with_retry(
-            || {
-                attempts.set(attempts.get() + 1);
-                Err(anyhow::Error::new(self_update::errors::Error::Release(
-                    "No assets found".to_string(),
+                    error_message.to_string(),
                 )))
             },
             |duration| {
@@ -407,19 +433,18 @@ mod tests {
                 elapsed.set(elapsed.get() + duration);
             },
             || elapsed.get(),
+            |error| should_retry_release_asset_error(error, "example-target", &["example-target"]),
         );
 
         assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                attempts.get(),
-                waits.into_inner(),
-            ),
-            (
-                Err("ReleaseError: No assets found".to_string()),
-                61,
-                vec![Duration::from_secs(30); 60],
-            ),
+            RetryOutcome {
+                result: result
+                    .map(|value| value.to_string())
+                    .map_err(|error| error.to_string()),
+                attempts: attempts.get(),
+                waits: waits.into_inner(),
+            },
+            expected,
         );
     }
 }
