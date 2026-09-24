@@ -1,4 +1,5 @@
 use crate::commands::agent::claude_sessions;
+use crate::commands::agent::session_status;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
@@ -60,7 +61,9 @@ impl App {
             match change.change_type {
                 SessionChangeType::Created | SessionChangeType::Modified => {
                     // Load the specific session
-                    if let Some(session) = store::load_session(&change.session_id)? {
+                    if let Some(session) =
+                        session_status::load_session_with_bg_run_status(&change.session_id)?
+                    {
                         // Check if session is stale (TTY check)
                         if is_session_stale(&session) {
                             self.remove_session(&change.session_id);
@@ -294,7 +297,7 @@ pub(super) fn get_title_display_name(session: &Session) -> String {
 /// Does not perform stale-session cleanup; that runs once at startup in
 /// a background thread (see `EventHandler::new`).
 pub(super) fn load_sessions() -> Result<Vec<Session>> {
-    store::list_sessions()
+    session_status::list_sessions_with_bg_run_status()
 }
 
 #[cfg(test)]

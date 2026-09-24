@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::store;
 use crate::shared::{cache, hex};
 
 /// Covers the interval between task registration and the worker recording its PID.
@@ -39,7 +40,13 @@ fn marker_path(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<Pat
 }
 
 pub(crate) fn register(session_id: &str, task_id: &str) -> Result<()> {
-    register_in(&tasks_dir()?, session_id, task_id)
+    let tasks_root = tasks_dir()?;
+    register_in(&tasks_root, session_id, task_id)?;
+    if let Err(error) = store::touch_session(session_id) {
+        let _ = clear_in(&tasks_root, session_id, task_id);
+        return Err(error).context("failed to refresh session after registering background task");
+    }
+    Ok(())
 }
 
 fn register_in(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<()> {
@@ -134,19 +141,41 @@ fn write_record(marker: &Path, record: &TaskRecord) -> Result<()> {
 }
 
 pub(crate) fn has_pending_in(tasks_root: &Path, session_id: &str) -> Result<bool> {
+    let scan = scan_pending_in(tasks_root, session_id)?;
+    if scan.stale_cleared {
+        store::touch_session(session_id)?;
+    }
+    Ok(scan.pending)
+}
+
+pub(crate) struct PendingScan {
+    pub pending: bool,
+    pub stale_cleared: bool,
+}
+
+pub(crate) fn scan_pending_in(tasks_root: &Path, session_id: &str) -> Result<PendingScan> {
     if !tasks_root.exists() {
-        return Ok(false);
+        return Ok(PendingScan {
+            pending: false,
+            stale_cleared: false,
+        });
     }
     with_registry_lock(tasks_root, || {
         let dir = session_tasks_dir(tasks_root, session_id);
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PendingScan {
+                    pending: false,
+                    stale_cleared: false,
+                });
+            }
             Err(error) => {
                 return Err(error).with_context(|| format!("failed to read {}", dir.display()));
             }
         };
 
+        let mut stale_cleared = false;
         for entry in entries {
             let entry =
                 entry.with_context(|| format!("failed to read an entry in {}", dir.display()))?;
@@ -155,19 +184,38 @@ pub(crate) fn has_pending_in(tasks_root: &Path, session_id: &str) -> Result<bool
                 && path
                     .extension()
                     .is_some_and(|extension| extension == "pending")
-                && marker_is_pending(&path)?
             {
-                return Ok(true);
+                match marker_is_pending(&path)? {
+                    MarkerState::Pending => {
+                        return Ok(PendingScan {
+                            pending: true,
+                            stale_cleared,
+                        });
+                    }
+                    MarkerState::ClearedStale => stale_cleared = true,
+                    MarkerState::NotPending => {}
+                }
             }
         }
-        Ok(false)
+        Ok(PendingScan {
+            pending: false,
+            stale_cleared,
+        })
     })
 }
 
-fn marker_is_pending(marker: &Path) -> Result<bool> {
+enum MarkerState {
+    Pending,
+    NotPending,
+    ClearedStale,
+}
+
+fn marker_is_pending(marker: &Path) -> Result<MarkerState> {
     let metadata = match fs::metadata(marker) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MarkerState::NotPending);
+        }
         Err(error) => {
             return Err(error).with_context(|| format!("failed to stat {}", marker.display()));
         }
@@ -179,8 +227,10 @@ fn marker_is_pending(marker: &Path) -> Result<bool> {
         .unwrap_or_default();
     let content = match fs::read_to_string(marker) {
         Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MarkerState::NotPending);
+        }
+        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(MarkerState::Pending),
         Err(error) => {
             tracing::warn!(
                 event = "agent.bg_run.task_marker_read_failed",
@@ -188,12 +238,12 @@ fn marker_is_pending(marker: &Path) -> Result<bool> {
                 error = %error,
             );
             fs::remove_file(marker)?;
-            return Ok(false);
+            return Ok(MarkerState::ClearedStale);
         }
     };
     let record = match serde_json::from_str::<TaskRecord>(&content) {
         Ok(record) => record,
-        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(true),
+        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(MarkerState::Pending),
         Err(error) => {
             tracing::warn!(
                 event = "agent.bg_run.task_marker_invalid",
@@ -201,16 +251,16 @@ fn marker_is_pending(marker: &Path) -> Result<bool> {
                 error = %error,
             );
             fs::remove_file(marker)?;
-            return Ok(false);
+            return Ok(MarkerState::ClearedStale);
         }
     };
 
     let pids = [record.parent_pid, record.worker_pid, record.command_pid];
     if pids.into_iter().flatten().any(process_is_alive) {
-        return Ok(true);
+        return Ok(MarkerState::Pending);
     }
     if age < UNREGISTERED_WORKER_GRACE {
-        return Ok(true);
+        return Ok(MarkerState::Pending);
     }
 
     tracing::info!(
@@ -218,11 +268,12 @@ fn marker_is_pending(marker: &Path) -> Result<bool> {
         marker = %marker.display(),
     );
     fs::remove_file(marker)?;
-    Ok(false)
+    Ok(MarkerState::ClearedStale)
 }
 
 pub(crate) fn clear(session_id: &str, task_id: &str) -> Result<()> {
-    clear_in(&tasks_dir()?, session_id, task_id)
+    clear_in(&tasks_dir()?, session_id, task_id)?;
+    store::touch_session(session_id)
 }
 
 pub(crate) fn clear_best_effort(session_id: &str, task_id: &str) {

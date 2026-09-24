@@ -102,6 +102,10 @@ pub const TMUX_WINDOW_TITLE_OPTION: &str = "@armyknife-cc-window-title";
 /// for hooks that fire inside a subagent.
 pub const MAIN_THREAD_AGENT_KEY: &str = "__main__";
 
+/// Runtime-only marker used to include `a agent bg run` tasks in shared
+/// pending-background-task behavior without persisting registry state.
+pub(crate) const BG_RUN_PENDING_TASK_MARKER: &str = "__armyknife_bg_run_pending__";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
@@ -126,21 +130,15 @@ pub struct Session {
     /// child sessions can still find their nearest living ancestor.
     #[serde(default)]
     pub ancestor_session_ids: Vec<String>,
-    /// IDs of in-flight Bash background tasks (`run_in_background: true`)
-    /// launched in this session, as reported by Claude Code's own task
-    /// registry (`background_tasks` on `Stop` input, filtered to
-    /// `type == "shell"`; see `HookInput::pending_bg_task_ids`). The Stop
-    /// hook fires synthetically as soon as a bg task is spawned, so a
-    /// non-empty set means "the user is still mid-task even though Claude's
-    /// main loop went idle". Overwritten wholesale from that array on every
-    /// `Stop` event. Older Claude Code builds omit `background_tasks`
-    /// entirely, which deserializes to an empty array and safely falls back
-    /// to "nothing pending". `sweep` also clears this set early -- without
-    /// waiting for a `Stop` -- once it can independently confirm no `claude`
-    /// process resolves for the session (see `sweep/mod.rs`), so a crashed
-    /// or killed process can't leave it stuck non-empty forever. Consumed by
-    /// `auto_compact` (skip compaction while non-empty) and by `sweep` (do
-    /// not auto-pause while non-empty).
+    /// IDs of in-flight background tasks launched in this session. Claude
+    /// Code reports Bash tasks through its `background_tasks` Stop input
+    /// (filtered to `type == "shell"`; see `HookInput::pending_bg_task_ids`).
+    /// `a agent bg run` contributes `BG_RUN_PENDING_TASK_MARKER` at runtime
+    /// after checking its separate task registry; that marker is removed
+    /// before the session is persisted. A non-empty set means the user is
+    /// still mid-task even if the agent's main loop went idle. `sweep` also
+    /// clears stale Claude task IDs after confirming their process exited.
+    /// Consumed by `auto_compact`, `sweep`, notifications, and display status.
     #[serde(default)]
     pub pending_bg_task_ids: BTreeSet<String>,
     /// IDs of in-flight Task-tool subagents launched in this session (`Task`
@@ -250,7 +248,8 @@ pub enum DisplayStatus {
     Paused,
     Ended,
     /// Persisted `status` is `Stopped` (the main loop is idle) but a Bash
-    /// background task or Task-tool subagent is still in flight. See
+    /// background task, Task-tool subagent, or `a agent bg run` task is still
+    /// in flight. See
     /// `Session::has_pending_bg_tasks`.
     Background,
 }
@@ -262,10 +261,10 @@ impl Session {
         self.status == SessionStatus::Stopped && self.read_at.is_none()
     }
 
-    /// True if this session has a Bash background task or Task-tool subagent
-    /// that has not yet reported completion (see `pending_bg_task_ids` /
-    /// `pending_agent_task_ids`). Shared by every consumer that must treat
-    /// such a session as still mid-task despite an idle main loop:
+    /// True if this session has a pending background task or Task-tool
+    /// subagent. `pending_bg_task_ids` includes Claude Code task IDs and
+    /// `a agent bg run`'s runtime marker. Shared by every consumer that must
+    /// treat such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
     /// `display_status` (report `Background` instead of `Stopped`).
     pub fn has_pending_bg_tasks(&self) -> bool {

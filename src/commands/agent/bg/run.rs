@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use uuid::Uuid;
 
-use super::super::{bg_tasks, store, types::SessionStatus};
+use super::super::{bg_tasks, store, types::SessionStatus, window_status};
 use crate::infra::process;
 use crate::shared::env_var::EnvVars;
 
@@ -45,6 +45,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
 
     bg_tasks::register(&session_id, &task_id)?;
     guard.mark_task_registered();
+    window_status::sync_window_status_for_session(&session_id);
     let worker_args = worker_args(
         &session_id,
         &task_id,
@@ -110,6 +111,7 @@ impl Drop for BackgroundRunGuard {
         }
         if self.task_registered {
             bg_tasks::clear_best_effort(&self.session_id, &self.task_id);
+            window_status::sync_window_status_for_session(&self.session_id);
         }
         for path in &self.output_paths {
             let _ = fs::remove_file(path);

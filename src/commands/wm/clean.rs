@@ -10,7 +10,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use super::error::{Result, WmError};
 use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::commands::agent::auto_pause::parse_duration;
-use crate::commands::agent::store::list_sessions;
+use crate::commands::agent::session_status::list_sessions_with_bg_run_status;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
@@ -289,7 +289,7 @@ fn apply_active_session_protection(
         return;
     }
 
-    let sessions = match list_sessions() {
+    let sessions = match list_sessions_with_bg_run_status() {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
