@@ -2,6 +2,7 @@
 
 mod batch;
 pub mod layout;
+mod pane_info;
 
 use std::fmt;
 use std::path::Path;
@@ -11,6 +12,7 @@ use indoc::writedoc;
 use thiserror::Error;
 
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
+pub use pane_info::get_pane_info_by_pane_id;
 
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
