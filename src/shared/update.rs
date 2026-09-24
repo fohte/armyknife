@@ -17,7 +17,7 @@ const RELEASE_TARGETS: &[&str] = &[
 ];
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
-const RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 const RELEASE_ASSET_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
@@ -223,13 +223,23 @@ where
 }
 
 pub fn do_update() -> anyhow::Result<()> {
-    let updater = base_update_builder()
-        .show_download_progress(true)
-        .no_confirm(true)
-        .build()?;
+    let mut builder = base_update_builder();
+    builder.show_download_progress(true).no_confirm(true);
+    let initial_updater = builder.build()?;
+    builder.show_output(false);
+    let retry_updater = builder.build()?;
     let started_at = Instant::now();
+    let mut first_attempt = true;
     let status = update_with_retry(
-        || updater.update().map_err(anyhow::Error::new),
+        || {
+            let updater = if first_attempt {
+                first_attempt = false;
+                &initial_updater
+            } else {
+                &retry_updater
+            };
+            updater.update().map_err(anyhow::Error::new)
+        },
         |duration| {
             println!(
                 "Release assets are not available yet. Waiting {} seconds...",
@@ -382,7 +392,7 @@ mod tests {
         RetryOutcome {
             result: Ok("updated".to_string()),
             attempts: 3,
-            waits: vec![Duration::from_secs(30); 2],
+            waits: vec![Duration::from_secs(10); 2],
         },
     )]
     #[case::non_asset_error_returns_immediately(
