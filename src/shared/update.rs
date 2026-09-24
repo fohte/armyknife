@@ -17,7 +17,8 @@ const RELEASE_TARGETS: &[&str] = &[
 ];
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60; // 24 hours
-const RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+const AUTHENTICATED_RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+const ANONYMOUS_RELEASE_ASSET_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const RELEASE_ASSET_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn should_check_for_update_with_path(path: &Path, now_secs: u64) -> bool {
@@ -134,17 +135,32 @@ fn resolve_github_token() -> Option<String> {
     resolve_github_token_with(env_var, gh_auth_token)
 }
 
-fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
+fn base_update_builder_with_authentication() -> (self_update::backends::github::UpdateBuilder, bool)
+{
     let mut builder = self_update::backends::github::Update::configure();
     builder
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
         .current_version(cargo_crate_version!());
-    if let Some(token) = resolve_github_token() {
+    let token = resolve_github_token();
+    let is_authenticated = token.is_some();
+    if let Some(token) = token {
         builder.auth_token(&token);
     }
-    builder
+    (builder, is_authenticated)
+}
+
+fn base_update_builder() -> self_update::backends::github::UpdateBuilder {
+    base_update_builder_with_authentication().0
+}
+
+fn release_asset_retry_interval(is_authenticated: bool) -> Duration {
+    if is_authenticated {
+        AUTHENTICATED_RELEASE_ASSET_RETRY_INTERVAL
+    } else {
+        ANONYMOUS_RELEASE_ASSET_RETRY_INTERVAL
+    }
 }
 
 fn do_update_silent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -186,6 +202,7 @@ fn update_with_retry<T, U, W, N, P>(
     mut wait: W,
     mut now: N,
     should_retry: P,
+    retry_interval: Duration,
 ) -> anyhow::Result<T>
 where
     U: FnMut() -> anyhow::Result<T>,
@@ -212,8 +229,8 @@ where
                     return Err(error);
                 }
 
-                let wait_duration = RELEASE_ASSET_RETRY_INTERVAL
-                    .min(RELEASE_ASSET_MAX_WAIT.saturating_sub(elapsed));
+                let wait_duration =
+                    retry_interval.min(RELEASE_ASSET_MAX_WAIT.saturating_sub(elapsed));
                 wait(wait_duration);
                 pending_error = Some(error);
             }
@@ -223,13 +240,14 @@ where
 }
 
 pub fn do_update() -> anyhow::Result<()> {
-    let mut builder = base_update_builder();
+    let (mut builder, is_authenticated) = base_update_builder_with_authentication();
     builder.show_download_progress(true).no_confirm(true);
     let initial_updater = builder.build()?;
     builder.show_output(false);
     let retry_updater = builder.build()?;
     let started_at = Instant::now();
     let mut first_attempt = true;
+    let retry_interval = release_asset_retry_interval(is_authenticated);
     let status = update_with_retry(
         || {
             let updater = if first_attempt {
@@ -249,6 +267,7 @@ pub fn do_update() -> anyhow::Result<()> {
         },
         || started_at.elapsed(),
         |error| should_retry_release_asset_error(error, self_update::get_target(), RELEASE_TARGETS),
+        retry_interval,
     )?;
 
     if status.updated() {
@@ -362,6 +381,16 @@ mod tests {
         assert_eq!(is_release_assets_pending(&error), expected);
     }
 
+    #[rstest]
+    #[case::authenticated(true, Duration::from_secs(10))]
+    #[case::anonymous(false, Duration::from_secs(60))]
+    fn release_asset_retry_interval_cases(
+        #[case] is_authenticated: bool,
+        #[case] expected: Duration,
+    ) {
+        assert_eq!(release_asset_retry_interval(is_authenticated), expected);
+    }
+
     #[test]
     fn release_asset_errors_are_retried_only_for_published_targets() {
         let error = anyhow::Error::new(self_update::errors::Error::Release(
@@ -444,6 +473,7 @@ mod tests {
             },
             || elapsed.get(),
             |error| should_retry_release_asset_error(error, "example-target", &["example-target"]),
+            release_asset_retry_interval(true),
         );
 
         assert_eq!(
