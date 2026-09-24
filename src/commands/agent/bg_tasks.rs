@@ -8,8 +8,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::session_status;
-use super::types::{BG_RUN_PENDING_TASK_MARKER, Session};
+use super::store;
 use crate::shared::{cache, hex};
 
 /// Covers the interval between task registration and the worker recording its PID.
@@ -43,7 +42,7 @@ fn marker_path(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<Pat
 pub(crate) fn register(session_id: &str, task_id: &str) -> Result<()> {
     let tasks_root = tasks_dir()?;
     register_in(&tasks_root, session_id, task_id)?;
-    if let Err(error) = session_status::touch_session(session_id) {
+    if let Err(error) = store::touch_session(session_id) {
         let _ = clear_in(&tasks_root, session_id, task_id);
         return Err(error).context("failed to refresh session after registering background task");
     }
@@ -142,27 +141,34 @@ fn write_record(marker: &Path, record: &TaskRecord) -> Result<()> {
 }
 
 pub(crate) fn has_pending_in(tasks_root: &Path, session_id: &str) -> Result<bool> {
-    has_pending_with_touch_in(tasks_root, session_id, true)
-}
-
-fn has_pending_for_hook_in(tasks_root: &Path, session_id: &str) -> Result<bool> {
-    has_pending_with_touch_in(tasks_root, session_id, false)
-}
-
-fn has_pending_with_touch_in(
-    tasks_root: &Path,
-    session_id: &str,
-    touch_session: bool,
-) -> Result<bool> {
-    if !tasks_root.exists() {
-        return Ok(false);
+    let scan = scan_pending_in(tasks_root, session_id)?;
+    if scan.stale_cleared {
+        store::touch_session(session_id)?;
     }
-    let (pending, stale_cleared) = with_registry_lock(tasks_root, || {
+    Ok(scan.pending)
+}
+
+pub(crate) struct PendingScan {
+    pub pending: bool,
+    pub stale_cleared: bool,
+}
+
+pub(crate) fn scan_pending_in(tasks_root: &Path, session_id: &str) -> Result<PendingScan> {
+    if !tasks_root.exists() {
+        return Ok(PendingScan {
+            pending: false,
+            stale_cleared: false,
+        });
+    }
+    with_registry_lock(tasks_root, || {
         let dir = session_tasks_dir(tasks_root, session_id);
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((false, false));
+                return Ok(PendingScan {
+                    pending: false,
+                    stale_cleared: false,
+                });
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("failed to read {}", dir.display()));
@@ -179,25 +185,37 @@ fn has_pending_with_touch_in(
                     .extension()
                     .is_some_and(|extension| extension == "pending")
             {
-                let (pending, cleared) = marker_is_pending(&path)?;
-                stale_cleared |= cleared;
-                if pending {
-                    return Ok((true, stale_cleared));
+                match marker_is_pending(&path)? {
+                    MarkerState::Pending => {
+                        return Ok(PendingScan {
+                            pending: true,
+                            stale_cleared,
+                        });
+                    }
+                    MarkerState::ClearedStale => stale_cleared = true,
+                    MarkerState::NotPending => {}
                 }
             }
         }
-        Ok((false, stale_cleared))
-    })?;
-    if stale_cleared && touch_session {
-        session_status::touch_session(session_id)?;
-    }
-    Ok(pending)
+        Ok(PendingScan {
+            pending: false,
+            stale_cleared,
+        })
+    })
 }
 
-fn marker_is_pending(marker: &Path) -> Result<(bool, bool)> {
+enum MarkerState {
+    Pending,
+    NotPending,
+    ClearedStale,
+}
+
+fn marker_is_pending(marker: &Path) -> Result<MarkerState> {
     let metadata = match fs::metadata(marker) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((false, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MarkerState::NotPending);
+        }
         Err(error) => {
             return Err(error).with_context(|| format!("failed to stat {}", marker.display()));
         }
@@ -209,8 +227,10 @@ fn marker_is_pending(marker: &Path) -> Result<(bool, bool)> {
         .unwrap_or_default();
     let content = match fs::read_to_string(marker) {
         Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((false, false)),
-        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok((true, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MarkerState::NotPending);
+        }
+        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(MarkerState::Pending),
         Err(error) => {
             tracing::warn!(
                 event = "agent.bg_run.task_marker_read_failed",
@@ -218,12 +238,12 @@ fn marker_is_pending(marker: &Path) -> Result<(bool, bool)> {
                 error = %error,
             );
             fs::remove_file(marker)?;
-            return Ok((false, true));
+            return Ok(MarkerState::ClearedStale);
         }
     };
     let record = match serde_json::from_str::<TaskRecord>(&content) {
         Ok(record) => record,
-        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok((true, false)),
+        Err(_error) if age < UNREGISTERED_WORKER_GRACE => return Ok(MarkerState::Pending),
         Err(error) => {
             tracing::warn!(
                 event = "agent.bg_run.task_marker_invalid",
@@ -231,16 +251,16 @@ fn marker_is_pending(marker: &Path) -> Result<(bool, bool)> {
                 error = %error,
             );
             fs::remove_file(marker)?;
-            return Ok((false, true));
+            return Ok(MarkerState::ClearedStale);
         }
     };
 
     let pids = [record.parent_pid, record.worker_pid, record.command_pid];
     if pids.into_iter().flatten().any(process_is_alive) {
-        return Ok((true, false));
+        return Ok(MarkerState::Pending);
     }
     if age < UNREGISTERED_WORKER_GRACE {
-        return Ok((true, false));
+        return Ok(MarkerState::Pending);
     }
 
     tracing::info!(
@@ -248,12 +268,12 @@ fn marker_is_pending(marker: &Path) -> Result<(bool, bool)> {
         marker = %marker.display(),
     );
     fs::remove_file(marker)?;
-    Ok((false, true))
+    Ok(MarkerState::ClearedStale)
 }
 
 pub(crate) fn clear(session_id: &str, task_id: &str) -> Result<()> {
     clear_in(&tasks_dir()?, session_id, task_id)?;
-    session_status::touch_session(session_id)
+    store::touch_session(session_id)
 }
 
 pub(crate) fn clear_best_effort(session_id: &str, task_id: &str) {
@@ -264,45 +284,6 @@ pub(crate) fn clear_best_effort(session_id: &str, task_id: &str) {
             task = %task_id,
             error = %error,
         );
-    }
-}
-
-/// Adds the runtime marker consumed by shared session background-task logic.
-/// Registry failures are treated as pending so automation cannot mistake an
-/// unreadable task registry for a completed command.
-pub(crate) fn include_pending_status(session: &mut Session) {
-    match tasks_dir().and_then(|root| has_pending_in(&root, &session.session_id)) {
-        Ok(true) => mark_pending_status(session),
-        Ok(false) => {}
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.bg_run.registry_read_failed",
-                session = %session.session_id,
-                error = %error,
-            );
-            mark_pending_status(session);
-        }
-    }
-}
-
-pub(crate) fn mark_pending_status(session: &mut Session) {
-    session
-        .pending_bg_task_ids
-        .insert(BG_RUN_PENDING_TASK_MARKER.to_string());
-}
-
-pub(crate) fn include_pending_status_in(session: &mut Session, tasks_root: &Path) {
-    match has_pending_for_hook_in(tasks_root, &session.session_id) {
-        Ok(true) => mark_pending_status(session),
-        Ok(false) => {}
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.bg_run.registry_read_failed",
-                session = %session.session_id,
-                error = %error,
-            );
-            mark_pending_status(session);
-        }
     }
 }
 

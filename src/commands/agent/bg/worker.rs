@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use indoc::formatdoc;
 
-use super::super::{bg_tasks, peer::notify};
+use super::super::{bg_tasks, peer::notify, window_status};
 use super::output;
 use crate::shared::command;
 use crate::shared::sanitize::strip_angle_brackets;
@@ -42,6 +42,7 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     let exit_code = status.as_ref().ok().and_then(ExitStatus::code);
 
     bg_tasks::clear_best_effort(&args.session, &args.task_id);
+    window_status::sync_window_status_for_session(&args.session);
 
     let message = completion_message(args, status.as_ref().ok(), execution_error.as_deref());
     match notify::notify(&args.session, &message, None, None) {

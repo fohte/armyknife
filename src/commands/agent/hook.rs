@@ -13,10 +13,10 @@ use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
 use super::auto_compact;
-use super::bg_tasks;
 use super::claude_sessions;
 use super::delete_tq_session_detached;
 use super::error::CcError;
+use super::session_status;
 use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{
@@ -130,8 +130,6 @@ struct SideEffects {
     tq_delete: bool,
     /// Include `a agent bg run` state in Stop processing.
     track_bg_run_tasks: bool,
-    /// Registry root used to include `a agent bg run` tasks in Stop handling.
-    bg_tasks_dir: Option<PathBuf>,
     /// Test-only sink that records the group ids passed to
     /// `remove_notification_group`. Lets tests assert the call happened
     /// without invoking hammerspoon.
@@ -150,14 +148,13 @@ type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
 
 impl SideEffects {
-    fn all(bg_tasks_dir: Option<PathBuf>) -> Self {
+    fn all() -> Self {
         Self {
             tmux: true,
             notifications: true,
             auto_compact: true,
             tq_delete: true,
             track_bg_run_tasks: true,
-            bg_tasks_dir,
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
@@ -173,7 +170,6 @@ impl SideEffects {
             auto_compact: false,
             tq_delete: false,
             track_bg_run_tasks: false,
-            bg_tasks_dir: None,
             removed_notification_groups: None,
             tmux_sync_calls: None,
         }
@@ -213,21 +209,7 @@ impl SideEffects {
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    let tasks_dir = if event == HookEvent::Stop {
-        match bg_tasks::tasks_dir() {
-            Ok(dir) => Some(dir),
-            Err(error) => {
-                tracing::warn!(
-                    event = "agent.bg_run.registry_path_unavailable",
-                    error = %error,
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all(tasks_dir)).map(|_| ())
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
 }
 
 /// Ends any Paused sessions that were attached to `pane_id` but belong to a
@@ -517,10 +499,7 @@ fn process_hook_event_impl(
         // `a agent bg run` tasks live in armyknife's registry and aren't
         // included in Claude Code's `background_tasks` input.
         if side_effects.track_bg_run_tasks {
-            match &side_effects.bg_tasks_dir {
-                Some(tasks_dir) => bg_tasks::include_pending_status_in(&mut session, tasks_dir),
-                None => bg_tasks::mark_pending_status(&mut session),
-            }
+            session_status::include_pending_status_for_stop(&mut session);
         }
 
         // Drop permission waits for subagents no longer in Claude Code's
@@ -2086,7 +2065,6 @@ mod tests {
             auto_compact: false,
             tq_delete: false,
             track_bg_run_tasks: false,
-            bg_tasks_dir: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };
@@ -2142,7 +2120,6 @@ mod tests {
             auto_compact: false,
             tq_delete: false,
             track_bg_run_tasks: false,
-            bg_tasks_dir: None,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
         };
@@ -2534,7 +2511,6 @@ mod tests {
             auto_compact: false,
             tq_delete: false,
             track_bg_run_tasks: false,
-            bg_tasks_dir: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
         };

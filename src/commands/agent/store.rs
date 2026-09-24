@@ -369,6 +369,11 @@ pub(crate) fn update_session_in(
     Ok(())
 }
 
+/// Rewrites an existing session so file watchers observe derived status changes.
+pub(crate) fn touch_session(session_id: &str) -> Result<()> {
+    update_session_in(&sessions_dir()?, session_id, |_| true)
+}
+
 /// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
 /// A no-op when the session is missing, corrupted, no longer `Stopped`, or
 /// already marked read — `mark-read` only flips unread→read, never

@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::Args;
 
+use super::session_status;
 use super::store;
 #[cfg(test)]
 use super::types::Engine;
@@ -90,6 +91,24 @@ pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Recomputes the current window option after an external background task
+/// changes state without producing a Claude Code hook event.
+pub(crate) fn sync_window_status_for_session(session_id: &str) {
+    let Ok(Some(session)) = session_status::load_session_with_bg_run_status(session_id) else {
+        return;
+    };
+    let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str()) else {
+        return;
+    };
+    let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
+        return;
+    };
+    let Ok(sessions_dir) = store::sessions_dir() else {
+        return;
+    };
+    let _ = sync_window_option(&window_id, &sessions_dir);
+}
+
 /// Loads every distinct Claude Code session running in the panes of `window_id`.
 ///
 /// Sessions are resolved via each pane's session-id option, so the cost stays
@@ -106,7 +125,8 @@ fn load_window_sessions(window_id: &str, sessions_dir: &Path) -> Result<Vec<Sess
         if !seen.insert(session_id.as_str()) {
             continue;
         }
-        if let Some(session) = store::load_session_from(sessions_dir, session_id)? {
+        if let Some(mut session) = store::load_session_from(sessions_dir, session_id)? {
+            session_status::include_pending_status(&mut session);
             sessions.push(session);
         }
     }
