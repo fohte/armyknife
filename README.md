@@ -364,13 +364,13 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active, `a agent list`, `a agent watch`, and tmux window status show `◎ background`; Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a wm clean` also preserves its worktree unless `--force` is set.
 
-Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files remain in the armyknife cache.
+Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files are written under the system temporary directory and may be removed by the OS.
 
 ```console
 $ a agent bg run -- printf 'ready\n'
 Started background task <task-id>
-stdout: <armyknife-cache-dir>/agent-bg/output/<task-id>.stdout
-stderr: <armyknife-cache-dir>/agent-bg/output/<task-id>.stderr
+stdout: <system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stdout
+stderr: <system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stderr
 ```
 
 The completion message has this form:
@@ -380,8 +380,8 @@ The completion message has this form:
 - Task ID: <task-id>
 - Command argv: ["printf", "ready\\n"]
 - Exit code: 0
-- stdout: "<armyknife-cache-dir>/agent-bg/output/<task-id>.stdout"
-- stderr: "<armyknife-cache-dir>/agent-bg/output/<task-id>.stderr"
+- stdout: "<system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stdout"
+- stderr: "<system-temp-dir>/armyknife-agent-bg-<task-id>/<task-id>.stderr"
 </background-task-complete>
 ```
 

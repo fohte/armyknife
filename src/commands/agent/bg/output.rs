@@ -5,14 +5,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::shared::cache;
-
-pub(super) fn output_dir() -> Result<PathBuf> {
-    let dir = cache::base_dir()
-        .context("Unable to determine cache directory")?
-        .join("agent-bg")
-        .join("output");
-    create_dir_secure(&dir)
+pub(super) fn output_dir(task_id: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("armyknife-agent-bg-{task_id}"));
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&dir)
         .with_context(|| format!("failed to create output directory: {}", dir.display()))?;
     Ok(dir)
 }
@@ -38,22 +35,4 @@ pub(super) fn create_output_file(path: &Path) -> io::Result<File> {
         .create_new(true)
         .mode(0o600)
         .open(path)
-}
-
-fn create_dir_secure(dir: &Path) -> io::Result<()> {
-    if !dir.exists() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        return Ok(());
-    }
-
-    let metadata = fs::metadata(dir)?;
-    let mut permissions = metadata.permissions();
-    if permissions.mode() & 0o077 != 0 {
-        permissions.set_mode(0o700);
-        fs::set_permissions(dir, permissions)?;
-    }
-    Ok(())
 }
