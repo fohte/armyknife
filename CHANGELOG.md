@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.330](https://github.com/fohte/armyknife/compare/v0.1.329...v0.1.330) (2026-09-24)
+
+
+### Bug Fixes
+
+* **agent:** store background task output in temporary directory ([#978](https://github.com/fohte/armyknife/issues/978)) ([4a32e7a](https://github.com/fohte/armyknife/commit/4a32e7a2b2c597615d077165d0ac5a71dfb61cec))
+
 ## [0.1.329](https://github.com/fohte/armyknife/compare/v0.1.328...v0.1.329) (2026-09-24)
 
 
