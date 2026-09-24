@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.324](https://github.com/fohte/armyknife/compare/v0.1.323...v0.1.324) (2026-09-24)
+
+
+### Features
+
+* **agent:** add background command execution and completion notifications ([#965](https://github.com/fohte/armyknife/issues/965)) ([5a13124](https://github.com/fohte/armyknife/commit/5a13124a670b3c7b63e295f7593322b44fc07954))
+
+
+### Bug Fixes
+
+* **agent:** restore switching to the tmux pane of a Codex session ([#966](https://github.com/fohte/armyknife/issues/966)) ([49848a4](https://github.com/fohte/armyknife/commit/49848a4fb756b17f1b17b38890f5456d50bb7d2c))
+
 ## [0.1.323](https://github.com/fohte/armyknife/compare/v0.1.322...v0.1.323) (2026-09-23)
 
 
