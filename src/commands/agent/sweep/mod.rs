@@ -28,7 +28,7 @@
 //! is hosting this session right now".
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -112,11 +112,13 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         .with_context(|| format!("invalid cc.auto_pause.timeout `{timeout_str}`"))?;
 
     let sessions_dir = store::sessions_dir()?;
+    let tasks_dir = super::bg_tasks::tasks_dir()?;
     let sender = LibcSignalSender;
     let snapshot = ProcessSnapshot::capture();
     let probe = TmuxSessionProbe {
         snapshot: snapshot.as_ref(),
         activity: TmuxActivityProbe,
+        tasks_dir,
     };
     tracing::info!(
         event = "agent.sweep.start",
@@ -173,11 +175,18 @@ pub(crate) trait SessionProbe: ActivityProbe {
     /// Returns the pid of the live process hosting `session` (per
     /// `session.engine`), if one can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Option<u32>;
+
+    /// Returns whether armyknife is tracking a detached background command
+    /// for this session.
+    fn has_pending_bg_run(&self, _session: &Session) -> bool {
+        false
+    }
 }
 
 struct TmuxSessionProbe<'a, A: ActivityProbe> {
     snapshot: Option<&'a ProcessSnapshot>,
     activity: A,
+    tasks_dir: PathBuf,
 }
 
 /// Descendant walks are bounded to this many processes. A shell hosting
@@ -192,6 +201,20 @@ impl<A: ActivityProbe> ActivityProbe for TmuxSessionProbe<'_, A> {
 }
 
 impl<A: ActivityProbe> SessionProbe for TmuxSessionProbe<'_, A> {
+    fn has_pending_bg_run(&self, session: &Session) -> bool {
+        match super::bg_tasks::has_pending_in(&self.tasks_dir, &session.session_id) {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.sweep.bg_run_registry_read_failed",
+                    session = %session.session_id,
+                    error = %error,
+                );
+                true
+            }
+        }
+    }
+
     fn resolve_pid(&self, session: &Session) -> Option<u32> {
         let pane_id = &session.tmux_info.as_ref()?.pane_id;
         let pane_pid = crate::infra::tmux::get_pane_pid(pane_id)?;
@@ -229,7 +252,7 @@ pub struct SweepReport {
     pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
-    /// Sessions in an active state (Running, WaitingInput, Paused).
+    /// Sessions in an active state or with a detached background command pending.
     pub active: usize,
 }
 
@@ -294,6 +317,17 @@ where
             continue;
         }
 
+        report.scanned += 1;
+
+        if probe.has_pending_bg_run(&session) {
+            tracing::info!(
+                event = "agent.sweep.bg_run_pending",
+                session = %session.session_id,
+            );
+            report.active += 1;
+            continue;
+        }
+
         // `pending_bg_task_ids` / `pending_agent_task_ids` are only ever
         // refreshed by a future `Stop` hook (see `hook.rs`). If the `claude`
         // process backing this session crashed or was killed outside of
@@ -316,8 +350,6 @@ where
                 store::save_session_to(sessions_dir, &session)?;
             }
         }
-
-        report.scanned += 1;
 
         // Fold the pane's last observed cursor-movement time into the
         // effective "last touched" time so a user who's still typing into a
