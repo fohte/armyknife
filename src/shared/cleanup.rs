@@ -1,4 +1,4 @@
-//! Shared cleanup logic for Claude Code sessions, notifications, and git worktrees.
+//! Shared cleanup logic for agent sessions, notifications, and git worktrees.
 //!
 //! Both `agent watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
 //! need to clean up related resources. This module provides the shared logic to
@@ -26,7 +26,7 @@ pub struct WorktreeCleanupResult {
     pub branch_deleted: Option<String>,
     /// Number of tmux windows that were closed.
     pub windows_closed: usize,
-    /// Number of Claude Code sessions cleaned up.
+    /// Number of agent sessions cleaned up.
     pub sessions_cleaned: usize,
     /// Number of process groups killed that were rooted in the worktree
     /// (identified by a member process whose cwd was inside it).
@@ -38,7 +38,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
+/// worktree itself, branch, tmux windows, agent session files, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -72,7 +72,7 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
 }
 
 /// Cleans up all resources for a worktree identified by `repo` and `worktree_name`:
-/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
+/// worktree itself, branch, tmux windows, agent session files, and notifications.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
 /// tmux window and session file lookup.
@@ -129,7 +129,7 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
     }
 }
 
-/// Returns true if the pane hosting this session still runs a live Claude
+/// Returns true if the pane hosting this session still runs a live agent
 /// process that needs SIGTERM before we drop the session file.
 ///
 /// Paused sessions were already SIGTERM'd by `agent sweep`, and Ended sessions
@@ -145,38 +145,75 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
     }
 }
 
-/// Cleans up active Claude Code session files and notification groups for sessions
+/// Cleans up active agent session files and notification groups for sessions
 /// whose `cwd` is inside `worktree_path`.
 ///
 /// Every stored status is considered so `Ended` sessions with stale notifications
 /// are included. Ended session records are retained for later delegated-session lookup.
 ///
 /// For each matching session:
-/// 1. If the session's Claude process is still expected to be alive and the
+/// 1. Interrupts active Codex turns, except the current thread, which is
+///    interrupted after this cleanup process exits.
+/// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 2. Deletes the session file unless the session has already ended
-/// 3. Removes the notification group on a best-effort basis
+/// 3. Deletes the session file unless the session has already ended
+/// 4. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
 pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
     let sessions = store::list_all_sessions()?;
     let alive_panes = tmux::list_all_pane_ids().unwrap_or_default();
+    let own_codex_session_id = crate::shared::env_var::EnvVars::load().codex_session_id;
+    let deferred_interrupt = own_codex_session_id
+        .as_deref()
+        .filter(|session_id| {
+            sessions.iter().any(|session| {
+                session.engine == Engine::Codex
+                    && session.session_id == *session_id
+                    && session.cwd.starts_with(worktree_path)
+            })
+        })
+        .map(str::to_string);
 
-    Ok(cleanup_sessions(
+    let cleaned = cleanup_sessions(
         &sessions,
-        worktree_path,
-        &alive_panes,
+        SessionCleanupContext {
+            worktree_path,
+            alive_panes: &alive_panes,
+            own_codex_session_id: own_codex_session_id.as_deref(),
+        },
         tmux::send_sigterm_to_pane,
         store::delete_session,
         crate::infra::notification::remove_group,
         crate::commands::agent::codex_steer::interrupt_if_in_progress,
-    ))
+    );
+
+    if let Some(session_id) = deferred_interrupt
+        && let Err(error) = crate::commands::agent::spawn_after_parent_exit(&session_id)
+    {
+        eprintln!(
+            "Warning: Failed to defer Codex turn interruption for session {session_id}: {error:#}"
+        );
+        tracing::warn!(
+            target: "armyknife::shared::cleanup",
+            event = "cleanup.codex_interruption.defer_err",
+            session = %session_id,
+            msg = format!("failed to defer Codex turn interruption: {error:#}"),
+        );
+    }
+
+    Ok(cleaned)
+}
+
+struct SessionCleanupContext<'a> {
+    worktree_path: &'a Path,
+    alive_panes: &'a HashSet<String>,
+    own_codex_session_id: Option<&'a str>,
 }
 
 fn cleanup_sessions(
     sessions: &[Session],
-    worktree_path: &Path,
-    alive_panes: &HashSet<String>,
+    context: SessionCleanupContext<'_>,
     mut send_sigterm: impl FnMut(&str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
@@ -185,8 +222,12 @@ fn cleanup_sessions(
     let mut cleaned = 0;
 
     for session in sessions {
-        if session.cwd.starts_with(worktree_path) {
+        if session.cwd.starts_with(context.worktree_path) {
+            let is_own_codex_session = session.engine == Engine::Codex
+                && context.own_codex_session_id == Some(session.session_id.as_str());
+
             if session.engine == Engine::Codex
+                && !is_own_codex_session
                 && let Err(error) = interrupt_codex_turn(&session.session_id)
             {
                 eprintln!(
@@ -201,9 +242,10 @@ fn cleanup_sessions(
                 );
             }
 
-            if should_sigterm_session(session.status)
+            if !is_own_codex_session
+                && should_sigterm_session(session.status)
                 && let Some(ref tmux_info) = session.tmux_info
-                && alive_panes.contains(&tmux_info.pane_id)
+                && context.alive_panes.contains(&tmux_info.pane_id)
             {
                 send_sigterm(&tmux_info.pane_id);
             }

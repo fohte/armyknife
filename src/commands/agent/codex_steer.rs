@@ -83,9 +83,7 @@ impl Client {
             .map_err(|error| anyhow!(error))
             .context("Codex app-server WebSocket handshake failed")?;
 
-        send_request(&mut socket, &initialize_request()).map_err(|error| match error {
-            RequestError::Rejected(error) | RequestError::Transport(error) => error,
-        })?;
+        send_request(&mut socket, &initialize_request()).map_err(request_error_to_anyhow)?;
 
         Ok(Self { socket })
     }
@@ -142,19 +140,10 @@ impl Client {
         })
     }
 
-    fn interrupt_if_in_progress(&mut self, thread_id: &str) -> anyhow::Result<()> {
-        let result =
-            send_request_with_result(&mut self.socket, &thread_turns_list_request(thread_id))
-                .map_err(request_error_to_anyhow)?;
-        let Some(turn_id) = latest_in_progress_turn_id(&result)? else {
-            return Ok(());
-        };
-
-        send_request(
-            &mut self.socket,
-            &turn_interrupt_request(thread_id, &turn_id),
-        )
-        .map_err(request_error_to_anyhow)
+    pub(crate) fn interrupt_if_in_progress(&mut self, thread_id: &str) -> anyhow::Result<()> {
+        interrupt_if_in_progress_with(thread_id, |request| {
+            send_request_with_result(&mut self.socket, request)
+        })
     }
 }
 
@@ -225,12 +214,20 @@ pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
 
 /// Interrupts the latest active turn for `thread_id` when the app-server is available.
 pub(crate) fn interrupt_if_in_progress(thread_id: &str) -> anyhow::Result<()> {
+    let Some(mut client) = connect_for_interrupt()? else {
+        return Ok(());
+    };
+
+    client.interrupt_if_in_progress(thread_id)
+}
+
+pub(crate) fn connect_for_interrupt() -> anyhow::Result<Option<Client>> {
     let socket_path = control_socket_path()?;
     if !socket_path.exists() {
-        return Ok(());
+        return Ok(None);
     }
 
-    Client::connect_to(&socket_path)?.interrupt_if_in_progress(thread_id)
+    Client::connect_to(&socket_path).map(Some)
 }
 
 fn control_socket_path() -> anyhow::Result<PathBuf> {
@@ -417,22 +414,10 @@ fn send_request_with_result(
             )
         })
         .map_err(RequestError::Transport)?;
-    wait_for_response_result(|| socket.read(), request.id, request.method)
+    wait_for_response(|| socket.read(), request.id, request.method)
 }
 
-#[cfg(test)]
 fn wait_for_response<R>(
-    read: R,
-    request_id: u64,
-    method: &str,
-) -> std::result::Result<(), RequestError>
-where
-    R: FnMut() -> tungstenite::Result<Message>,
-{
-    wait_for_response_result(read, request_id, method).map(|_| ())
-}
-
-fn wait_for_response_result<R>(
     mut read: R,
     request_id: u64,
     method: &str,
@@ -449,12 +434,8 @@ where
                 let response: Value = serde_json::from_str(&text)
                     .with_context(|| format!("invalid JSON in `{method}` response"))
                     .map_err(RequestError::Transport)?;
-                if is_response_to(&response, request_id, method)? {
-                    return response.get("result").cloned().ok_or_else(|| {
-                        RequestError::Transport(anyhow!(
-                            "Codex app-server `{method}` returned no result"
-                        ))
-                    });
+                if let Some(result) = is_response_to(&response, request_id, method)? {
+                    return Ok(result);
                 }
             }
             Message::Close(frame) => {
@@ -471,9 +452,9 @@ fn is_response_to(
     response: &Value,
     request_id: u64,
     method: &str,
-) -> std::result::Result<bool, RequestError> {
+) -> std::result::Result<Option<Value>, RequestError> {
     if response.get("id").and_then(Value::as_u64) != Some(request_id) {
-        return Ok(false);
+        return Ok(None);
     }
     if let Some(error) = response.get("error") {
         return Err(RequestError::Rejected(anyhow!(
@@ -486,7 +467,20 @@ fn is_response_to(
             "Codex app-server `{method}` returned no result"
         )));
     }
-    Ok(true)
+    Ok(response.get("result").cloned())
+}
+
+fn interrupt_if_in_progress_with(
+    thread_id: &str,
+    mut send: impl FnMut(&RpcRequest) -> std::result::Result<Value, RequestError>,
+) -> anyhow::Result<()> {
+    let result = send(&thread_turns_list_request(thread_id)).map_err(request_error_to_anyhow)?;
+    let Some(turn_id) = latest_in_progress_turn_id(&result)? else {
+        return Ok(());
+    };
+
+    send(&turn_interrupt_request(thread_id, &turn_id)).map_err(request_error_to_anyhow)?;
+    Ok(())
 }
 
 fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {
@@ -704,9 +698,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matching_success(json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}), Ok(true))]
-    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(false))]
-    #[case::different_request(json!({"id": 1, "result": {}}), Ok(false))]
+    #[case::matching_success(
+        json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}),
+        Ok(Some(json!({"turn": {"id": "turn-a"}})))
+    )]
+    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(None))]
+    #[case::different_request(json!({"id": 1, "result": {}}), Ok(None))]
     #[case::server_error(
         json!({"id": 2, "error": {"code": -32600, "message": "thread not found"}}),
         Err("Codex app-server `turn/start` failed: thread not found (code -32600)")
@@ -717,7 +714,7 @@ mod tests {
     )]
     fn selects_matching_rpc_response(
         #[case] response: Value,
-        #[case] expected: std::result::Result<bool, &str>,
+        #[case] expected: std::result::Result<Option<Value>, &str>,
     ) {
         assert_eq!(
             is_response_to(&response, 2, "turn/start").map_err(|error| error.to_string()),
@@ -747,7 +744,7 @@ mod tests {
             2,
             "turn/start",
         );
-        assert_eq!(actual.map_err(|error| error.to_string()), Ok(()));
+        assert_eq!(actual.map_err(|error| error.to_string()), Ok(json!({})));
     }
 
     #[rstest]
