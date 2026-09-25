@@ -152,8 +152,8 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 /// are included. Ended session records are retained for later delegated-session lookup.
 ///
 /// For each matching session:
-/// 1. Interrupts active Codex turns, except the current thread, which is
-///    interrupted after this cleanup process exits.
+/// 1. Archives Codex threads, except the current thread, which is archived
+///    after this cleanup process exits.
 /// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
 /// 3. Deletes the session file unless the session has already ended
@@ -164,7 +164,7 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
     let sessions = store::list_all_sessions()?;
     let alive_panes = tmux::list_all_pane_ids().unwrap_or_default();
     let own_codex_session_id = crate::shared::env_var::EnvVars::load().codex_session_id;
-    let deferred_interrupt = own_codex_session_id
+    let deferred_archive = own_codex_session_id
         .as_deref()
         .filter(|session_id| {
             sessions.iter().any(|session| {
@@ -185,20 +185,20 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
         tmux::send_sigterm_to_pane,
         store::delete_session,
         crate::infra::notification::remove_group,
-        crate::commands::agent::codex_steer::interrupt_if_in_progress,
+        crate::commands::agent::codex_steer::archive_thread,
     );
 
-    if let Some(session_id) = deferred_interrupt
+    if let Some(session_id) = deferred_archive
         && let Err(error) = crate::commands::agent::spawn_after_parent_exit(&session_id)
     {
         eprintln!(
-            "Warning: Failed to defer Codex turn interruption for session {session_id}: {error:#}"
+            "Warning: Failed to defer Codex thread archive for session {session_id}: {error:#}"
         );
         tracing::warn!(
             target: "armyknife::shared::cleanup",
-            event = "cleanup.codex_interruption.defer_err",
+            event = "cleanup.codex_archive.defer_err",
             session = %session_id,
-            msg = format!("failed to defer Codex turn interruption: {error:#}"),
+            msg = format!("failed to defer Codex thread archive: {error:#}"),
         );
     }
 
@@ -217,7 +217,7 @@ fn cleanup_sessions(
     mut send_sigterm: impl FnMut(&str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
-    mut interrupt_codex_turn: impl FnMut(&str) -> anyhow::Result<()>,
+    mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> usize {
     let mut cleaned = 0;
 
@@ -228,17 +228,17 @@ fn cleanup_sessions(
 
             if session.engine == Engine::Codex
                 && !is_own_codex_session
-                && let Err(error) = interrupt_codex_turn(&session.session_id)
+                && let Err(error) = archive_codex_thread(&session.session_id)
             {
                 eprintln!(
-                    "Warning: Failed to interrupt Codex turn for session {}: {error:#}",
+                    "Warning: Failed to archive Codex thread for session {}: {error:#}",
                     session.session_id
                 );
                 tracing::warn!(
                     target: "armyknife::shared::cleanup",
-                    event = "cleanup.codex_interruption.err",
+                    event = "cleanup.codex_archive.err",
                     session = %session.session_id,
-                    msg = format!("failed to interrupt Codex turn: {error:#}"),
+                    msg = format!("failed to archive Codex thread: {error:#}"),
                 );
             }
 
