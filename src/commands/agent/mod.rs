@@ -1,3 +1,4 @@
+mod archive_detached;
 mod auto_compact;
 pub(crate) mod auto_pause;
 mod bg;
@@ -15,7 +16,6 @@ mod focus;
 mod generate_title_detached;
 mod graceful_quit;
 mod hook;
-mod interrupt_detached;
 mod list;
 mod mark_read;
 pub(crate) mod new;
@@ -35,6 +35,8 @@ mod window_status;
 
 use clap::Subcommand;
 
+pub use archive_detached::ArchiveDetachedArgs;
+pub(crate) use archive_detached::spawn_after_parent_exit;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
 pub use clean_detached::CleanDetachedArgs;
@@ -44,8 +46,6 @@ pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
 pub use hook::permission_notification::DelayedPermissionNotificationArgs;
-pub use interrupt_detached::InterruptDetachedArgs;
-pub(crate) use interrupt_detached::spawn_after_parent_exit;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
@@ -127,9 +127,9 @@ pub enum AgentCommands {
     #[command(name = "generate-title-detached", hide = true)]
     GenerateTitleDetached(GenerateTitleDetachedArgs),
 
-    /// Internal: interrupt a Codex thread after worktree cleanup exits.
-    #[command(name = "interrupt-detached", hide = true)]
-    InterruptDetached(InterruptDetachedArgs),
+    /// Internal: archive a Codex thread after worktree cleanup exits.
+    #[command(name = "archive-detached", hide = true)]
+    ArchiveDetached(ArchiveDetachedArgs),
 
     /// Internal: best-effort tq session deletion, spawned detached when a
     /// session is confirmed Ended (a genuine SessionEnd, or eviction on
@@ -160,7 +160,7 @@ impl AgentCommands {
             Self::PaneHasPaused(args) => pane::status::run(args)?,
             Self::CleanDetached(args) => clean_detached::run(args).await?,
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
-            Self::InterruptDetached(args) => interrupt_detached::run(args)?,
+            Self::ArchiveDetached(args) => archive_detached::run(args)?,
             Self::DeleteTqSessionDetached(args) => delete_tq_session_detached::run(args)?,
         }
         Ok(())

@@ -20,9 +20,11 @@ use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
-const THREAD_TURNS_LIST_REQUEST_ID: u64 = 3;
-const TURN_INTERRUPT_REQUEST_ID: u64 = 4;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+mod archive;
+
+pub(crate) use archive::archive_thread;
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
 
@@ -139,12 +141,6 @@ impl Client {
             RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
         })
     }
-
-    pub(crate) fn interrupt_if_in_progress(&mut self, thread_id: &str) -> anyhow::Result<()> {
-        interrupt_if_in_progress_with(thread_id, |request| {
-            send_request_with_result(&mut self.socket, request)
-        })
-    }
 }
 
 /// Serializes armyknife launches that would otherwise match the same cwd-only
@@ -212,24 +208,6 @@ pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
     client.start_turn(thread_id, content, None)
 }
 
-/// Interrupts the latest active turn for `thread_id` when the app-server is available.
-pub(crate) fn interrupt_if_in_progress(thread_id: &str) -> anyhow::Result<()> {
-    let Some(mut client) = connect_for_interrupt()? else {
-        return Ok(());
-    };
-
-    client.interrupt_if_in_progress(thread_id)
-}
-
-pub(crate) fn connect_for_interrupt() -> anyhow::Result<Option<Client>> {
-    let socket_path = control_socket_path()?;
-    if !socket_path.exists() {
-        return Ok(None);
-    }
-
-    Client::connect_to(&socket_path).map(Some)
-}
-
 fn control_socket_path() -> anyhow::Result<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
@@ -288,56 +266,6 @@ fn turn_start_request(
             "params": params,
         }),
     }
-}
-
-fn thread_turns_list_request(thread_id: &str) -> RpcRequest {
-    RpcRequest {
-        id: THREAD_TURNS_LIST_REQUEST_ID,
-        method: "thread/turns/list",
-        payload: json!({
-            "id": THREAD_TURNS_LIST_REQUEST_ID,
-            "method": "thread/turns/list",
-            "params": {
-                "threadId": thread_id,
-                "limit": 1,
-                "sortDirection": "desc",
-            },
-        }),
-    }
-}
-
-fn turn_interrupt_request(thread_id: &str, turn_id: &str) -> RpcRequest {
-    RpcRequest {
-        id: TURN_INTERRUPT_REQUEST_ID,
-        method: "turn/interrupt",
-        payload: json!({
-            "id": TURN_INTERRUPT_REQUEST_ID,
-            "method": "turn/interrupt",
-            "params": {
-                "threadId": thread_id,
-                "turnId": turn_id,
-            },
-        }),
-    }
-}
-
-fn latest_in_progress_turn_id(result: &Value) -> anyhow::Result<Option<String>> {
-    let turns = result
-        .get("data")
-        .and_then(Value::as_array)
-        .context("Codex app-server `thread/turns/list` returned no turn data")?;
-    let Some(turn) = turns.first() else {
-        return Ok(None);
-    };
-    if turn.get("status").and_then(Value::as_str) != Some("inProgress") {
-        return Ok(None);
-    }
-
-    turn.get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .context("Codex app-server returned an in-progress turn without an ID")
-        .map(Some)
 }
 
 #[cfg(test)]
@@ -468,19 +396,6 @@ fn is_response_to(
         )));
     }
     Ok(response.get("result").cloned())
-}
-
-fn interrupt_if_in_progress_with(
-    thread_id: &str,
-    mut send: impl FnMut(&RpcRequest) -> std::result::Result<Value, RequestError>,
-) -> anyhow::Result<()> {
-    let result = send(&thread_turns_list_request(thread_id)).map_err(request_error_to_anyhow)?;
-    let Some(turn_id) = latest_in_progress_turn_id(&result)? else {
-        return Ok(());
-    };
-
-    send(&turn_interrupt_request(thread_id, &turn_id)).map_err(request_error_to_anyhow)?;
-    Ok(())
 }
 
 fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {

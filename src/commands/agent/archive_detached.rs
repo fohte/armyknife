@@ -1,8 +1,7 @@
-//! Deferred self-interruption for worktree cleanup.
+//! Deferred self-archive for worktree cleanup.
 //!
-//! A Codex tool can run `a wm delete` inside the turn that cleanup must stop.
-//! This detached worker waits for the cleanup process to exit before sending
-//! the interrupt, so the tool call can finish deleting sessions and windows.
+//! A Codex tool can run `a wm delete` inside the thread that cleanup must
+//! archive. This detached worker waits for cleanup to exit before archiving it.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,11 +14,11 @@ use crate::infra::process;
 
 const PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(300);
 const PARENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const EVENT_TARGET: &str = "armyknife::commands::agent::interrupt_detached";
+const EVENT_TARGET: &str = "armyknife::commands::agent::archive_detached";
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct InterruptDetachedArgs {
-    /// Codex thread to interrupt after the cleanup process exits.
+pub struct ArchiveDetachedArgs {
+    /// Codex thread to archive after the cleanup process exits.
     #[arg(long)]
     pub thread_id: String,
     /// Cleanup process whose exit indicates all worktree resources are handled.
@@ -32,7 +31,7 @@ pub fn spawn_after_parent_exit(thread_id: &str) -> Result<()> {
     let parent_pid = std::process::id().to_string();
     let args = [
         "agent",
-        "interrupt-detached",
+        "archive-detached",
         "--thread-id",
         thread_id,
         "--parent-pid",
@@ -41,40 +40,26 @@ pub fn spawn_after_parent_exit(thread_id: &str) -> Result<()> {
     let cwd = crate::shared::dirs::home_dir();
 
     process::spawn_detached(exe, args, cwd.as_deref(), &[])
-        .context("failed to start deferred Codex turn interruption")
+        .context("failed to start deferred Codex thread archive")
 }
 
-pub fn run(args: &InterruptDetachedArgs) -> Result<()> {
-    let mut client = match codex_steer::connect_for_interrupt() {
-        Ok(Some(client)) => client,
-        Ok(None) => return Ok(()),
-        Err(error) => {
-            tracing::warn!(
-                target: EVENT_TARGET,
-                event = "agent.codex_interrupt.connect_err",
-                thread_id = %args.thread_id,
-                msg = format!("failed to connect to Codex app-server: {error:#}"),
-            );
-            return Ok(());
-        }
-    };
-
+pub fn run(args: &ArchiveDetachedArgs) -> Result<()> {
     if !wait_for_parent_exit(args.parent_pid) {
         tracing::warn!(
             target: EVENT_TARGET,
-            event = "agent.codex_interrupt.parent_timeout",
+            event = "agent.codex_archive.parent_timeout",
             thread_id = %args.thread_id,
             parent_pid = args.parent_pid,
         );
         return Ok(());
     }
 
-    if let Err(error) = client.interrupt_if_in_progress(&args.thread_id) {
+    if let Err(error) = codex_steer::archive_thread(&args.thread_id) {
         tracing::warn!(
             target: EVENT_TARGET,
-            event = "agent.codex_interrupt.err",
+            event = "agent.codex_archive.err",
             thread_id = %args.thread_id,
-            msg = format!("failed to interrupt Codex turn: {error:#}"),
+            msg = format!("failed to archive Codex thread: {error:#}"),
         );
     }
 

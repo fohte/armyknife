@@ -23,7 +23,7 @@ async fn run() -> Result<()> {
         Commands::Update
             | Commands::Completions { .. }
             | Commands::Doctor(_)
-            | Commands::Agent(AgentCommands::InterruptDetached(_))
+            | Commands::Agent(AgentCommands::ArchiveDetached(_))
     ) {
         // Avoid running the updater twice when `a update` was requested,
         // and skip for completions to keep output clean.
