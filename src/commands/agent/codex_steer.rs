@@ -20,6 +20,7 @@ use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
+const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 mod archive;
@@ -326,13 +327,6 @@ fn send_request(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
 ) -> std::result::Result<(), RequestError> {
-    send_request_with_result(socket, request).map(|_| ())
-}
-
-fn send_request_with_result(
-    socket: &mut WebSocket<UnixStream>,
-    request: &RpcRequest,
-) -> std::result::Result<Value, RequestError> {
     socket
         .send(Message::Text(request.payload.to_string().into()))
         .with_context(|| {
@@ -342,7 +336,7 @@ fn send_request_with_result(
             )
         })
         .map_err(RequestError::Transport)?;
-    wait_for_response(|| socket.read(), request.id, request.method)
+    wait_for_response(|| socket.read(), request.id, request.method).map(|_| ())
 }
 
 fn wait_for_response<R>(
