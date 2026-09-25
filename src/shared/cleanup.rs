@@ -1,13 +1,14 @@
-//! Shared cleanup logic for Claude Code sessions and git worktrees.
+//! Shared cleanup logic for Claude Code sessions, notifications, and git worktrees.
 //!
 //! Both `agent watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
 //! need to clean up related resources. This module provides the shared logic to
 //! ensure consistent cleanup regardless of the entry point.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Session, SessionStatus};
 use crate::commands::wm::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
@@ -37,7 +38,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, and Claude Code session files.
+/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -71,7 +72,7 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
 }
 
 /// Cleans up all resources for a worktree identified by `repo` and `worktree_name`:
-/// worktree itself, branch, tmux windows, and Claude Code session files.
+/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
 /// tmux window and session file lookup.
@@ -144,42 +145,79 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
     }
 }
 
-/// Cleans up Claude Code session files for sessions whose `cwd` is inside `worktree_path`.
+/// Cleans up active Claude Code session files and notification groups for sessions
+/// whose `cwd` is inside `worktree_path`.
+///
+/// Every stored status is considered so `Ended` sessions with stale notifications
+/// are included. Ended session records are retained for later delegated-session lookup.
 ///
 /// For each matching session:
 /// 1. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 2. Deletes the session file
+/// 2. Deletes the session file unless the session has already ended
+/// 3. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
 pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
-    let sessions = store::list_sessions()?;
-    let mut cleaned = 0;
-
-    // Batch-fetch alive pane IDs to avoid per-session tmux process spawning
+    let sessions = store::list_all_sessions()?;
     let alive_panes = tmux::list_all_pane_ids().unwrap_or_default();
 
-    for session in &sessions {
+    Ok(cleanup_sessions(
+        &sessions,
+        worktree_path,
+        &alive_panes,
+        tmux::send_sigterm_to_pane,
+        store::delete_session,
+        crate::infra::notification::remove_group,
+    ))
+}
+
+fn cleanup_sessions(
+    sessions: &[Session],
+    worktree_path: &Path,
+    alive_panes: &HashSet<String>,
+    mut send_sigterm: impl FnMut(&str),
+    mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
+    mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
+) -> usize {
+    let mut cleaned = 0;
+
+    for session in sessions {
         if session.cwd.starts_with(worktree_path) {
             if should_sigterm_session(session.status)
                 && let Some(ref tmux_info) = session.tmux_info
                 && alive_panes.contains(&tmux_info.pane_id)
             {
-                tmux::send_sigterm_to_pane(&tmux_info.pane_id);
+                send_sigterm(&tmux_info.pane_id);
             }
 
-            if let Err(e) = store::delete_session(&session.session_id) {
+            if session.status != SessionStatus::Ended {
+                if let Err(e) = delete_session(&session.session_id) {
+                    eprintln!(
+                        "Warning: Failed to delete session {}: {e}",
+                        session.session_id
+                    );
+                } else {
+                    cleaned += 1;
+                }
+            }
+
+            if let Err(e) = remove_notification_group(&session.session_id) {
                 eprintln!(
-                    "Warning: Failed to delete session {}: {e}",
+                    "Warning: Failed to remove notification group for session {}: {e}",
                     session.session_id
                 );
-            } else {
-                cleaned += 1;
+                tracing::warn!(
+                    target: "armyknife::shared::cleanup",
+                    event = "cleanup.notification.err",
+                    session = %session.session_id,
+                    msg = format!("failed to remove notification group: {e}"),
+                );
             }
         }
     }
 
-    Ok(cleaned)
+    cleaned
 }
 
 #[cfg(test)]
