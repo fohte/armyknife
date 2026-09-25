@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.332](https://github.com/fohte/armyknife/compare/v0.1.331...v0.1.332) (2026-09-25)
+
+
+### Bug Fixes
+
+* **wm:** interrupt running Codex turns on worktree deletion ([#982](https://github.com/fohte/armyknife/issues/982)) ([5fa28ac](https://github.com/fohte/armyknife/commit/5fa28ac1115eede99d2ff13d184f7ecbb2b63bda))
+
 ## [0.1.331](https://github.com/fohte/armyknife/compare/v0.1.330...v0.1.331) (2026-09-25)
 
 
