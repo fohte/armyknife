@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.333](https://github.com/fohte/armyknife/compare/v0.1.332...v0.1.333) (2026-09-25)
+
+
+### Bug Fixes
+
+* **wm:** archive Codex threads on worktree deletion ([#984](https://github.com/fohte/armyknife/issues/984)) ([767a90b](https://github.com/fohte/armyknife/commit/767a90bf74eecc4f2a17a244d98fdad244a84964))
+
 ## [0.1.332](https://github.com/fohte/armyknife/compare/v0.1.331...v0.1.332) (2026-09-25)
 
 
