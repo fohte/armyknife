@@ -20,6 +20,8 @@ use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
+const THREAD_TURNS_LIST_REQUEST_ID: u64 = 3;
+const TURN_INTERRUPT_REQUEST_ID: u64 = 4;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
@@ -81,9 +83,7 @@ impl Client {
             .map_err(|error| anyhow!(error))
             .context("Codex app-server WebSocket handshake failed")?;
 
-        send_request(&mut socket, &initialize_request()).map_err(|error| match error {
-            RequestError::Rejected(error) | RequestError::Transport(error) => error,
-        })?;
+        send_request(&mut socket, &initialize_request()).map_err(request_error_to_anyhow)?;
 
         Ok(Self { socket })
     }
@@ -137,6 +137,12 @@ impl Client {
         .map_err(|error| match error {
             RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
             RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
+        })
+    }
+
+    pub(crate) fn interrupt_if_in_progress(&mut self, thread_id: &str) -> anyhow::Result<()> {
+        interrupt_if_in_progress_with(thread_id, |request| {
+            send_request_with_result(&mut self.socket, request)
         })
     }
 }
@@ -206,6 +212,24 @@ pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
     client.start_turn(thread_id, content, None)
 }
 
+/// Interrupts the latest active turn for `thread_id` when the app-server is available.
+pub(crate) fn interrupt_if_in_progress(thread_id: &str) -> anyhow::Result<()> {
+    let Some(mut client) = connect_for_interrupt()? else {
+        return Ok(());
+    };
+
+    client.interrupt_if_in_progress(thread_id)
+}
+
+pub(crate) fn connect_for_interrupt() -> anyhow::Result<Option<Client>> {
+    let socket_path = control_socket_path()?;
+    if !socket_path.exists() {
+        return Ok(None);
+    }
+
+    Client::connect_to(&socket_path).map(Some)
+}
+
 fn control_socket_path() -> anyhow::Result<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
@@ -229,6 +253,9 @@ fn initialize_request() -> RpcRequest {
                     "name": "armyknife",
                     "title": "armyknife",
                     "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": true,
                 },
             },
         }),
@@ -261,6 +288,56 @@ fn turn_start_request(
             "params": params,
         }),
     }
+}
+
+fn thread_turns_list_request(thread_id: &str) -> RpcRequest {
+    RpcRequest {
+        id: THREAD_TURNS_LIST_REQUEST_ID,
+        method: "thread/turns/list",
+        payload: json!({
+            "id": THREAD_TURNS_LIST_REQUEST_ID,
+            "method": "thread/turns/list",
+            "params": {
+                "threadId": thread_id,
+                "limit": 1,
+                "sortDirection": "desc",
+            },
+        }),
+    }
+}
+
+fn turn_interrupt_request(thread_id: &str, turn_id: &str) -> RpcRequest {
+    RpcRequest {
+        id: TURN_INTERRUPT_REQUEST_ID,
+        method: "turn/interrupt",
+        payload: json!({
+            "id": TURN_INTERRUPT_REQUEST_ID,
+            "method": "turn/interrupt",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+            },
+        }),
+    }
+}
+
+fn latest_in_progress_turn_id(result: &Value) -> anyhow::Result<Option<String>> {
+    let turns = result
+        .get("data")
+        .and_then(Value::as_array)
+        .context("Codex app-server `thread/turns/list` returned no turn data")?;
+    let Some(turn) = turns.first() else {
+        return Ok(None);
+    };
+    if turn.get("status").and_then(Value::as_str) != Some("inProgress") {
+        return Ok(None);
+    }
+
+    turn.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("Codex app-server returned an in-progress turn without an ID")
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -321,6 +398,13 @@ fn send_request(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
 ) -> std::result::Result<(), RequestError> {
+    send_request_with_result(socket, request).map(|_| ())
+}
+
+fn send_request_with_result(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+) -> std::result::Result<Value, RequestError> {
     socket
         .send(Message::Text(request.payload.to_string().into()))
         .with_context(|| {
@@ -337,7 +421,7 @@ fn wait_for_response<R>(
     mut read: R,
     request_id: u64,
     method: &str,
-) -> std::result::Result<(), RequestError>
+) -> std::result::Result<Value, RequestError>
 where
     R: FnMut() -> tungstenite::Result<Message>,
 {
@@ -350,8 +434,8 @@ where
                 let response: Value = serde_json::from_str(&text)
                     .with_context(|| format!("invalid JSON in `{method}` response"))
                     .map_err(RequestError::Transport)?;
-                if is_response_to(&response, request_id, method)? {
-                    return Ok(());
+                if let Some(result) = is_response_to(&response, request_id, method)? {
+                    return Ok(result);
                 }
             }
             Message::Close(frame) => {
@@ -368,9 +452,9 @@ fn is_response_to(
     response: &Value,
     request_id: u64,
     method: &str,
-) -> std::result::Result<bool, RequestError> {
+) -> std::result::Result<Option<Value>, RequestError> {
     if response.get("id").and_then(Value::as_u64) != Some(request_id) {
-        return Ok(false);
+        return Ok(None);
     }
     if let Some(error) = response.get("error") {
         return Err(RequestError::Rejected(anyhow!(
@@ -383,7 +467,26 @@ fn is_response_to(
             "Codex app-server `{method}` returned no result"
         )));
     }
-    Ok(true)
+    Ok(response.get("result").cloned())
+}
+
+fn interrupt_if_in_progress_with(
+    thread_id: &str,
+    mut send: impl FnMut(&RpcRequest) -> std::result::Result<Value, RequestError>,
+) -> anyhow::Result<()> {
+    let result = send(&thread_turns_list_request(thread_id)).map_err(request_error_to_anyhow)?;
+    let Some(turn_id) = latest_in_progress_turn_id(&result)? else {
+        return Ok(());
+    };
+
+    send(&turn_interrupt_request(thread_id, &turn_id)).map_err(request_error_to_anyhow)?;
+    Ok(())
+}
+
+fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {
+    match error {
+        RequestError::Rejected(error) | RequestError::Transport(error) => error,
+    }
 }
 
 fn rpc_error(error: &Value) -> String {
@@ -413,6 +516,9 @@ mod tests {
                         "name": "armyknife",
                         "title": "armyknife",
                         "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": {
+                        "experimentalApi": true,
                     },
                 },
             }),
@@ -592,9 +698,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matching_success(json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}), Ok(true))]
-    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(false))]
-    #[case::different_request(json!({"id": 1, "result": {}}), Ok(false))]
+    #[case::matching_success(
+        json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}),
+        Ok(Some(json!({"turn": {"id": "turn-a"}})))
+    )]
+    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(None))]
+    #[case::different_request(json!({"id": 1, "result": {}}), Ok(None))]
     #[case::server_error(
         json!({"id": 2, "error": {"code": -32600, "message": "thread not found"}}),
         Err("Codex app-server `turn/start` failed: thread not found (code -32600)")
@@ -605,7 +714,7 @@ mod tests {
     )]
     fn selects_matching_rpc_response(
         #[case] response: Value,
-        #[case] expected: std::result::Result<bool, &str>,
+        #[case] expected: std::result::Result<Option<Value>, &str>,
     ) {
         assert_eq!(
             is_response_to(&response, 2, "turn/start").map_err(|error| error.to_string()),
@@ -635,7 +744,7 @@ mod tests {
             2,
             "turn/start",
         );
-        assert_eq!(actual.map_err(|error| error.to_string()), Ok(()));
+        assert_eq!(actual.map_err(|error| error.to_string()), Ok(json!({})));
     }
 
     #[rstest]

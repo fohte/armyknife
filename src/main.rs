@@ -1,5 +1,6 @@
 use anyhow::Result;
 use armyknife::cli::{Cli, Commands};
+use armyknife::commands::agent::AgentCommands;
 use armyknife::shared;
 use armyknife::shared::update;
 use clap::{CommandFactory, Parser};
@@ -18,8 +19,11 @@ async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
     if !matches!(
-        command,
-        Commands::Update | Commands::Completions { .. } | Commands::Doctor(_)
+        &command,
+        Commands::Update
+            | Commands::Completions { .. }
+            | Commands::Doctor(_)
+            | Commands::Agent(AgentCommands::InterruptDetached(_))
     ) {
         // Avoid running the updater twice when `a update` was requested,
         // and skip for completions to keep output clean.
