@@ -1,4 +1,4 @@
-//! Shared cleanup logic for Claude Code sessions and git worktrees.
+//! Shared cleanup logic for Claude Code sessions, notifications, and git worktrees.
 //!
 //! Both `agent watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
 //! need to clean up related resources. This module provides the shared logic to
@@ -37,7 +37,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, and Claude Code session files.
+/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -71,7 +71,7 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
 }
 
 /// Cleans up all resources for a worktree identified by `repo` and `worktree_name`:
-/// worktree itself, branch, tmux windows, and Claude Code session files.
+/// worktree itself, branch, tmux windows, Claude Code session files, and notifications.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
 /// tmux window and session file lookup.
@@ -144,16 +144,18 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
     }
 }
 
-/// Cleans up Claude Code session files for sessions whose `cwd` is inside `worktree_path`.
+/// Cleans up Claude Code session files and notifications for sessions whose `cwd`
+/// is inside `worktree_path`.
 ///
 /// For each matching session:
 /// 1. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
 /// 2. Deletes the session file
+/// 3. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
 pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
-    let sessions = store::list_sessions()?;
+    let sessions = store::list_all_sessions()?;
     let mut cleaned = 0;
 
     // Batch-fetch alive pane IDs to avoid per-session tmux process spawning
@@ -175,6 +177,13 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
                 );
             } else {
                 cleaned += 1;
+            }
+
+            if let Err(e) = crate::infra::notification::remove_group(&session.session_id) {
+                eprintln!(
+                    "Warning: Failed to remove notification group for session {}: {e}",
+                    session.session_id
+                );
             }
         }
     }
