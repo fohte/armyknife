@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::wm::worktree::{
     delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
     get_worktree_branch,
@@ -169,6 +169,7 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
         tmux::send_sigterm_to_pane,
         store::delete_session,
         crate::infra::notification::remove_group,
+        crate::commands::agent::codex_steer::interrupt_if_in_progress,
     ))
 }
 
@@ -179,11 +180,27 @@ fn cleanup_sessions(
     mut send_sigterm: impl FnMut(&str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
+    mut interrupt_codex_turn: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> usize {
     let mut cleaned = 0;
 
     for session in sessions {
         if session.cwd.starts_with(worktree_path) {
+            if session.engine == Engine::Codex
+                && let Err(error) = interrupt_codex_turn(&session.session_id)
+            {
+                eprintln!(
+                    "Warning: Failed to interrupt Codex turn for session {}: {error:#}",
+                    session.session_id
+                );
+                tracing::warn!(
+                    target: "armyknife::shared::cleanup",
+                    event = "cleanup.codex_interruption.err",
+                    session = %session.session_id,
+                    msg = format!("failed to interrupt Codex turn: {error:#}"),
+                );
+            }
+
             if should_sigterm_session(session.status)
                 && let Some(ref tmux_info) = session.tmux_info
                 && alive_panes.contains(&tmux_info.pane_id)

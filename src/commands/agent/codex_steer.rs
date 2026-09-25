@@ -20,6 +20,8 @@ use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
+const THREAD_TURNS_LIST_REQUEST_ID: u64 = 3;
+const TURN_INTERRUPT_REQUEST_ID: u64 = 4;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
@@ -139,6 +141,21 @@ impl Client {
             RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
         })
     }
+
+    fn interrupt_if_in_progress(&mut self, thread_id: &str) -> anyhow::Result<()> {
+        let result =
+            send_request_with_result(&mut self.socket, &thread_turns_list_request(thread_id))
+                .map_err(request_error_to_anyhow)?;
+        let Some(turn_id) = latest_in_progress_turn_id(&result)? else {
+            return Ok(());
+        };
+
+        send_request(
+            &mut self.socket,
+            &turn_interrupt_request(thread_id, &turn_id),
+        )
+        .map_err(request_error_to_anyhow)
+    }
 }
 
 /// Serializes armyknife launches that would otherwise match the same cwd-only
@@ -206,6 +223,16 @@ pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
     client.start_turn(thread_id, content, None)
 }
 
+/// Interrupts the latest active turn for `thread_id` when the app-server is available.
+pub(crate) fn interrupt_if_in_progress(thread_id: &str) -> anyhow::Result<()> {
+    let socket_path = control_socket_path()?;
+    if !socket_path.exists() {
+        return Ok(());
+    }
+
+    Client::connect_to(&socket_path)?.interrupt_if_in_progress(thread_id)
+}
+
 fn control_socket_path() -> anyhow::Result<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
@@ -229,6 +256,9 @@ fn initialize_request() -> RpcRequest {
                     "name": "armyknife",
                     "title": "armyknife",
                     "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": true,
                 },
             },
         }),
@@ -261,6 +291,56 @@ fn turn_start_request(
             "params": params,
         }),
     }
+}
+
+fn thread_turns_list_request(thread_id: &str) -> RpcRequest {
+    RpcRequest {
+        id: THREAD_TURNS_LIST_REQUEST_ID,
+        method: "thread/turns/list",
+        payload: json!({
+            "id": THREAD_TURNS_LIST_REQUEST_ID,
+            "method": "thread/turns/list",
+            "params": {
+                "threadId": thread_id,
+                "limit": 1,
+                "sortDirection": "desc",
+            },
+        }),
+    }
+}
+
+fn turn_interrupt_request(thread_id: &str, turn_id: &str) -> RpcRequest {
+    RpcRequest {
+        id: TURN_INTERRUPT_REQUEST_ID,
+        method: "turn/interrupt",
+        payload: json!({
+            "id": TURN_INTERRUPT_REQUEST_ID,
+            "method": "turn/interrupt",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+            },
+        }),
+    }
+}
+
+fn latest_in_progress_turn_id(result: &Value) -> anyhow::Result<Option<String>> {
+    let turns = result
+        .get("data")
+        .and_then(Value::as_array)
+        .context("Codex app-server `thread/turns/list` returned no turn data")?;
+    let Some(turn) = turns.first() else {
+        return Ok(None);
+    };
+    if turn.get("status").and_then(Value::as_str) != Some("inProgress") {
+        return Ok(None);
+    }
+
+    turn.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("Codex app-server returned an in-progress turn without an ID")
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -321,6 +401,13 @@ fn send_request(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
 ) -> std::result::Result<(), RequestError> {
+    send_request_with_result(socket, request).map(|_| ())
+}
+
+fn send_request_with_result(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+) -> std::result::Result<Value, RequestError> {
     socket
         .send(Message::Text(request.payload.to_string().into()))
         .with_context(|| {
@@ -330,14 +417,26 @@ fn send_request(
             )
         })
         .map_err(RequestError::Transport)?;
-    wait_for_response(|| socket.read(), request.id, request.method)
+    wait_for_response_result(|| socket.read(), request.id, request.method)
 }
 
+#[cfg(test)]
 fn wait_for_response<R>(
-    mut read: R,
+    read: R,
     request_id: u64,
     method: &str,
 ) -> std::result::Result<(), RequestError>
+where
+    R: FnMut() -> tungstenite::Result<Message>,
+{
+    wait_for_response_result(read, request_id, method).map(|_| ())
+}
+
+fn wait_for_response_result<R>(
+    mut read: R,
+    request_id: u64,
+    method: &str,
+) -> std::result::Result<Value, RequestError>
 where
     R: FnMut() -> tungstenite::Result<Message>,
 {
@@ -351,7 +450,11 @@ where
                     .with_context(|| format!("invalid JSON in `{method}` response"))
                     .map_err(RequestError::Transport)?;
                 if is_response_to(&response, request_id, method)? {
-                    return Ok(());
+                    return response.get("result").cloned().ok_or_else(|| {
+                        RequestError::Transport(anyhow!(
+                            "Codex app-server `{method}` returned no result"
+                        ))
+                    });
                 }
             }
             Message::Close(frame) => {
@@ -386,6 +489,12 @@ fn is_response_to(
     Ok(true)
 }
 
+fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {
+    match error {
+        RequestError::Rejected(error) | RequestError::Transport(error) => error,
+    }
+}
+
 fn rpc_error(error: &Value) -> String {
     let Some(message) = error.get("message").and_then(Value::as_str) else {
         return error.to_string();
@@ -413,6 +522,9 @@ mod tests {
                         "name": "armyknife",
                         "title": "armyknife",
                         "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "capabilities": {
+                        "experimentalApi": true,
                     },
                 },
             }),
