@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.331](https://github.com/fohte/armyknife/compare/v0.1.330...v0.1.331) (2026-09-25)
+
+
+### Bug Fixes
+
+* **wm:** clear session notifications on worktree deletion ([#980](https://github.com/fohte/armyknife/issues/980)) ([b727943](https://github.com/fohte/armyknife/commit/b727943e85c92d56f47f7bd0c7789cd6a5122dc7))
+
 ## [0.1.330](https://github.com/fohte/armyknife/compare/v0.1.329...v0.1.330) (2026-09-24)
 
 
