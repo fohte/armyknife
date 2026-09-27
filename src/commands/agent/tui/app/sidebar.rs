@@ -206,14 +206,13 @@ impl App {
         self.restore_selection(old_position, old_session_id.as_deref());
     }
 
-    pub fn sync_sidebar_list_state(&mut self) {
+    pub fn sync_sidebar_list_state(&mut self, rows: &[super::super::tq_sidebar::SidebarRow]) {
         let selection = if self.sidebar_focused {
             &self.sidebar_cursor
         } else {
             &self.sidebar_selection
         };
-        let selected = self
-            .sidebar_rows()
+        let selected = rows
             .iter()
             .position(|row| row.selection.as_ref() == Some(selection));
         self.sidebar_list_state.select(selected);

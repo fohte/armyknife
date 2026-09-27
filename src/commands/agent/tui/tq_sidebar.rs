@@ -334,6 +334,14 @@ fn count_for_task(
     snapshot: &TqSnapshot,
 ) -> Vec<(DisplayStatus, usize)> {
     let task_ids = task_descendants(task_id, snapshot);
+    count_linked_sessions(&task_ids, sessions, snapshot)
+}
+
+fn count_linked_sessions(
+    task_ids: &HashSet<String>,
+    sessions: &[Session],
+    snapshot: &TqSnapshot,
+) -> Vec<(DisplayStatus, usize)> {
     count_sessions(sessions, |session| {
         snapshot
             .session_tasks
@@ -353,12 +361,7 @@ fn count_for_project(
         .filter(|task| effective_project_id(task, snapshot) == Some(project_id))
         .map(|task| task.id.clone())
         .collect::<HashSet<_>>();
-    count_sessions(sessions, |session| {
-        snapshot
-            .session_tasks
-            .get(&session.session_id)
-            .is_some_and(|tasks| tasks.iter().any(|task| task_ids.contains(&task.task_id)))
-    })
+    count_linked_sessions(&task_ids, sessions, snapshot)
 }
 
 fn count_sessions(

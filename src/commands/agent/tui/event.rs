@@ -59,8 +59,8 @@ pub enum AppEvent {
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
     /// tq sidebar snapshot fetch completed. `Ok(None)` means the fetch was
-    /// skipped because there are no local sessions, so cached task links
-    /// should remain in use.
+    /// skipped because tq is unavailable or there are no local sessions, so
+    /// cached task links should remain in use.
     TqSidebarFetched(std::result::Result<Option<TqSnapshot>, String>),
     /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
     /// is opened in the browser; `Err` (tq missing/unreachable) is logged

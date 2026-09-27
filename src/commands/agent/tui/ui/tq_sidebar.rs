@@ -34,7 +34,7 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
 
     let rows = app.sidebar_rows();
-    app.sync_sidebar_list_state();
+    app.sync_sidebar_list_state(&rows);
 
     let items = rows
         .iter()
@@ -224,6 +224,9 @@ fn format_counts(counts: &[(DisplayStatus, usize)]) -> Vec<(String, Style)> {
 
 fn parse_project_color(value: &str) -> Option<Color> {
     let hex = value.strip_prefix('#')?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     match hex.len() {
         6 => Some(Color::Rgb(
             u8::from_str_radix(&hex[0..2], 16).ok()?,

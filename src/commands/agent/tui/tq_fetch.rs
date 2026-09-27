@@ -48,7 +48,7 @@ pub async fn fetch_sidebar_snapshot(
         return Ok(None);
     }
     let Some(client) = client else {
-        return Err("tq binary is not available".to_string());
+        return Ok(None);
     };
 
     let sessions = client
@@ -89,21 +89,11 @@ fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
 ) -> HashMap<String, SessionTask> {
-    sessions
+    build_all_tasks_by_session(sessions, local_session_ids)
         .into_iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .filter_map(|session| {
-            let task = session.tasks.into_iter().next()?;
-            Some((
-                session.session_id,
-                SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
-                },
-            ))
+        .filter_map(|(session_id, tasks)| {
+            let task = tasks.into_iter().next()?;
+            Some((session_id, task))
         })
         .collect()
 }
