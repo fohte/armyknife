@@ -16,6 +16,8 @@ Runs after `a agent new --worktree` finishes creating a worktree. If the hook ex
 
 If the worktree cannot be removed automatically, the branch is left intact and `a agent new --worktree` points the user at `a wm delete` for manual cleanup.
 
+The hook runs under a per-repository lock because it may update shared Git config. Other `a agent new --worktree` calls for that repository wait until the hook or its rollback finishes. A waiting call prints a message. Do not invoke `a agent new --worktree` for the same repository from this hook; the nested call would wait for the outer call to release the lock.
+
 | Variable                  | Description                           |
 | ------------------------- | ------------------------------------- |
 | `ARMYKNIFE_WORKTREE_PATH` | Absolute path to the created worktree |

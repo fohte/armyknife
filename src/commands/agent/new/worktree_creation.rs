@@ -39,6 +39,7 @@ pub(super) fn run_worktree_creation(
     // Fetch with prune
     fetch_with_prune(&repo).context("Failed to fetch from remote")?;
 
+    // The hook may update shared Git config, so keep the lock through the hook and rollback.
     let creation_lock = WorktreeCreationLock::acquire(&repo)?;
 
     // Remove branch prefix to avoid double prefix

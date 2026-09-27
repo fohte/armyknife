@@ -1,9 +1,11 @@
-use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
+use std::fs::File;
+use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use super::GitRepo;
+use super::error::Result;
+use super::file_lock::{lock_exclusive, open_lock_file, try_lock_exclusive, unlock};
 
 const LOCK_FILE_NAME: &str = "armyknife-worktree-creation.lock";
 
@@ -14,26 +16,24 @@ pub(crate) struct WorktreeCreationLock {
 impl WorktreeCreationLock {
     pub(crate) fn acquire(repo: &GitRepo) -> Result<Self> {
         let lock_path = repo.common_dir().join(LOCK_FILE_NAME);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .with_context(|| {
+        Self::acquire_at(&lock_path)
+    }
+
+    fn acquire_at(lock_path: &Path) -> Result<Self> {
+        let file = open_lock_file(lock_path, "worktree creation")?;
+        if !try_lock_exclusive(&file).with_context(|| {
+            format!(
+                "Failed to acquire worktree creation lock at {}",
+                lock_path.display()
+            )
+        })? {
+            eprintln!("Waiting for another worktree creation in this repository to finish...");
+            lock_exclusive(&file, "worktree creation").with_context(|| {
                 format!(
-                    "Failed to open worktree creation lock at {}",
+                    "Failed to acquire worktree creation lock at {}",
                     lock_path.display()
                 )
             })?;
-
-        // SAFETY: `file` remains open until the lock guard is dropped.
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if result != 0 {
-            return Err(anyhow::anyhow!(
-                "Failed to acquire worktree creation lock: {}",
-                std::io::Error::last_os_error()
-            ));
         }
 
         Ok(Self { file })
@@ -42,9 +42,6 @@ impl WorktreeCreationLock {
 
 impl Drop for WorktreeCreationLock {
     fn drop(&mut self) {
-        // SAFETY: `file` remains open until this guard is dropped.
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
+        unlock(&self.file);
     }
 }
