@@ -121,8 +121,12 @@ pub(super) fn render_session_list(
     app.update_row_order(&row_id_refs);
 
     let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
+        .highlight_style(Style::default().bg(if app.sidebar_focused {
+            Color::Indexed(236)
+        } else {
+            Color::DarkGray
+        }))
+        .highlight_symbol(if app.sidebar_focused { " " } else { ">" });
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -627,7 +631,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -669,7 +673,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -786,7 +790,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
 
@@ -816,7 +820,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -844,7 +848,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -888,7 +892,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -922,7 +926,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -971,7 +975,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1018,7 +1022,7 @@ mod tests {
             >⏸ project         project                                              just now
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1047,7 +1051,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1074,7 +1078,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }

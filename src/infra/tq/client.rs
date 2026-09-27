@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::error::{Result, TqError};
 use crate::infra::external_tool::ExternalTool;
@@ -27,7 +27,7 @@ const CLAUDE_CODE_PROVIDER: &str = "claude_code";
 const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A tq task's open/closed state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TqTaskStatus {
     #[default]
@@ -71,6 +71,41 @@ pub struct SessionTasks {
     pub tasks: Vec<TqTask>,
 }
 
+/// Task fields needed to build the watch sidebar and its selected-task bar.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TqSidebarTask {
+    pub id: String,
+    pub number: u32,
+    pub title: String,
+    #[serde(default)]
+    pub status: TqTaskStatus,
+    #[serde(default)]
+    pub status_reason: Option<String>,
+    #[serde(default)]
+    pub commitment: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// Project fields needed to group tasks in the watch sidebar.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TqProject {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 pub struct TqClient;
 
 impl TqClient {
@@ -93,6 +128,37 @@ impl TqClient {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
                 &args,
+                format!("task panicked: {e}"),
+                None,
+            )),
+        }
+    }
+
+    /// Lists the requested tasks and their ancestors for the watch sidebar.
+    pub async fn list_sidebar_tasks(
+        &self,
+        task_ids: &HashSet<String>,
+    ) -> Result<Vec<TqSidebarTask>> {
+        let ids: Vec<String> = task_ids.iter().cloned().collect();
+        let args = build_task_list_args(&ids);
+        let join_result = tokio::task::spawn_blocking(move || run_task_list(&ids)).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                &args,
+                format!("task panicked: {e}"),
+                None,
+            )),
+        }
+    }
+
+    /// Lists all projects for coloring and grouping the watch sidebar.
+    pub async fn list_projects(&self) -> Result<Vec<TqProject>> {
+        let join_result = tokio::task::spawn_blocking(run_project_list).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                &["project", "list"],
                 format!("task panicked: {e}"),
                 None,
             )),
@@ -173,6 +239,57 @@ fn build_session_list_args(session_ids: &[String]) -> Vec<String> {
         args.push(id.clone());
     }
     args
+}
+
+fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
+    vec![
+        "task".to_string(),
+        "list".to_string(),
+        "--ids".to_string(),
+        task_ids.join(","),
+        "--include-ancestors".to_string(),
+        "true".to_string(),
+    ]
+}
+
+fn run_task_list(task_ids: &[String]) -> Result<Vec<TqSidebarTask>> {
+    let args = build_task_list_args(task_ids);
+    let mut command = ExternalTool::Tq.command();
+    command.args(&args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            &args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_project_list() -> Result<Vec<TqProject>> {
+    let args = ["project", "list"];
+    let mut command = ExternalTool::Tq.command();
+    command.args(args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            &args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 /// Runs `tq task url <task_id>` to completion and returns its trimmed

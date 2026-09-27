@@ -6,6 +6,8 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use super::super::session_rows::is_descendant_of;
+use super::super::tq_sidebar::SidebarSelection;
+use super::super::tq_sidebar::{matches_scope, scope_filter};
 use super::{App, AppMode};
 
 impl App {
@@ -14,11 +16,13 @@ impl App {
         !self.confirmed_query.is_empty()
             || self.status_filter.is_some()
             || self.drilldown_scope.is_some()
+            || self.sidebar_selection != SidebarSelection::All
     }
 
     /// Enters search mode.
     /// Lazily builds the searchable text cache on first use.
     pub fn enter_search_mode(&mut self) {
+        self.sidebar_focused = false;
         // Build searchable text cache on first search
         if self.searchable_text_cache.is_none() {
             self.searchable_text_cache = Some(build_searchable_text_cache(&self.sessions));
@@ -58,6 +62,8 @@ impl App {
         self.confirmed_query.clear();
         self.status_filter = None;
         self.drilldown_scope = None;
+        self.sidebar_selection = SidebarSelection::All;
+        self.sidebar_cursor = SidebarSelection::All;
         self.filtered_indices = (0..self.sessions.len()).collect();
         self.rebuild_row_order();
         self.list_state
@@ -101,12 +107,18 @@ impl App {
 
         let status_filter = self.status_filter;
         let scope_root = self.drilldown_scope.clone();
+        let sidebar_filter = scope_filter(self.tq_snapshot.as_ref(), &self.sidebar_selection);
+        let tq_snapshot = self.tq_snapshot.as_ref();
 
         self.filtered_indices = self
             .sessions
             .iter()
             .enumerate()
             .filter(|(_, session)| {
+                if !matches_scope(&sidebar_filter, tq_snapshot, &session.session_id) {
+                    return false;
+                }
+
                 // Drill-down scope (AND with status/text filters below)
                 if let Some(ref root_id) = scope_root
                     && session.session_id != *root_id
