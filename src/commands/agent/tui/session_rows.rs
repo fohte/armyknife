@@ -35,8 +35,8 @@ pub(super) struct SessionRowEntry<'a> {
     /// (any depth, not just direct children -- see [`descendant_counts`]).
     /// Drives the `▸{n}` badge; `0` means no badge.
     pub descendant_count: usize,
-    /// The tq task this session is linked to, if any. Drives the
-    /// `#<number> <title> › ` title-prefix; `None` renders no prefix at all.
+    /// The tq task this session is linked to, if any. Drives the task-number
+    /// column and cursor-relative task-kinship styling.
     pub task: Option<SessionTask>,
 }
 
@@ -58,8 +58,8 @@ pub(super) enum Section {
     Idle,
 }
 
-/// A tq task linked to a session, as needed for rendering the title-prefix
-/// (`#<number> <title> › `) and for the cursor-relative task-kinship check
+/// A tq task linked to a session, as needed for rendering the task-number
+/// column and for the cursor-relative task-kinship check
 /// (see [`is_related_task`]). `parent_task_id` is `None` both when the task
 /// genuinely has no parent and when the running `tq` binary is too old to
 /// report `parentId` at all -- either way, kinship degrades to "same task
@@ -72,7 +72,7 @@ pub(super) struct SessionTask {
     pub parent_task_id: Option<String>,
     /// Whether the linked tq task is closed. `false` both when the task is
     /// genuinely open and when the running `tq` binary is too old to report
-    /// task status at all -- either way, the title-prefix renders as open.
+    /// task status at all -- either way, the task number renders as open.
     pub is_closed: bool,
 }
 
@@ -136,10 +136,10 @@ impl<'a> SessionLookup<'a> {
 /// already time-sorted).
 ///
 /// `task_by_session` attaches each row's linked tq task (see [`SessionTask`])
-/// for the title-prefix renderer; a session absent from it gets `task: None`
-/// and renders no prefix. Callers can pass an empty map unconditionally when
-/// tq integration is unavailable -- there is no separate "ungrouped" mode to
-/// branch on.
+/// for the task-number column; a session absent from it gets `task: None`
+/// and renders an empty cell. Callers can pass an empty map unconditionally
+/// when tq integration is unavailable -- there is no separate "ungrouped"
+/// mode to branch on.
 pub(super) fn build_session_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
@@ -358,7 +358,7 @@ fn collateral_kin_relation(selected: &Session, session: &Session) -> Option<(Kin
 }
 
 /// Whether `other`'s task should read as "related" to `cursor`'s task, for
-/// the title-prefix brightness. Unlike [`kin_relation`]'s graded distance,
+/// the task-number brightness. Unlike [`kin_relation`]'s graded distance,
 /// task kinship is deliberately binary: the same task, or a direct
 /// parent/child task -- not any ancestor/descendant generation beyond that.
 /// `false` whenever either side has no task (nothing to relate), including

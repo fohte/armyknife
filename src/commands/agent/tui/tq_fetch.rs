@@ -1,5 +1,5 @@
 //! Fetches which locally known Claude Code sessions are linked to a tq
-//! task, keyed by session_id, for the session list's title-prefix renderer.
+//! task, keyed by session_id, for the session list's task-number column.
 //! Pure read-only against tq; never touches local session state.
 
 use std::collections::{HashMap, HashSet};
@@ -39,7 +39,7 @@ pub async fn fetch_session_tasks(
 }
 
 /// Fetches the linked task IDs, their full task records and all projects as
-/// one snapshot for the sidebar and the session title prefixes.
+/// one snapshot for the sidebar and the session task-number column.
 pub async fn fetch_sidebar_snapshot(
     client: Option<TqClient>,
     local_session_ids: HashSet<String>,
@@ -79,7 +79,7 @@ pub async fn fetch_sidebar_snapshot(
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. A session linked to multiple tasks keeps only the
-/// first (tq's own ordering) -- the title-prefix only has room for one.
+/// first (tq's own ordering) -- the task-number column only has room for one.
 ///
 /// The `local_session_ids` filter here is also the fallback for a `tq`
 /// binary predating `--session-id`, which silently ignores the flag and

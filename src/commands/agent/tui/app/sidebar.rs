@@ -7,6 +7,10 @@ use crate::commands::agent::tui::tq_sidebar::{
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
 
 impl App {
+    pub fn is_tq_loading(&self) -> bool {
+        self.tq_snapshot.is_none() && self.tq_refreshing
+    }
+
     pub fn set_tq_snapshot(&mut self, mut snapshot: TqSnapshot) {
         let old_position = self.list_state.selected();
         let old_session_id = self
