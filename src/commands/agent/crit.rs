@@ -1,4 +1,4 @@
-//! Link crit reviews to agent sessions and open them in tmux popups.
+//! Link crit reviews to agent sessions and open them in tmux floating panes.
 
 mod monitor;
 mod pane;
@@ -21,13 +21,14 @@ use crate::shared::log::short_run_id;
 use self::url::parse_port;
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
+const CRIT_PANE_OPTION: &str = "@armyknife-crit-pane";
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CritCommands {
     /// Associate a crit review URL with the current agent session.
     Add(AddArgs),
 
-    /// Open the latest crit review for a session or pane in a tmux popup.
+    /// Toggle the latest crit review for a session or pane in a tmux floating pane.
     Open(OpenArgs),
 
     /// Wait for a crit daemon to stop, then clear its session link.
@@ -149,7 +150,7 @@ fn open(args: &OpenArgs) -> Result<()> {
         );
         if args.parent_pid.is_some()
             && let Err(tmux_error) =
-                tmux::run_tmux(&["display-message", "crit popup failed; see armyknife log"])
+                tmux::run_tmux(&["display-message", "crit pane failed; see armyknife log"])
         {
             tracing::warn!(
                 event = "agent.crit.open.failure_notice_failed",
@@ -166,23 +167,54 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
     {
         bail!("Timed out waiting for agent watch to exit");
     }
+
+    let pane_id = args.pane.clone().or_else(tmux::current_pane_id_from_env);
+    if args.session.is_none()
+        && let Some(pane_id) = pane_id.as_deref()
+        && tmux::get_pane_option(pane_id, CRIT_PANE_OPTION).is_some()
+    {
+        close_crit_pane(pane_id)?;
+        return Ok(());
+    }
+
     let session_id = resolve_session_id(args)?;
     tracing::Span::current().record("session", tracing::field::display(&session_id));
     let session = store::load_session(&session_id)?
         .with_context(|| format!("Agent session not found: {session_id}"))?;
+    let tmux_info = session
+        .tmux_info
+        .as_ref()
+        .context("Agent session has no tmux pane")?;
+    let target_pane_id = if args.session.is_some() {
+        tmux_info.pane_id.as_str()
+    } else {
+        pane_id
+            .as_deref()
+            .context("Provide --session or --pane outside an agent tmux pane")?
+    };
+
+    if let Some(crit_pane_id) =
+        tmux::find_pane_with_option_value(target_pane_id, CRIT_PANE_OPTION, target_pane_id)?
+    {
+        close_crit_pane(&crit_pane_id)?;
+        return Ok(());
+    }
+
     let url = session
         .crit_urls
         .last()
         .context("No crit review is associated with this agent session")?;
     let port = parse_port(url)?;
-    let tmux_info = session
-        .tmux_info
-        .as_ref()
-        .context("Agent session has no tmux pane")?;
 
-    tmux::focus_pane(&tmux_info.pane_id).context("failed to focus the agent tmux pane")?;
-    tracing::info!(event = "agent.crit.open.popup_requested", port);
-    display_popup(&session, url, port, &tmux_info.pane_id)
+    tmux::focus_pane(target_pane_id).context("failed to focus the agent tmux pane")?;
+    tracing::info!(event = "agent.crit.open.floating_pane_requested", port);
+    display_floating_pane(&session, url, port, target_pane_id)
+}
+
+fn close_crit_pane(pane_id: &str) -> Result<()> {
+    tmux::run_tmux(&["kill-pane", "-t", pane_id])?;
+    tracing::info!(event = "agent.crit.open.floating_pane_closed", pane = %pane_id);
+    Ok(())
 }
 
 fn resolve_session_id(args: &OpenArgs) -> Result<String> {
@@ -199,7 +231,7 @@ fn resolve_session_id(args: &OpenArgs) -> Result<String> {
         .with_context(|| format!("No agent session is bound to pane {pane_id}"))
 }
 
-fn display_popup(session: &Session, url: &str, port: u16, pane_id: &str) -> Result<()> {
+fn display_floating_pane(session: &Session, url: &str, port: u16, pane_id: &str) -> Result<()> {
     let shpool = tool_path(ExternalTool::Shpool)?;
     let terminal_browser = tool_path(ExternalTool::TerminalBrowser)?;
     let shpool_session = format!("crit-{port}");
@@ -217,23 +249,27 @@ fn display_popup(session: &Session, url: &str, port: u16, pane_id: &str) -> Resu
     let label = display_label(session);
     let repo = repo_name(&session.cwd);
     let title = tmux_title(&format!(" crit · {label} · {repo} "));
-    tmux::run_tmux(&[
-        "display-popup",
-        "-E",
-        "-w",
+    let crit_pane_id = tmux::run_tmux_output(&[
+        "new-pane",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-x",
         "90%",
-        "-h",
+        "-y",
         "90%",
-        "-b",
-        "rounded",
+        "-X",
+        "5%",
+        "-Y",
+        "5%",
         "-S",
         "fg=colour98",
         "-t",
         pane_id,
-        "-T",
-        &title,
         command.as_ref(),
     ])?;
+    tmux::set_pane_option(&crit_pane_id, CRIT_PANE_OPTION, pane_id)?;
+    tmux::run_tmux(&["select-pane", "-T", &title, "-t", &crit_pane_id])?;
     Ok(())
 }
 
@@ -290,7 +326,7 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
         parent_pid.as_str(),
     ];
     process::spawn_detached(&executable, args, None, &[])
-        .context("failed to start the crit popup after agent watch")
+        .context("failed to start the crit pane after agent watch")
 }
 
 fn repo_name(cwd: &Path) -> String {

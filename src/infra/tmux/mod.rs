@@ -91,7 +91,7 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Run a tmux command and return stdout on success.
-fn run_tmux_output(args: &[&str]) -> Result<String> {
+pub(crate) fn run_tmux_output(args: &[&str]) -> Result<String> {
     let mut command = ExternalTool::Tmux.command();
     command.args(args);
 
@@ -439,6 +439,28 @@ pub fn get_pane_option(pane_id: &str, option: &str) -> Option<String> {
     } else {
         Some(output)
     }
+}
+
+/// Find a pane in the target pane's window whose user option has the given value.
+pub(crate) fn find_pane_with_option_value(
+    target_pane_id: &str,
+    option: &str,
+    value: &str,
+) -> Result<Option<String>> {
+    let filter = format!("#{{==:#{{{option}}},{value}}}");
+    let output = run_tmux_output(&[
+        "list-panes",
+        "-t",
+        target_pane_id,
+        "-f",
+        &filter,
+        "-F",
+        "#{pane_id}",
+    ])?;
+    Ok(output
+        .lines()
+        .find(|line| !line.is_empty())
+        .map(str::to_string))
 }
 
 /// Set a user option on a specific tmux window.

@@ -357,7 +357,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
 | `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server) |
 | `crit add <url>`                                 |         | Associate a crit review with the calling session                          |
-| `crit open [--session <id> \| --pane <pane_id>]` |         | Open the latest associated review in a tmux popup                         |
+| `crit open [--session <id> \| --pane <pane_id>]` |         | Toggle the latest associated review in a tmux floating pane               |
 | `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes           |
 | `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                  |
 | `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)             |
@@ -366,7 +366,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. The command associates each URL with the calling tracked session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, the association and notification still work, but automatic cleanup is unavailable. If no tracked session ID is available, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
-`a agent crit open` opens the latest associated review in a tmux popup. It requires `shpool` and `terminal-browser` on `PATH`. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and open the latest review. `crit add` mirrors the latest URL to the pane option `@crit` and re-runs the `window-layout-changed` hook, allowing tmux configuration to show a review border:
+`a agent crit open` toggles the latest associated review in a tmux floating pane. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and toggle the review pane. `crit add` mirrors the latest URL to the pane option `@crit` and re-runs the `window-layout-changed` hook, allowing tmux configuration to show a review border:
 
 ```sh
 a agent crit add http://127.0.0.1:12345/review

@@ -63,7 +63,7 @@ struct KeyEffects {
     /// User pressed `t`: fetch this task's web URL from `tq` (its result
     /// opens the browser once `AppEvent::TaskUrlFetched` arrives).
     fetch_task_url: Option<String>,
-    /// User pressed `o`: leave watch and open this session's crit popup.
+    /// User pressed `o`: leave watch and open this session's crit pane.
     open_crit_session_id: Option<String>,
 }
 
