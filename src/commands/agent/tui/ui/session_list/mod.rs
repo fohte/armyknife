@@ -20,8 +20,8 @@ use super::helpers::{
     status_color, truncate,
 };
 
-mod task_prefix;
-use task_prefix::{TaskPrefixSpan, task_prefix_style};
+mod task_number;
+use task_number::task_number_style;
 
 /// Display width reserved by ratatui's `List::highlight_symbol` (the `>`
 /// selection marker). Every row -- selected or not -- occupies this column,
@@ -33,15 +33,18 @@ const MARKER_WIDTH: usize = 1;
 const STATUS_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the repo column, left-aligned and space-padded.
 const REPO_COLUMN_WIDTH: usize = 16;
+/// Fixed width for the task number and its gap before the title column.
+const TASK_NUMBER_COLUMN_WIDTH: usize = 5;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
 /// Absolute column where a `WaitingInput` session's question line starts:
-/// same width as the marker + status + repo columns combined, so the
+/// same width as the marker, status, repo, and task-number columns, so the
 /// question sits under the title column rather than the repo column.
-const WAITING_QUESTION_INDENT: usize = MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH;
+const WAITING_QUESTION_INDENT: usize =
+    MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH;
 /// Below this age, the time column renders in the default (bright)
 /// foreground; at or above it, it dims to `DIM_FG`. Independent of status
 /// color, so a stale RUNNING session's time still reads as stale.
@@ -51,9 +54,9 @@ const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 /// RUNNING / UNREAD / PAUSED-STOPPED), each session as one row (two for
 /// `WaitingInput`), with fixed-width columns so the time column aligns
 /// vertically across every row regardless of section. A session linked to a
-/// tq task (`app.task_by_session`) gets a `#<number> <title> › ` prefix
-/// ahead of its usual breadcrumb/title, dimmed unless its task is related to
-/// the cursor row's task (see [`is_related_task`]).
+/// tq task (`app.task_by_session`) gets a fixed-width task-number column,
+/// dimmed unless its task is related to the cursor row's task (see
+/// [`is_related_task`]).
 pub(super) fn render_session_list(
     frame: &mut Frame,
     area: Rect,
@@ -132,10 +135,16 @@ pub(super) fn render_session_list(
 }
 
 /// Variable width of the title column: whatever's left after the fixed
-/// marker/status/repo/time columns, floored so it never disappears.
+/// marker/status/repo/task-number/time columns, floored so it never disappears.
 fn title_column_width(term_width: usize) -> usize {
     term_width
-        .saturating_sub(MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TIME_COLUMN_WIDTH)
+        .saturating_sub(
+            MARKER_WIDTH
+                + STATUS_COLUMN_WIDTH
+                + REPO_COLUMN_WIDTH
+                + TASK_NUMBER_COLUMN_WIDTH
+                + TIME_COLUMN_WIDTH,
+        )
         .max(MIN_TITLE_WIDTH)
 }
 
@@ -279,34 +288,32 @@ fn build_session_item(
     let cursor_task = app
         .selected_session()
         .and_then(|selected| app.task_by_session.get(selected.session_id.as_str()));
-    let task_prefix = entry.task.as_ref().map(|task| {
+    let task_number_spans = if let Some(task) = entry.task.as_ref() {
         let related = is_related_task(cursor_task, Some(task));
-        let style = task_prefix_style(related, task.is_closed);
-        let label = format!("#{} {}", task.task_number, task.task_title);
-        let label_style = if task.is_closed {
+        let style = task_number_style(related, task.is_closed);
+        let number = truncate(&format!("#{}", task.task_number), TASK_NUMBER_COLUMN_WIDTH);
+        let number_width = number.width();
+        let number_style = if task.is_closed {
             style.add_modifier(Modifier::CROSSED_OUT)
         } else {
             style
         };
-        TaskPrefixSpan {
-            text: format!("{label} \u{203a} "),
-            style,
-            label_style,
-            label_len: label.chars().count(),
-        }
-    });
+        vec![
+            Span::styled(number, number_style),
+            Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH.saturating_sub(number_width))),
+        ]
+    } else if app.tq_snapshot.is_none() && app.tq_refreshing {
+        vec![
+            Span::styled("━━━━", Style::default().fg(DIM_FG)),
+            Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH - "━━━━".width())),
+        ]
+    } else {
+        vec![Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH))]
+    };
 
     let title_width = title_column_width(term_width);
     let title_style = own_title_style(is_idle, title_kin_color);
-    let title_spans = build_title_spans(
-        entry,
-        app,
-        &own_title,
-        title_width,
-        query,
-        title_style,
-        task_prefix,
-    );
+    let title_spans = build_title_spans(entry, app, &own_title, title_width, query, title_style);
 
     let time_text = format_compact_time(session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
@@ -322,6 +329,7 @@ fn build_session_item(
         Span::raw(" "),
         Span::styled(repo_col, Style::default().fg(DIM_FG)),
     ];
+    spans.extend(task_number_spans);
     spans.extend(title_spans);
     spans.push(Span::styled(time_col, time_style));
 
@@ -341,7 +349,7 @@ fn build_session_item(
         let truncated_quoted = truncate(&quoted, quoted_width);
         // ratatui reserves the marker column on every line of a multi-line
         // `ListItem`, not just the first, so our own content only needs to
-        // cover the remaining status+repo width to reach `WAITING_QUESTION_INDENT`.
+        // cover the columns before the title to reach `WAITING_QUESTION_INDENT`.
         lines.push(Line::from(vec![
             Span::raw(" ".repeat(WAITING_QUESTION_INDENT - MARKER_WIDTH)),
             Span::styled(truncated_quoted, Style::default().fg(DIM_FG)),
@@ -371,7 +379,6 @@ fn build_title_spans(
     title_width: usize,
     query: &str,
     title_style: Style,
-    task_prefix: Option<TaskPrefixSpan>,
 ) -> Vec<Span<'static>> {
     let dim_style = Style::default().fg(DIM_FG);
     let descendant_badge = descendant_badge_text(entry.descendant_count);
@@ -390,15 +397,8 @@ fn build_title_spans(
     let badge_width = descendant_badge.width() + crit_badge.width();
     let content_width = title_width.saturating_sub(badge_width);
 
-    let (mut spans, content_width_used) = build_breadcrumb_title_spans(
-        entry,
-        app,
-        own_title,
-        content_width,
-        query,
-        title_style,
-        task_prefix,
-    );
+    let (mut spans, content_width_used) =
+        build_breadcrumb_title_spans(entry, app, own_title, content_width, query, title_style);
 
     let mut used_width = content_width_used;
     if !descendant_badge.is_empty() {
@@ -423,15 +423,9 @@ fn build_title_spans(
 /// append the descendant-count badge directly after this content and pad
 /// only once both are known.
 ///
-/// Builds up to four style regions, left to right: the task-prefix label
-/// (`#<number> <title>`, struck through when the task is closed), the
-/// task-prefix's trailing ` › ` separator (same color as the label but never
-/// struck through, see [`TaskPrefixSpan`]), the session breadcrumb prefix
-/// (always `dim_style`, unrelated to task kinship), then `own_title`
-/// (`title_style`, carrying session-kinship `kin_color`). `truncate` only
-/// ever cuts from the end, so an earlier region survives intact whenever the
-/// cut lands in a later one -- only the region the cut actually lands in
-/// (and none after it) loses content.
+/// Builds the session breadcrumb prefix and title as separate style regions.
+/// `truncate` only ever cuts from the end, so the breadcrumb survives intact
+/// whenever the cut lands in the title.
 fn build_breadcrumb_title_spans(
     entry: &SessionRowEntry,
     app: &App,
@@ -439,20 +433,8 @@ fn build_breadcrumb_title_spans(
     max_width: usize,
     query: &str,
     title_style: Style,
-    task_prefix: Option<TaskPrefixSpan>,
 ) -> (Vec<Span<'static>>, usize) {
     let dim_style = Style::default().fg(DIM_FG);
-    let TaskPrefixSpan {
-        text: task_prefix_text,
-        style: task_prefix_style,
-        label_style: task_label_style,
-        label_len: task_label_len,
-    } = task_prefix.unwrap_or_else(|| TaskPrefixSpan {
-        text: String::new(),
-        style: dim_style,
-        label_style: dim_style,
-        label_len: 0,
-    });
     let breadcrumb_prefix = entry.breadcrumb_ancestor.map(|parent| {
         let parent_title = app
             .get_cached_title(&parent.session_id)
@@ -461,26 +443,18 @@ fn build_breadcrumb_title_spans(
         format!("{parent_title} \u{203a} ")
     });
 
-    let combined = format!(
-        "{task_prefix_text}{}{own_title}",
-        breadcrumb_prefix.as_deref().unwrap_or("")
-    );
+    let combined = format!("{}{own_title}", breadcrumb_prefix.as_deref().unwrap_or(""));
     let truncated = truncate(&combined, max_width);
     let width = truncated.width();
     let truncated_chars: Vec<char> = truncated.chars().collect();
 
-    let task_boundary = task_prefix_text.chars().count();
-    let task_label_boundary = task_label_len.min(task_boundary);
-    let breadcrumb_boundary = task_boundary
-        + breadcrumb_prefix
-            .as_deref()
-            .map_or(0, |p| p.chars().count());
+    let breadcrumb_boundary = breadcrumb_prefix
+        .as_deref()
+        .map_or(0, |p| p.chars().count());
 
     let mut spans = Vec::new();
     let mut cursor = 0usize;
     let regions = [
-        (task_label_boundary, task_label_style),
-        (task_boundary, task_prefix_style),
         (breadcrumb_boundary, dim_style),
         (truncated_chars.len(), title_style),
     ];
@@ -625,7 +599,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         project                                              just now
+            >● project              project                                         just now
 
 
 
@@ -651,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_task_prefix_appears_before_breadcrumb_and_title() {
+    fn test_render_task_number_appears_before_breadcrumb_and_title() {
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
@@ -667,7 +641,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         #42 Fix the bug › project                            just now
+            >● project         #42   project                                        just now
 
 
 
@@ -679,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_task_kin_highlight_dims_unrelated_task_prefix() {
+    fn test_render_task_kin_highlight_dims_unrelated_task_number() {
         let now = Utc::now();
 
         // "cursor" and "same_task" share task #42; "other_task" is linked to
@@ -711,15 +685,14 @@ mod tests {
             );
         });
 
-        // Column 19 is where the title column (and so the task-prefix, when
-        // present) starts on every row -- see `WAITING_QUESTION_INDENT`.
+        // Column 19 is where the task-number column starts on every row.
         assert_ne!(buffer[(19, 2)].fg, DIM_FG);
         assert_ne!(buffer[(19, 3)].fg, DIM_FG);
         assert_eq!(buffer[(19, 4)].fg, DIM_FG);
     }
 
     #[test]
-    fn test_render_closed_task_prefix_strikes_through_label_only() {
+    fn test_render_closed_task_number_strikes_through_number_only() {
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
@@ -737,21 +710,20 @@ mod tests {
             );
         });
 
-        // Row 2 is the session row; the task-prefix "#42 Fix the bug › "
-        // starts at column 19 -- see `WAITING_QUESTION_INDENT`.
-        let label_cols = 19..34;
-        let separator_cols = 34..37;
-        let title_col = 37;
+        // Row 2 is the session row; the number starts at column 19 and the
+        // title starts after the fixed-width number column.
+        let number_cols = 19..22;
+        let padding_cols = 22..24;
+        let title_col = 24;
 
-        for x in label_cols {
+        for x in number_cols {
             assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
             assert!(
                 buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
                 "column {x}"
             );
         }
-        for x in separator_cols {
-            assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
+        for x in padding_cols {
             assert!(
                 !buffer[(x, 2)].modifier.contains(Modifier::CROSSED_OUT),
                 "column {x}"
@@ -784,7 +756,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >◎ project         project                                              just now
+            >◎ project              project                                         just now
 
 
 
@@ -813,8 +785,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project         project                                              just now
-                               “Which approach do you prefer?”
+            >◐ project              project                                         just now
+                                    “Which approach do you prefer?”
 
 
 
@@ -841,8 +813,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project         project                                              just now
-                               “”
+            >◐ project              project                                         just now
+                                    “”
 
 
 
@@ -885,9 +857,9 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
              ── RUNNING (3) ────────────────────────────────────────────────────────────────
-            >● project         project ▸2                                           just now
-             ● project         project › project                                    just now
-             ● project         project › project                                    just now
+            >● project              project ▸2                                      just now
+             ● project              project › project                               just now
+             ● project              project › project                               just now
 
 
 
@@ -917,11 +889,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project         project › project                                          2m
-                               “Pick one”
+            >◐ project              project › project                                     2m
+                                    “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project         project ▸1                                           just now
+             ● project              project ▸1                                      just now
 
 
 
@@ -966,11 +938,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project         project                                              just now
-                               “Pick one”
+             ◐ project              project                                         just now
+                                    “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         project                                              just now
+            >● project              project                                         just now
 
 
 
@@ -1009,17 +981,17 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 2 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project         project                                              just now
-                               “Pick one”
+             ◐ project              project                                         just now
+                                    “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project         project                                              just now
+             ● project              project                                         just now
 
              ── UNREAD (1) ─────────────────────────────────────────────────────────────────
-             ✱ project         project                                              just now
+             ✱ project              project                                         just now
 
              ── PAUSED (1) ─────────────────────────────────────────────────────────────────
-            >⏸ project         project                                              just now
+            >⏸ project              project                                         just now
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
@@ -1042,11 +1014,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project         project                                              just now
-                               “Pick one”
+             ◐ project              project                                         just now
+                                    “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         project                                              just now
+            >● project              project                                         just now
 
 
 
@@ -1071,8 +1043,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 0 running · 2 idle
             ── PAUSED (2) ─────────────────────────────────────────────────────────────────
-            ⏸ project         project                                              just now
-            ⏸ project         project                                              just now
+            ⏸ project              project                                         just now
+            ⏸ project              project                                         just now
 
 
 
@@ -1092,11 +1064,11 @@ mod tests {
     // `a` sits one generation past `MAX_KIN_DISTANCE` and must render
     // uncolored, same as the cursor row `e` itself. Rows: chrome(y0),
     // section header(y1), a(y2) b(y3) c(y4) d(y5) e(y6), in input order.
-    #[case::beyond_cap_ancestor_a(2, 19, Color::Reset)]
-    #[case::great_grandparent_b(3, 29, Color::Indexed(146))]
-    #[case::grandparent_c(4, 29, Color::Indexed(111))]
-    #[case::parent_d(5, 29, Color::Indexed(39))]
-    #[case::cursor_row_e(6, 29, Color::Reset)]
+    #[case::beyond_cap_ancestor_a(2, 24, Color::Reset)]
+    #[case::great_grandparent_b(3, 34, Color::Indexed(146))]
+    #[case::grandparent_c(4, 34, Color::Indexed(111))]
+    #[case::parent_d(5, 34, Color::Indexed(39))]
+    #[case::cursor_row_e(6, 34, Color::Reset)]
     fn test_render_kin_highlight_ancestor_ramp_and_cap(
         #[case] row_y: u16,
         #[case] col_x: u16,
@@ -1138,10 +1110,10 @@ mod tests {
     // uncolored, same as the cursor row itself. Rows: chrome(y0),
     // header(y1), root(y2) gp_a(y3) gp_b(y4) parent_a(y5) parent_a2(y6)
     // selected(y7) sibling(y8) cousin(y9), in input order.
-    #[case::beyond_cap_great_uncle(4, 29, Color::Reset)]
-    #[case::cursor_row_selected(7, 29, Color::Reset)]
-    #[case::sibling(8, 29, Color::Indexed(129))]
-    #[case::cousin(9, 29, Color::Indexed(135))]
+    #[case::beyond_cap_great_uncle(4, 34, Color::Reset)]
+    #[case::cursor_row_selected(7, 34, Color::Reset)]
+    #[case::sibling(8, 34, Color::Indexed(129))]
+    #[case::cousin(9, 34, Color::Indexed(135))]
     fn test_render_kin_highlight_collateral_ramp_and_cap(
         #[case] row_y: u16,
         #[case] col_x: u16,
@@ -1213,9 +1185,9 @@ mod tests {
         });
 
         // child's own title (after its "project › " breadcrumb) starts at
-        // column 29, row 4. It's a direct descendant of the cursor (pink
+        // column 34, row 4. It's a direct descendant of the cursor (pink
         // kin color), but the query "project" matches it too, and search
         // hits must win over kin coloring.
-        assert_eq!(buffer[(29, 4)].fg, Color::Yellow);
+        assert_eq!(buffer[(34, 4)].fg, Color::Yellow);
     }
 }

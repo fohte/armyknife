@@ -36,10 +36,20 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     let rows = app.sidebar_rows();
     app.sync_sidebar_list_state(&rows);
 
-    let items = rows
+    let loading = app.tq_snapshot.is_none() && app.tq_refreshing;
+    let failed_without_snapshot = app.tq_snapshot.is_none() && app.tq_refresh_failed;
+    let mut items = rows
         .iter()
-        .map(|row| build_row_item(row, inner.width as usize))
+        .map(|row| build_row_item(row, inner.width as usize, loading))
         .collect::<Vec<_>>();
+    if loading {
+        items.extend(loading_tree_rows(inner.width as usize));
+    } else if failed_without_snapshot {
+        items.push(ListItem::new(Line::styled(
+            "Failed to load tq tasks",
+            Style::default().fg(Color::Red),
+        )));
+    }
     let list = List::new(items)
         .highlight_style(Style::default().bg(if app.sidebar_focused {
             Color::DarkGray
@@ -54,7 +64,7 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn build_row_item(row: &SidebarRow, area_width: usize) -> ListItem<'static> {
+fn build_row_item(row: &SidebarRow, area_width: usize, loading: bool) -> ListItem<'static> {
     if row.kind == SidebarRowKind::Separator {
         return ListItem::new(Line::styled(
             "─".repeat(area_width.saturating_sub(1)),
@@ -62,11 +72,14 @@ fn build_row_item(row: &SidebarRow, area_width: usize) -> ListItem<'static> {
         ));
     }
 
-    let counts = row
-        .session_counts
-        .as_ref()
-        .map(|counts| format_counts(counts))
-        .unwrap_or_default();
+    let counts = if row.kind == SidebarRowKind::Untasked && loading {
+        vec![("━━".to_string(), Style::default().fg(DIM_FG))]
+    } else {
+        row.session_counts
+            .as_ref()
+            .map(|counts| format_counts(counts))
+            .unwrap_or_default()
+    };
     let count_width = counts
         .iter()
         .map(|(text, _)| text.width() + 1)
@@ -86,6 +99,28 @@ fn build_row_item(row: &SidebarRow, area_width: usize) -> ListItem<'static> {
         line_spans.push(Span::raw(" "));
     }
     ListItem::new(Line::from(line_spans))
+}
+
+fn loading_tree_rows(area_width: usize) -> Vec<ListItem<'static>> {
+    [(16, 3), (22, 2), (12, 3), (19, 2)]
+        .into_iter()
+        .map(|(label_width, count_width)| {
+            let content_width = area_width.saturating_sub(1);
+            let count_field_width = count_width + 1;
+            let left_width = content_width.saturating_sub(count_field_width);
+            let label_width = label_width.min(left_width.saturating_sub(2));
+            let label = format!("  {}", "━".repeat(label_width));
+            let label_style = Style::default().fg(DIM_FG);
+            let padding = left_width.saturating_sub(label.width());
+
+            ListItem::new(Line::from(vec![
+                Span::styled(label, label_style),
+                Span::raw(" ".repeat(padding)),
+                Span::styled("━".repeat(count_width), label_style),
+                Span::raw(" "),
+            ]))
+        })
+        .collect()
 }
 
 fn row_label_spans(row: &SidebarRow, width: usize) -> Vec<Span<'static>> {
@@ -260,9 +295,6 @@ fn footer_message(app: &App, now: DateTime<Utc>) -> Option<(String, Style)> {
                 Style::default().fg(Color::Yellow),
             ))
         }
-        None => Some((
-            "! tq load failed   r: retry".to_string(),
-            Style::default().fg(Color::Red),
-        )),
+        None => Some(("r: retry".to_string(), Style::default().fg(Color::Red))),
     }
 }
