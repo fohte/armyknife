@@ -34,8 +34,9 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let is_edit_mode = app.view == View::Session && matches!(app.mode, AppMode::Edit { .. });
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
     let has_drilldown_scope = app.view == View::Session && app.drilldown_scope.is_some();
-    let has_sidebar_scope =
-        app.view == View::Session && app.sidebar_selection != SidebarSelection::All;
+    let has_sidebar_scope = app.view == View::Session
+        && !(app.narrow_layout && app.sidebar_focused)
+        && app.sidebar_selection != SidebarSelection::All;
     let has_input_bar = is_search_mode || has_text_filter || is_edit_mode || has_drilldown_scope;
     let show_top_bar = has_input_bar || has_sidebar_scope;
     let top_bar_height = if has_input_bar && has_sidebar_scope {

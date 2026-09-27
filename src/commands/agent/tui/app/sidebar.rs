@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::App;
+use super::{App, View};
 use crate::commands::agent::tui::tq_sidebar::{
     SidebarRowKind, SidebarSelection, build_sidebar_rows, selection_exists,
 };
@@ -98,8 +98,16 @@ impl App {
     }
 
     pub fn set_sidebar_available(&mut self, available: bool) {
-        self.sidebar_available = available;
-        if !available {
+        let narrow_layout = self.view == View::Session && !available;
+        if self.narrow_layout && !narrow_layout && !self.sidebar_visible {
+            self.sidebar_focused = false;
+        }
+        if available && !self.sidebar_available {
+            self.sidebar_focused = false;
+        }
+        self.narrow_layout = narrow_layout;
+        self.sidebar_available = self.view == View::Session && (available || narrow_layout);
+        if !self.sidebar_available {
             self.sidebar_focused = false;
         }
     }
@@ -117,6 +125,14 @@ impl App {
         if self.sidebar_visible && self.sidebar_available {
             self.sidebar_focused = !self.sidebar_focused;
         }
+    }
+
+    pub fn show_narrow_sidebar_screen(&mut self) {
+        self.sidebar_focused = true;
+    }
+
+    pub fn show_narrow_session_list_screen(&mut self) {
+        self.sidebar_focused = false;
     }
 
     pub fn move_sidebar_cursor(&mut self, delta: isize) {

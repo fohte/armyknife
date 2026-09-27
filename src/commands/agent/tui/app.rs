@@ -131,6 +131,8 @@ pub struct App {
     pub sidebar_visible: bool,
     pub sidebar_focused: bool,
     pub sidebar_available: bool,
+    /// Whether the session view is using the single-pane layout.
+    pub narrow_layout: bool,
     /// The filter currently applied to the session list and the sidebar cursor.
     pub sidebar_selection: SidebarSelection,
     pub sidebar_cursor: SidebarSelection,
@@ -151,10 +153,12 @@ impl App {
         app.sidebar_visible = true;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
-        let initial_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
+        let focus_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
             .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| store::load_last_selected_session().ok().flatten());
+            .filter(|s| !s.is_empty());
+        app.sidebar_focused = focus_session_id.is_none();
+        let initial_session_id =
+            focus_session_id.or_else(|| store::load_last_selected_session().ok().flatten());
 
         if let Some(session_id) = initial_session_id {
             let old_pos = app.list_state.selected();
@@ -206,6 +210,7 @@ impl App {
             sidebar_visible: false,
             sidebar_focused: false,
             sidebar_available: false,
+            narrow_layout: false,
             sidebar_selection: SidebarSelection::All,
             sidebar_cursor: SidebarSelection::All,
             sidebar_collapsed: HashSet::new(),

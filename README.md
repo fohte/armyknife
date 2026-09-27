@@ -377,7 +377,7 @@ a agent watch
 set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
 ```
 
-On wide terminals, `a agent watch` shows a tq task sidebar beside the session list. Use `Tab` to switch focus, `C-b` to show or hide the sidebar, and `Enter` to filter by a task or project. Task filters include descendant tasks; the **タスクなし** row shows sessions without linked tq tasks. Press `r` while the sidebar has focus to refresh tq data.
+On wide terminals, `a agent watch` shows a tq task sidebar beside the session list. Use `Tab` to switch focus, `C-b` to show or hide the sidebar, and `Enter` to filter by a task or project. Task filters include descendant tasks; the **タスクなし** row shows sessions without linked tq tasks. Press `r` while the sidebar has focus to refresh tq data. On narrow terminals, the sidebar and session list use separate screens: press `Enter` on a sidebar row to show its matching sessions, then press `Esc` to return to the sidebar. `Esc` clears search, status, or drill-down filters before returning. At startup in the narrow layout, `ARMYKNIFE_FOCUS_SESSION` opens the session list first; otherwise the sidebar is shown.
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active, `a agent list`, `a agent watch`, and tmux window status show `◎ background`; Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a wm clean` also preserves its worktree unless `--force` is set.
 

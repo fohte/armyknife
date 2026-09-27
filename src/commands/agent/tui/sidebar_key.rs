@@ -5,6 +5,14 @@ use super::app::App;
 use super::event::KeyEvent;
 
 pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
+    if app.narrow_layout
+        && (!app.sidebar_focused
+            || matches!(key.code, KeyCode::Tab)
+            || (key.code == KeyCode::Char('b') && key.modifiers == KeyModifiers::CONTROL))
+    {
+        return None;
+    }
+
     match (key.code, key.modifiers) {
         (KeyCode::Tab, _) => {
             app.clear_error();
@@ -39,6 +47,9 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
         (KeyCode::Enter, _) if app.sidebar_focused => {
             app.clear_error();
             app.select_sidebar_cursor();
+            if app.narrow_layout {
+                app.show_narrow_session_list_screen();
+            }
             Some(KeyEffects::default())
         }
         (KeyCode::Char('r'), KeyModifiers::NONE) if app.sidebar_focused => {

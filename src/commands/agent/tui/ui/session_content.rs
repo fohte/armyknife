@@ -19,7 +19,13 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
         View::Session => {
             let sidebar_available = area.width >= minimum_total_width();
             app.set_sidebar_available(sidebar_available);
-            if app.sidebar_visible && sidebar_available {
+            if app.narrow_layout {
+                if app.sidebar_focused {
+                    render_tq_sidebar(frame, area, app);
+                } else {
+                    render_session_list(frame, area, app, now);
+                }
+            } else if app.sidebar_visible && sidebar_available {
                 let [sidebar_area, session_area] = Layout::horizontal([
                     Constraint::Percentage(SIDEBAR_PERCENTAGE),
                     Constraint::Percentage(100 - SIDEBAR_PERCENTAGE),
@@ -36,6 +42,7 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
 }
 
 pub(super) fn render_sidebar_scope(frame: &mut Frame, area: Rect, app: &App) {
+    let is_narrow_list_screen = app.narrow_layout && !app.sidebar_focused;
     let (label, detail) = match &app.sidebar_selection {
         SidebarSelection::Task(task_id) => {
             let Some(snapshot) = app.tq_snapshot.as_ref() else {
@@ -44,7 +51,12 @@ pub(super) fn render_sidebar_scope(frame: &mut Frame, area: Rect, app: &App) {
             let Some(task) = snapshot.tasks.get(task_id) else {
                 return;
             };
-            let label = format!("  #{} {}", task.number, task.title);
+            let label = format!(
+                "  {}#{} {}",
+                if is_narrow_list_screen { "‹ " } else { "" },
+                task.number,
+                task.title
+            );
             let today = Utc::now().date_naive().to_string();
             let due = task.due_date.as_deref().map(|date| {
                 if task.status != crate::infra::tq::TqTaskStatus::Completed && date < today.as_str()
@@ -56,10 +68,18 @@ pub(super) fn render_sidebar_scope(frame: &mut Frame, area: Rect, app: &App) {
             });
             (
                 label,
-                [task.commitment.clone(), due]
-                    .into_iter()
-                    .flatten()
-                    .collect(),
+                [
+                    is_narrow_list_screen.then(|| match task.status {
+                        crate::infra::tq::TqTaskStatus::Todo => "todo".to_string(),
+                        crate::infra::tq::TqTaskStatus::Completed => "completed".to_string(),
+                        crate::infra::tq::TqTaskStatus::Other => "other".to_string(),
+                    }),
+                    task.commitment.clone(),
+                    due,
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
             )
         }
         SidebarSelection::Project(project_id) => {
@@ -70,11 +90,21 @@ pub(super) fn render_sidebar_scope(frame: &mut Frame, area: Rect, app: &App) {
                 return;
             };
             (
-                format!("  ▣ {}", project.title),
+                format!(
+                    "  {}▣ {}",
+                    if is_narrow_list_screen { "‹ " } else { "" },
+                    project.title
+                ),
                 project.status.clone().into_iter().collect(),
             )
         }
-        SidebarSelection::Untasked => ("  ○ タスクなし".to_string(), Vec::new()),
+        SidebarSelection::Untasked => (
+            format!(
+                "  {}○ タスクなし",
+                if is_narrow_list_screen { "‹ " } else { "" }
+            ),
+            Vec::new(),
+        ),
         SidebarSelection::All => return,
     };
     let mut spans = vec![Span::styled(
