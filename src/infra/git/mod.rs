@@ -8,10 +8,12 @@ mod branch;
 pub(crate) mod cmd;
 mod error;
 mod fetch_lock;
+mod file_lock;
 mod github;
 mod repo;
 #[cfg(test)]
 pub mod test_utils;
+mod worktree_creation_lock;
 
 pub use branch::{
     MergeStatus, find_base_branch, get_merge_status, get_merge_status_for_repo,
@@ -23,3 +25,4 @@ pub use repo::{
     GitRepo, current_branch, fetch_with_prune, get_main_branch_for_repo, get_repo_owner_and_name,
     get_repo_root, get_repo_root_in, open_repo, open_repo_at, parse_repo,
 };
+pub(crate) use worktree_creation_lock::WorktreeCreationLock;

@@ -13,7 +13,7 @@ use crate::commands::agent::error::CcError;
 use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
-use crate::infra::git::{get_main_branch_for_repo, open_repo_at};
+use crate::infra::git::{WorktreeCreationLock, get_main_branch_for_repo, open_repo_at};
 use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -38,6 +38,9 @@ pub(super) fn run_worktree_creation(
 
     // Fetch with prune
     fetch_with_prune(&repo).context("Failed to fetch from remote")?;
+
+    // The hook may update shared Git config, so keep the lock through the hook and rollback.
+    let creation_lock = WorktreeCreationLock::acquire(&repo)?;
 
     // Remove branch prefix to avoid double prefix
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
@@ -178,6 +181,8 @@ pub(super) fn run_worktree_creation(
             return Err(hook_err);
         }
     }
+
+    drop(creation_lock);
 
     let (env_vars, background) = tmux_launch_inputs(&args.common)?;
     let env_refs: Vec<(&str, &str)> = env_vars

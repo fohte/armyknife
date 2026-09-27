@@ -4,15 +4,15 @@
 //! `refs/remotes/origin/*` lock files and one or more typically fail with
 //! `cannot lock ref ...`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
 use super::error::Result;
+use super::file_lock::{lock_exclusive, open_lock_file, unlock};
 
 /// Window during which a completed fetch is treated as fresh enough to skip
 /// for a subsequent caller.
@@ -29,13 +29,7 @@ pub fn fetch_with_coalescing<F>(lock_path: &Path, ttl: Duration, fetch_fn: F) ->
 where
     F: FnOnce() -> Result<()>,
 {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)
-        .with_context(|| format!("Failed to open fetch lock at {}", lock_path.display()))?;
+    let file = open_lock_file(lock_path, "fetch")?;
 
     let _guard = FlockGuard::acquire(&file)?;
 
@@ -96,25 +90,14 @@ struct FlockGuard<'f> {
 
 impl<'f> FlockGuard<'f> {
     fn acquire(file: &'f File) -> Result<Self> {
-        // SAFETY: `file` is borrowed for the guard's lifetime, so its fd is
-        // valid for the duration of the flock call.
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(anyhow::anyhow!(
-                "Failed to acquire fetch lock: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
+        lock_exclusive(file, "fetch")?;
         Ok(Self { file })
     }
 }
 
 impl Drop for FlockGuard<'_> {
     fn drop(&mut self) {
-        // SAFETY: `self.file` is borrowed for this guard's lifetime.
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
+        unlock(self.file);
     }
 }
 
