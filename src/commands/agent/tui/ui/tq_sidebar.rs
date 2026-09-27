@@ -36,7 +36,7 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     let rows = app.sidebar_rows();
     app.sync_sidebar_list_state(&rows);
 
-    let loading = app.tq_snapshot.is_none() && app.tq_refreshing;
+    let loading = app.is_tq_loading();
     let failed_without_snapshot = app.tq_snapshot.is_none() && app.tq_refresh_failed;
     let mut items = rows
         .iter()
@@ -84,8 +84,7 @@ fn build_row_item(row: &SidebarRow, area_width: usize, loading: bool) -> ListIte
         .iter()
         .map(|(text, _)| text.width() + 1)
         .sum::<usize>();
-    let content_width = area_width.saturating_sub(1);
-    let left_width = content_width.saturating_sub(count_width);
+    let (_, left_width) = column_widths(area_width, count_width);
     let spans = row_label_spans(row, left_width);
     let left_width_used = spans
         .iter()
@@ -105,9 +104,8 @@ fn loading_tree_rows(area_width: usize) -> Vec<ListItem<'static>> {
     [(16, 3), (22, 2), (12, 3), (19, 2)]
         .into_iter()
         .map(|(label_width, count_width)| {
-            let content_width = area_width.saturating_sub(1);
             let count_field_width = count_width + 1;
-            let left_width = content_width.saturating_sub(count_field_width);
+            let (_, left_width) = column_widths(area_width, count_field_width);
             let label_width = label_width.min(left_width.saturating_sub(2));
             let label = format!("  {}", "━".repeat(label_width));
             let label_style = Style::default().fg(DIM_FG);
@@ -121,6 +119,12 @@ fn loading_tree_rows(area_width: usize) -> Vec<ListItem<'static>> {
             ]))
         })
         .collect()
+}
+
+fn column_widths(area_width: usize, count_field_width: usize) -> (usize, usize) {
+    let content_width = area_width.saturating_sub(1);
+    let left_width = content_width.saturating_sub(count_field_width);
+    (content_width, left_width)
 }
 
 fn row_label_spans(row: &SidebarRow, width: usize) -> Vec<Span<'static>> {

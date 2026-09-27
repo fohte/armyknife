@@ -34,7 +34,7 @@ const STATUS_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the repo column, left-aligned and space-padded.
 const REPO_COLUMN_WIDTH: usize = 16;
 /// Fixed width for the task number and its gap before the title column.
-const TASK_NUMBER_COLUMN_WIDTH: usize = 5;
+const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
 /// Floor for the variable-width title column so it never collapses to
@@ -291,7 +291,10 @@ fn build_session_item(
     let task_number_spans = if let Some(task) = entry.task.as_ref() {
         let related = is_related_task(cursor_task, Some(task));
         let style = task_number_style(related, task.is_closed);
-        let number = truncate(&format!("#{}", task.task_number), TASK_NUMBER_COLUMN_WIDTH);
+        let number = truncate(
+            &format!("#{}", task.task_number),
+            TASK_NUMBER_COLUMN_WIDTH.saturating_sub(1),
+        );
         let number_width = number.width();
         let number_style = if task.is_closed {
             style.add_modifier(Modifier::CROSSED_OUT)
@@ -302,7 +305,7 @@ fn build_session_item(
             Span::styled(number, number_style),
             Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH.saturating_sub(number_width))),
         ]
-    } else if app.tq_snapshot.is_none() && app.tq_refreshing {
+    } else if app.is_tq_loading() {
         vec![
             Span::styled("━━━━", Style::default().fg(DIM_FG)),
             Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH - "━━━━".width())),
@@ -599,7 +602,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project              project                                         just now
+            >● project               project                                         just now
 
 
 
@@ -713,8 +716,8 @@ mod tests {
         // Row 2 is the session row; the number starts at column 19 and the
         // title starts after the fixed-width number column.
         let number_cols = 19..22;
-        let padding_cols = 22..24;
-        let title_col = 24;
+        let padding_cols = 22..25;
+        let title_col = 25;
 
         for x in number_cols {
             assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
@@ -756,7 +759,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >◎ project              project                                         just now
+            >◎ project               project                                         just now
 
 
 
@@ -785,8 +788,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project              project                                         just now
-                                    “Which approach do you prefer?”
+            >◐ project               project                                         just now
+                                     “Which approach do you prefer?”
 
 
 
@@ -813,8 +816,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project              project                                         just now
-                                    “”
+            >◐ project               project                                         just now
+                                     “”
 
 
 
@@ -857,9 +860,9 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
              ── RUNNING (3) ────────────────────────────────────────────────────────────────
-            >● project              project ▸2                                      just now
-             ● project              project › project                               just now
-             ● project              project › project                               just now
+            >● project               project ▸2                                      just now
+             ● project               project › project                               just now
+             ● project               project › project                               just now
 
 
 
@@ -889,11 +892,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project              project › project                                     2m
-                                    “Pick one”
+            >◐ project               project › project                                     2m
+                                     “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project              project ▸1                                      just now
+             ● project               project ▸1                                      just now
 
 
 
@@ -938,11 +941,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project              project                                         just now
-                                    “Pick one”
+             ◐ project               project                                         just now
+                                     “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project              project                                         just now
+            >● project               project                                         just now
 
 
 
@@ -981,17 +984,17 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 2 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project              project                                         just now
-                                    “Pick one”
+             ◐ project               project                                         just now
+                                     “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project              project                                         just now
+             ● project               project                                         just now
 
              ── UNREAD (1) ─────────────────────────────────────────────────────────────────
-             ✱ project              project                                         just now
+             ✱ project               project                                         just now
 
              ── PAUSED (1) ─────────────────────────────────────────────────────────────────
-            >⏸ project              project                                         just now
+            >⏸ project               project                                         just now
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
@@ -1014,11 +1017,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project              project                                         just now
-                                    “Pick one”
+             ◐ project               project                                         just now
+                                     “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project              project                                         just now
+            >● project               project                                         just now
 
 
 
@@ -1043,8 +1046,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 0 running · 2 idle
             ── PAUSED (2) ─────────────────────────────────────────────────────────────────
-            ⏸ project              project                                         just now
-            ⏸ project              project                                         just now
+            ⏸ project               project                                         just now
+            ⏸ project               project                                         just now
 
 
 
