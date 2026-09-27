@@ -1,12 +1,12 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::KeyEffects;
-use super::app::{App, NarrowScreen};
+use super::app::App;
 use super::event::KeyEvent;
 
 pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     if app.narrow_layout
-        && (app.narrow_screen != NarrowScreen::Sidebar
+        && (!app.sidebar_focused
             || matches!(key.code, KeyCode::Tab)
             || (key.code == KeyCode::Char('b') && key.modifiers == KeyModifiers::CONTROL))
     {

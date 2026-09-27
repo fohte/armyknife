@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::commands::agent::tui::app::{App, AppMode, NarrowScreen, View};
+use crate::commands::agent::tui::app::{App, AppMode, View};
 
 pub(super) fn render_help_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
     let help = Paragraph::new(Text::from(lines)).style(Style::default().fg(Color::DarkGray));
@@ -181,40 +181,7 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             lines
         }
         AppMode::Normal if app.show_help => {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled("  j/k", bold),
-                    Span::raw(": move  "),
-                    Span::styled("f", bold),
-                    Span::raw(": focus  "),
-                    Span::styled("r", bold),
-                    Span::raw(": resume  "),
-                    Span::styled("p", bold),
-                    Span::raw(": preview  "),
-                    Span::styled("t", bold),
-                    Span::raw(": open task  "),
-                    Span::styled("d", bold),
-                    Span::raw(": delete"),
-                ]),
-                Line::from(vec![
-                    Span::styled("  1-9", bold),
-                    Span::raw(": quick  "),
-                    Span::styled("/", bold),
-                    Span::raw(": search  "),
-                    Span::styled("h/←", bold),
-                    Span::raw(": parent  "),
-                    Span::styled("→/l", bold),
-                    Span::raw(": drill down"),
-                ]),
-                Line::from(vec![
-                    Span::styled("  C-r/w/s/p", bold),
-                    Span::raw(": filter  "),
-                    Span::styled("o", bold),
-                    Span::raw(": open crit  "),
-                    Span::styled("q", bold),
-                    Span::raw(": quit"),
-                ]),
-            ];
+            let mut lines = build_full_session_list_help_lines(bold);
             if app.sidebar_available {
                 lines.push(Line::from(vec![
                     Span::styled("  Tab", bold),
@@ -253,91 +220,104 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
 }
 
 fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
-    match app.narrow_screen {
-        NarrowScreen::Sidebar if app.show_help => vec![
-            Line::from(vec![
-                Span::styled("  j/k", bold),
-                Span::raw(": move  "),
-                Span::styled("Enter", bold),
-                Span::raw(": select  "),
-                Span::styled("h/←", bold),
-                Span::raw(": parent / collapse"),
-            ]),
-            Line::from(vec![
-                Span::styled("  l/→", bold),
-                Span::raw(": expand  "),
-                Span::styled("r", bold),
-                Span::raw(": refresh  "),
-                Span::styled("Esc", bold),
-                Span::raw(": clear filter  "),
-                Span::styled("q", bold),
-                Span::raw(": quit"),
-            ]),
-        ],
-        NarrowScreen::Sidebar => build_compact_help_line(
-            bold,
-            &[
-                ("j/k", "move"),
-                ("h/l", "tree"),
-                ("Enter", "select"),
-                ("r", "refresh"),
-            ],
-        ),
-        NarrowScreen::SessionList if app.show_help => {
-            let escape_label = if app.has_non_sidebar_filter() {
-                "clear filters"
+    if app.sidebar_focused {
+        if app.show_help {
+            let escape_label = if app.has_filter() {
+                "clear filter"
             } else {
-                "tasks"
+                "quit"
             };
             vec![
                 Line::from(vec![
                     Span::styled("  j/k", bold),
                     Span::raw(": move  "),
-                    Span::styled("f", bold),
-                    Span::raw(": focus  "),
-                    Span::styled("r", bold),
-                    Span::raw(": resume  "),
-                    Span::styled("p", bold),
-                    Span::raw(": preview  "),
-                    Span::styled("t", bold),
-                    Span::raw(": open task"),
-                ]),
-                Line::from(vec![
-                    Span::styled("  d", bold),
-                    Span::raw(": delete  "),
-                    Span::styled("1-9", bold),
-                    Span::raw(": quick select  "),
-                    Span::styled("/", bold),
-                    Span::raw(": search  "),
+                    Span::styled("Enter", bold),
+                    Span::raw(": select  "),
                     Span::styled("h/←", bold),
-                    Span::raw(": parent  "),
-                    Span::styled("→/l", bold),
-                    Span::raw(": drill down"),
+                    Span::raw(": parent / collapse"),
                 ]),
                 Line::from(vec![
-                    Span::styled("  C-r/w/s/p", bold),
-                    Span::raw(": filter  "),
-                    Span::styled("o", bold),
-                    Span::raw(": open crit  "),
+                    Span::styled("  l/→", bold),
+                    Span::raw(": expand  "),
+                    Span::styled("r", bold),
+                    Span::raw(": refresh  "),
                     Span::styled("Esc", bold),
                     Span::raw(format!(": {escape_label}  ")),
                     Span::styled("q", bold),
                     Span::raw(": quit"),
                 ]),
             ]
-        }
-        NarrowScreen::SessionList => {
-            let escape_label = if app.has_non_sidebar_filter() {
-                "clear filter"
-            } else {
-                "tasks"
-            };
+        } else {
             build_compact_help_line(
                 bold,
-                &[("/", "search"), ("Esc", escape_label), ("q", "quit")],
+                &[
+                    ("j/k", "move"),
+                    ("h/l", "tree"),
+                    ("Enter", "select"),
+                    ("r", "refresh"),
+                ],
             )
         }
+    } else if app.show_help {
+        let escape_label = if app.has_non_sidebar_filter() {
+            "clear filters"
+        } else {
+            "tasks"
+        };
+        let mut lines = build_full_session_list_help_lines(bold);
+        lines.push(Line::from(vec![
+            Span::styled("  Esc", bold),
+            Span::raw(format!(": {escape_label}")),
+        ]));
+        lines
+    } else {
+        let escape_label = if app.has_non_sidebar_filter() {
+            "clear filter"
+        } else {
+            "tasks"
+        };
+        build_compact_help_line(
+            bold,
+            &[("/", "search"), ("Esc", escape_label), ("q", "quit")],
+        )
     }
+}
+
+fn build_full_session_list_help_lines(bold: Style) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled("  j/k", bold),
+            Span::raw(": move  "),
+            Span::styled("f", bold),
+            Span::raw(": focus  "),
+            Span::styled("r", bold),
+            Span::raw(": resume  "),
+            Span::styled("p", bold),
+            Span::raw(": preview  "),
+            Span::styled("t", bold),
+            Span::raw(": open task  "),
+            Span::styled("d", bold),
+            Span::raw(": delete"),
+        ]),
+        Line::from(vec![
+            Span::styled("  1-9", bold),
+            Span::raw(": quick  "),
+            Span::styled("/", bold),
+            Span::raw(": search  "),
+            Span::styled("h/←", bold),
+            Span::raw(": parent  "),
+            Span::styled("→/l", bold),
+            Span::raw(": drill down"),
+        ]),
+        Line::from(vec![
+            Span::styled("  C-r/w/s/p", bold),
+            Span::raw(": filter  "),
+            Span::styled("o", bold),
+            Span::raw(": open crit  "),
+            Span::styled("q", bold),
+            Span::raw(": quit"),
+        ]),
+    ]
 }
 
 fn build_clean_help_lines(app: &App) -> Vec<Line<'static>> {

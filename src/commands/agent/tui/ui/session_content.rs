@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::commands::agent::tui::app::{App, NarrowScreen, View};
+use crate::commands::agent::tui::app::{App, View};
 use crate::commands::agent::tui::tq_sidebar::SidebarSelection;
 
 use super::clean_list::render_clean_list;
@@ -20,9 +20,10 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
             let sidebar_available = area.width >= minimum_total_width();
             app.set_sidebar_available(sidebar_available);
             if app.narrow_layout {
-                match app.narrow_screen {
-                    NarrowScreen::Sidebar => render_tq_sidebar(frame, area, app),
-                    NarrowScreen::SessionList => render_session_list(frame, area, app, now),
+                if app.sidebar_focused {
+                    render_tq_sidebar(frame, area, app);
+                } else {
+                    render_session_list(frame, area, app, now);
                 }
             } else if app.sidebar_visible && sidebar_available {
                 let [sidebar_area, session_area] = Layout::horizontal([
@@ -41,7 +42,7 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
 }
 
 pub(super) fn render_sidebar_scope(frame: &mut Frame, area: Rect, app: &App) {
-    let is_narrow_list_screen = app.narrow_layout && app.narrow_screen == NarrowScreen::SessionList;
+    let is_narrow_list_screen = app.narrow_layout && !app.sidebar_focused;
     let (label, detail) = match &app.sidebar_selection {
         SidebarSelection::Task(task_id) => {
             let Some(snapshot) = app.tq_snapshot.as_ref() else {

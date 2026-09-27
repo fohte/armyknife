@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::KeyEffects;
-use super::app::{App, AppMode, NarrowScreen, View};
+use super::app::{App, AppMode, View};
 use super::event::KeyEvent;
 use super::{crit_key, sidebar_key, title_edit, worktree_session_children};
 use crate::commands::agent::resume;
@@ -103,7 +103,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
 
         // Clear filter or quit
         (KeyCode::Esc, _) => {
-            if app.narrow_layout && app.narrow_screen == NarrowScreen::SessionList {
+            if app.narrow_layout && !app.sidebar_focused {
                 if app.has_non_sidebar_filter() {
                     app.clear_non_sidebar_filters();
                 } else {
@@ -219,10 +219,7 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 }
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
-    if app.mode == AppMode::Normal
-        && app.narrow_layout
-        && app.narrow_screen == NarrowScreen::Sidebar
-    {
+    if app.mode == AppMode::Normal && app.narrow_layout && app.sidebar_focused {
         return handle_narrow_sidebar_key_event(app, key);
     }
 

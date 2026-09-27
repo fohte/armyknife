@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::{App, NarrowScreen, View};
+use super::{App, View};
 use crate::commands::agent::tui::tq_sidebar::{
     SidebarRowKind, SidebarSelection, build_sidebar_rows, selection_exists,
 };
@@ -95,29 +95,15 @@ impl App {
 
     pub fn set_sidebar_available(&mut self, available: bool) {
         let narrow_layout = self.view == View::Session && !available;
-        if self.sidebar_layout_initialized && self.narrow_layout != narrow_layout {
-            if narrow_layout {
-                self.narrow_screen = if self.sidebar_focused {
-                    NarrowScreen::Sidebar
-                } else {
-                    NarrowScreen::SessionList
-                };
-            } else {
-                self.sidebar_focused = self.narrow_screen == NarrowScreen::Sidebar;
-            }
-        } else if !self.sidebar_layout_initialized && !narrow_layout {
-            self.narrow_screen = if self.sidebar_focused {
-                NarrowScreen::Sidebar
-            } else {
-                NarrowScreen::SessionList
-            };
+        if self.narrow_layout && !narrow_layout && !self.sidebar_visible {
+            self.sidebar_focused = false;
         }
-        self.sidebar_layout_initialized = true;
+        if available && !self.sidebar_available {
+            self.sidebar_focused = false;
+        }
         self.narrow_layout = narrow_layout;
         self.sidebar_available = self.view == View::Session && (available || narrow_layout);
-        if narrow_layout {
-            self.sidebar_focused = self.narrow_screen == NarrowScreen::Sidebar;
-        } else if !self.sidebar_available {
+        if !self.sidebar_available {
             self.sidebar_focused = false;
         }
     }
@@ -129,31 +115,19 @@ impl App {
         } else if self.sidebar_available {
             self.sidebar_visible = true;
         }
-        self.narrow_screen = if self.sidebar_focused {
-            NarrowScreen::Sidebar
-        } else {
-            NarrowScreen::SessionList
-        };
     }
 
     pub fn toggle_sidebar_focus(&mut self) {
         if self.sidebar_visible && self.sidebar_available {
             self.sidebar_focused = !self.sidebar_focused;
-            self.narrow_screen = if self.sidebar_focused {
-                NarrowScreen::Sidebar
-            } else {
-                NarrowScreen::SessionList
-            };
         }
     }
 
     pub fn show_narrow_sidebar_screen(&mut self) {
-        self.narrow_screen = NarrowScreen::Sidebar;
         self.sidebar_focused = true;
     }
 
     pub fn show_narrow_session_list_screen(&mut self) {
-        self.narrow_screen = NarrowScreen::SessionList;
         self.sidebar_focused = false;
     }
 
