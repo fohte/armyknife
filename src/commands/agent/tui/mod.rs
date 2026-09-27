@@ -566,10 +566,6 @@ fn handle_confirm_key_event(app: &mut App, key: KeyEvent) {
 
 /// Handles key events based on the current view and sub-mode.
 fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
-    if key.code == KeyCode::Tab {
-        return KeyEffects::default();
-    }
-
     // One-shot banners: any key press dismisses them so they do not
     // linger over later renders.
     if app.clean_progress.as_ref().is_some_and(|p| p.done) {

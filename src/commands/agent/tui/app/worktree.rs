@@ -49,13 +49,7 @@ impl App {
     }
 
     /// Installs the freshly discovered worktrees for Clean view.
-    pub fn set_worktrees(&mut self, mut rows: Vec<WorktreeRow>) {
-        rows.sort_by(|a, b| {
-            a.repo
-                .cmp(&b.repo)
-                .then_with(|| a.branch.cmp(&b.branch))
-                .then_with(|| a.name.cmp(&b.name))
-        });
+    pub fn set_worktrees(&mut self, rows: Vec<WorktreeRow>) {
         self.worktree_discovery = WorktreeDiscoveryState::Loaded(rows);
         self.refresh_worktree_session_counts();
     }
@@ -82,7 +76,8 @@ impl App {
     /// Marks worktree discovery as failed and surfaces the error in the global banner.
     pub fn set_worktrees_failed(&mut self, error: String) {
         self.set_error(format!("Failed to load worktrees: {error}"));
-        self.worktree_discovery = WorktreeDiscoveryState::Failed;
+        self.worktree_discovery = WorktreeDiscoveryState::Failed(error);
+        self.seed_clean_view_if_pending();
     }
 }
 

@@ -42,6 +42,11 @@ impl App {
         {
             return false;
         }
+        if let WorktreeDiscoveryState::Failed(error) = &self.worktree_discovery {
+            self.clean_view.set_worktree_discovery_failed(error.clone());
+            return false;
+        }
+
         // Distinguish "discovery still running" from "discovery done
         // with zero worktrees" — the latter must transition out of
         // LoadingPr so the empty-list placeholder renders instead of a

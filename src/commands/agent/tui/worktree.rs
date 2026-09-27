@@ -21,7 +21,7 @@ pub enum WorktreeDiscoveryState {
     #[default]
     Loading,
     Loaded(Vec<WorktreeRow>),
-    Failed,
+    Failed(String),
 }
 
 /// `Path::canonicalize`, falling back to the original path on error.

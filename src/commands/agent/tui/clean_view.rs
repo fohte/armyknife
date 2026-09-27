@@ -33,6 +33,8 @@ pub enum CleanLoadState {
     #[default]
     LoadingPr,
     Ready(Vec<CleanRow>),
+    /// Worktree discovery failed before the rows could be built.
+    WorktreeDiscoveryFailed(String),
     /// Catastrophic load failure (e.g. no worktree snapshot). PR-fetch
     /// failures use [`PrFetchStatus::Failed`] and keep the row list.
     Failed(String),
@@ -148,6 +150,12 @@ impl CleanView {
             self.state = CleanLoadState::Failed(error.clone());
             self.pr_fetch = PrFetchStatus::Failed(error);
         }
+    }
+
+    /// Keep a worktree-discovery failure visible while the clean view is open.
+    pub fn set_worktree_discovery_failed(&mut self, error: String) {
+        self.state = CleanLoadState::WorktreeDiscoveryFailed(error);
+        self.pr_fetch = PrFetchStatus::Done;
     }
 
     /// Install the initial row list built synchronously from the

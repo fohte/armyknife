@@ -32,6 +32,17 @@ pub(super) fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, no
             frame.render_widget(p, area);
             return;
         }
+        CleanLoadState::WorktreeDiscoveryFailed(err) => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Failed to load worktrees: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(err, Style::default().fg(Color::Red)),
+            ]);
+            frame.render_widget(Paragraph::new(line), area);
+            return;
+        }
         CleanLoadState::Failed(err) => {
             let line = Line::from(vec![
                 Span::styled(
