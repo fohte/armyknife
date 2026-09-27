@@ -568,7 +568,7 @@ mod tests {
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
-        "  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
+        "  C-r/w/s/p: filter  Tab: worktree view  o: open crit  q: quit".to_string(),
     ])]
     #[case::worktree_view_default(View::Worktree, false, vec![
         " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),
