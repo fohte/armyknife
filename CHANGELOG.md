@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.337](https://github.com/fohte/armyknife/compare/v0.1.336...v0.1.337) (2026-09-27)
+
+
+### Bug Fixes
+
+* **agent/crit:** toggle review in floating pane ([#993](https://github.com/fohte/armyknife/issues/993)) ([73d1259](https://github.com/fohte/armyknife/commit/73d1259cee2020c910279c7523668664d45c4caf))
+
 ## [0.1.336](https://github.com/fohte/armyknife/compare/v0.1.335...v0.1.336) (2026-09-27)
 
 
