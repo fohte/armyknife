@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::session_rows::SessionTask;
+use super::tq_snapshot::TqSnapshot;
 use crate::commands::agent::claude_sessions::normalize_title;
 use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
 
@@ -15,6 +16,7 @@ use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
 /// there are no local sessions. A successful lookup returns `Some`, including
 /// an empty map when no tasks are linked, so callers can retain cached links
 /// when no fresh result is available.
+#[cfg(test)]
 pub async fn fetch_session_tasks(
     client: Option<TqClient>,
     local_session_ids: HashSet<String>,
@@ -36,6 +38,45 @@ pub async fn fetch_session_tasks(
     Ok(Some(build_task_by_session(sessions, &local_session_ids)))
 }
 
+/// Fetches the linked task IDs, their full task records and all projects as
+/// one snapshot for the sidebar and the session title prefixes.
+pub async fn fetch_sidebar_snapshot(
+    client: Option<TqClient>,
+    local_session_ids: HashSet<String>,
+) -> Result<Option<TqSnapshot>, String> {
+    if local_session_ids.is_empty() {
+        return Ok(None);
+    }
+    let Some(client) = client else {
+        return Err("tq binary is not available".to_string());
+    };
+
+    let sessions = client
+        .list_session_tasks(&local_session_ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
+    let linked_task_ids = session_tasks
+        .values()
+        .flat_map(|tasks| tasks.iter().map(|task| task.task_id.clone()))
+        .collect::<HashSet<_>>();
+
+    let (tasks, projects) = if linked_task_ids.is_empty() {
+        (
+            Vec::new(),
+            client.list_projects().await.map_err(|e| e.to_string())?,
+        )
+    } else {
+        tokio::try_join!(
+            client.list_sidebar_tasks(&linked_task_ids),
+            client.list_projects(),
+        )
+        .map_err(|e| e.to_string())?
+    };
+
+    Ok(Some(TqSnapshot::new(session_tasks, tasks, projects)))
+}
+
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. A session linked to multiple tasks keeps only the
 /// first (tq's own ordering) -- the title-prefix only has room for one.
@@ -43,6 +84,7 @@ pub async fn fetch_session_tasks(
 /// The `local_session_ids` filter here is also the fallback for a `tq`
 /// binary predating `--session-id`, which silently ignores the flag and
 /// returns every session it knows about.
+#[cfg(test)]
 fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
@@ -62,6 +104,30 @@ fn build_task_by_session(
                     is_closed: task.status == TqTaskStatus::Completed,
                 },
             ))
+        })
+        .collect()
+}
+
+fn build_all_tasks_by_session(
+    sessions: Vec<SessionTasks>,
+    local_session_ids: &HashSet<String>,
+) -> HashMap<String, Vec<SessionTask>> {
+    sessions
+        .into_iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .map(|session| {
+            let tasks = session
+                .tasks
+                .into_iter()
+                .map(|task| SessionTask {
+                    task_id: task.id,
+                    task_number: task.number,
+                    task_title: normalize_title(&task.title),
+                    parent_task_id: task.parent_id,
+                    is_closed: task.status == TqTaskStatus::Completed,
+                })
+                .collect();
+            (session.session_id, tasks)
         })
         .collect()
 }

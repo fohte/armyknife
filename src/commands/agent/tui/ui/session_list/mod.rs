@@ -121,8 +121,12 @@ pub(super) fn render_session_list(
     app.update_row_order(&row_id_refs);
 
     let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol(">");
+        .highlight_style(Style::default().bg(if app.sidebar_focused {
+            Color::Indexed(236)
+        } else {
+            Color::DarkGray
+        }))
+        .highlight_symbol(if app.sidebar_focused { " " } else { ">" });
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }

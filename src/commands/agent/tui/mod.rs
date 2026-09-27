@@ -5,10 +5,13 @@ mod crit_key;
 mod event;
 mod pr_fetch;
 mod session_rows;
+mod sidebar_key;
 mod title_edit;
 mod title_generate;
 mod tq_cache;
 mod tq_fetch;
+mod tq_sidebar;
+mod tq_snapshot;
 mod ui;
 mod worktree;
 mod worktree_session_children;
@@ -95,6 +98,8 @@ pub fn run() -> Result<()> {
 struct KeyEffects {
     /// User pressed `c`: kick off the PR fetch for the clean view.
     request_clean_pr_fetch: bool,
+    /// User pressed `r` while the sidebar had focus.
+    request_tq_sidebar_fetch: bool,
     /// User confirmed `y` in the clean view: spawn the detached child
     /// for these paths and start tailing its log.
     spawn_detached_clean: Option<Vec<PathBuf>>,
@@ -115,6 +120,9 @@ impl KeyEffects {
     fn merge(&mut self, other: KeyEffects) {
         if other.request_clean_pr_fetch {
             self.request_clean_pr_fetch = true;
+        }
+        if other.request_tq_sidebar_fetch {
+            self.request_tq_sidebar_fetch = true;
         }
         if other.spawn_detached_clean.is_some() {
             self.spawn_detached_clean = other.spawn_detached_clean;
@@ -148,15 +156,17 @@ const MAX_DRAIN_PER_ITERATION: usize = 100;
 fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut app = App::new()?;
     match tq_cache::load() {
-        Ok(task_by_session) => app.set_session_tasks(task_by_session),
-        Err(error) => tracing::warn!("failed to load tq session-task cache: {error}"),
+        Ok(Some(snapshot)) => app.set_tq_snapshot(snapshot),
+        Ok(None) => {}
+        Err(error) => tracing::warn!("failed to load tq sidebar cache: {error}"),
     }
     let event_handler = EventHandler::new()?;
     let mut crit_session_id = None;
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
-    event_handler.start_tq_session_tasks_fetch(local_session_ids);
+    app.tq_refresh_started();
+    event_handler.start_tq_sidebar_fetch(local_session_ids);
     let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
 
     loop {
@@ -214,19 +224,22 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TqSessionTasksFetched(Ok(Some(task_by_session))) => {
+                AppEvent::TqSidebarFetched(Ok(Some(snapshot))) => {
                     tq_refresh_schedule.fetch_completed();
-                    if let Err(error) = tq_cache::store(&task_by_session) {
-                        tracing::warn!("failed to store tq session-task cache: {error}");
+                    if let Err(error) = tq_cache::store(&snapshot) {
+                        tracing::warn!("failed to store tq sidebar cache: {error}");
                     }
-                    app.set_session_tasks(task_by_session);
+                    app.set_tq_snapshot(snapshot);
+                    app.tq_refresh_finished();
                 }
-                AppEvent::TqSessionTasksFetched(Ok(None)) => {
+                AppEvent::TqSidebarFetched(Ok(None)) => {
                     tq_refresh_schedule.fetch_completed();
+                    app.tq_refresh_finished();
                 }
-                AppEvent::TqSessionTasksFetched(Err(e)) => {
+                AppEvent::TqSidebarFetched(Err(e)) => {
                     tq_refresh_schedule.fetch_completed();
-                    tracing::warn!("tq session-task fetch failed: {e}");
+                    app.tq_refresh_failed();
+                    tracing::warn!("tq sidebar fetch failed: {e}");
                 }
                 AppEvent::TaskUrlFetched(Ok(url)) => {
                     open_url(&mut app, &url);
@@ -275,6 +288,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         if let Some(task_id) = effects.fetch_task_url {
             event_handler.start_task_url_fetch(task_id);
         }
+        if effects.request_tq_sidebar_fetch {
+            tq_refresh_schedule.request();
+        }
         if effects.open_crit_session_id.is_some() {
             crit_session_id = effects.open_crit_session_id;
         }
@@ -305,7 +321,8 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         if tq_refresh_schedule.start_pending() {
             let local_session_ids: HashSet<String> =
                 app.sessions.iter().map(|s| s.session_id.clone()).collect();
-            event_handler.start_tq_session_tasks_fetch(local_session_ids);
+            app.tq_refresh_started();
+            event_handler.start_tq_sidebar_fetch(local_session_ids);
         }
 
         if app.should_quit {
@@ -643,6 +660,12 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 }
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
+    if app.mode == AppMode::Normal
+        && let Some(effects) = sidebar_key::handle(app, key)
+    {
+        return effects;
+    }
+
     // `c` from Normal mode enters the clean view from the session list.
     if app.mode == AppMode::Normal
         && let (KeyCode::Char('c'), KeyModifiers::NONE) = (key.code, key.modifiers)

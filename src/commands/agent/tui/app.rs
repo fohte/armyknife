@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::session_rows::SessionTask;
+use super::tq_sidebar::SidebarSelection;
+use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
 mod clean;
@@ -18,6 +20,7 @@ mod delete;
 mod filter;
 mod navigation;
 mod reload;
+mod sidebar;
 mod worktree;
 
 use reload::{build_title_cache, get_title_display_name, load_sessions};
@@ -116,11 +119,23 @@ pub struct App {
     /// user confirms `y` in the clean view; cleared once the bottom-bar
     /// summary has been on screen long enough for the user to read it.
     pub clean_progress: Option<CleanProgress>,
-    /// The tq task linked to each currently-known session, keyed by
-    /// session_id. Empty when tq integration isn't configured, tq is
-    /// unreachable, or no session is linked to any task -- rows for a
-    /// session absent from this map simply render no title-prefix.
+    /// The first tq task linked to each session in the displayed snapshot,
+    /// keyed by session_id. May come from the cache while tq is unavailable.
     pub task_by_session: HashMap<String, SessionTask>,
+    /// Full tq data used by the task navigation sidebar.
+    pub tq_snapshot: Option<TqSnapshot>,
+    /// Whether the current tq refresh is still running or most recently failed.
+    pub tq_refreshing: bool,
+    pub tq_refresh_failed: bool,
+    /// Sidebar visibility and focus. Width availability is updated by the renderer.
+    pub sidebar_visible: bool,
+    pub sidebar_focused: bool,
+    pub sidebar_available: bool,
+    /// The filter currently applied to the session list and the sidebar cursor.
+    pub sidebar_selection: SidebarSelection,
+    pub sidebar_cursor: SidebarSelection,
+    pub sidebar_collapsed: HashSet<SidebarSelection>,
+    pub sidebar_list_state: ListState,
 }
 
 impl App {
@@ -133,6 +148,7 @@ impl App {
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let mut app = Self::with_sessions(sessions);
+        app.sidebar_visible = true;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
         let initial_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
@@ -184,6 +200,16 @@ impl App {
             clean_view: CleanView::new(),
             clean_progress: None,
             task_by_session: HashMap::new(),
+            tq_snapshot: None,
+            tq_refreshing: false,
+            tq_refresh_failed: false,
+            sidebar_visible: false,
+            sidebar_focused: false,
+            sidebar_available: false,
+            sidebar_selection: SidebarSelection::All,
+            sidebar_cursor: SidebarSelection::All,
+            sidebar_collapsed: HashSet::new(),
+            sidebar_list_state: ListState::default(),
         };
         app.rebuild_row_order();
         app.list_state
@@ -258,16 +284,6 @@ impl App {
         session.label = label;
         let title = get_title_display_name(session);
         self.title_cache.insert(session_id.to_string(), title);
-    }
-
-    /// Sets the tq task-by-session lookup and rebuilds row order so the list
-    /// re-renders with the new title-prefixes, preserving the current
-    /// selection the same way a reload does.
-    pub fn set_session_tasks(&mut self, task_by_session: HashMap<String, SessionTask>) {
-        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
-        let old_pos = self.list_state.selected();
-        self.task_by_session = task_by_session;
-        self.restore_selection(old_pos, selected_session_id.as_deref());
     }
 }
 

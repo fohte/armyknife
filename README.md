@@ -373,6 +373,8 @@ a agent crit add http://127.0.0.1:12345/review
 a agent watch
 ```
 
+On wide terminals, `a agent watch` shows a tq task sidebar beside the session list. Use `Tab` to switch focus, `C-b` to show or hide the sidebar, and `Enter` to filter by a task or project. Task filters include descendant tasks; **Unassigned** shows sessions without linked tq tasks. Press `r` while the sidebar has focus to refresh tq data.
+
 ```tmux
 set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
 ```

@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
-use super::session_rows::SessionTask;
+use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
 use crate::infra::tq::TqClient;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Key event with code and modifiers.
 #[derive(Debug, Clone, Copy)]
@@ -58,10 +58,10 @@ pub enum AppEvent {
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
-    /// tq session-task fetch completed. `Ok(None)` means the fetch was
-    /// skipped because tq is unavailable or there are no local sessions, so
-    /// cached task links should remain in use.
-    TqSessionTasksFetched(std::result::Result<Option<HashMap<String, SessionTask>>, String>),
+    /// tq sidebar snapshot fetch completed. `Ok(None)` means the fetch was
+    /// skipped because there are no local sessions, so cached task links
+    /// should remain in use.
+    TqSidebarFetched(std::result::Result<Option<TqSnapshot>, String>),
     /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
     /// is opened in the browser; `Err` (tq missing/unreachable) is logged
     /// and otherwise ignored -- the same silent degrade as every other tq
@@ -168,22 +168,22 @@ impl EventHandler {
         });
     }
 
-    /// Kick off a one-shot fetch mapping `local_session_ids` to their linked
-    /// tq tasks. Returns immediately; the result arrives as
-    /// [`AppEvent::TqSessionTasksFetched`]. Same runtime-unavailable
+    /// Kick off a one-shot fetch of the tq sidebar snapshot. Returns
+    /// immediately; the result arrives as [`AppEvent::TqSidebarFetched`].
+    /// Same runtime-unavailable
     /// fallback as [`Self::start_clean_pr_fetch`].
-    pub fn start_tq_session_tasks_fetch(&self, local_session_ids: HashSet<String>) {
+    pub fn start_tq_sidebar_fetch(&self, local_session_ids: HashSet<String>) {
         let tx = self.sender.clone();
         let Some(rt) = self.rt_handle.as_ref().cloned() else {
-            let _ = tx.send(AppEvent::TqSessionTasksFetched(Err(
+            let _ = tx.send(AppEvent::TqSidebarFetched(Err(
                 "tokio runtime is not available".to_string(),
             )));
             return;
         };
         let client = TqClient::detect();
         rt.spawn(async move {
-            let result = super::tq_fetch::fetch_session_tasks(client, local_session_ids).await;
-            let _ = tx.send(AppEvent::TqSessionTasksFetched(result));
+            let result = super::tq_fetch::fetch_sidebar_snapshot(client, local_session_ids).await;
+            let _ = tx.send(AppEvent::TqSidebarFetched(result));
         });
     }
 
