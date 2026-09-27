@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -16,7 +16,11 @@ pub(super) fn load() -> Result<HashMap<String, SessionTask>> {
     let Some(path) = path() else {
         return Ok(HashMap::new());
     };
-    match fs::read(&path) {
+    load_from(&path)
+}
+
+fn load_from(path: &Path) -> Result<HashMap<String, SessionTask>> {
+    match fs::read(path) {
         Ok(content) => serde_json::from_slice(&content)
             .with_context(|| format!("failed to parse cache file: {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
@@ -28,6 +32,10 @@ pub(super) fn load() -> Result<HashMap<String, SessionTask>> {
 
 pub(super) fn store(task_by_session: &HashMap<String, SessionTask>) -> Result<()> {
     let path = path().context("cache directory is unavailable")?;
+    store_to(&path, task_by_session)
+}
+
+fn store_to(path: &Path, task_by_session: &HashMap<String, SessionTask>) -> Result<()> {
     let parent = path
         .parent()
         .context("cache file path has no parent directory")?;
@@ -45,7 +53,7 @@ pub(super) fn store(task_by_session: &HashMap<String, SessionTask>) -> Result<()
     temp_file.write_all(b"\n")?;
     temp_file.as_file().sync_all()?;
     temp_file
-        .persist(&path)
+        .persist(path)
         .with_context(|| format!("failed to replace cache file: {}", path.display()))?;
     Ok(())
 }

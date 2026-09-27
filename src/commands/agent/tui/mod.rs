@@ -35,6 +35,47 @@ use crate::shared::command;
 
 const TQ_SESSION_TASKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+struct TqRefreshSchedule {
+    in_flight: bool,
+    pending: bool,
+    next_periodic_refresh: Instant,
+}
+
+impl TqRefreshSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            in_flight: true,
+            pending: false,
+            next_periodic_refresh: now + TQ_SESSION_TASKS_REFRESH_INTERVAL,
+        }
+    }
+
+    fn periodic_refresh_due(&mut self, now: Instant) -> bool {
+        if now < self.next_periodic_refresh {
+            return false;
+        }
+        self.next_periodic_refresh = now + TQ_SESSION_TASKS_REFRESH_INTERVAL;
+        true
+    }
+
+    fn fetch_completed(&mut self) {
+        self.in_flight = false;
+    }
+
+    fn request(&mut self) {
+        self.pending = true;
+    }
+
+    fn start_pending(&mut self) -> bool {
+        if self.in_flight || !self.pending {
+            return false;
+        }
+        self.in_flight = true;
+        self.pending = false;
+        true
+    }
+}
+
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
     let mut terminal = ratatui::init();
@@ -106,9 +147,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
     event_handler.start_tq_session_tasks_fetch(local_session_ids);
-    let mut tq_fetch_in_flight = true;
-    let mut tq_fetch_pending = false;
-    let mut next_tq_refresh = Instant::now() + TQ_SESSION_TASKS_REFRESH_INTERVAL;
+    let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -138,9 +177,8 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 }
                 AppEvent::SessionsChanged(None) => needs_full_reload = true,
                 AppEvent::Tick => {
-                    if Instant::now() >= next_tq_refresh {
+                    if tq_refresh_schedule.periodic_refresh_due(Instant::now()) {
                         periodic_tq_refresh_due = true;
-                        next_tq_refresh = Instant::now() + TQ_SESSION_TASKS_REFRESH_INTERVAL;
                     }
                 }
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
@@ -166,18 +204,20 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TqSessionTasksFetched(Some(Ok(task_by_session))) => {
-                    tq_fetch_in_flight = false;
+                AppEvent::TqSessionTasksFetched(Ok(Some(task_by_session))) => {
+                    tq_refresh_schedule.fetch_completed();
                     if let Err(error) = tq_cache::store(&task_by_session) {
                         tracing::warn!("failed to store tq session-task cache: {error}");
                     }
                     app.set_session_tasks(task_by_session);
                 }
-                AppEvent::TqSessionTasksFetched(Some(Err(e))) => {
-                    tq_fetch_in_flight = false;
+                AppEvent::TqSessionTasksFetched(Ok(None)) => {
+                    tq_refresh_schedule.fetch_completed();
+                }
+                AppEvent::TqSessionTasksFetched(Err(e)) => {
+                    tq_refresh_schedule.fetch_completed();
                     tracing::warn!("tq session-task fetch failed: {e}");
                 }
-                AppEvent::TqSessionTasksFetched(None) => tq_fetch_in_flight = false,
                 AppEvent::TaskUrlFetched(Ok(url)) => {
                     open_url(&mut app, &url);
                 }
@@ -250,14 +290,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         // A new session may already be tq-linked; refresh its prefix along
         // with periodic refreshes, coalescing requests while one is running.
         if new_session_created || periodic_tq_refresh_due {
-            tq_fetch_pending = true;
+            tq_refresh_schedule.request();
         }
-        if !tq_fetch_in_flight && tq_fetch_pending {
+        if tq_refresh_schedule.start_pending() {
             let local_session_ids: HashSet<String> =
                 app.sessions.iter().map(|s| s.session_id.clone()).collect();
             event_handler.start_tq_session_tasks_fetch(local_session_ids);
-            tq_fetch_in_flight = true;
-            tq_fetch_pending = false;
         }
 
         if app.should_quit {
