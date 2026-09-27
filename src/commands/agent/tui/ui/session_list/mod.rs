@@ -484,6 +484,8 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
 
+    const TASK_NUMBER_COLUMN_START: usize = WAITING_QUESTION_INDENT - TASK_NUMBER_COLUMN_WIDTH;
+
     #[rstest]
     #[case::just_now(0, "just now")]
     #[case::one_minute(60, "1m")]
@@ -688,10 +690,10 @@ mod tests {
             );
         });
 
-        // Column 19 is where the task-number column starts on every row.
-        assert_ne!(buffer[(19, 2)].fg, DIM_FG);
-        assert_ne!(buffer[(19, 3)].fg, DIM_FG);
-        assert_eq!(buffer[(19, 4)].fg, DIM_FG);
+        let task_number_column = TASK_NUMBER_COLUMN_START as u16;
+        assert_ne!(buffer[(task_number_column, 2)].fg, DIM_FG);
+        assert_ne!(buffer[(task_number_column, 3)].fg, DIM_FG);
+        assert_eq!(buffer[(task_number_column, 4)].fg, DIM_FG);
     }
 
     #[test]
@@ -713,11 +715,12 @@ mod tests {
             );
         });
 
-        // Row 2 is the session row; the number starts at column 19 and the
-        // title starts after the fixed-width number column.
-        let number_cols = 19..22;
-        let padding_cols = 22..25;
-        let title_col = 25;
+        // The number and title positions follow the shared column widths.
+        let number_start = TASK_NUMBER_COLUMN_START as u16;
+        let title_col = WAITING_QUESTION_INDENT as u16;
+        let number_end = number_start + "#42".width() as u16;
+        let number_cols = number_start..number_end;
+        let padding_cols = number_end..title_col;
 
         for x in number_cols {
             assert_eq!(buffer[(x, 2)].fg, Color::Indexed(97), "column {x}");
@@ -1067,14 +1070,14 @@ mod tests {
     // `a` sits one generation past `MAX_KIN_DISTANCE` and must render
     // uncolored, same as the cursor row `e` itself. Rows: chrome(y0),
     // section header(y1), a(y2) b(y3) c(y4) d(y5) e(y6), in input order.
-    #[case::beyond_cap_ancestor_a(2, 25, Color::Reset)]
-    #[case::great_grandparent_b(3, 35, Color::Indexed(146))]
-    #[case::grandparent_c(4, 35, Color::Indexed(111))]
-    #[case::parent_d(5, 35, Color::Indexed(39))]
-    #[case::cursor_row_e(6, 35, Color::Reset)]
+    #[case::beyond_cap_ancestor_a(2, false, Color::Reset)]
+    #[case::great_grandparent_b(3, true, Color::Indexed(146))]
+    #[case::grandparent_c(4, true, Color::Indexed(111))]
+    #[case::parent_d(5, true, Color::Indexed(39))]
+    #[case::cursor_row_e(6, true, Color::Reset)]
     fn test_render_kin_highlight_ancestor_ramp_and_cap(
         #[case] row_y: u16,
-        #[case] col_x: u16,
+        #[case] has_breadcrumb: bool,
         #[case] expected_fg: Color,
     ) {
         let now = Utc::now();
@@ -1101,8 +1104,14 @@ mod tests {
         let sessions = vec![a, b, c, d, e];
         // list_state index: header=0, a=1, b=2, c=3, d=4, e=5 -- select "e".
         let buffer = render_buffer(&sessions, Some(5), now, 80, 12);
+        let breadcrumb_width = if has_breadcrumb {
+            "project › ".width()
+        } else {
+            0
+        };
+        let title_column = WAITING_QUESTION_INDENT + breadcrumb_width;
 
-        assert_eq!(buffer[(col_x, row_y)].fg, expected_fg);
+        assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
 
     #[rstest]
@@ -1113,13 +1122,12 @@ mod tests {
     // uncolored, same as the cursor row itself. Rows: chrome(y0),
     // header(y1), root(y2) gp_a(y3) gp_b(y4) parent_a(y5) parent_a2(y6)
     // selected(y7) sibling(y8) cousin(y9), in input order.
-    #[case::beyond_cap_great_uncle(4, 35, Color::Reset)]
-    #[case::cursor_row_selected(7, 35, Color::Reset)]
-    #[case::sibling(8, 35, Color::Indexed(129))]
-    #[case::cousin(9, 35, Color::Indexed(135))]
+    #[case::beyond_cap_great_uncle(4, Color::Reset)]
+    #[case::cursor_row_selected(7, Color::Reset)]
+    #[case::sibling(8, Color::Indexed(129))]
+    #[case::cousin(9, Color::Indexed(135))]
     fn test_render_kin_highlight_collateral_ramp_and_cap(
         #[case] row_y: u16,
-        #[case] col_x: u16,
         #[case] expected_fg: Color,
     ) {
         let now = Utc::now();
@@ -1165,8 +1173,9 @@ mod tests {
         // list_state index: header=0, root=1, gp_a=2, gp_b=3, parent_a=4,
         // parent_a2=5, selected=6, sibling=7, cousin=8 -- select "selected".
         let buffer = render_buffer(&sessions, Some(6), now, 80, 20);
+        let title_column = WAITING_QUESTION_INDENT + "project › ".width();
 
-        assert_eq!(buffer[(col_x, row_y)].fg, expected_fg);
+        assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
 
     #[test]
@@ -1187,10 +1196,10 @@ mod tests {
             app.confirmed_query = "project".to_string();
         });
 
-        // child's own title (after its "project › " breadcrumb) starts at
-        // column 35, row 4. It's a direct descendant of the cursor (pink
-        // kin color), but the query "project" matches it too, and search
-        // hits must win over kin coloring.
-        assert_eq!(buffer[(35, 4)].fg, Color::Yellow);
+        // The child's own title starts after its breadcrumb in row 4. The
+        // child is a direct descendant of the cursor, but the query "project"
+        // matches it too, and search hits must win over kin coloring.
+        let title_column = WAITING_QUESTION_INDENT + "project › ".width();
+        assert_eq!(buffer[(title_column as u16, 4)].fg, Color::Yellow);
     }
 }
