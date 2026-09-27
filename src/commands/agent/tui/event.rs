@@ -58,11 +58,10 @@ pub enum AppEvent {
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
-    /// tq session-task fetch completed (mapping each displayed session to
-    /// the tq task it's linked to, for the title-prefix). `Ok(HashMap::new())`
-    /// (tq not configured or nothing linked) and `Err` (tq unreachable) both
-    /// leave every row's title-prefix empty.
-    TqSessionTasksFetched(std::result::Result<HashMap<String, SessionTask>, String>),
+    /// tq session-task fetch completed. `Ok(None)` means the fetch was
+    /// skipped because tq is unavailable or there are no local sessions, so
+    /// cached task links should remain in use.
+    TqSessionTasksFetched(std::result::Result<Option<HashMap<String, SessionTask>>, String>),
     /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
     /// is opened in the browser; `Err` (tq missing/unreachable) is logged
     /// and otherwise ignored -- the same silent degrade as every other tq
