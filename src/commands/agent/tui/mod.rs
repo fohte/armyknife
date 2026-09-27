@@ -10,8 +10,8 @@ mod title_generate;
 mod tq_cache;
 mod tq_fetch;
 mod ui;
+mod worktree;
 mod worktree_session_children;
-mod worktree_view;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -28,7 +28,6 @@ use ratatui::DefaultTerminal;
 
 use self::app::{App, AppMode, View};
 use self::event::{AppEvent, EventHandler, KeyEvent, SessionChange, SessionChangeType};
-use self::worktree_view::WorktreeMode;
 use crate::commands::agent::resume;
 use crate::commands::agent::types::SessionStatus;
 use crate::infra::tmux;
@@ -296,10 +295,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             sessions_changed = true;
         }
         if sessions_changed {
-            // Keep the worktree overlay (session count + active marker) in
-            // sync without re-running git discovery.
-            let snapshot = app.sessions.clone();
-            app.worktree_view.refresh_session_overlay(&snapshot);
+            app.refresh_worktree_session_counts();
         }
         // A new session may already be tq-linked; refresh its prefix along
         // with periodic refreshes, coalescing requests while one is running.
@@ -642,19 +638,11 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
     match app.view {
         View::Session => handle_session_view_key_event(app, key),
-        View::Worktree => handle_worktree_view_key_event(app, key),
         View::Clean => handle_clean_view_key_event(app, key),
     }
 }
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
-    // Tab cycles views from any non-text-input session sub-mode.
-    if app.mode == AppMode::Normal
-        && let (KeyCode::Tab, _) = (key.code, key.modifiers)
-    {
-        app.cycle_view();
-        return KeyEffects::default();
-    }
     // `c` from Normal mode enters the clean view from the session list.
     if app.mode == AppMode::Normal
         && let (KeyCode::Char('c'), KeyModifiers::NONE) = (key.code, key.modifiers)
@@ -717,71 +705,18 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     }
 }
 
-fn handle_worktree_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
-    // Sub-mode dispatcher: confirmations have their own keys.
-    if let WorktreeMode::Confirm { .. } = app.worktree_view.mode {
-        match key.code {
-            KeyCode::Char('y') => {
-                if let Err(e) = app.worktree_view_confirm_delete() {
-                    app.set_error(format!("Failed to delete worktree: {e}"));
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Esc => {
-                app.worktree_view_cancel_confirm();
-            }
-            _ => {}
-        }
-        return KeyEffects::default();
-    }
-
-    app.clear_error();
-    match (key.code, key.modifiers) {
-        (KeyCode::Tab, _) => app.cycle_view(),
-        (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
-        (KeyCode::Esc, _) => app.quit(),
-        (KeyCode::Char('c'), KeyModifiers::NONE) => {
-            let seeded = app.enter_clean_view();
-            return KeyEffects {
-                request_clean_pr_fetch: seeded,
-                ..Default::default()
-            };
-        }
-        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
-            app.worktree_view.select_next();
-        }
-        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
-            app.worktree_view.select_previous();
-        }
-        (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
-            focus_selected_worktree_session(app);
-        }
-        (KeyCode::Char('d'), KeyModifiers::NONE) => {
-            app.worktree_view_request_delete();
-        }
-        (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
-            if let Some(num) = c.to_digit(10) {
-                app.worktree_view.select_by_number(num as usize);
-            }
-        }
-        (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
-        _ => {}
-    }
-    KeyEffects::default()
-}
-
-/// Handles key events in the clean view (modal-style; Tab is a no-op).
+/// Handles key events in the clean view.
 fn handle_clean_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     app.clear_error();
     match (key.code, key.modifiers) {
-        // Cancel: return to the previous view without acting.
+        // Cancel: return to the session list without acting.
         (KeyCode::Esc, _)
         | (KeyCode::Char('n'), KeyModifiers::NONE)
         | (KeyCode::Char('q'), KeyModifiers::NONE) => {
             app.exit_clean_view();
         }
         // Confirm: spawn detached child with all To-delete paths and
-        // return to the previous view so progress can show in the
-        // bottom bar of session / worktree view.
+        // return to the session list so progress can show in its bottom bar.
         (KeyCode::Char('y'), KeyModifiers::NONE) => {
             let paths = app.clean_view.to_delete_paths();
             if paths.is_empty() {
@@ -811,29 +746,6 @@ fn handle_clean_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         _ => {}
     }
     KeyEffects::default()
-}
-
-fn focus_selected_worktree_session(app: &mut App) {
-    if let Some(child) = app.worktree_view.selected_session_child() {
-        focus_session_child(app, &child);
-        return;
-    }
-    let pane_id = match app.worktree_view_focus_session() {
-        Some(s) => match s.tmux_info.as_ref() {
-            Some(t) => t.pane_id.clone(),
-            None => {
-                app.set_error("No tmux pane for this session".to_string());
-                return;
-            }
-        },
-        None => {
-            app.set_error("No sessions in this worktree to focus".to_string());
-            return;
-        }
-    };
-    if let Err(e) = tmux::focus_pane(&pane_id) {
-        app.set_error(format!("Failed to focus tmux pane: {e}"));
-    }
 }
 
 fn focus_session_child(app: &mut App, child: &self::worktree_session_children::SessionChild) {
@@ -913,15 +825,9 @@ mod tests {
         assert!(app.should_quit);
     }
 
-    // All 3 sessions default to `Running`, so row 0 is the "RUNNING (3)"
-    // header and rows 1-3 are the sessions; raw indices are shifted by +1
-    // relative to a header-less list.
-    #[rstest]
-    #[case::session_view(View::Session)]
-    #[case::worktree_view(View::Worktree)]
-    fn test_handle_key_toggle_help(#[case] view: View) {
+    #[test]
+    fn test_handle_key_toggle_help() {
         let mut app = create_test_app_with_sessions(1);
-        app.view = view;
         assert!(!app.show_help);
         handle_key_event(&mut app, key(KeyCode::Char('?')));
         assert!(app.show_help);
@@ -1788,17 +1694,13 @@ mod tests {
     }
 
     fn seed_one_worktree(app: &mut App) {
-        app.set_worktrees(vec![
-            crate::commands::agent::tui::worktree_view::WorktreeRow {
-                repo: "r1".to_string(),
-                branch: "feat-a".to_string(),
-                name: "feat-a".to_string(),
-                path: PathBuf::from("/tmp/r1/feat-a"),
-                session_count: 0,
-                has_active: false,
-                sessions: Vec::new(),
-            },
-        ]);
+        app.set_worktrees(vec![crate::commands::agent::tui::worktree::WorktreeRow {
+            repo: "r1".to_string(),
+            branch: "feat-a".to_string(),
+            name: "feat-a".to_string(),
+            path: PathBuf::from("/tmp/r1/feat-a"),
+            session_count: 0,
+        }]);
     }
 
     #[test]
@@ -1807,17 +1709,6 @@ mod tests {
         seed_one_worktree(&mut app);
         let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
         assert_eq!(app.view, View::Clean);
-        assert!(effects.request_clean_pr_fetch);
-    }
-
-    #[test]
-    fn pressing_c_from_worktree_view_enters_clean() {
-        let mut app = create_test_app_with_sessions(0);
-        seed_one_worktree(&mut app);
-        app.view = View::Worktree;
-        let effects = handle_key_event(&mut app, key(KeyCode::Char('c')));
-        assert_eq!(app.view, View::Clean);
-        assert_eq!(app.clean_return_view, View::Worktree);
         assert!(effects.request_clean_pr_fetch);
     }
 
@@ -1869,13 +1760,12 @@ mod tests {
     #[case::esc(KeyCode::Esc)]
     #[case::n(KeyCode::Char('n'))]
     #[case::q(KeyCode::Char('q'))]
-    fn clean_view_cancel_returns_to_previous_view(#[case] code: KeyCode) {
+    fn clean_view_cancel_returns_to_session_view(#[case] code: KeyCode) {
         let mut app = create_test_app_with_sessions(0);
-        app.view = View::Worktree;
         handle_key_event(&mut app, key(KeyCode::Char('c')));
         assert_eq!(app.view, View::Clean);
         handle_key_event(&mut app, key(code));
-        assert_eq!(app.view, View::Worktree);
+        assert_eq!(app.view, View::Session);
     }
 
     #[test]
@@ -1907,7 +1797,7 @@ mod tests {
             "/tmp/a",
         )]);
         let effects = handle_key_event(&mut app, key(KeyCode::Char('y')));
-        assert_eq!(app.view, View::Session); // returned to caller view
+        assert_eq!(app.view, View::Session); // returned to the session list
         assert_eq!(
             effects.spawn_detached_clean,
             Some(vec![PathBuf::from("/tmp/a")])

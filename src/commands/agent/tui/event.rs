@@ -13,7 +13,7 @@ use std::time::Duration;
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
 use super::session_rows::SessionTask;
-use super::worktree_view::WorktreeRow;
+use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
 use crate::infra::tq::TqClient;
 use std::collections::{HashMap, HashSet};
@@ -50,7 +50,7 @@ pub enum AppEvent {
     /// Tick for periodic updates.
     Tick,
     /// Background worktree discovery finished.
-    WorktreesLoaded(std::result::Result<Vec<super::worktree_view::WorktreeRow>, String>),
+    WorktreesLoaded(std::result::Result<Vec<super::worktree::WorktreeRow>, String>),
     /// Background session-label (repo name + worktree name) resolution
     /// finished for one batch of cwds.
     SessionLabelsResolved(Vec<(PathBuf, String, String)>),
@@ -295,11 +295,11 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
     use crate::shared::config::load_config;
     use crate::shared::repos_root::resolve_repos_root;
 
-    let result = (|| -> std::result::Result<Vec<super::worktree_view::WorktreeRow>, String> {
+    let result = (|| -> std::result::Result<Vec<super::worktree::WorktreeRow>, String> {
         let config = load_config().map_err(|e| e.to_string())?;
         let repos_root =
             resolve_repos_root(config.wm.repos_root.as_deref()).map_err(|e| e.to_string())?;
-        Ok(super::worktree_view::discover_worktree_rows(
+        Ok(super::worktree::discover_worktree_rows(
             &repos_root,
             &config.wm.worktrees_dir,
         ))

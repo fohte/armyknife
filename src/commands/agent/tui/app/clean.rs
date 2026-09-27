@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::super::clean_progress::CleanLogEvent;
-use super::super::worktree_view::WorktreeRow;
+use super::super::worktree::{WorktreeDiscoveryState, WorktreeRow};
 use super::{App, View};
 
 impl App {
@@ -9,16 +9,13 @@ impl App {
     /// driving the clean view's PR fetch. Returns an empty vec while the
     /// discovery is still loading or failed.
     pub fn worktree_rows_snapshot(&self) -> Vec<WorktreeRow> {
-        match &self.worktree_view.state {
-            super::super::worktree_view::WorktreeLoadState::Loaded(rows) => rows.clone(),
+        match &self.worktree_discovery {
+            WorktreeDiscoveryState::Loaded(rows) => rows.clone(),
             _ => Vec::new(),
         }
     }
 
-    /// Switch into the clean view. Records the current view so the user
-    /// can return via Esc/n/q, then seeds the row list synchronously
-    /// from the worktree snapshot so the user sees rows immediately
-    /// while the async PR fetch runs.
+    /// Switch into the clean view and seed its rows while the async PR fetch runs.
     ///
     /// Returns true when the worktree snapshot was non-empty and the
     /// caller should kick off the PR fetch. If false, the clean view
@@ -28,7 +25,6 @@ impl App {
         if self.view == View::Clean {
             return false;
         }
-        self.clean_return_view = self.view;
         self.view = View::Clean;
         self.clean_view.reset();
         self.seed_clean_view_if_pending()
@@ -46,13 +42,16 @@ impl App {
         {
             return false;
         }
+        if let WorktreeDiscoveryState::Failed(error) = &self.worktree_discovery {
+            self.clean_view.set_worktree_discovery_failed(error.clone());
+            return false;
+        }
+
         // Distinguish "discovery still running" from "discovery done
         // with zero worktrees" — the latter must transition out of
         // LoadingPr so the empty-list placeholder renders instead of a
         // permanent "Loading worktrees..." banner.
-        let super::super::worktree_view::WorktreeLoadState::Loaded(rows) =
-            &self.worktree_view.state
-        else {
+        let WorktreeDiscoveryState::Loaded(rows) = &self.worktree_discovery else {
             return false;
         };
         if rows.is_empty() {
@@ -66,10 +65,9 @@ impl App {
         true
     }
 
-    /// Leave the clean view without acting on the partition; returns
-    /// to whichever view the user came from.
+    /// Leave the clean view without acting on the partition.
     pub fn exit_clean_view(&mut self) {
-        self.view = self.clean_return_view;
+        self.view = View::Session;
     }
 
     /// Install fully PR-enriched rows directly. Used by tests; the
@@ -127,9 +125,7 @@ impl App {
         // without a fresh discovery pass.
         let deleted: Vec<PathBuf> = progress.deleted_paths.iter().map(PathBuf::from).collect();
         if !deleted.is_empty() {
-            if let super::super::worktree_view::WorktreeLoadState::Loaded(rows) =
-                &mut self.worktree_view.state
-            {
+            if let WorktreeDiscoveryState::Loaded(rows) = &mut self.worktree_discovery {
                 rows.retain(|r| !deleted.iter().any(|d| d == &r.path));
             }
             self.clean_view.remove_paths(&deleted);

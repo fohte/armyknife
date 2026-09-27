@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::session_rows::SessionTask;
-use super::worktree_view::WorktreeView;
+use super::worktree::WorktreeDiscoveryState;
 
 mod clean;
 mod delete;
@@ -23,24 +23,12 @@ mod worktree;
 use reload::{build_title_cache, get_title_display_name, load_sessions};
 pub(super) use worktree::resolve_labels_for_cwds;
 
-/// Top-level view selection. Tab cycles between Session and Worktree
-/// only; `Clean` is reached via `c` and exited via Esc/n/q.
+/// Top-level view selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     #[default]
     Session,
-    Worktree,
     Clean,
-}
-
-impl View {
-    pub fn next(self) -> Self {
-        match self {
-            View::Session => View::Worktree,
-            View::Worktree => View::Session,
-            View::Clean => View::Clean,
-        }
-    }
 }
 
 /// Application mode.
@@ -120,10 +108,8 @@ pub struct App {
     pub view: View,
     /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
     pub show_help: bool,
-    /// View to return to when the user exits the clean view (Esc/n/q).
-    pub clean_return_view: View,
-    /// Worktree-view state (background-loaded list, sub-mode, selection).
-    pub worktree_view: WorktreeView,
+    /// Worktree discovery shared by Clean view and its background PR fetch.
+    pub worktree_discovery: WorktreeDiscoveryState,
     /// Clean-view state (sections, selection, PR-fetch progress).
     pub clean_view: CleanView,
     /// In-flight detached clean progress. `Some` from the moment the
@@ -194,8 +180,7 @@ impl App {
             pending_label_cwds: HashSet::new(),
             view: View::Session,
             show_help: false,
-            clean_return_view: View::Session,
-            worktree_view: WorktreeView::new(),
+            worktree_discovery: WorktreeDiscoveryState::default(),
             clean_view: CleanView::new(),
             clean_progress: None,
             task_by_session: HashMap::new(),
