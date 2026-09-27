@@ -602,7 +602,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                         just now
+            >● project               project                                        just now
 
 
 
@@ -759,7 +759,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >◎ project               project                                         just now
+            >◎ project               project                                        just now
 
 
 
@@ -788,7 +788,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project                                         just now
+            >◐ project               project                                        just now
                                      “Which approach do you prefer?”
 
 
@@ -816,7 +816,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project                                         just now
+            >◐ project               project                                        just now
                                      “”
 
 
@@ -860,9 +860,9 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
              ── RUNNING (3) ────────────────────────────────────────────────────────────────
-            >● project               project ▸2                                      just now
-             ● project               project › project                               just now
-             ● project               project › project                               just now
+            >● project               project ▸2                                     just now
+             ● project               project › project                              just now
+             ● project               project › project                              just now
 
 
 
@@ -892,11 +892,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project › project                                     2m
+            >◐ project               project › project                                    2m
                                      “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project               project ▸1                                      just now
+             ● project               project ▸1                                     just now
 
 
 
@@ -941,11 +941,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                         just now
+             ◐ project               project                                        just now
                                      “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                         just now
+            >● project               project                                        just now
 
 
 
@@ -984,17 +984,17 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 2 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                         just now
+             ◐ project               project                                        just now
                                      “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project               project                                         just now
+             ● project               project                                        just now
 
              ── UNREAD (1) ─────────────────────────────────────────────────────────────────
-             ✱ project               project                                         just now
+             ✱ project               project                                        just now
 
              ── PAUSED (1) ─────────────────────────────────────────────────────────────────
-            >⏸ project               project                                         just now
+            >⏸ project               project                                        just now
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
@@ -1017,11 +1017,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                         just now
+             ◐ project               project                                        just now
                                      “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                         just now
+            >● project               project                                        just now
 
 
 
@@ -1046,8 +1046,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 0 running · 2 idle
             ── PAUSED (2) ─────────────────────────────────────────────────────────────────
-            ⏸ project               project                                         just now
-            ⏸ project               project                                         just now
+            ⏸ project               project                                        just now
+            ⏸ project               project                                        just now
 
 
 
@@ -1067,11 +1067,11 @@ mod tests {
     // `a` sits one generation past `MAX_KIN_DISTANCE` and must render
     // uncolored, same as the cursor row `e` itself. Rows: chrome(y0),
     // section header(y1), a(y2) b(y3) c(y4) d(y5) e(y6), in input order.
-    #[case::beyond_cap_ancestor_a(2, 24, Color::Reset)]
-    #[case::great_grandparent_b(3, 34, Color::Indexed(146))]
-    #[case::grandparent_c(4, 34, Color::Indexed(111))]
-    #[case::parent_d(5, 34, Color::Indexed(39))]
-    #[case::cursor_row_e(6, 34, Color::Reset)]
+    #[case::beyond_cap_ancestor_a(2, 25, Color::Reset)]
+    #[case::great_grandparent_b(3, 35, Color::Indexed(146))]
+    #[case::grandparent_c(4, 35, Color::Indexed(111))]
+    #[case::parent_d(5, 35, Color::Indexed(39))]
+    #[case::cursor_row_e(6, 35, Color::Reset)]
     fn test_render_kin_highlight_ancestor_ramp_and_cap(
         #[case] row_y: u16,
         #[case] col_x: u16,
@@ -1113,10 +1113,10 @@ mod tests {
     // uncolored, same as the cursor row itself. Rows: chrome(y0),
     // header(y1), root(y2) gp_a(y3) gp_b(y4) parent_a(y5) parent_a2(y6)
     // selected(y7) sibling(y8) cousin(y9), in input order.
-    #[case::beyond_cap_great_uncle(4, 34, Color::Reset)]
-    #[case::cursor_row_selected(7, 34, Color::Reset)]
-    #[case::sibling(8, 34, Color::Indexed(129))]
-    #[case::cousin(9, 34, Color::Indexed(135))]
+    #[case::beyond_cap_great_uncle(4, 35, Color::Reset)]
+    #[case::cursor_row_selected(7, 35, Color::Reset)]
+    #[case::sibling(8, 35, Color::Indexed(129))]
+    #[case::cousin(9, 35, Color::Indexed(135))]
     fn test_render_kin_highlight_collateral_ramp_and_cap(
         #[case] row_y: u16,
         #[case] col_x: u16,
@@ -1188,9 +1188,9 @@ mod tests {
         });
 
         // child's own title (after its "project › " breadcrumb) starts at
-        // column 34, row 4. It's a direct descendant of the cursor (pink
+        // column 35, row 4. It's a direct descendant of the cursor (pink
         // kin color), but the query "project" matches it too, and search
         // hits must win over kin coloring.
-        assert_eq!(buffer[(34, 4)].fg, Color::Yellow);
+        assert_eq!(buffer[(35, 4)].fg, Color::Yellow);
     }
 }
