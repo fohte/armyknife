@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.339](https://github.com/fohte/armyknife/compare/v0.1.338...v0.1.339) (2026-09-27)
+
+
+### Features
+
+* **agent:** support separate screens for the tq sidebar and session list on narrow terminals ([#998](https://github.com/fohte/armyknife/issues/998)) ([5fc5359](https://github.com/fohte/armyknife/commit/5fc53596f095c7c153902d619c932c18eb8beeb7))
+* **agent:** use fixed-width task number column in session list to prevent layout shift ([#997](https://github.com/fohte/armyknife/issues/997)) ([cf00310](https://github.com/fohte/armyknife/commit/cf00310a18f2488919ad72dbe63e0795e0fd5932))
+
 ## [0.1.338](https://github.com/fohte/armyknife/compare/v0.1.337...v0.1.338) (2026-09-27)
 
 
