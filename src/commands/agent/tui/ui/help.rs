@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::commands::agent::tui::app::{App, AppMode, View};
+use crate::commands::agent::tui::app::{App, AppMode, NarrowScreen, View};
 
 pub(super) fn render_help_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
     let help = Paragraph::new(Text::from(lines)).style(Style::default().fg(Color::DarkGray));
@@ -56,6 +56,10 @@ fn build_compact_help_line(bold: Style, hints: &[(&str, &str)]) -> Vec<Line<'sta
 }
 
 fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
+    if app.mode == AppMode::Normal && app.narrow_layout {
+        return build_narrow_session_help_lines(app, bold);
+    }
+
     if app.mode == AppMode::Normal && app.sidebar_focused {
         if app.show_help {
             return vec![
@@ -245,6 +249,94 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             ],
         ),
         AppMode::Normal => build_compact_help_line(bold, &[("/", "search"), ("q", "quit")]),
+    }
+}
+
+fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
+    match app.narrow_screen {
+        NarrowScreen::Sidebar if app.show_help => vec![
+            Line::from(vec![
+                Span::styled("  j/k", bold),
+                Span::raw(": move  "),
+                Span::styled("Enter", bold),
+                Span::raw(": select  "),
+                Span::styled("h/←", bold),
+                Span::raw(": parent / collapse"),
+            ]),
+            Line::from(vec![
+                Span::styled("  l/→", bold),
+                Span::raw(": expand  "),
+                Span::styled("r", bold),
+                Span::raw(": refresh  "),
+                Span::styled("Esc", bold),
+                Span::raw(": clear filter  "),
+                Span::styled("q", bold),
+                Span::raw(": quit"),
+            ]),
+        ],
+        NarrowScreen::Sidebar => build_compact_help_line(
+            bold,
+            &[
+                ("j/k", "move"),
+                ("h/l", "tree"),
+                ("Enter", "select"),
+                ("r", "refresh"),
+            ],
+        ),
+        NarrowScreen::SessionList if app.show_help => {
+            let escape_label = if app.has_non_sidebar_filter() {
+                "clear filters"
+            } else {
+                "tasks"
+            };
+            vec![
+                Line::from(vec![
+                    Span::styled("  j/k", bold),
+                    Span::raw(": move  "),
+                    Span::styled("f", bold),
+                    Span::raw(": focus  "),
+                    Span::styled("r", bold),
+                    Span::raw(": resume  "),
+                    Span::styled("p", bold),
+                    Span::raw(": preview  "),
+                    Span::styled("t", bold),
+                    Span::raw(": open task"),
+                ]),
+                Line::from(vec![
+                    Span::styled("  d", bold),
+                    Span::raw(": delete  "),
+                    Span::styled("1-9", bold),
+                    Span::raw(": quick select  "),
+                    Span::styled("/", bold),
+                    Span::raw(": search  "),
+                    Span::styled("h/←", bold),
+                    Span::raw(": parent  "),
+                    Span::styled("→/l", bold),
+                    Span::raw(": drill down"),
+                ]),
+                Line::from(vec![
+                    Span::styled("  C-r/w/s/p", bold),
+                    Span::raw(": filter  "),
+                    Span::styled("o", bold),
+                    Span::raw(": open crit  "),
+                    Span::styled("Esc", bold),
+                    Span::raw(format!(": {escape_label}  ")),
+                    Span::styled("q", bold),
+                    Span::raw(": quit"),
+                ]),
+            ]
+        }
+        NarrowScreen::SessionList => {
+            let escape_label = if app.has_non_sidebar_filter() {
+                "clear filter"
+            } else {
+                "tasks"
+            };
+            build_compact_help_line(
+                bold,
+                &[("/", "search"), ("Esc", escape_label), ("q", "quit")],
+            )
+        }
     }
 }
 

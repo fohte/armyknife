@@ -13,16 +13,33 @@ use super::{App, AppMode};
 impl App {
     /// Returns whether a filter is currently active.
     pub fn has_filter(&self) -> bool {
+        self.has_non_sidebar_filter() || self.sidebar_selection != SidebarSelection::All
+    }
+
+    pub fn has_non_sidebar_filter(&self) -> bool {
         !self.confirmed_query.is_empty()
             || self.status_filter.is_some()
             || self.drilldown_scope.is_some()
-            || self.sidebar_selection != SidebarSelection::All
+    }
+
+    /// Clears session-list filters while keeping the selected tq scope.
+    pub fn clear_non_sidebar_filters(&mut self) {
+        let old_position = self.list_state.selected();
+        let old_session_id = self
+            .selected_session()
+            .map(|session| session.session_id.clone());
+        self.search_query.clear();
+        self.confirmed_query.clear();
+        self.status_filter = None;
+        self.drilldown_scope = None;
+        self.apply_filter();
+        self.restore_selection(old_position, old_session_id.as_deref());
     }
 
     /// Enters search mode.
     /// Lazily builds the searchable text cache on first use.
     pub fn enter_search_mode(&mut self) {
-        self.sidebar_focused = false;
+        self.show_narrow_session_list_screen();
         // Build searchable text cache on first search
         if self.searchable_text_cache.is_none() {
             self.searchable_text_cache = Some(build_searchable_text_cache(&self.sessions));
