@@ -10,6 +10,7 @@ mod clean_detached;
 mod codex;
 mod codex_queue;
 pub(crate) mod codex_steer;
+mod crit;
 mod delete_tq_session_detached;
 mod error;
 mod focus;
@@ -41,6 +42,7 @@ pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
 pub use clean_detached::CleanDetachedArgs;
 pub use codex::CodexArgs;
+pub use crit::CritCommands;
 pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
@@ -64,6 +66,10 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Associate crit reviews with agent sessions and open them in tmux popups
+    #[command(subcommand)]
+    Crit(CritCommands),
 
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
@@ -144,6 +150,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
             Self::List(args) => list::run(args)?,

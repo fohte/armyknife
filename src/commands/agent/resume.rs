@@ -477,6 +477,7 @@ mod tests {
             let now = Utc::now();
             Session {
                 session_id: "resume-target".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,
                 tty: None,
@@ -686,6 +687,7 @@ mod tests {
         fn session(status: SessionStatus, tmux_info: Option<TmuxInfo>) -> Session {
             Session {
                 session_id: "guard-test".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,
                 tty: None,

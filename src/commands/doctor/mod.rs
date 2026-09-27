@@ -208,6 +208,8 @@ mod tests {
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
+            ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
+            ExternalTool::Open, ExternalTool::XdgOpen,
         ],
     )]
     #[case::ghostty_terminal(
@@ -221,6 +223,8 @@ mod tests {
             ExternalTool::Nvim, ExternalTool::Ghostty, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
+            ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
+            ExternalTool::Open, ExternalTool::XdgOpen,
         ],
     )]
     #[case::custom_editor(
@@ -234,6 +238,8 @@ mod tests {
             ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
+            ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
+            ExternalTool::Open, ExternalTool::XdgOpen,
         ],
     )]
     #[case::notifications_disabled(
@@ -247,6 +253,8 @@ mod tests {
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode,
             ExternalTool::Tq, ExternalTool::Lsof,
+            ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
+            ExternalTool::Open, ExternalTool::XdgOpen,
         ],
     )]
     fn selected_tools_cases(#[case] config: Config, #[case] expected: &[ExternalTool]) {

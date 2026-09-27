@@ -370,13 +370,21 @@ fn build_title_spans(
     task_prefix: Option<TaskPrefixSpan>,
 ) -> Vec<Span<'static>> {
     let dim_style = Style::default().fg(DIM_FG);
-    let badge = descendant_badge_text(entry.descendant_count);
-    let badge = if badge.width() < title_width {
-        badge
+    let descendant_badge = descendant_badge_text(entry.descendant_count);
+    let crit_badge = if entry.session.crit_urls.is_empty() {
+        String::new()
+    } else {
+        " [crit]".to_string()
+    };
+    let show_descendant_badge =
+        !descendant_badge.is_empty() && descendant_badge.width() + crit_badge.width() < title_width;
+    let descendant_badge = if show_descendant_badge {
+        descendant_badge
     } else {
         String::new()
     };
-    let content_width = title_width - badge.width();
+    let badge_width = descendant_badge.width() + crit_badge.width();
+    let content_width = title_width.saturating_sub(badge_width);
 
     let (mut spans, content_width_used) = build_breadcrumb_title_spans(
         entry,
@@ -389,9 +397,16 @@ fn build_title_spans(
     );
 
     let mut used_width = content_width_used;
-    if !badge.is_empty() {
-        used_width += badge.width();
-        spans.push(Span::styled(badge, dim_style));
+    if !descendant_badge.is_empty() {
+        used_width += descendant_badge.width();
+        spans.push(Span::styled(descendant_badge, dim_style));
+    }
+    if !crit_badge.is_empty() {
+        used_width += crit_badge.width();
+        spans.push(Span::styled(
+            crit_badge,
+            Style::default().fg(Color::Indexed(98)),
+        ));
     }
     if used_width < title_width {
         spans.push(Span::raw(" ".repeat(title_width - used_width)));

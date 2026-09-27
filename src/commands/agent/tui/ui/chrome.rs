@@ -262,6 +262,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 Span::raw(": focus  "),
                 Span::styled("r", bold),
                 Span::raw(": resume  "),
+                Span::styled("o", bold),
+                Span::raw(": open crit  "),
                 Span::styled("d", bold),
                 Span::raw(": delete  "),
                 Span::styled("/", bold),
@@ -308,6 +310,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  C-r/w/s/p", bold),
                 Span::raw(": filter  "),
+                Span::styled("o", bold),
+                Span::raw(": open crit  "),
                 Span::styled("q", bold),
                 Span::raw(": quit"),
             ]),
@@ -490,7 +494,7 @@ mod tests {
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
-        "  C-r/w/s/p: filter  q: quit".to_string(),
+        "  C-r/w/s/p: filter  o: open crit  q: quit".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,

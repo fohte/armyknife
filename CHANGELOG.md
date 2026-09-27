@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.335](https://github.com/fohte/armyknife/compare/v0.1.334...v0.1.335) (2026-09-27)
+
+
+### Features
+
+* **agent:** support opening crit reviews in tmux linked to sessions ([#988](https://github.com/fohte/armyknife/issues/988)) ([99d66ea](https://github.com/fohte/armyknife/commit/99d66eafc8b30e8d8ab5082f9b88ed8641e6c395))
+
 ## [0.1.334](https://github.com/fohte/armyknife/compare/v0.1.333...v0.1.334) (2026-09-27)
 
 
