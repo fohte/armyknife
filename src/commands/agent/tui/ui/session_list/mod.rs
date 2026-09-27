@@ -631,7 +631,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -673,7 +673,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -790,7 +790,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
 
@@ -820,7 +820,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -848,7 +848,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -892,7 +892,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -926,7 +926,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -975,7 +975,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1022,7 +1022,7 @@ mod tests {
             >⏸ project         project                                              just now
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1051,7 +1051,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1078,7 +1078,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   q: quit"};
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
     }

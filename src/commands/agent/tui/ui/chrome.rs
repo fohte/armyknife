@@ -283,12 +283,13 @@ mod tests {
 
     #[rstest]
     #[case::session_view_default(View::Session, false, vec![
-        " ?: keys   /: search   q: quit".to_string(),
+        " ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit".to_string(),
     ])]
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
         "  C-r/w/s/p: filter  o: open crit  q: quit".to_string(),
+        "  Tab: focus  C-b: toggle sidebar".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,
