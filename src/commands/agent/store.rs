@@ -41,6 +41,13 @@ pub fn sessions_dir() -> Result<PathBuf> {
         .ok_or_else(|| CcError::CacheDirNotFound.into())
 }
 
+/// Returns the directory for crit lifecycle markers.
+pub fn crit_dir() -> Result<PathBuf> {
+    cache::base_dir()
+        .map(|d| d.join("cc").join("crit"))
+        .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
 /// Returns the file path for storing the last selected session ID.
 /// Path: ~/.cache/armyknife/cc/last_selected_session
 pub fn last_selected_session_file() -> Result<PathBuf> {

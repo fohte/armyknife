@@ -364,7 +364,18 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
-`a agent crit add <url>` stores the URL for the calling tracked session, sends a desktop notification, and removes the association when the crit daemon exits. `a agent crit open` opens the latest review in a tmux popup. When no tracked session ID is available, `add` opens the URL in the default browser. Opening a review in a popup requires `crit` and a tmux environment with persistent terminal-browser support.
+[`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. The command associates each URL with the calling tracked session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, the association and notification still work, but automatic cleanup is unavailable. If no tracked session ID is available, macOS opens the URL with `open` and other platforms use `xdg-open`.
+
+`a agent crit open` opens the latest associated review in a tmux popup. It requires `shpool` and `terminal-browser` on `PATH`. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and open the latest review. `crit add` mirrors the latest URL to the pane option `@crit` and re-runs the `window-layout-changed` hook, allowing tmux configuration to show a review border:
+
+```sh
+a agent crit add http://127.0.0.1:12345/review
+a agent watch
+```
+
+```tmux
+set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
+```
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active, `a agent list`, `a agent watch`, and tmux window status show `◎ background`; Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a wm clean` also preserves its worktree unless `--force` is set.
 

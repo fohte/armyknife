@@ -129,6 +129,24 @@ Stop hook (parent process):
 | `agent.composer.draft_protected` | An unsent composer draft keeps the session active           |
 | `agent.composer.unrecognized`    | The composer could not be parsed; timeout uses `updated_at` |
 
+### `agent crit`
+
+| event                                         | meaning                                                 |
+| --------------------------------------------- | ------------------------------------------------------- |
+| `agent.crit.add.registered`                   | A review URL was associated with a session              |
+| `agent.crit.add.pane_sync_failed`             | The `@crit` pane option or layout hook could not update |
+| `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started              |
+| `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                |
+| `agent.crit.monitor.start`                    | The detached monitor began watching a daemon            |
+| `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port             |
+| `agent.crit.monitor.replacement_check_failed` | The monitor could not check for a replacement daemon    |
+| `agent.crit.monitor.exit`                     | The daemon and associated pane links were cleaned up    |
+| `agent.crit.cleanup.*`                        | A best-effort cleanup step failed or was skipped        |
+| `agent.crit.notification.failed`              | The desktop notification could not be sent              |
+| `agent.crit.open.popup_requested`             | A tmux popup was requested for a review                 |
+| `agent.crit.open.failed`                      | Opening the crit popup failed                           |
+| `agent.crit.open.failure_notice_failed`       | tmux could not display an open failure notice           |
+
 ## Debugging recipes
 
 ### "Auto-compact is not firing"

@@ -1,6 +1,7 @@
 mod app;
 mod clean_progress;
 mod clean_view;
+mod crit_key;
 mod event;
 mod pr_fetch;
 mod session_rows;
@@ -12,7 +13,6 @@ mod worktree_session_children;
 mod worktree_view;
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -39,22 +39,8 @@ pub fn run() -> Result<()> {
     ratatui::restore();
     let crit_session_id = result?;
     if let Some(session_id) = crit_session_id {
-        schedule_crit_popup(&session_id)?;
+        super::crit::spawn_open_after_watch(&session_id)?;
     }
-    Ok(())
-}
-
-/// Opens crit after the watch process exits so tmux can close its popup first.
-fn schedule_crit_popup(session_id: &str) -> Result<()> {
-    let executable = std::env::current_exe()?;
-    let args = [
-        OsString::from("agent"),
-        OsString::from("crit"),
-        OsString::from("open"),
-        OsString::from(format!("--session={session_id}")),
-        OsString::from("--after-watch"),
-    ];
-    crate::infra::process::spawn_detached(&executable, &args, None, &[])?;
     Ok(())
 }
 
@@ -646,23 +632,8 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             ..Default::default()
         };
     }
-    // `o` leaves watch before opening a crit popup, since watch may itself
-    // be running inside a tmux popup.
-    if app.mode == AppMode::Normal
-        && let (KeyCode::Char('o'), KeyModifiers::NONE) = (key.code, key.modifiers)
-    {
-        app.clear_error();
-        let session_id = app
-            .selected_session()
-            .filter(|session| !session.crit_urls.is_empty())
-            .map(|session| session.session_id.clone());
-        if session_id.is_some() {
-            app.quit();
-        }
-        return KeyEffects {
-            open_crit_session_id: session_id,
-            ..Default::default()
-        };
+    if let Some(effects) = crit_key::handle(app, key) {
+        return effects;
     }
 
     match app.mode {

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::store;
+use crate::infra::process;
 use crate::shared::{cache, hex};
 
 /// Covers the interval between task registration and the worker recording its PID.
@@ -256,7 +257,7 @@ fn marker_is_pending(marker: &Path) -> Result<MarkerState> {
     };
 
     let pids = [record.parent_pid, record.worker_pid, record.command_pid];
-    if pids.into_iter().flatten().any(process_is_alive) {
+    if pids.into_iter().flatten().any(process::is_process_alive) {
         return Ok(MarkerState::Pending);
     }
     if age < UNREGISTERED_WORKER_GRACE {
@@ -334,13 +335,4 @@ fn create_dir_secure(dir: &Path) -> std::io::Result<()> {
         fs::set_permissions(dir, permissions)?;
     }
     Ok(())
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    // SAFETY: signal 0 only checks whether this process ID exists.
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }

@@ -3,8 +3,7 @@
 //! A Codex tool can run `a wm delete` inside the thread that cleanup must
 //! archive. This detached worker waits for cleanup to exit before archiving it.
 
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -13,7 +12,6 @@ use crate::commands::agent::codex_steer;
 use crate::infra::process;
 
 const PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(300);
-const PARENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const EVENT_TARGET: &str = "armyknife::commands::agent::archive_detached";
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -67,21 +65,5 @@ pub fn run(args: &ArchiveDetachedArgs) -> Result<()> {
 }
 
 fn wait_for_parent_exit(parent_pid: u32) -> bool {
-    let deadline = Instant::now() + PARENT_EXIT_TIMEOUT;
-    while process_is_alive(parent_pid) {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        thread::sleep(PARENT_POLL_INTERVAL);
-    }
-    true
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    // SAFETY: signal 0 only checks whether this process ID exists.
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    process::wait_for_process_exit(parent_pid, PARENT_EXIT_TIMEOUT)
 }

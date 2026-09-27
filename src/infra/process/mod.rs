@@ -1,8 +1,7 @@
-//! Process-tree utilities (parent PID lookup, descendant search).
+//! Process-tree and process-lifetime utilities.
 //!
-//! All external-process interaction (currently `ps`) is isolated in this
-//! module so that production code elsewhere can call pure functions and tests
-//! can stub at the module boundary.
+//! Process inspection and command execution are isolated here so production
+//! code elsewhere can keep OS-level process operations at one boundary.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
@@ -21,6 +20,32 @@ const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Starting sleep between exit checks, doubled after each check up to `MAX_POLL_INTERVAL`.
 const INITIAL_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// Returns whether a process ID still refers to a live process.
+pub fn is_process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid == 0 {
+        return false;
+    }
+
+    // SAFETY: signal 0 only checks whether this process ID exists.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Waits up to `timeout` for a process to exit, polling every 50 ms.
+pub fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while is_process_alive(pid) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
 
 /// Runs `command` to completion, killing it if it does not exit within `timeout`.
 ///

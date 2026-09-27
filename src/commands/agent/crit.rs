@@ -1,19 +1,25 @@
 //! Link crit reviews to agent sessions and open them in tmux popups.
 
 mod monitor;
+mod pane;
+mod url;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 
 use super::store;
-use super::types::{Session, TMUX_CRIT_OPTION};
+use super::types::{Session, resolve_session_option};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::notification::{Notification, NotificationAction};
+use crate::infra::process;
 use crate::infra::tmux;
+use crate::shared::command;
 use crate::shared::env_var::EnvVars;
+use crate::shared::log::short_run_id;
+
+use self::url::parse_port;
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
@@ -48,7 +54,7 @@ pub struct OpenArgs {
 
     /// Wait for the watch popup to close before opening the review.
     #[arg(long, hide = true)]
-    pub after_watch: bool,
+    pub parent_pid: Option<u32>,
 }
 
 pub fn run(command: &CritCommands) -> Result<()> {
@@ -61,16 +67,30 @@ pub fn run(command: &CritCommands) -> Result<()> {
 
 fn add(args: &AddArgs) -> Result<()> {
     let Some(session_id) = EnvVars::load().own_session_id() else {
-        let status = ExternalTool::Open
-            .command()
+        let mut opener = if cfg!(target_os = "macos") {
+            ExternalTool::Open.command()
+        } else {
+            command::new("xdg-open")
+        };
+        let status = opener
             .arg(&args.url)
             .status()
             .context("failed to open crit URL in the default browser")?;
-        anyhow::ensure!(status.success(), "open exited with {status}");
+        anyhow::ensure!(
+            status.success(),
+            "default browser opener exited with {status}"
+        );
         return Ok(());
     };
 
     let port = parse_port(&args.url)?;
+    let span = tracing::info_span!(
+        "agent.crit.add",
+        run_id = %short_run_id(),
+        session = %session_id,
+        port,
+    );
+    let _guard = span.enter();
     let sessions_dir = store::sessions_dir()?;
     let lock = store::lock_session_for_update(&sessions_dir, &session_id)?;
     let Some(mut session) = lock.load()? else {
@@ -78,22 +98,37 @@ fn add(args: &AddArgs) -> Result<()> {
     };
     add_url(&mut session, &args.url);
     lock.save(&session)?;
+    tracing::info!(event = "agent.crit.add.registered");
 
-    if let Some(tmux_info) = &session.tmux_info {
-        tmux::set_pane_option(&tmux_info.pane_id, TMUX_CRIT_OPTION, &args.url)
-            .context("failed to set crit URL on the tmux pane")?;
-        rerun_window_layout_hook(&tmux_info.pane_id)
-            .context("failed to re-evaluate the tmux pane border")?;
+    if let Some(tmux_info) = &session.tmux_info
+        && let Err(error) = pane::set_crit_url(&tmux_info.pane_id, &args.url)
+    {
+        tracing::warn!(
+            event = "agent.crit.add.pane_sync_failed",
+            pane = %tmux_info.pane_id,
+            error = %error,
+        );
+        eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");
     }
     drop(lock);
 
     if let Err(error) = monitor::ensure_started(port, &session) {
-        tracing::warn!(session_id, port, %error, "failed to start crit lifecycle monitor");
+        tracing::warn!(
+            event = "agent.crit.monitor.start_failed",
+            session = %session_id,
+            port,
+            error = %error,
+        );
         eprintln!("[armyknife] warning: failed to monitor crit review shutdown: {error:#}");
     }
 
     if let Err(error) = send_notification(&session, port) {
-        tracing::warn!(session_id, port, %error, "failed to send crit notification");
+        tracing::warn!(
+            event = "agent.crit.notification.failed",
+            session = %session_id,
+            port,
+            error = %error,
+        );
         eprintln!("[armyknife] warning: failed to send crit notification: {error:#}");
     }
 
@@ -101,10 +136,39 @@ fn add(args: &AddArgs) -> Result<()> {
 }
 
 fn open(args: &OpenArgs) -> Result<()> {
-    if args.after_watch {
-        thread::sleep(Duration::from_secs(1));
+    let span = tracing::info_span!(
+        "agent.crit.open",
+        run_id = %short_run_id(),
+        session = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+    let result = open_inner(args);
+    if let Err(error) = &result {
+        tracing::warn!(
+            event = "agent.crit.open.failed",
+            error = %error,
+        );
+        if args.parent_pid.is_some()
+            && let Err(tmux_error) =
+                tmux::run_tmux(&["display-message", "crit popup failed; see armyknife log"])
+        {
+            tracing::warn!(
+                event = "agent.crit.open.failure_notice_failed",
+                error = %tmux_error,
+            );
+        }
+    }
+    result
+}
+
+fn open_inner(args: &OpenArgs) -> Result<()> {
+    if let Some(parent_pid) = args.parent_pid
+        && !process::wait_for_process_exit(parent_pid, Duration::from_secs(300))
+    {
+        bail!("Timed out waiting for agent watch to exit");
     }
     let session_id = resolve_session_id(args)?;
+    tracing::Span::current().record("session", tracing::field::display(&session_id));
     let session = store::load_session(&session_id)?
         .with_context(|| format!("Agent session not found: {session_id}"))?;
     let url = session
@@ -118,6 +182,7 @@ fn open(args: &OpenArgs) -> Result<()> {
         .context("Agent session has no tmux pane")?;
 
     tmux::focus_pane(&tmux_info.pane_id).context("failed to focus the agent tmux pane")?;
+    tracing::info!(event = "agent.crit.open.popup_requested", port);
     display_popup(&session, url, port, &tmux_info.pane_id)
 }
 
@@ -131,30 +196,24 @@ fn resolve_session_id(args: &OpenArgs) -> Result<String> {
         bail!("Provide --session or --pane outside an agent tmux pane");
     };
 
-    store::list_all_sessions()?
-        .into_iter()
-        .find(|session| {
-            session
-                .tmux_info
-                .as_ref()
-                .is_some_and(|info| info.pane_id == pane_id)
-        })
-        .map(|session| session.session_id)
-        .with_context(|| format!("No agent session is associated with pane {pane_id}"))
+    resolve_session_option(|option| tmux::get_pane_option(&pane_id, option))
+        .with_context(|| format!("No agent session is bound to pane {pane_id}"))
 }
 
 fn display_popup(session: &Session, url: &str, port: u16, pane_id: &str) -> Result<()> {
     let shpool = tool_path(ExternalTool::Shpool)?;
     let terminal_browser = tool_path(ExternalTool::TerminalBrowser)?;
     let shpool_session = format!("crit-{port}");
-    let inner_command = shell_join([terminal_browser.as_str(), "open", url])?;
-    let command = shell_join([
+    let inner_command = shlex::try_join([terminal_browser.as_str(), "open", url])
+        .context("failed to quote terminal-browser command")?;
+    let command = shlex::try_join([
         shpool.as_str(),
         "attach",
         "-c",
-        inner_command.as_str(),
+        inner_command.as_ref(),
         shpool_session.as_str(),
-    ])?;
+    ])
+    .context("failed to quote shpool command")?;
 
     let label = display_label(session);
     let repo = repo_name(&session.cwd);
@@ -174,7 +233,7 @@ fn display_popup(session: &Session, url: &str, port: u16, pane_id: &str) -> Resu
         pane_id,
         "-T",
         &title,
-        &command,
+        command.as_ref(),
     ])?;
     Ok(())
 }
@@ -193,14 +252,15 @@ fn send_notification(session: &Session, port: u16) -> Result<()> {
     notification = notification.with_subtitle(subtitle);
 
     if session.tmux_info.is_some() {
-        let command = shell_join([
+        let command = shlex::try_join([
             "a",
             "agent",
             "crit",
             "open",
             "--session",
             &session.session_id,
-        ])?;
+        ])
+        .context("failed to quote the crit notification command")?;
         notification = notification.with_action(NotificationAction::new(command));
     }
 
@@ -218,23 +278,20 @@ fn add_url(session: &mut Session, url: &str) {
     session.crit_urls.push(url.to_string());
 }
 
-fn parse_port(url: &str) -> Result<u16> {
-    let (_, rest) = url
-        .split_once("://")
-        .with_context(|| format!("Invalid crit review URL: {url}"))?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let (_, port) = authority
-        .rsplit_once(':')
-        .with_context(|| format!("Crit review URL has no port: {url}"))?;
-    let port = port
-        .parse::<u16>()
-        .with_context(|| format!("Invalid port in crit review URL: {url}"))?;
-    anyhow::ensure!(port != 0, "Crit review URL has an invalid port: {url}");
-    Ok(port)
-}
-
-fn rerun_window_layout_hook(pane_id: &str) -> crate::infra::tmux::Result<()> {
-    tmux::run_tmux(&["set-hook", "-R", "-t", pane_id, "window-layout-changed"])
+pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
+    let executable = std::env::current_exe().context("failed to resolve armyknife executable")?;
+    let parent_pid = std::process::id().to_string();
+    let args = [
+        "agent",
+        "crit",
+        "open",
+        "--session",
+        session_id,
+        "--parent-pid",
+        parent_pid.as_str(),
+    ];
+    process::spawn_detached(&executable, args, None, &[])
+        .context("failed to start the crit popup after agent watch")
 }
 
 fn repo_name(cwd: &Path) -> String {
@@ -275,15 +332,4 @@ fn tool_path(tool: ExternalTool) -> Result<String> {
         .to_str()
         .map(str::to_string)
         .with_context(|| format!("{} executable path is not valid UTF-8", tool.name()))
-}
-
-fn shell_join<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<String> {
-    args.into_iter()
-        .map(|arg| {
-            shlex::try_quote(arg)
-                .map(|quoted| quoted.into_owned())
-                .map_err(Into::into)
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|args| args.join(" "))
 }

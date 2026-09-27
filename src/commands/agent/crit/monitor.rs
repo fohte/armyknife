@@ -1,7 +1,6 @@
 //! Detached cleanup worker for crit review daemons.
 
 use std::fs::{self, File, OpenOptions};
-use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,11 +9,12 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use super::super::store;
-use super::super::types::{Session, TMUX_CRIT_OPTION};
-use super::{parse_port, rerun_window_layout_hook};
+use super::super::types::Session;
+use super::pane;
+use super::url::parse_port;
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
-use crate::infra::tmux;
+use crate::shared::log::short_run_id;
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
@@ -36,10 +36,6 @@ pub struct MonitorArgs {
     /// Pane associated when the review was requested.
     #[arg(long)]
     pane: Option<String>,
-
-    /// Marker used to prevent duplicate monitor processes for one daemon.
-    #[arg(long)]
-    marker: PathBuf,
 
     /// Reservation marker claimed by the process that launched this worker.
     #[arg(long)]
@@ -69,7 +65,6 @@ pub(super) fn ensure_started(port: u16, session: &Session) -> Result<()> {
             format!("--port={port}"),
             format!("--pid={pid}"),
             format!("--session={}", session.session_id),
-            format!("--marker={}", marker.display()),
             format!("--reservation={reservation}"),
         ];
         if !pane_id.is_empty() {
@@ -79,7 +74,12 @@ pub(super) fn ensure_started(port: u16, session: &Session) -> Result<()> {
         let worker_pid =
             process::spawn_detached_with_pid(&executable, args, Some(Path::new("/")), &[])
                 .context("failed to spawn crit lifecycle monitor")?;
-        tracing::info!(port, worker_pid, session_id = %session.session_id, "started crit lifecycle monitor");
+        tracing::info!(
+            event = "agent.crit.monitor.started",
+            port,
+            worker_pid,
+            session = %session.session_id,
+        );
         Ok(())
     })();
 
@@ -90,22 +90,39 @@ pub(super) fn ensure_started(port: u16, session: &Session) -> Result<()> {
 }
 
 pub(super) fn run(args: &MonitorArgs) -> Result<()> {
-    write_marker_owner(&args.marker, &args.reservation)?;
+    let span = tracing::info_span!(
+        "agent.crit.monitor",
+        run_id = %short_run_id(),
+        session = %args.session,
+        port = args.port,
+    );
+    let _guard = span.enter();
+    let marker = marker_path(args.port)?;
+    write_marker_owner(&marker, &args.reservation)?;
+    tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
     loop {
-        while process_is_alive(watched_pid) {
+        while process::is_process_alive(watched_pid) {
             thread::sleep(MONITOR_POLL_INTERVAL);
         }
 
         match crit_pid_for_port(args.port) {
             Ok(Some(current_pid))
-                if current_pid != watched_pid && process_is_alive(current_pid) =>
+                if current_pid != watched_pid && process::is_process_alive(current_pid) =>
             {
+                tracing::info!(
+                    event = "agent.crit.monitor.replacement_found",
+                    previous_pid = watched_pid,
+                    current_pid,
+                );
                 watched_pid = current_pid;
             }
             Ok(_) => break,
             Err(error) => {
-                tracing::warn!(port = args.port, %error, "failed to check for a replacement crit daemon");
+                tracing::warn!(
+                    event = "agent.crit.monitor.replacement_check_failed",
+                    error = %error,
+                );
                 break;
             }
         }
@@ -113,7 +130,8 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
 
     kill_shpool_session(args.port);
     cleanup_session_links(args.port, &args.session, args.pane.as_deref());
-    remove_marker_if_owned(&args.marker);
+    remove_marker_if_owned(&marker);
+    tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
 }
 
@@ -129,7 +147,11 @@ fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
 
     let status: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("failed to parse crit status JSON")?;
-    Ok(status
+    Ok(pid_for_port(&status, port))
+}
+
+fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
+    status
         .get("sessions")
         .and_then(serde_json::Value::as_array)
         .into_iter()
@@ -138,15 +160,11 @@ fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
             session.get("port").and_then(serde_json::Value::as_u64) == Some(port.into())
         })
         .and_then(|session| session.get("pid").and_then(serde_json::Value::as_u64))
-        .and_then(|pid| u32::try_from(pid).ok()))
+        .and_then(|pid| u32::try_from(pid).ok())
 }
 
 fn marker_path(port: u16) -> Result<PathBuf> {
-    let sessions_dir = store::sessions_dir()?;
-    let cc_dir = sessions_dir
-        .parent()
-        .context("session directory has no parent")?;
-    Ok(cc_dir.join("crit").join(format!("{port}.monitor")))
+    Ok(store::crit_dir()?.join(format!("{port}.monitor")))
 }
 
 fn claim_marker(path: &Path) -> Result<Option<String>> {
@@ -166,21 +184,28 @@ fn marker_is_active(path: &Path) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
+    Ok(marker_is_active_at(
+        &contents,
+        unix_time_secs(),
+        process::is_process_alive,
+    ))
+}
+
+fn marker_is_active_at(contents: &str, now: u64, is_process_alive: impl Fn(u32) -> bool) -> bool {
     if let Ok(pid) = contents.trim().parse::<u32>() {
-        return Ok(process_is_alive(pid));
+        return is_process_alive(pid);
     }
     let Some((pid, started_at)) = contents
         .trim()
         .strip_prefix("starting:")
         .and_then(|value| value.split_once(':'))
     else {
-        return Ok(false);
+        return false;
     };
     let (Ok(pid), Ok(started_at)) = (pid.parse::<u32>(), started_at.parse::<u64>()) else {
-        return Ok(false);
+        return false;
     };
-    Ok(process_is_alive(pid)
-        && unix_time_secs().saturating_sub(started_at) < STARTING_MARKER_TTL.as_secs())
+    is_process_alive(pid) && now.saturating_sub(started_at) < STARTING_MARKER_TTL.as_secs()
 }
 
 fn lock_marker(path: &Path) -> Result<File> {
@@ -240,8 +265,16 @@ fn kill_shpool_session(port: u16) {
         .status();
     match result {
         Ok(status) if status.success() => {}
-        Ok(status) => tracing::debug!(port, %status, "shpool session was already stopped"),
-        Err(error) => tracing::warn!(port, %error, "failed to stop crit shpool session"),
+        Ok(status) => tracing::debug!(
+            event = "agent.crit.cleanup.shpool_already_stopped",
+            port,
+            %status,
+        ),
+        Err(error) => tracing::warn!(
+            event = "agent.crit.cleanup.shpool_kill_failed",
+            port,
+            error = %error,
+        ),
     }
 }
 
@@ -261,7 +294,11 @@ fn cleanup_session_links(port: u16, fallback_session_id: &str, fallback_pane_id:
             }
         }
         Err(error) => {
-            tracing::warn!(port, %error, "failed to list sessions during crit cleanup");
+            tracing::warn!(
+                event = "agent.crit.cleanup.session_list_failed",
+                port,
+                error = %error,
+            );
         }
     }
     if !fallback_was_processed {
@@ -273,81 +310,72 @@ fn remove_session_link(port: u16, session_id: &str, fallback_pane_id: Option<&st
     let sessions_dir = match store::sessions_dir() {
         Ok(dir) => dir,
         Err(error) => {
-            tracing::warn!(session_id, port, %error, "failed to resolve session store during crit cleanup");
-            clear_pane_if_matching(port, fallback_pane_id);
+            tracing::warn!(
+                event = "agent.crit.cleanup.session_dir_failed",
+                session = %session_id,
+                port,
+                error = %error,
+            );
+            restore_pane_link(port, fallback_pane_id, None, session_id);
             return;
         }
     };
-    let lock = match store::lock_session_for_update(&sessions_dir, session_id) {
-        Ok(lock) => lock,
+    let updated = match drop_port_from_session_in(&sessions_dir, port, session_id) {
+        Ok(updated) => updated,
         Err(error) => {
-            tracing::warn!(session_id, port, %error, "failed to lock session during crit cleanup");
-            clear_pane_if_matching(port, fallback_pane_id);
-            return;
+            tracing::warn!(
+                event = "agent.crit.cleanup.session_update_failed",
+                session = %session_id,
+                port,
+                error = %error,
+            );
+            None
         }
     };
-    let session = match lock.load() {
-        Ok(Some(session)) => session,
-        Ok(None) => {
-            clear_pane_if_matching(port, fallback_pane_id);
-            return;
-        }
-        Err(error) => {
-            tracing::warn!(session_id, port, %error, "failed to load session during crit cleanup");
-            clear_pane_if_matching(port, fallback_pane_id);
-            return;
-        }
-    };
-
-    let mut updated = session;
-    let previous_count = updated.crit_urls.len();
-    updated
-        .crit_urls
-        .retain(|url| parse_port(url).ok() != Some(port));
-    if updated.crit_urls.len() != previous_count
-        && let Err(error) = lock.save(&updated)
-    {
-        tracing::warn!(session_id, port, %error, "failed to save crit link cleanup");
-    }
-
     let pane_id = updated
-        .tmux_info
         .as_ref()
+        .and_then(|session| session.tmux_info.as_ref())
         .map(|info| info.pane_id.as_str())
         .or(fallback_pane_id);
-    if let Some(pane_id) = pane_id {
-        if let Some(latest_url) = updated.crit_urls.last() {
-            if let Err(error) = tmux::set_pane_option(pane_id, TMUX_CRIT_OPTION, latest_url) {
-                tracing::warn!(session_id, pane_id, %error, "failed to restore remaining crit link");
-            } else if let Err(error) = rerun_window_layout_hook(pane_id) {
-                tracing::warn!(session_id, pane_id, %error, "failed to re-evaluate the tmux pane border");
-            }
-        } else {
-            clear_pane_if_matching(port, Some(pane_id));
-        }
-    }
+    let latest_url = updated
+        .as_ref()
+        .and_then(|session| session.crit_urls.last().map(String::as_str));
+    restore_pane_link(port, pane_id, latest_url, session_id);
 }
 
-fn clear_pane_if_matching(port: u16, pane_id: Option<&str>) {
+fn drop_port_from_session_in(
+    sessions_dir: &Path,
+    port: u16,
+    session_id: &str,
+) -> Result<Option<Session>> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = lock.load()? else {
+        return Ok(None);
+    };
+
+    let previous_len = session.crit_urls.len();
+    session
+        .crit_urls
+        .retain(|url| parse_port(url).ok() != Some(port));
+    if session.crit_urls.len() != previous_len {
+        lock.save(&session)?;
+    }
+    Ok(Some(session))
+}
+
+fn restore_pane_link(port: u16, pane_id: Option<&str>, latest_url: Option<&str>, session: &str) {
     let Some(pane_id) = pane_id else {
         return;
     };
-    if tmux::get_pane_option(pane_id, TMUX_CRIT_OPTION)
-        .as_deref()
-        .and_then(|url| parse_port(url).ok())
-        == Some(port)
-    {
-        let _ = tmux::run_tmux(&["set-option", "-p", "-u", "-t", pane_id, TMUX_CRIT_OPTION]);
-        let _ = rerun_window_layout_hook(pane_id);
+    if let Err(error) = pane::restore_crit_url(pane_id, port, latest_url) {
+        tracing::warn!(
+            event = "agent.crit.cleanup.pane_sync_failed",
+            session,
+            pane = %pane_id,
+            port,
+            error = %error,
+        );
     }
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    let Ok(pid) = c_int::try_from(pid) else {
-        return false;
-    };
-    // The worker only tracks local crit processes owned by the same user.
-    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 fn unix_time_secs() -> u64 {
