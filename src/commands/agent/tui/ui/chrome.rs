@@ -327,6 +327,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 Span::raw(": focus  "),
                 Span::styled("r", bold),
                 Span::raw(": resume  "),
+                Span::styled("o", bold),
+                Span::raw(": open crit  "),
                 Span::styled("d", bold),
                 Span::raw(": delete  "),
                 Span::styled("/", bold),
@@ -375,6 +377,8 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 Span::raw(": filter  "),
                 Span::styled("Tab", bold),
                 Span::raw(": worktree view  "),
+                Span::styled("o", bold),
+                Span::raw(": open crit  "),
                 Span::styled("q", bold),
                 Span::raw(": quit"),
             ]),
@@ -564,7 +568,7 @@ mod tests {
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
-        "  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
+        "  C-r/w/s/p: filter  Tab: worktree view  o: open crit  q: quit".to_string(),
     ])]
     #[case::worktree_view_default(View::Worktree, false, vec![
         " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),

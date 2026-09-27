@@ -104,6 +104,11 @@ fn build_send_lua(notification: &Notification) -> String {
             "n:contentImage(hs.image.imageFromPath({}))",
             lua_quote(app_icon)
         ));
+    } else if let Some(content_image_url) = notification.content_image_url() {
+        parts.push(format!(
+            "n:contentImage(hs.image.imageFromURL({}))",
+            lua_quote(content_image_url)
+        ));
     }
 
     // Disable auto-withdraw so the notification stays until clicked or explicitly removed

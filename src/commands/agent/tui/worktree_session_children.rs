@@ -154,6 +154,7 @@ mod tests {
     fn session(id: &str, cwd: &Path, updated_at: DateTime<Utc>, pane: Option<&str>) -> Session {
         Session {
             session_id: id.to_string(),
+            crit_urls: Vec::new(),
             cwd: cwd.to_path_buf(),
             transcript_path: None,
             tty: None,

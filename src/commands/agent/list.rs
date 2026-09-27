@@ -249,6 +249,7 @@ mod tests {
     fn create_test_session() -> Session {
         Session {
             session_id: "test-123".to_string(),
+            crit_urls: Vec::new(),
             cwd: PathBuf::from("/home/user/projects/myproject"),
             transcript_path: None,
             tty: None,
@@ -397,6 +398,7 @@ mod tests {
         let sessions = vec![
             Session {
                 session_id: "s1".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/running"),
                 transcript_path: None,
                 tty: None,
@@ -418,6 +420,7 @@ mod tests {
             },
             Session {
                 session_id: "s2".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/waiting"),
                 transcript_path: None,
                 tty: None,
@@ -439,6 +442,7 @@ mod tests {
             },
             Session {
                 session_id: "s3".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/stopped"),
                 transcript_path: None,
                 tty: None,
@@ -460,6 +464,7 @@ mod tests {
             },
             Session {
                 session_id: "s4".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/background"),
                 transcript_path: None,
                 tty: None,
@@ -749,6 +754,7 @@ mod tests {
         let sessions = vec![
             Session {
                 session_id: "s1".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/home/user/webapp"),
                 transcript_path: None,
                 tty: None,
@@ -775,6 +781,7 @@ mod tests {
             },
             Session {
                 session_id: "s2".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/home/user/api"),
                 transcript_path: None,
                 tty: None,
@@ -801,6 +808,7 @@ mod tests {
             },
             Session {
                 session_id: "s3".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/home/user/docs"),
                 transcript_path: None,
                 tty: None,

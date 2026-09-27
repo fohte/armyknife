@@ -24,6 +24,11 @@ pub enum ExternalTool {
     Hammerspoon,
     Tq,
     Lsof,
+    Crit,
+    Shpool,
+    TerminalBrowser,
+    Open,
+    XdgOpen,
 }
 
 pub struct Metadata {
@@ -60,6 +65,11 @@ impl ExternalTool {
         Self::Hammerspoon,
         Self::Tq,
         Self::Lsof,
+        Self::Crit,
+        Self::Shpool,
+        Self::TerminalBrowser,
+        Self::Open,
+        Self::XdgOpen,
     ];
 
     pub const fn metadata(self) -> Metadata {
@@ -174,6 +184,51 @@ impl ExternalTool {
                 brew_pkg: None,
                 macos_app_path: None,
             },
+            Self::Crit => Metadata {
+                name: "crit",
+                binary: "crit",
+                purpose: "crit review lifecycle and status",
+                version_args: &["--version"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
+            Self::Shpool => Metadata {
+                name: "shpool",
+                binary: "shpool",
+                purpose: "persistent terminal-browser sessions for crit reviews",
+                version_args: &["--version"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
+            Self::TerminalBrowser => Metadata {
+                name: "terminal-browser",
+                binary: "terminal-browser",
+                purpose: "render crit reviews in a terminal popup",
+                version_args: &["--version"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
+            Self::Open => Metadata {
+                name: "open",
+                binary: "open",
+                purpose: "open crit reviews when no agent session is associated",
+                version_args: &["--help"],
+                macos_only: true,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
+            Self::XdgOpen => Metadata {
+                name: "xdg-open",
+                binary: "xdg-open",
+                purpose: "open crit reviews when no agent session is associated",
+                version_args: &["--help"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
         }
     }
 
@@ -259,6 +314,11 @@ mod tests {
             "hammerspoon",
             "tq",
             "lsof",
+            "crit",
+            "shpool",
+            "terminal-browser",
+            "open",
+            "xdg-open",
         ];
         want.sort_unstable();
 

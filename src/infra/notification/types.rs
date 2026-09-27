@@ -8,6 +8,7 @@ pub struct Notification {
     action: Option<NotificationAction>,
     group: Option<String>,
     app_icon: Option<String>,
+    content_image_url: Option<String>,
 }
 
 impl Notification {
@@ -21,6 +22,7 @@ impl Notification {
             action: None,
             group: None,
             app_icon: None,
+            content_image_url: None,
         }
     }
 
@@ -87,6 +89,17 @@ impl Notification {
     /// Returns the app icon path, if any.
     pub fn app_icon(&self) -> Option<&str> {
         self.app_icon.as_deref()
+    }
+
+    /// Sets a URL to load as the notification content image.
+    pub fn with_content_image_url(mut self, url: impl Into<String>) -> Self {
+        self.content_image_url = Some(url.into());
+        self
+    }
+
+    /// Returns the URL for the notification content image, if any.
+    pub fn content_image_url(&self) -> Option<&str> {
+        self.content_image_url.as_deref()
     }
 }
 

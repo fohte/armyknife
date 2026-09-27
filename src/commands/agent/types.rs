@@ -95,6 +95,9 @@ pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 /// `window-status-format` is expected to fall back to `#W` in that case.
 pub const TMUX_WINDOW_TITLE_OPTION: &str = "@armyknife-cc-window-title";
 
+/// Tmux pane user option mirroring the latest crit review URL for a session.
+pub const TMUX_CRIT_OPTION: &str = "@crit";
+
 /// Key used in `Session::pending_permission_agent_ids` for hook events fired
 /// on the main thread (i.e. `HookInput::agent_id` is absent). Claude Code
 /// never emits a real `agent_id` equal to this value: per
@@ -109,6 +112,9 @@ pub(crate) const BG_RUN_PENDING_TASK_MARKER: &str = "__armyknife_bg_run_pending_
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
+    /// Crit review URLs opened by this session, ordered by most recently requested.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crit_urls: Vec<String>,
     pub cwd: PathBuf,
     pub transcript_path: Option<PathBuf>,
     /// TTY device path (legacy field, not used for session lifecycle detection).
@@ -560,6 +566,7 @@ mod tests {
     fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
         Session {
             session_id: "s".to_string(),
+            crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,
