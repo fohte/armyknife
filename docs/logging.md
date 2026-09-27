@@ -143,8 +143,9 @@ Stop hook (parent process):
 | `agent.crit.monitor.exit`                     | The daemon and associated pane links were cleaned up    |
 | `agent.crit.cleanup.*`                        | A best-effort cleanup step failed or was skipped        |
 | `agent.crit.notification.failed`              | The desktop notification could not be sent              |
-| `agent.crit.open.popup_requested`             | A tmux popup was requested for a review                 |
-| `agent.crit.open.failed`                      | Opening the crit popup failed                           |
+| `agent.crit.open.floating_pane_requested`     | A tmux floating pane was requested for a review         |
+| `agent.crit.open.floating_pane_closed`        | A tmux floating pane was closed                         |
+| `agent.crit.open.failed`                      | Opening or closing the crit pane failed                 |
 | `agent.crit.open.failure_notice_failed`       | tmux could not display an open failure notice           |
 
 ## Debugging recipes

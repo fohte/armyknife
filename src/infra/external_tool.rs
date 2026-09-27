@@ -205,7 +205,7 @@ impl ExternalTool {
             Self::TerminalBrowser => Metadata {
                 name: "terminal-browser",
                 binary: "terminal-browser",
-                purpose: "render crit reviews in a terminal popup",
+                purpose: "render crit reviews in a terminal pane",
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,

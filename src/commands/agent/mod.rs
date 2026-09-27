@@ -67,7 +67,7 @@ pub enum AgentCommands {
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
 
-    /// Associate crit reviews with agent sessions and open them in tmux popups
+    /// Associate crit reviews with agent sessions and open them in tmux floating panes
     #[command(subcommand)]
     Crit(CritCommands),
 
