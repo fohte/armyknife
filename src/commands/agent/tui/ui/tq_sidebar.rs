@@ -20,7 +20,7 @@ pub(super) const SIDEBAR_PERCENTAGE: u16 = 40;
 pub(super) const MIN_SESSION_LIST_WIDTH: u16 = 48;
 
 pub(super) fn minimum_total_width() -> u16 {
-    MIN_SESSION_LIST_WIDTH * 100 / (100 - SIDEBAR_PERCENTAGE)
+    (MIN_SESSION_LIST_WIDTH * 100).div_ceil(100 - SIDEBAR_PERCENTAGE)
 }
 
 pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
