@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.336](https://github.com/fohte/armyknife/compare/v0.1.335...v0.1.336) (2026-09-27)
+
+
+### Features
+
+* **agent:** show previous tq task prefix immediately on watch startup ([#990](https://github.com/fohte/armyknife/issues/990)) ([1cdc156](https://github.com/fohte/armyknife/commit/1cdc1568aa3ba09e74481e48c014d3784dd0d500))
+
 ## [0.1.335](https://github.com/fohte/armyknife/compare/v0.1.334...v0.1.335) (2026-09-27)
 
 

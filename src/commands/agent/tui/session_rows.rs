@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
@@ -62,7 +64,7 @@ pub(super) enum Section {
 /// genuinely has no parent and when the running `tq` binary is too old to
 /// report `parentId` at all -- either way, kinship degrades to "same task
 /// only" rather than being treated as an error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(super) struct SessionTask {
     pub task_id: String,
     pub task_number: u32,

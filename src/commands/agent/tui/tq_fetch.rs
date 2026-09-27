@@ -11,21 +11,21 @@ use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
 /// Fetches tq's session -> tasks listing and reduces it to one
 /// [`SessionTask`] per locally known session_id.
 ///
-/// Returns `Ok(HashMap::new())`, not an error, when tq integration isn't
-/// available (`client` is `None`, i.e. [`TqClient::detect`] found no `tq`
-/// binary on `PATH`) -- the caller treats "not available" and "fetched,
-/// nothing linked" identically: sessions render with no title-prefix.
+/// Returns `Ok(None)` when the fetch is skipped because tq is unavailable or
+/// there are no local sessions. A successful lookup returns `Some`, including
+/// an empty map when no tasks are linked, so callers can retain cached links
+/// when no fresh result is available.
 pub async fn fetch_session_tasks(
     client: Option<TqClient>,
     local_session_ids: HashSet<String>,
-) -> Result<HashMap<String, SessionTask>, String> {
+) -> Result<Option<HashMap<String, SessionTask>>, String> {
     let Some(client) = client else {
-        return Ok(HashMap::new());
+        return Ok(None);
     };
     if local_session_ids.is_empty() {
         // Skip the round trip: tq's --session-id filter needs at least one
         // id, and an empty request would otherwise return its full history.
-        return Ok(HashMap::new());
+        return Ok(None);
     }
 
     let sessions = client
@@ -33,7 +33,7 @@ pub async fn fetch_session_tasks(
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(build_task_by_session(sessions, &local_session_ids))
+    Ok(Some(build_task_by_session(sessions, &local_session_ids)))
 }
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
@@ -102,17 +102,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn client_none_returns_empty_without_spawning_tq() {
+    async fn client_none_skips_without_spawning_tq() {
         let result = fetch_session_tasks(None, ids(&["session-1"])).await;
 
-        assert_eq!(result, Ok(HashMap::new()));
+        assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]
-    async fn empty_local_session_ids_returns_empty_without_spawning_tq() {
+    async fn empty_local_session_ids_skips_without_spawning_tq() {
         let result = fetch_session_tasks(Some(TqClient), HashSet::new()).await;
 
-        assert_eq!(result, Ok(HashMap::new()));
+        assert_eq!(result, Ok(None));
     }
 
     #[rstest]
