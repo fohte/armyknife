@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.334](https://github.com/fohte/armyknife/compare/v0.1.333...v0.1.334) (2026-09-27)
+
+
+### Bug Fixes
+
+* **agent:** serialize worktree creation within the same repository ([#986](https://github.com/fohte/armyknife/issues/986)) ([9316865](https://github.com/fohte/armyknife/commit/93168656ea84c0d5ecdb9812cb2b093d9148eaa9))
+
 ## [0.1.333](https://github.com/fohte/armyknife/compare/v0.1.332...v0.1.333) (2026-09-25)
 
 
