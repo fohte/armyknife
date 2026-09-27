@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.338](https://github.com/fohte/armyknife/compare/v0.1.337...v0.1.338) (2026-09-27)
+
+
+### Features
+
+* **agent:** add a tq task and project sidebar to watch ([#995](https://github.com/fohte/armyknife/issues/995)) ([a5fabd3](https://github.com/fohte/armyknife/commit/a5fabd3ee4405e50afcb135bb381ffe32eeb4acc))
+
 ## [0.1.337](https://github.com/fohte/armyknife/compare/v0.1.336...v0.1.337) (2026-09-27)
 
 
