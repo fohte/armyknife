@@ -23,6 +23,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
+        crit_urls: Vec::new(),
         cwd: cwd.to_path_buf(),
         transcript_path: None,
         tty: None,
@@ -72,6 +73,7 @@ mod tests {
         let now = Utc::now();
         Session {
             session_id: "resume-target".to_string(),
+            crit_urls: Vec::new(),
             cwd: PathBuf::from("/workspace/project"),
             transcript_path: None,
             tty: None,

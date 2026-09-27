@@ -339,28 +339,32 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                  | Aliases | Description                                                               |
-| --------------------------------------- | ------- | ------------------------------------------------------------------------- |
-| `new [--worktree[=<branch>]] [options]` |         | Start a Claude Code session, optionally in a new worktree                 |
-| `codex [<args>...]`                     |         | Start Codex and bind its thread ID to the current tmux pane               |
-| `hook <event>`                          |         | Record session events (called from Claude Code hooks)                     |
-| `list`                                  | `ls`    | List all Claude Code sessions with status                                 |
-| `focus <session_id>`                    |         | Focus on a session's tmux pane                                            |
-| `mark-read [-t <pane_id>]`              |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
-| `resume [session_id]`                   | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
-| `resurrect save`                        |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
-| `resurrect restore`                     |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
-| `peer parent`                           |         | List the session that delegated to this one, if any (JSON)                |
-| `peer children`                         |         | List the sessions this one delegated to (JSON)                            |
-| `peer list [-R <repo>]`                 |         | List tracked sessions, with their SendMessage names (JSON)                |
-| `peer me`                               |         | Print the session running in the caller's own tmux pane (JSON)            |
-| `peer wake <session_id>`                |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
-| `peer notify <session_id> -m <text>`    |         | Send a message to another session (SendMessage socket / Codex app-server) |
-| `bg run -- <cmd> [args...]`             |         | Run a command detached and notify this session when it finishes           |
-| `sweep`                                 |         | Pause long-stopped sessions (run periodically or manual)                  |
-| `auto-compact schedule --session <id>`  |         | Detached worker spawned by the Stop hook (not for direct use)             |
-| `window-status <window_id>`             |         | Print status symbols for the sessions in a tmux window                    |
-| `pane-has-paused <pane_id>`             |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+| Action                                           | Aliases | Description                                                               |
+| ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
+| `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
+| `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
+| `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
+| `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
+| `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
+| `mark-read [-t <pane_id>]`                       |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
+| `resume [session_id]`                            | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
+| `resurrect save`                                 |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
+| `resurrect restore`                              |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
+| `peer parent`                                    |         | List the session that delegated to this one, if any (JSON)                |
+| `peer children`                                  |         | List the sessions this one delegated to (JSON)                            |
+| `peer list [-R <repo>]`                          |         | List tracked sessions, with their SendMessage names (JSON)                |
+| `peer me`                                        |         | Print the session running in the caller's own tmux pane (JSON)            |
+| `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
+| `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server) |
+| `crit add <url>`                                 |         | Associate a crit review with the calling session                          |
+| `crit open [--session <id> \| --pane <pane_id>]` |         | Open the latest associated review in a tmux popup                         |
+| `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes           |
+| `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                  |
+| `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)             |
+| `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                    |
+| `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+
+`a agent crit add <url>` stores the URL for the calling tracked session, sends a desktop notification, and removes the association when the crit daemon exits. `a agent crit open` opens the latest review in a tmux popup. When no tracked session ID is available, `add` opens the URL in the default browser. Opening a review in a popup requires `crit` and a tmux environment with persistent terminal-browser support.
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active, `a agent list`, `a agent watch`, and tmux window status show `◎ background`; Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a wm clean` also preserves its worktree unless `--force` is set.
 

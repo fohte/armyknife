@@ -708,6 +708,7 @@ mod tests {
     fn create_test_session(id: &str) -> Session {
         Session {
             session_id: id.to_string(),
+            crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,
@@ -1494,6 +1495,7 @@ mod tests {
         ) -> Session {
             Session {
                 session_id: id.to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,
                 tty: None,

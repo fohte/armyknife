@@ -12,6 +12,7 @@ mod worktree_session_children;
 mod worktree_view;
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +37,25 @@ pub fn run() -> Result<()> {
     let mut terminal = ratatui::init();
     let result = run_app(&mut terminal);
     ratatui::restore();
-    result
+    let crit_session_id = result?;
+    if let Some(session_id) = crit_session_id {
+        schedule_crit_popup(&session_id)?;
+    }
+    Ok(())
+}
+
+/// Opens crit after the watch process exits so tmux can close its popup first.
+fn schedule_crit_popup(session_id: &str) -> Result<()> {
+    let executable = std::env::current_exe()?;
+    let args = [
+        OsString::from("agent"),
+        OsString::from("crit"),
+        OsString::from("open"),
+        OsString::from(format!("--session={session_id}")),
+        OsString::from("--after-watch"),
+    ];
+    crate::infra::process::spawn_detached(&executable, &args, None, &[])?;
+    Ok(())
 }
 
 /// Side effects requested by key handlers that need access to the event
@@ -58,6 +77,8 @@ struct KeyEffects {
     /// User pressed `t`: fetch this task's web URL from `tq` (its result
     /// opens the browser once `AppEvent::TaskUrlFetched` arrives).
     fetch_task_url: Option<String>,
+    /// User pressed `o`: leave watch and open this session's crit popup.
+    open_crit_session_id: Option<String>,
 }
 
 impl KeyEffects {
@@ -77,6 +98,9 @@ impl KeyEffects {
         if other.fetch_task_url.is_some() {
             self.fetch_task_url = other.fetch_task_url;
         }
+        if other.open_crit_session_id.is_some() {
+            self.open_crit_session_id = other.open_crit_session_id;
+        }
     }
 }
 
@@ -91,9 +115,10 @@ const MAX_DRAIN_PER_ITERATION: usize = 100;
 /// 3. Key events are processed immediately during drain
 /// 4. SessionsChanged events are merged (deduplicated by session_id)
 /// 5. The merged reload + render happens once per iteration
-fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
+fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut app = App::new()?;
     let event_handler = EventHandler::new()?;
+    let mut crit_session_id = None;
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
@@ -202,6 +227,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         if let Some(task_id) = effects.fetch_task_url {
             event_handler.start_task_url_fetch(task_id);
         }
+        if effects.open_crit_session_id.is_some() {
+            crit_session_id = effects.open_crit_session_id;
+        }
 
         // Apply merged session changes in a single reload
         let mut sessions_changed = false;
@@ -239,7 +267,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(crit_session_id)
 }
 
 /// Merges session changes by deduplicating on session_id, keeping the last change_type.
@@ -618,6 +646,24 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             ..Default::default()
         };
     }
+    // `o` leaves watch before opening a crit popup, since watch may itself
+    // be running inside a tmux popup.
+    if app.mode == AppMode::Normal
+        && let (KeyCode::Char('o'), KeyModifiers::NONE) = (key.code, key.modifiers)
+    {
+        app.clear_error();
+        let session_id = app
+            .selected_session()
+            .filter(|session| !session.crit_urls.is_empty())
+            .map(|session| session.session_id.clone());
+        if session_id.is_some() {
+            app.quit();
+        }
+        return KeyEffects {
+            open_crit_session_id: session_id,
+            ..Default::default()
+        };
+    }
 
     match app.mode {
         AppMode::Normal => {
@@ -778,6 +824,7 @@ mod tests {
         let sessions: Vec<Session> = (0..count)
             .map(|i| Session {
                 session_id: format!("session-{}", i),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from(format!("/project/{}", i)),
                 transcript_path: None,
                 tty: None,
@@ -1241,6 +1288,7 @@ mod tests {
         let sessions: Vec<Session> = vec![
             Session {
                 session_id: "session-running".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/running"),
                 transcript_path: None,
                 tty: None,
@@ -1262,6 +1310,7 @@ mod tests {
             },
             Session {
                 session_id: "session-waiting".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/waiting"),
                 transcript_path: None,
                 tty: None,
@@ -1283,6 +1332,7 @@ mod tests {
             },
             Session {
                 session_id: "session-stopped".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/stopped"),
                 transcript_path: None,
                 tty: None,
@@ -1304,6 +1354,7 @@ mod tests {
             },
             Session {
                 session_id: "session-paused".to_string(),
+                crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/paused"),
                 transcript_path: None,
                 tty: None,
@@ -1545,6 +1596,7 @@ mod tests {
     fn session_with_cwd(id: &str, cwd: PathBuf) -> Session {
         Session {
             session_id: id.to_string(),
+            crit_urls: Vec::new(),
             cwd,
             transcript_path: None,
             tty: None,

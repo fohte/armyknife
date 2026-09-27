@@ -188,6 +188,7 @@ mod tests {
     ) -> Session {
         Session {
             session_id: session_id.to_string(),
+            crit_urls: Vec::new(),
             cwd,
             transcript_path: None,
             tty: None,
