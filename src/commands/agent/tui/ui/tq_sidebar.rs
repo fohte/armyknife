@@ -16,11 +16,11 @@ use crate::commands::agent::types::DisplayStatus;
 
 use super::helpers::{DIM_FG, status_color, truncate};
 
-pub(super) const SIDEBAR_WIDTH: u16 = 40;
-pub(super) const MIN_SESSION_LIST_WIDTH: u16 = 40;
+pub(super) const SIDEBAR_PERCENTAGE: u16 = 40;
+pub(super) const MIN_SESSION_LIST_WIDTH: u16 = 48;
 
 pub(super) fn minimum_total_width() -> u16 {
-    SIDEBAR_WIDTH + MIN_SESSION_LIST_WIDTH
+    MIN_SESSION_LIST_WIDTH * 100 / (100 - SIDEBAR_PERCENTAGE)
 }
 
 pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {

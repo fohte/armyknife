@@ -12,9 +12,7 @@ use crate::commands::agent::tui::tq_sidebar::SidebarSelection;
 
 use super::clean_list::render_clean_list;
 use super::session_list::render_session_list;
-use super::tq_sidebar::{
-    MIN_SESSION_LIST_WIDTH, SIDEBAR_WIDTH, minimum_total_width, render_tq_sidebar,
-};
+use super::tq_sidebar::{SIDEBAR_PERCENTAGE, minimum_total_width, render_tq_sidebar};
 
 pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     match app.view {
@@ -23,8 +21,8 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
             app.set_sidebar_available(sidebar_available);
             if app.sidebar_visible && sidebar_available {
                 let [sidebar_area, session_area] = Layout::horizontal([
-                    Constraint::Length(SIDEBAR_WIDTH),
-                    Constraint::Min(MIN_SESSION_LIST_WIDTH),
+                    Constraint::Percentage(SIDEBAR_PERCENTAGE),
+                    Constraint::Percentage(100 - SIDEBAR_PERCENTAGE),
                 ])
                 .areas(area);
                 render_tq_sidebar(frame, sidebar_area, app);
