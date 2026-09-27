@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 
 use crate::commands::agent::tui::app::App;
-use crate::commands::agent::tui::worktree_view::WorktreeRow;
+use crate::commands::agent::tui::worktree::WorktreeRow;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
 use super::chrome::render_with_time;
@@ -40,8 +40,6 @@ pub(super) fn wt_row(repo: &str, branch: &str, name: &str, path: &str) -> Worktr
         name: name.to_string(),
         path: PathBuf::from(path),
         session_count: 0,
-        has_active: false,
-        sessions: Vec::new(),
     }
 }
 

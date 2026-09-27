@@ -612,7 +612,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -654,7 +654,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -771,7 +771,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
 
@@ -801,7 +801,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -829,7 +829,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -873,7 +873,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -907,7 +907,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -956,7 +956,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1003,7 +1003,7 @@ mod tests {
             >⏸ project         project                                              just now
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1032,7 +1032,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -1059,7 +1059,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: worktree   q: quit"};
+             ?: keys   /: search   q: quit"};
 
         assert_eq!(output, expected);
     }

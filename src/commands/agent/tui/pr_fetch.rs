@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::Utc;
 
 use super::clean_view::{CleanRow, CleanRowInput, build_clean_rows};
-use super::worktree_view::WorktreeRow;
+use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
 use crate::infra::git::{GitRepo, github_owner_and_repo, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};

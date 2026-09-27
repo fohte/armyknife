@@ -1,14 +1,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::super::worktree::{WorktreeDiscoveryState, WorktreeRow, canonicalize_or_self};
+use super::App;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
-use crate::commands::agent::types::Session;
-
-use super::super::worktree_view::{
-    WorktreeMode, WorktreeRow, canonicalize_or_self, session_lives_under,
-};
-use super::{App, View};
 
 impl App {
     /// Cache lookup only. Misses are expected for sessions whose async
@@ -52,112 +48,41 @@ impl App {
         }
     }
 
-    /// Cycles the active view. No-op when in `Clean`.
-    pub fn cycle_view(&mut self) {
-        if self.view == View::Clean {
+    /// Installs the freshly discovered worktrees for Clean view.
+    pub fn set_worktrees(&mut self, mut rows: Vec<WorktreeRow>) {
+        rows.sort_by(|a, b| {
+            a.repo
+                .cmp(&b.repo)
+                .then_with(|| a.branch.cmp(&b.branch))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        self.worktree_discovery = WorktreeDiscoveryState::Loaded(rows);
+        self.refresh_worktree_session_counts();
+    }
+
+    /// Refreshes the session counts used by Clean view without re-running
+    /// git discovery.
+    pub fn refresh_worktree_session_counts(&mut self) {
+        let WorktreeDiscoveryState::Loaded(rows) = &mut self.worktree_discovery else {
             return;
-        }
-        self.view = self.view.next();
-        if self.view == View::Worktree {
-            // Make sure overlay reflects the latest session list whenever the
-            // user lands on the worktree view.
-            self.worktree_view.refresh_session_overlay(&self.sessions);
+        };
+        let canonical_sessions: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|session| canonicalize_or_self(&session.cwd))
+            .collect();
+        for row in rows {
+            row.session_count = canonical_sessions
+                .iter()
+                .filter(|cwd| cwd.starts_with(&row.path))
+                .count();
         }
     }
 
-    /// Installs the freshly loaded worktree rows.
-    pub fn set_worktrees(&mut self, rows: Vec<WorktreeRow>) {
-        self.worktree_view.set_rows(rows);
-        self.worktree_view.refresh_session_overlay(&self.sessions);
-    }
-
-    /// Marks worktree discovery as failed (background thread error) and
-    /// also surfaces the error in the global error banner so the user
-    /// notices it without switching to the worktree view first.
+    /// Marks worktree discovery as failed and surfaces the error in the global banner.
     pub fn set_worktrees_failed(&mut self, error: String) {
         self.set_error(format!("Failed to load worktrees: {error}"));
-        self.worktree_view.set_failed(error);
-    }
-
-    /// In worktree view, returns the most recently updated session inside the
-    /// currently selected worktree (used for `Enter` → focus pane).
-    pub fn worktree_view_focus_session(&self) -> Option<&Session> {
-        let row = self.worktree_view.selected_worktree()?;
-        // `row.path` is already canonicalized at discovery time.
-        self.sessions
-            .iter()
-            .filter(|s| canonicalize_or_self(&s.cwd).starts_with(&row.path))
-            .max_by_key(|s| s.updated_at)
-    }
-
-    /// Enters Confirm sub-mode on the selected worktree (for `d`).
-    pub fn worktree_view_request_delete(&mut self) {
-        if let Some(row) = self.worktree_view.selected_worktree() {
-            self.worktree_view.mode = WorktreeMode::Confirm {
-                worktree_path: row.path,
-                session_count: row.session_count,
-                has_active: row.has_active,
-            };
-        }
-    }
-
-    /// Cancels the pending worktree-view confirmation.
-    pub fn worktree_view_cancel_confirm(&mut self) {
-        self.worktree_view.mode = WorktreeMode::Normal;
-    }
-
-    /// Deletes the worktree via `cleanup_worktree_resources` (git worktree,
-    /// branch, tmux windows, session files). Does not consult merge status.
-    pub fn worktree_view_confirm_delete(&mut self) -> anyhow::Result<()> {
-        let path = match &self.worktree_view.mode {
-            WorktreeMode::Confirm { worktree_path, .. } => worktree_path.clone(),
-            _ => return Ok(()),
-        };
-
-        self.worktree_view.mode = WorktreeMode::Normal;
-
-        use crate::shared::cleanup;
-        let result = cleanup::cleanup_worktree_resources(&path)?;
-
-        if result.worktree_deleted {
-            // Drop sessions whose cwd is gone.
-            if let Some(ref wt_root) = result.worktree_root {
-                let to_remove: Vec<String> = self
-                    .sessions
-                    .iter()
-                    .filter(|s| session_lives_under(&s.cwd, wt_root))
-                    .map(|s| s.session_id.clone())
-                    .collect();
-                for id in &to_remove {
-                    self.remove_session(id);
-                }
-            }
-            let prev_selection = self.worktree_view.list_state.selected();
-            if let super::super::worktree_view::WorktreeLoadState::Loaded(rows) =
-                &mut self.worktree_view.state
-            {
-                rows.retain(|r| r.path != path);
-            }
-            self.worktree_view.refresh_session_overlay(&self.sessions);
-            // Keep the cursor near the deleted row: pick the first
-            // selectable index >= the old position, otherwise the last.
-            let sel = self.worktree_view.selectable_indices();
-            let next = prev_selection
-                .and_then(|p| {
-                    sel.iter()
-                        .find(|&&i| i >= p)
-                        .copied()
-                        .or_else(|| sel.last().copied())
-                })
-                .or_else(|| sel.first().copied());
-            self.worktree_view.list_state.select(next);
-        } else {
-            self.set_error(format!(
-                "Worktree not deleted: {} (use `a wm clean` to investigate)",
-                path.display()
-            ));
-        }
-        Ok(())
+        self.worktree_discovery = WorktreeDiscoveryState::Failed;
     }
 }
 

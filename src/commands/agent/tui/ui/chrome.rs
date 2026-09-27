@@ -9,13 +9,11 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::{App, AppMode, View};
-use crate::commands::agent::tui::worktree_view::WorktreeMode;
 
 use super::clean_list::render_clean_list;
 use super::edit_bar::render_edit_input;
 use super::helpers::{count_statuses, truncate};
 use super::session_list::render_session_list;
-use super::worktree_list::render_worktree_list;
 
 const HEADER_HEIGHT: u16 = 1;
 
@@ -150,7 +148,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     match app.view {
         View::Session => render_session_list(frame, area, app, now),
-        View::Worktree => render_worktree_list(frame, area, app, now),
         View::Clean => render_clean_list(frame, area, app, now),
     }
 }
@@ -176,10 +173,6 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
         return vec![line];
     }
 
-    if app.view == View::Worktree {
-        return build_worktree_help_lines(app, bold);
-    }
-
     build_session_help_lines(app, bold)
 }
 
@@ -196,14 +189,12 @@ fn clean_status_line(app: &App, bold: Style) -> Option<Line<'static>> {
         Span::styled(progress.render_line(), progress_style),
         Span::raw("   "),
         Span::styled("q", bold),
-        Span::raw(": quit  "),
-        Span::styled("Tab", bold),
-        Span::raw(": switch view"),
+        Span::raw(": quit"),
     ]))
 }
 
 /// Builds the collapsed `?: keys   <hint>   <hint>   ...` line shared by the
-/// worktree and session views' default (non-expanded) help bar state.
+/// session view's default (non-expanded) help bar state.
 fn build_compact_help_line(bold: Style, hints: &[(&str, &str)]) -> Vec<Line<'static>> {
     let mut spans = vec![
         Span::raw(" "),
@@ -216,62 +207,6 @@ fn build_compact_help_line(bold: Style, hints: &[(&str, &str)]) -> Vec<Line<'sta
         spans.push(Span::raw(format!(": {label}{sep}")));
     }
     vec![Line::from(spans)]
-}
-
-fn build_worktree_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
-    match &app.worktree_view.mode {
-        WorktreeMode::Confirm {
-            session_count,
-            has_active,
-            ..
-        } => {
-            let warn_color = if *has_active {
-                Color::Red
-            } else {
-                Color::Yellow
-            };
-            let warn_style = Style::default().fg(warn_color).add_modifier(Modifier::BOLD);
-            let prompt = if *has_active {
-                format!(
-                    "  WARNING: ACTIVE session — delete worktree and {session_count} session{}?",
-                    if *session_count == 1 { "" } else { "s" }
-                )
-            } else if *session_count > 0 {
-                format!(
-                    "  Delete worktree and {session_count} session{}?",
-                    if *session_count == 1 { "" } else { "s" }
-                )
-            } else {
-                "  Delete worktree?".to_string()
-            };
-            vec![Line::from(vec![
-                Span::styled(prompt, warn_style),
-                Span::raw(" "),
-                Span::styled("y", bold),
-                Span::raw(": yes  "),
-                Span::styled("n/Esc", bold),
-                Span::raw(": cancel"),
-            ])]
-        }
-        WorktreeMode::Normal if app.show_help => vec![Line::from(vec![
-            Span::styled("  j/k", bold),
-            Span::raw(": move  "),
-            Span::styled("Enter/f", bold),
-            Span::raw(": focus  "),
-            Span::styled("d", bold),
-            Span::raw(": delete  "),
-            Span::styled("1-9", bold),
-            Span::raw(": quick  "),
-            Span::styled("Tab", bold),
-            Span::raw(": switch view  "),
-            Span::styled("q", bold),
-            Span::raw(": quit"),
-        ])],
-        WorktreeMode::Normal => build_compact_help_line(
-            bold,
-            &[("Enter/f", "focus"), ("Tab", "switch view"), ("q", "quit")],
-        ),
-    }
 }
 
 fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
@@ -373,24 +308,15 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  C-r/w/s/p", bold),
                 Span::raw(": filter  "),
-                Span::styled("Tab", bold),
-                Span::raw(": worktree view  "),
                 Span::styled("q", bold),
                 Span::raw(": quit"),
             ]),
         ],
         AppMode::Normal if app.has_filter() => build_compact_help_line(
             bold,
-            &[
-                ("/", "search"),
-                ("Esc", "clear filter"),
-                ("Tab", "worktree"),
-                ("q", "quit"),
-            ],
+            &[("/", "search"), ("Esc", "clear filter"), ("q", "quit")],
         ),
-        AppMode::Normal => {
-            build_compact_help_line(bold, &[("/", "search"), ("Tab", "worktree"), ("q", "quit")])
-        }
+        AppMode::Normal => build_compact_help_line(bold, &[("/", "search"), ("q", "quit")]),
     }
 }
 
@@ -559,18 +485,12 @@ mod tests {
 
     #[rstest]
     #[case::session_view_default(View::Session, false, vec![
-        " ?: keys   /: search   Tab: worktree   q: quit".to_string(),
+        " ?: keys   /: search   q: quit".to_string(),
     ])]
     #[case::session_view_expanded(View::Session, true, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
-        "  C-r/w/s/p: filter  Tab: worktree view  q: quit".to_string(),
-    ])]
-    #[case::worktree_view_default(View::Worktree, false, vec![
-        " ?: keys   Enter/f: focus   Tab: switch view   q: quit".to_string(),
-    ])]
-    #[case::worktree_view_expanded(View::Worktree, true, vec![
-        "  j/k: move  Enter/f: focus  d: delete  1-9: quick  Tab: switch view  q: quit".to_string(),
+        "  C-r/w/s/p: filter  q: quit".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,

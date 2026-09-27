@@ -1,7 +1,7 @@
 //! Clean view state for the cc watch TUI.
 //!
-//! Reached by pressing `c` from session view or worktree view. Shows the
-//! same worktree list as the worktree view, but partitioned into
+//! Reached by pressing `c` from session view. It partitions discovered
+//! worktrees into
 //! "To delete" (merged PR & no active session) and "Kept" (everything
 //! else). The user can toggle individual rows between sections with
 //! Enter, then press `y` to spawn `a agent clean-detached` as a detached
@@ -13,8 +13,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
 
+use super::worktree::{WorktreeRow, canonicalize_or_self};
 use super::worktree_session_children::{SessionChild, sessions_under_worktree_from_canonical};
-use super::worktree_view::{WorktreeRow, canonicalize_or_self};
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::Session;
@@ -543,8 +543,6 @@ mod tests {
             name: name.to_string(),
             path: PathBuf::from(path),
             session_count: 0,
-            has_active: false,
-            sessions: Vec::new(),
         }
     }
 
@@ -770,10 +768,8 @@ mod tests {
             repo: "r".to_string(),
             branch: "b".to_string(),
             name: "wt".to_string(),
-            path: super::super::worktree_view::canonicalize_or_self(&wt),
+            path: super::super::worktree::canonicalize_or_self(&wt),
             session_count: 1,
-            has_active: false,
-            sessions: Vec::new(),
         };
         let input = CleanRowInput {
             row,
@@ -840,10 +836,8 @@ mod tests {
             repo: "r".to_string(),
             branch: "b".to_string(),
             name: "wt".to_string(),
-            path: super::super::worktree_view::canonicalize_or_self(&wt),
+            path: super::super::worktree::canonicalize_or_self(&wt),
             session_count: 1,
-            has_active: false,
-            sessions: Vec::new(),
         };
         let input = CleanRowInput {
             row,

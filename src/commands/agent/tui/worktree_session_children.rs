@@ -1,5 +1,4 @@
-//! Shared "sessions living under a worktree" model used by both the
-//! worktree view and the clean view.
+//! Shared "sessions living under a worktree" model used by the clean view.
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +10,7 @@ use ratatui::widgets::ListItem;
 use crate::commands::agent::types::{DisplayStatus, Session};
 
 #[cfg(test)]
-use super::worktree_view::canonicalize_or_self;
+use super::worktree::canonicalize_or_self;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 #[cfg(test)]
@@ -42,7 +41,7 @@ impl SessionChild {
 /// pairs so the caller can amortize canonicalize across many worktree
 /// rows; macOS `/tmp` vs `/private/tmp` resolves correctly as long as
 /// both `worktree_path` and each cwd in `canonical_sessions` were run
-/// through [`canonicalize_or_self`](super::worktree_view::canonicalize_or_self).
+/// through [`canonicalize_or_self`](super::worktree::canonicalize_or_self).
 pub fn sessions_under_worktree_from_canonical(
     worktree_path: &Path,
     canonical_sessions: &[(PathBuf, &Session)],
