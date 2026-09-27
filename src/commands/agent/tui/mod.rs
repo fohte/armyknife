@@ -6,6 +6,7 @@ mod pr_fetch;
 mod session_rows;
 mod title_edit;
 mod title_generate;
+mod tq_cache;
 mod tq_fetch;
 mod ui;
 mod worktree_session_children;
@@ -14,6 +15,7 @@ mod worktree_view;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -30,6 +32,8 @@ use crate::commands::agent::resume;
 use crate::commands::agent::types::SessionStatus;
 use crate::infra::tmux;
 use crate::shared::command;
+
+const TQ_SESSION_TASKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
@@ -93,11 +97,18 @@ const MAX_DRAIN_PER_ITERATION: usize = 100;
 /// 5. The merged reload + render happens once per iteration
 fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut app = App::new()?;
+    match tq_cache::load() {
+        Ok(task_by_session) => app.set_session_tasks(task_by_session),
+        Err(error) => tracing::warn!("failed to load tq session-task cache: {error}"),
+    }
     let event_handler = EventHandler::new()?;
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
     event_handler.start_tq_session_tasks_fetch(local_session_ids);
+    let mut tq_fetch_in_flight = true;
+    let mut tq_fetch_pending = false;
+    let mut next_tq_refresh = Instant::now() + TQ_SESSION_TASKS_REFRESH_INTERVAL;
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -109,6 +120,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
 
         let first_event = event_handler.next()?;
         let mut needs_full_reload = false;
+        let mut periodic_tq_refresh_due = false;
         let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
         let mut effects = KeyEffects::default();
 
@@ -125,7 +137,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                     }
                 }
                 AppEvent::SessionsChanged(None) => needs_full_reload = true,
-                AppEvent::Tick => {}
+                AppEvent::Tick => {
+                    if Instant::now() >= next_tq_refresh {
+                        periodic_tq_refresh_due = true;
+                        next_tq_refresh = Instant::now() + TQ_SESSION_TASKS_REFRESH_INTERVAL;
+                    }
+                }
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
                     app.set_worktrees(rows);
                     // If the user opened the clean view before discovery
@@ -149,12 +166,18 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
                 }
-                AppEvent::TqSessionTasksFetched(Ok(task_by_session)) => {
+                AppEvent::TqSessionTasksFetched(Some(Ok(task_by_session))) => {
+                    tq_fetch_in_flight = false;
+                    if let Err(error) = tq_cache::store(&task_by_session) {
+                        tracing::warn!("failed to store tq session-task cache: {error}");
+                    }
                     app.set_session_tasks(task_by_session);
                 }
-                AppEvent::TqSessionTasksFetched(Err(e)) => {
+                AppEvent::TqSessionTasksFetched(Some(Err(e))) => {
+                    tq_fetch_in_flight = false;
                     tracing::warn!("tq session-task fetch failed: {e}");
                 }
+                AppEvent::TqSessionTasksFetched(None) => tq_fetch_in_flight = false,
                 AppEvent::TaskUrlFetched(Ok(url)) => {
                     open_url(&mut app, &url);
                 }
@@ -223,15 +246,18 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             // sync without re-running git discovery.
             let snapshot = app.sessions.clone();
             app.worktree_view.refresh_session_overlay(&snapshot);
-
-            // A newly created session may already be tq-linked (or an
-            // existing one may have just been linked); re-fetch so it picks
-            // up its title-prefix instead of staying unlinked forever.
-            if new_session_created {
-                let local_session_ids: HashSet<String> =
-                    snapshot.iter().map(|s| s.session_id.clone()).collect();
-                event_handler.start_tq_session_tasks_fetch(local_session_ids);
-            }
+        }
+        // A new session may already be tq-linked; refresh its prefix along
+        // with periodic refreshes, coalescing requests while one is running.
+        if new_session_created || periodic_tq_refresh_due {
+            tq_fetch_pending = true;
+        }
+        if !tq_fetch_in_flight && tq_fetch_pending {
+            let local_session_ids: HashSet<String> =
+                app.sessions.iter().map(|s| s.session_id.clone()).collect();
+            event_handler.start_tq_session_tasks_fetch(local_session_ids);
+            tq_fetch_in_flight = true;
+            tq_fetch_pending = false;
         }
 
         if app.should_quit {

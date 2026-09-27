@@ -58,11 +58,10 @@ pub enum AppEvent {
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
-    /// tq session-task fetch completed (mapping each displayed session to
-    /// the tq task it's linked to, for the title-prefix). `Ok(HashMap::new())`
-    /// (tq not configured or nothing linked) and `Err` (tq unreachable) both
-    /// leave every row's title-prefix empty.
-    TqSessionTasksFetched(std::result::Result<HashMap<String, SessionTask>, String>),
+    /// tq session-task fetch completed. `None` means the fetch was skipped
+    /// because tq is unavailable or there are no local sessions, so cached
+    /// task links should remain in use.
+    TqSessionTasksFetched(Option<std::result::Result<HashMap<String, SessionTask>, String>>),
     /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
     /// is opened in the browser; `Err` (tq missing/unreachable) is logged
     /// and otherwise ignored -- the same silent degrade as every other tq
@@ -176,15 +175,23 @@ impl EventHandler {
     pub fn start_tq_session_tasks_fetch(&self, local_session_ids: HashSet<String>) {
         let tx = self.sender.clone();
         let Some(rt) = self.rt_handle.as_ref().cloned() else {
-            let _ = tx.send(AppEvent::TqSessionTasksFetched(Err(
+            let _ = tx.send(AppEvent::TqSessionTasksFetched(Some(Err(
                 "tokio runtime is not available".to_string(),
-            )));
+            ))));
             return;
         };
-        let client = TqClient::detect();
+        let Some(client) = TqClient::detect() else {
+            let _ = tx.send(AppEvent::TqSessionTasksFetched(None));
+            return;
+        };
+        if local_session_ids.is_empty() {
+            let _ = tx.send(AppEvent::TqSessionTasksFetched(None));
+            return;
+        }
         rt.spawn(async move {
-            let result = super::tq_fetch::fetch_session_tasks(client, local_session_ids).await;
-            let _ = tx.send(AppEvent::TqSessionTasksFetched(result));
+            let result =
+                super::tq_fetch::fetch_session_tasks(Some(client), local_session_ids).await;
+            let _ = tx.send(AppEvent::TqSessionTasksFetched(Some(result)));
         });
     }
 
