@@ -28,6 +28,7 @@ pub enum ExternalTool {
     Shpool,
     TerminalBrowser,
     Open,
+    XdgOpen,
 }
 
 pub struct Metadata {
@@ -68,6 +69,7 @@ impl ExternalTool {
         Self::Shpool,
         Self::TerminalBrowser,
         Self::Open,
+        Self::XdgOpen,
     ];
 
     pub const fn metadata(self) -> Metadata {
@@ -218,6 +220,15 @@ impl ExternalTool {
                 brew_pkg: None,
                 macos_app_path: None,
             },
+            Self::XdgOpen => Metadata {
+                name: "xdg-open",
+                binary: "xdg-open",
+                purpose: "open crit reviews when no agent session is associated",
+                version_args: &["--help"],
+                macos_only: false,
+                brew_pkg: None,
+                macos_app_path: None,
+            },
         }
     }
 
@@ -307,6 +318,7 @@ mod tests {
             "shpool",
             "terminal-browser",
             "open",
+            "xdg-open",
         ];
         want.sort_unstable();
 

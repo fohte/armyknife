@@ -15,7 +15,6 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::process;
 use crate::infra::tmux;
-use crate::shared::command;
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
@@ -70,7 +69,7 @@ fn add(args: &AddArgs) -> Result<()> {
         let mut opener = if cfg!(target_os = "macos") {
             ExternalTool::Open.command()
         } else {
-            command::new("xdg-open")
+            ExternalTool::XdgOpen.command()
         };
         let status = opener
             .arg(&args.url)
