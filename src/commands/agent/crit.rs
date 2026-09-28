@@ -237,7 +237,7 @@ fn display_floating_pane(session: &Session, url: &str, port: u16, pane_id: &str)
     let shpool_session = format!("crit-{port}");
     let inner_command = shlex::try_join([terminal_browser.as_str(), "open", url])
         .context("failed to quote terminal-browser command")?;
-    let command = shlex::try_join([
+    let shpool_command = shlex::try_join([
         shpool.as_str(),
         "attach",
         "-c",
@@ -245,6 +245,8 @@ fn display_floating_pane(session: &Session, url: &str, port: u16, pane_id: &str)
         shpool_session.as_str(),
     ])
     .context("failed to quote shpool command")?;
+    // shpool does not restore modifyOtherKeys across session attaches.
+    let command = format!("printf '\\033[>4;2m' && exec {shpool_command}");
 
     let label = display_label(session);
     let repo = repo_name(&session.cwd);
