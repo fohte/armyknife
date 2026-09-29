@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.342](https://github.com/fohte/armyknife/compare/v0.1.341...v0.1.342) (2026-09-29)
+
+
+### Features
+
+* **agent/watch:** highlight linked tasks and sessions across panes ([#1005](https://github.com/fohte/armyknife/issues/1005)) ([6ba66a6](https://github.com/fohte/armyknife/commit/6ba66a6758c6a2eac32c90c8277368b145af36c8))
+
 ## [0.1.341](https://github.com/fohte/armyknife/compare/v0.1.340...v0.1.341) (2026-09-29)
 
 
