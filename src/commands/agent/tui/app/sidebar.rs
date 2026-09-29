@@ -323,15 +323,7 @@ impl App {
             return;
         }
 
-        let filter = scope_filter(self.tq_snapshot.as_ref(), &self.sidebar_cursor);
-        let linked_session_ids = self
-            .sessions
-            .iter()
-            .filter(|session| {
-                matches_scope(&filter, self.tq_snapshot.as_ref(), &session.session_id)
-            })
-            .map(|session| session.session_id.clone())
-            .collect::<HashSet<_>>();
+        let linked_session_ids = self.linked_session_ids_for_sidebar_cursor();
         if linked_session_ids.is_empty() {
             return;
         }
@@ -354,15 +346,7 @@ impl App {
     }
 
     fn first_session_row_position(&self, session_ids: &HashSet<String>) -> Option<usize> {
-        self.row_sessions
-            .iter()
-            .enumerate()
-            .find_map(|(position, session_index)| {
-                let session = (*session_index).and_then(|index| self.sessions.get(index))?;
-                session_ids
-                    .contains(&session.session_id)
-                    .then_some(position)
-            })
+        self.position_of_session_row_where(|session| session_ids.contains(&session.session_id))
     }
 
     pub fn sync_sidebar_list_state(&mut self, rows: &[super::super::tq_sidebar::SidebarRow]) {
