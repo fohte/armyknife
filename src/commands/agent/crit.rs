@@ -21,7 +21,6 @@ use crate::shared::log::short_run_id;
 use self::url::parse_port;
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
-const CRIT_PANE_OPTION: &str = "@armyknife-crit-pane";
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CritCommands {
@@ -171,7 +170,7 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
     let pane_id = args.pane.clone().or_else(tmux::current_pane_id_from_env);
     if args.session.is_none()
         && let Some(pane_id) = pane_id.as_deref()
-        && tmux::get_pane_option(pane_id, CRIT_PANE_OPTION).is_some()
+        && tmux::is_crit_pane(pane_id)
     {
         close_crit_pane(pane_id)?;
         return Ok(());
@@ -193,9 +192,7 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
             .context("Provide --session or --pane outside an agent tmux pane")?
     };
 
-    if let Some(crit_pane_id) =
-        tmux::find_pane_with_option_value(target_pane_id, CRIT_PANE_OPTION, target_pane_id)?
-    {
+    if let Some(crit_pane_id) = tmux::find_crit_pane_for_parent(target_pane_id)? {
         close_crit_pane(&crit_pane_id)?;
         return Ok(());
     }
@@ -208,11 +205,21 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
 
     tmux::focus_pane(target_pane_id).context("failed to focus the agent tmux pane")?;
     tracing::info!(event = "agent.crit.open.floating_pane_requested", port);
-    display_floating_pane(&session, url, port, target_pane_id)
+    let title = format!(
+        " crit · {} · {} ",
+        display_label(&session),
+        repo_name(&session.cwd)
+    );
+    tmux::open_crit_pane(tmux::CritPaneSpec {
+        parent_pane_id: target_pane_id,
+        url,
+        port,
+        title: &title,
+    })
 }
 
 fn close_crit_pane(pane_id: &str) -> Result<()> {
-    tmux::run_tmux(&["kill-pane", "-t", pane_id])?;
+    tmux::close_crit_pane(pane_id)?;
     tracing::info!(event = "agent.crit.open.floating_pane_closed", pane = %pane_id);
     Ok(())
 }
@@ -229,48 +236,6 @@ fn resolve_session_id(args: &OpenArgs) -> Result<String> {
 
     resolve_session_option(|option| tmux::get_pane_option(&pane_id, option))
         .with_context(|| format!("No agent session is bound to pane {pane_id}"))
-}
-
-fn display_floating_pane(session: &Session, url: &str, port: u16, pane_id: &str) -> Result<()> {
-    let shpool = tool_path(ExternalTool::Shpool)?;
-    let terminal_browser = tool_path(ExternalTool::TerminalBrowser)?;
-    let shpool_session = format!("crit-{port}");
-    let inner_command = shlex::try_join([terminal_browser.as_str(), "open", url])
-        .context("failed to quote terminal-browser command")?;
-    let command = shlex::try_join([
-        shpool.as_str(),
-        "attach",
-        "-c",
-        inner_command.as_ref(),
-        shpool_session.as_str(),
-    ])
-    .context("failed to quote shpool command")?;
-
-    let label = display_label(session);
-    let repo = repo_name(&session.cwd);
-    let title = tmux_title(&format!(" crit · {label} · {repo} "));
-    let crit_pane_id = tmux::run_tmux_output(&[
-        "new-pane",
-        "-P",
-        "-F",
-        "#{pane_id}",
-        "-x",
-        "90%",
-        "-y",
-        "90%",
-        "-X",
-        "5%",
-        "-Y",
-        "5%",
-        "-S",
-        "fg=colour98",
-        "-t",
-        pane_id,
-        command.as_ref(),
-    ])?;
-    tmux::set_pane_option(&crit_pane_id, CRIT_PANE_OPTION, pane_id)?;
-    tmux::run_tmux(&["select-pane", "-T", &title, "-t", &crit_pane_id])?;
-    Ok(())
 }
 
 fn send_notification(session: &Session, port: u16) -> Result<()> {
@@ -351,20 +316,4 @@ fn display_label(session: &Session) -> String {
 
 fn short_id(session_id: &str) -> String {
     session_id.chars().take(8).collect()
-}
-
-fn tmux_title(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .replace('#', "##")
-}
-
-fn tool_path(tool: ExternalTool) -> Result<String> {
-    tool.resolve_path()
-        .with_context(|| format!("{} executable not found on PATH", tool.name()))?
-        .to_str()
-        .map(str::to_string)
-        .with_context(|| format!("{} executable path is not valid UTF-8", tool.name()))
 }
