@@ -140,13 +140,36 @@ fn add(args: &AddArgs) -> Result<()> {
 
 fn add_without_agent_session(args: &AddArgs, pane_id: &str) -> Result<()> {
     let port = parse_port(&args.url)?;
-    monitor::ensure_started(port, None).context("failed to monitor crit review shutdown")?;
-    tmux::open_crit_pane(tmux::CritPaneSpec {
+    let span = tracing::info_span!(
+        "agent.crit.add",
+        run_id = %short_run_id(),
+        session = "none",
+        port,
+    );
+    let _guard = span.enter();
+
+    if let Err(error) = monitor::ensure_started(port, None) {
+        tracing::warn!(
+            event = "agent.crit.monitor.start_failed",
+            port,
+            error = %error,
+        );
+        eprintln!("[armyknife] warning: failed to monitor crit review shutdown: {error:#}");
+    }
+
+    let result = tmux::open_crit_pane(tmux::CritPaneSpec {
         parent_pane_id: pane_id,
         url: &args.url,
         port,
         title: " crit · review ",
-    })
+    });
+    if let Err(error) = &result {
+        tracing::warn!(event = "agent.crit.add.pane_open_failed", error = %error);
+        return result;
+    }
+
+    tracing::info!(event = "agent.crit.add.pane_opened");
+    result
 }
 
 fn open(args: &OpenArgs) -> Result<()> {

@@ -21,19 +21,12 @@ pub(crate) fn find_crit_pane_for_parent(parent_pane_id: &str) -> super::Result<O
 }
 
 pub(crate) fn find_crit_panes_for_port(port: u16) -> super::Result<Vec<String>> {
-    let output = super::run_tmux_output(&[
-        "list-panes",
-        "-a",
-        "-F",
-        "#{pane_id}\t#{@armyknife-crit-pane-port}",
-    ])?;
-    let port = port.to_string();
+    let filter = format!("#{{==:#{{{CRIT_PANE_PORT_OPTION}}},{port}}}");
+    let output = super::run_tmux_output(&["list-panes", "-a", "-f", &filter, "-F", "#{pane_id}"])?;
     Ok(output
         .lines()
-        .filter_map(|line| {
-            let (pane_id, pane_port) = line.split_once('\t')?;
-            (pane_port == port).then(|| pane_id.to_string())
-        })
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
         .collect())
 }
 

@@ -131,9 +131,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     }
 
     kill_shpool_session(args.port);
-    if args.session.is_none() {
-        close_crit_panes(args.port);
-    }
+    close_crit_panes(args.port);
     cleanup_session_links(args.port, args.session.as_deref(), args.pane.as_deref());
     remove_marker_if_owned(&marker);
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
