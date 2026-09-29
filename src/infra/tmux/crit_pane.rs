@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use crate::infra::external_tool::ExternalTool;
 
 const CRIT_PANE_OPTION: &str = "@armyknife-crit-pane";
+const CRIT_PANE_PORT_OPTION: &str = "@armyknife-crit-pane-port";
 
 pub(crate) struct CritPaneSpec<'a> {
     pub(crate) parent_pane_id: &'a str,
@@ -17,6 +18,16 @@ pub(crate) fn is_crit_pane(pane_id: &str) -> bool {
 
 pub(crate) fn find_crit_pane_for_parent(parent_pane_id: &str) -> super::Result<Option<String>> {
     super::find_pane_with_option_value(parent_pane_id, CRIT_PANE_OPTION, parent_pane_id)
+}
+
+pub(crate) fn find_crit_panes_for_port(port: u16) -> super::Result<Vec<String>> {
+    let filter = format!("#{{==:#{{{CRIT_PANE_PORT_OPTION}}},{port}}}");
+    let output = super::run_tmux_output(&["list-panes", "-a", "-f", &filter, "-F", "#{pane_id}"])?;
+    Ok(output
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 pub(crate) fn close_crit_pane(pane_id: &str) -> super::Result<()> {
@@ -60,8 +71,15 @@ pub(crate) fn open_crit_pane(spec: CritPaneSpec<'_>) -> Result<()> {
         spec.parent_pane_id,
         command.as_str(),
     ])?;
-    super::set_pane_option(&crit_pane_id, CRIT_PANE_OPTION, spec.parent_pane_id)?;
-    super::run_tmux(&["select-pane", "-T", &title, "-t", &crit_pane_id])?;
+    let pane_setup = (|| {
+        super::set_pane_option(&crit_pane_id, CRIT_PANE_PORT_OPTION, &spec.port.to_string())?;
+        super::set_pane_option(&crit_pane_id, CRIT_PANE_OPTION, spec.parent_pane_id)?;
+        super::run_tmux(&["select-pane", "-T", &title, "-t", &crit_pane_id])
+    })();
+    if let Err(error) = pane_setup {
+        let _ = close_crit_pane(&crit_pane_id);
+        return Err(error.into());
+    }
     Ok(())
 }
 

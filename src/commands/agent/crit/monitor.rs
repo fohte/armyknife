@@ -14,6 +14,7 @@ use super::pane;
 use super::url::parse_port;
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
+use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -29,9 +30,9 @@ pub struct MonitorArgs {
     #[arg(long)]
     pid: u32,
 
-    /// Agent session ID that owns the review.
+    /// Agent session ID that owns the review, if any.
     #[arg(long)]
-    session: String,
+    session: Option<String>,
 
     /// Pane associated when the review was requested.
     #[arg(long)]
@@ -42,31 +43,32 @@ pub struct MonitorArgs {
     reservation: String,
 }
 
-pub(super) fn ensure_started(port: u16, session: &Session) -> Result<()> {
+pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()> {
     let marker = marker_path(port)?;
     let Some(reservation) = claim_marker(&marker)? else {
         return Ok(());
     };
+    let pane_id = session
+        .and_then(|session| session.tmux_info.as_ref().map(|info| info.pane_id.as_str()))
+        .unwrap_or_default();
+    let session_id = session.map(|session| session.session_id.as_str());
 
     let result = (|| {
         let pid = crit_pid_for_port(port)?
             .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
         let executable =
             std::env::current_exe().context("failed to resolve the armyknife executable")?;
-        let pane_id = session
-            .tmux_info
-            .as_ref()
-            .map(|info| info.pane_id.as_str())
-            .unwrap_or_default();
         let mut args = vec![
             "agent".to_string(),
             "crit".to_string(),
             "monitor".to_string(),
             format!("--port={port}"),
             format!("--pid={pid}"),
-            format!("--session={}", session.session_id),
             format!("--reservation={reservation}"),
         ];
+        if let Some(session_id) = session_id {
+            args.push(format!("--session={session_id}"));
+        }
         if !pane_id.is_empty() {
             args.push(format!("--pane={pane_id}"));
         }
@@ -78,7 +80,7 @@ pub(super) fn ensure_started(port: u16, session: &Session) -> Result<()> {
             event = "agent.crit.monitor.started",
             port,
             worker_pid,
-            session = %session.session_id,
+            session = session_id.unwrap_or("none"),
         );
         Ok(())
     })();
@@ -93,7 +95,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     let span = tracing::info_span!(
         "agent.crit.monitor",
         run_id = %short_run_id(),
-        session = %args.session,
+        session = args.session.as_deref().unwrap_or("none"),
         port = args.port,
     );
     let _guard = span.enter();
@@ -129,7 +131,8 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     }
 
     kill_shpool_session(args.port);
-    cleanup_session_links(args.port, &args.session, args.pane.as_deref());
+    close_crit_panes(args.port);
+    cleanup_session_links(args.port, args.session.as_deref(), args.pane.as_deref());
     remove_marker_if_owned(&marker);
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
@@ -278,8 +281,12 @@ fn kill_shpool_session(port: u16) {
     }
 }
 
-fn cleanup_session_links(port: u16, fallback_session_id: &str, fallback_pane_id: Option<&str>) {
-    let mut fallback_was_processed = false;
+fn cleanup_session_links(
+    port: u16,
+    fallback_session_id: Option<&str>,
+    fallback_pane_id: Option<&str>,
+) {
+    let mut fallback_was_processed = fallback_session_id.is_none();
     match store::list_all_sessions() {
         Ok(sessions) => {
             for session in sessions.into_iter().filter(|session| {
@@ -288,7 +295,7 @@ fn cleanup_session_links(port: u16, fallback_session_id: &str, fallback_pane_id:
                     .iter()
                     .any(|url| parse_port(url).ok() == Some(port))
             }) {
-                fallback_was_processed |= session.session_id == fallback_session_id;
+                fallback_was_processed |= Some(session.session_id.as_str()) == fallback_session_id;
                 let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.as_str());
                 remove_session_link(port, &session.session_id, pane_id);
             }
@@ -301,8 +308,28 @@ fn cleanup_session_links(port: u16, fallback_session_id: &str, fallback_pane_id:
             );
         }
     }
-    if !fallback_was_processed {
+    if !fallback_was_processed && let Some(fallback_session_id) = fallback_session_id {
         remove_session_link(port, fallback_session_id, fallback_pane_id);
+    }
+}
+
+fn close_crit_panes(port: u16) {
+    let panes = match tmux::find_crit_panes_for_port(port) {
+        Ok(panes) => panes,
+        Err(error) => {
+            tracing::warn!(event = "agent.crit.cleanup.pane_list_failed", port, error = %error);
+            return;
+        }
+    };
+    for pane_id in panes {
+        if let Err(error) = tmux::close_crit_pane(&pane_id) {
+            tracing::warn!(
+                event = "agent.crit.cleanup.pane_close_failed",
+                port,
+                pane = %pane_id,
+                error = %error,
+            );
+        }
     }
 }
 
