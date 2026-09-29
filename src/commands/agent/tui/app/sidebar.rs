@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use super::{App, View};
 use crate::commands::agent::tui::tq_sidebar::{
-    SidebarRowKind, SidebarSelection, build_sidebar_rows, selection_exists,
+    SidebarRow, SidebarRowKind, SidebarSelection, build_sidebar_rows, matches_scope, scope_filter,
+    selection_exists,
 };
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
 
@@ -123,11 +124,18 @@ impl App {
 
     pub fn toggle_sidebar_focus(&mut self) {
         if self.sidebar_visible && self.sidebar_available {
-            self.sidebar_focused = !self.sidebar_focused;
+            if self.sidebar_focused {
+                self.move_session_cursor_to_sidebar_cursor();
+                self.sidebar_focused = false;
+            } else {
+                self.move_sidebar_cursor_to_selected_session();
+                self.sidebar_focused = true;
+            }
         }
     }
 
     pub fn show_narrow_sidebar_screen(&mut self) {
+        self.move_sidebar_cursor_to_selected_session();
         self.sidebar_focused = true;
     }
 
@@ -226,15 +234,141 @@ impl App {
         self.restore_selection(old_position, old_session_id.as_deref());
     }
 
-    pub fn sync_sidebar_list_state(&mut self, rows: &[super::super::tq_sidebar::SidebarRow]) {
-        let selection = if self.sidebar_focused {
-            &self.sidebar_cursor
-        } else {
-            &self.sidebar_selection
+    pub fn linked_session_ids_for_sidebar_cursor(&self) -> HashSet<String> {
+        if self.sidebar_cursor == SidebarSelection::All {
+            return HashSet::new();
+        }
+        let filter = scope_filter(self.tq_snapshot.as_ref(), &self.sidebar_cursor);
+        self.sessions
+            .iter()
+            .filter(|session| {
+                matches_scope(&filter, self.tq_snapshot.as_ref(), &session.session_id)
+            })
+            .map(|session| session.session_id.clone())
+            .collect()
+    }
+
+    pub fn linked_sidebar_selections_for_selected_session(
+        &self,
+        rows: &[SidebarRow],
+    ) -> Vec<SidebarSelection> {
+        let Some(session) = self.selected_session() else {
+            return Vec::new();
         };
+        let Some(snapshot) = self.tq_snapshot.as_ref() else {
+            return Vec::new();
+        };
+        let Some(tasks) = snapshot.session_tasks.get(&session.session_id) else {
+            return vec![SidebarSelection::Untasked];
+        };
+        if tasks.is_empty() {
+            return vec![SidebarSelection::Untasked];
+        }
+
+        let visible_task_ids = rows
+            .iter()
+            .filter_map(|row| match row.selection.as_ref() {
+                Some(SidebarSelection::Task(task_id)) => Some(task_id.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let mut linked_task_ids = HashSet::new();
+        for linked_task in tasks {
+            let mut task_id = Some(linked_task.task_id.as_str());
+            let mut visited = HashSet::new();
+            while let Some(current_id) = task_id {
+                if visible_task_ids.contains(current_id) {
+                    linked_task_ids.insert(current_id);
+                    break;
+                }
+                if !visited.insert(current_id) {
+                    break;
+                }
+                task_id = snapshot
+                    .tasks
+                    .get(current_id)
+                    .and_then(|task| task.parent_id.as_deref());
+            }
+        }
+
+        rows.iter()
+            .filter_map(|row| {
+                let selection = row.selection.as_ref()?;
+                match selection {
+                    SidebarSelection::Task(task_id)
+                        if linked_task_ids.contains(task_id.as_str()) =>
+                    {
+                        Some(selection.clone())
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn move_sidebar_cursor_to_selected_session(&mut self) {
+        let rows = self.sidebar_rows();
+        if let Some(selection) = self
+            .linked_sidebar_selections_for_selected_session(&rows)
+            .first()
+        {
+            self.sidebar_cursor = selection.clone();
+        }
+    }
+
+    fn move_session_cursor_to_sidebar_cursor(&mut self) {
+        if self.sidebar_cursor == SidebarSelection::All {
+            self.list_state
+                .select(self.selectable_positions().first().copied());
+            return;
+        }
+
+        let filter = scope_filter(self.tq_snapshot.as_ref(), &self.sidebar_cursor);
+        let linked_session_ids = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                matches_scope(&filter, self.tq_snapshot.as_ref(), &session.session_id)
+            })
+            .map(|session| session.session_id.clone())
+            .collect::<HashSet<_>>();
+        if linked_session_ids.is_empty() {
+            return;
+        }
+
+        if let Some(position) = self.first_session_row_position(&linked_session_ids) {
+            self.list_state.select(Some(position));
+            return;
+        }
+
+        let old_position = self.list_state.selected();
+        let old_session_id = self
+            .selected_session()
+            .map(|session| session.session_id.clone());
+        self.sidebar_selection = self.sidebar_cursor.clone();
+        self.apply_filter();
+        self.restore_selection(old_position, old_session_id.as_deref());
+        if let Some(position) = self.first_session_row_position(&linked_session_ids) {
+            self.list_state.select(Some(position));
+        }
+    }
+
+    fn first_session_row_position(&self, session_ids: &HashSet<String>) -> Option<usize> {
+        self.row_sessions
+            .iter()
+            .enumerate()
+            .find_map(|(position, session_index)| {
+                let session = (*session_index).and_then(|index| self.sessions.get(index))?;
+                session_ids
+                    .contains(&session.session_id)
+                    .then_some(position)
+            })
+    }
+
+    pub fn sync_sidebar_list_state(&mut self, rows: &[super::super::tq_sidebar::SidebarRow]) {
         let selected = rows
             .iter()
-            .position(|row| row.selection.as_ref() == Some(selection));
+            .position(|row| row.selection.as_ref() == Some(&self.sidebar_cursor));
         self.sidebar_list_state.select(selected);
     }
 }

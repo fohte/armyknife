@@ -38,9 +38,29 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let loading = app.is_tq_loading();
     let failed_without_snapshot = app.tq_snapshot.is_none() && app.tq_refresh_failed;
+    let linked_selections = app
+        .linked_sidebar_selections_for_selected_session(&rows)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
     let mut items = rows
         .iter()
-        .map(|row| build_row_item(row, inner.width as usize, loading))
+        .map(|row| {
+            let item = build_row_item(
+                row,
+                inner.width as usize,
+                loading,
+                row.selection.as_ref() == Some(&app.sidebar_selection),
+            );
+            if row
+                .selection
+                .as_ref()
+                .is_some_and(|selection| linked_selections.contains(selection))
+            {
+                item.style(Style::default().bg(Color::Indexed(236)))
+            } else {
+                item
+            }
+        })
         .collect::<Vec<_>>();
     if loading {
         items.extend(loading_tree_rows(inner.width as usize));
@@ -50,13 +70,16 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
             Style::default().fg(Color::Red),
         )));
     }
+    let selected_sidebar_row_is_linked = linked_selections.contains(&app.sidebar_cursor);
     let list = List::new(items)
-        .highlight_style(Style::default().bg(if app.sidebar_focused {
-            Color::DarkGray
+        .highlight_style(if app.sidebar_focused {
+            Style::default().bg(Color::DarkGray)
+        } else if selected_sidebar_row_is_linked {
+            Style::default().bg(Color::Indexed(236))
         } else {
-            Color::Indexed(236)
-        }))
-        .highlight_symbol(if app.sidebar_focused { ">" } else { " " });
+            Style::default()
+        })
+        .highlight_symbol(if app.sidebar_focused { ">" } else { "›" });
     frame.render_stateful_widget(list, list_area, &mut app.sidebar_list_state);
 
     if let Some((message, style)) = footer_message(app, Utc::now()) {
@@ -64,7 +87,12 @@ pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn build_row_item(row: &SidebarRow, area_width: usize, loading: bool) -> ListItem<'static> {
+fn build_row_item(
+    row: &SidebarRow,
+    area_width: usize,
+    loading: bool,
+    is_filter_selection: bool,
+) -> ListItem<'static> {
     if row.kind == SidebarRowKind::Separator {
         return ListItem::new(Line::styled(
             "─".repeat(area_width.saturating_sub(1)),
@@ -85,13 +113,18 @@ fn build_row_item(row: &SidebarRow, area_width: usize, loading: bool) -> ListIte
         .map(|(text, _)| text.width() + 1)
         .sum::<usize>();
     let (_, left_width) = column_widths(area_width, count_width);
-    let spans = row_label_spans(row, left_width);
+    let mut line_spans = if is_filter_selection {
+        vec![Span::styled("▌", Style::default().fg(Color::Indexed(179)))]
+    } else {
+        vec![Span::raw(" ")]
+    };
+    let spans = row_label_spans(row, left_width.saturating_sub(1));
     let left_width_used = spans
         .iter()
         .map(|span| span.content.as_ref().width())
         .sum::<usize>();
-    let padding = left_width.saturating_sub(left_width_used);
-    let mut line_spans = spans;
+    let padding = left_width.saturating_sub(left_width_used + 1);
+    line_spans.extend(spans);
     line_spans.push(Span::raw(" ".repeat(padding)));
     for (text, style) in counts {
         line_spans.push(Span::styled(text, style));
