@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.341](https://github.com/fohte/armyknife/compare/v0.1.340...v0.1.341) (2026-09-29)
+
+
+### Features
+
+* **agent:** open crit review in floating pane when launched from tmux pane ([#1003](https://github.com/fohte/armyknife/issues/1003)) ([28a92ba](https://github.com/fohte/armyknife/commit/28a92ba56c2974528662c6b51c26d18d8ae28850))
+
 ## [0.1.340](https://github.com/fohte/armyknife/compare/v0.1.339...v0.1.340) (2026-09-29)
 
 
