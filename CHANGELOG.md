@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.340](https://github.com/fohte/armyknife/compare/v0.1.339...v0.1.340) (2026-09-29)
+
+
+### Bug Fixes
+
+* **agent:** enable Ctrl modifier keys in crit floating pane ([#1001](https://github.com/fohte/armyknife/issues/1001)) ([be0bd9e](https://github.com/fohte/armyknife/commit/be0bd9ea595d4664d9798fba04856c06964e4174))
+
 ## [0.1.339](https://github.com/fohte/armyknife/compare/v0.1.338...v0.1.339) (2026-09-27)
 
 
