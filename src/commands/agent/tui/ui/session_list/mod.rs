@@ -96,6 +96,7 @@ pub(super) fn render_session_list(
     };
 
     let rows = build_session_rows(&filtered_sessions, &app.task_by_session);
+    let linked_session_ids = app.linked_session_ids_for_sidebar_cursor();
 
     // Build list items and owned row ids from the same `rows`, then drop
     // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
@@ -113,7 +114,14 @@ pub(super) fn render_session_list(
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
-            SessionRow::Session(entry) => build_session_item(entry, app, now, term_width, &query),
+            SessionRow::Session(entry) => build_session_item(
+                entry,
+                app,
+                now,
+                term_width,
+                &query,
+                linked_session_ids.contains(&entry.session.session_id),
+            ),
         };
         items.push(item);
     }
@@ -123,13 +131,20 @@ pub(super) fn render_session_list(
     let row_id_refs: Vec<Option<&str>> = row_ids.iter().map(|id| id.as_deref()).collect();
     app.update_row_order(&row_id_refs);
 
+    let selected_session_is_linked = app
+        .selected_session()
+        .is_some_and(|session| linked_session_ids.contains(&session.session_id));
     let list = List::new(items)
-        .highlight_style(Style::default().bg(if app.sidebar_focused {
-            Color::Indexed(236)
+        .highlight_style(if app.sidebar_focused {
+            if selected_session_is_linked {
+                Style::default().bg(Color::Indexed(236))
+            } else {
+                Style::default()
+            }
         } else {
-            Color::DarkGray
-        }))
-        .highlight_symbol(if app.sidebar_focused { " " } else { ">" });
+            Style::default().bg(Color::DarkGray)
+        })
+        .highlight_symbol(if app.sidebar_focused { "›" } else { ">" });
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -261,6 +276,7 @@ fn build_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
+    is_linked: bool,
 ) -> ListItem<'static> {
     let session = entry.session;
     let is_idle = is_idle_session(session);
@@ -359,7 +375,12 @@ fn build_session_item(
         ]));
     }
 
-    ListItem::new(lines)
+    let item = ListItem::new(lines);
+    if is_linked {
+        item.style(Style::default().bg(Color::Indexed(236)))
+    } else {
+        item
+    }
 }
 
 fn descendant_badge_text(descendant_count: usize) -> String {

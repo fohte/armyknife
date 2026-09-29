@@ -156,10 +156,20 @@ impl App {
     /// The row index whose session has the given id, if that session is
     /// currently displayed.
     pub(super) fn position_of_session_row(&self, session_id: &str) -> Option<usize> {
-        self.row_sessions.iter().position(|opt| {
-            opt.and_then(|idx| self.sessions.get(idx))
-                .is_some_and(|s| s.session_id == session_id)
-        })
+        self.position_of_session_row_where(|session| session.session_id == session_id)
+    }
+
+    pub(super) fn position_of_session_row_where(
+        &self,
+        predicate: impl Fn(&Session) -> bool,
+    ) -> Option<usize> {
+        self.row_sessions
+            .iter()
+            .enumerate()
+            .find_map(|(position, session_index)| {
+                let session = (*session_index).and_then(|idx| self.sessions.get(idx))?;
+                predicate(session).then_some(position)
+            })
     }
 
     /// Resolves the selection after a row-order rebuild.
