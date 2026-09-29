@@ -66,6 +66,10 @@ pub fn run(command: &CritCommands) -> Result<()> {
 
 fn add(args: &AddArgs) -> Result<()> {
     let Some(session_id) = EnvVars::load().own_session_id() else {
+        if let Some(pane_id) = tmux::current_pane_id_from_env() {
+            return add_without_agent_session(args, &pane_id);
+        }
+
         let mut opener = if cfg!(target_os = "macos") {
             ExternalTool::Open.command()
         } else {
@@ -111,7 +115,7 @@ fn add(args: &AddArgs) -> Result<()> {
     }
     drop(lock);
 
-    if let Err(error) = monitor::ensure_started(port, &session) {
+    if let Err(error) = monitor::ensure_started(port, Some(&session)) {
         tracing::warn!(
             event = "agent.crit.monitor.start_failed",
             session = %session_id,
@@ -132,6 +136,17 @@ fn add(args: &AddArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn add_without_agent_session(args: &AddArgs, pane_id: &str) -> Result<()> {
+    let port = parse_port(&args.url)?;
+    monitor::ensure_started(port, None).context("failed to monitor crit review shutdown")?;
+    tmux::open_crit_pane(tmux::CritPaneSpec {
+        parent_pane_id: pane_id,
+        url: &args.url,
+        port,
+        title: " crit · review ",
+    })
 }
 
 fn open(args: &OpenArgs) -> Result<()> {

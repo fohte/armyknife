@@ -14,7 +14,8 @@ use thiserror::Error;
 
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 pub(crate) use crit_pane::{
-    CritPaneSpec, close_crit_pane, find_crit_pane_for_parent, is_crit_pane, open_crit_pane,
+    CritPaneSpec, close_crit_pane, find_crit_pane_for_parent, find_crit_panes_for_port,
+    is_crit_pane, open_crit_pane,
 };
 pub use pane_info::get_pane_info_by_pane_id;
 
