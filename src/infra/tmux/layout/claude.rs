@@ -129,7 +129,14 @@ impl Launch {
         } else {
             None
         };
-        let route = self.finish(tmux_location.as_deref())?;
+        let route = self.finish(tmux_location.as_deref()).with_context(|| {
+            spec.pane_id.map_or_else(
+                || "Claude initial prompt delivery failed after creating a pane".to_string(),
+                |pane_id| {
+                    format!("Claude pane {pane_id} was created, but initial prompt delivery failed")
+                },
+            )
+        })?;
         match route {
             AgentLaunchRoute::ClaudeMessaging => {
                 if let Some(path) = spec.prompt_file {
@@ -400,10 +407,7 @@ mod tests {
                 prompt_path.exists(),
             ),
             (
-                Err(
-                    "Failed to send initial prompt through Claude messaging: socket unavailable"
-                        .to_string()
-                ),
+                Err("Claude pane %2 was created, but initial prompt delivery failed: Failed to send initial prompt through Claude messaging: socket unavailable".to_string()),
                 true,
             ),
         );

@@ -361,6 +361,37 @@ fn count_panes(node: &LayoutNode) -> usize {
     }
 }
 
+/// Count the panes that would run the requested agent after layout retargeting.
+fn count_agent_panes(layout: &LayoutNode, engine: Engine) -> usize {
+    let mut commands = Vec::new();
+    collect_pane_commands(layout, &mut commands);
+
+    let retarget = !commands
+        .iter()
+        .any(|command| is_engine_command(command, engine));
+    commands
+        .iter()
+        .map(|command| {
+            if retarget {
+                retarget_agent_command(command, engine)
+            } else {
+                command.clone()
+            }
+        })
+        .filter(|command| is_engine_command(command, engine))
+        .count()
+}
+
+fn collect_pane_commands(node: &LayoutNode, commands: &mut Vec<String>) {
+    match node {
+        LayoutNode::Pane(pane) => commands.push(pane.command.clone()),
+        LayoutNode::Split(split) => {
+            collect_pane_commands(&split.first, commands);
+            collect_pane_commands(&split.second, commands);
+        }
+    }
+}
+
 /// Tmux session config shared by both `build_layout` and `split_pane`.
 pub struct TmuxSessionSpec<'a> {
     /// Target tmux session name.
@@ -415,23 +446,10 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
     } = common;
 
-    let preflight_plan = build_layout_plan(LayoutCommandsSpec {
-        session,
-        cwd,
-        window_name,
-        layout,
-        model,
-        reasoning_effort,
-        prompt_file: None,
-        engine,
-        env_vars,
-        background,
-        restore_automatic_rename,
-    });
     let launch = AgentLaunch::prepare(
         engine,
         prompt,
-        preflight_plan.agent_commands.len(),
+        count_agent_panes(layout, engine),
         Path::new(cwd),
     )?;
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
@@ -550,26 +568,36 @@ mod tests {
         }),
         vec![(1, "codex --search".to_string())]
     )]
+    #[case::multiple_retargeted_panes(
+        LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: pane("claude"),
+            second: pane("claude --verbose"),
+        }),
+        vec![(1, "codex".to_string()), (2, "codex".to_string())]
+    )]
     fn layout_plan_identifies_agent_panes(
         #[case] layout: LayoutNode,
         #[case] expected: Vec<(usize, String)>,
     ) {
+        let actual = build_layout_plan(LayoutCommandsSpec {
+            session: "session-a",
+            cwd: "/workspace/project-a",
+            window_name: "window-a",
+            layout: &layout,
+            model: None,
+            reasoning_effort: None,
+            prompt_file: None,
+            engine: Engine::Codex,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        })
+        .agent_commands;
+
         assert_eq!(
-            build_layout_plan(LayoutCommandsSpec {
-                session: "session-a",
-                cwd: "/workspace/project-a",
-                window_name: "window-a",
-                layout: &layout,
-                model: None,
-                reasoning_effort: None,
-                prompt_file: None,
-                engine: Engine::Codex,
-                env_vars: &[],
-                background: false,
-                restore_automatic_rename: false,
-            })
-            .agent_commands,
-            expected,
+            (actual, count_agent_panes(&layout, Engine::Codex)),
+            (expected.clone(), expected.len()),
         );
     }
 

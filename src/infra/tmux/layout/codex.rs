@@ -120,11 +120,16 @@ impl Launch {
         spec: RecoverySpec<'_>,
         bind_pane: impl FnOnce(&str, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<AgentLaunchRoute> {
-        let route = self.finish(spec.cwd, spec.effort)?;
-        let thread_id = match &route {
-            AgentLaunchRoute::CodexDaemon { thread_id }
-            | AgentLaunchRoute::CodexDaemonTurnUnconfirmed { thread_id, .. } => thread_id,
-            AgentLaunchRoute::Standard | AgentLaunchRoute::ClaudeMessaging => return Ok(route),
+        let route = self.finish(spec.cwd, spec.effort).with_context(|| {
+            spec.pane_id.map_or_else(
+                || "Codex initial prompt delivery failed after creating a pane".to_string(),
+                |pane_id| {
+                    format!("Codex pane {pane_id} was created, but initial prompt delivery failed")
+                },
+            )
+        })?;
+        let Some(thread_id) = route.codex_thread_id() else {
+            return Ok(route);
         };
         let pane_id = spec
             .pane_id
@@ -172,8 +177,18 @@ impl Launch {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn prompt_file() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prompt.txt");
+        std::fs::write(&path, "prompt").unwrap();
+        (dir, path)
+    }
 
     struct StubClient {
         thread: anyhow::Result<String>,
@@ -326,6 +341,121 @@ mod tests {
                     reason: "response unavailable".to_string(),
                 }),
                 Some(("%42".to_string(), "thread-example".to_string())),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn successful_turn_binds_its_thread_and_removes_prompt_file(
+        prompt_file: (tempfile::TempDir, PathBuf),
+    ) {
+        let (_dir, prompt_path) = prompt_file;
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Ok(())),
+                }),
+                None,
+            ))
+        })
+        .expect("connection should succeed");
+        let mut binding = None;
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: Some(&prompt_path),
+                pane_id: Some("%42"),
+            },
+            |pane_id, thread_id| {
+                binding = Some((pane_id.to_string(), thread_id.to_string()));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| format!("{error:#}")),
+                binding,
+                prompt_path.exists(),
+            ),
+            (
+                Ok(AgentLaunchRoute::CodexDaemon {
+                    thread_id: "thread-example".to_string(),
+                }),
+                Some(("%42".to_string(), "thread-example".to_string())),
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn daemon_route_requires_a_pane_target() {
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Ok(())),
+                }),
+                None,
+            ))
+        })
+        .expect("connection should succeed");
+        let mut binding = None;
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: None,
+            },
+            |pane_id, thread_id| {
+                binding = Some((pane_id.to_string(), thread_id.to_string()));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (route.map_err(|error| format!("{error:#}")), binding),
+            (
+                Err("Codex daemon launch has no pane target".to_string()),
+                None
+            ),
+        );
+    }
+
+    #[test]
+    fn delivery_failure_identifies_the_created_pane() {
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Err(codex_steer::DeliveryError::NotDelivered(
+                        anyhow::anyhow!("rejected"),
+                    ))),
+                }),
+                None,
+            ))
+        })
+        .expect("connection should succeed");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+            },
+            |_, _| panic!("a rejected turn must not bind the pane"),
+        );
+
+        assert_eq!(
+            route.map_err(|error| format!("{error:#}")),
+            Err(
+                "Codex pane %42 was created, but initial prompt delivery failed: Codex app-server rejected the initial turn/start request: rejected".to_string()
             ),
         );
     }

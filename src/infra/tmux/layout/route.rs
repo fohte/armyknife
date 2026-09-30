@@ -12,6 +12,14 @@ pub enum AgentLaunchRoute {
 }
 
 impl AgentLaunchRoute {
+    pub(crate) fn codex_thread_id(&self) -> Option<&str> {
+        match self {
+            Self::CodexDaemon { thread_id }
+            | Self::CodexDaemonTurnUnconfirmed { thread_id, .. } => Some(thread_id),
+            Self::Standard | Self::ClaudeMessaging => None,
+        }
+    }
+
     pub fn display_suffix(&self) -> String {
         match self {
             Self::Standard => String::new(),
