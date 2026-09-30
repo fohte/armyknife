@@ -14,8 +14,10 @@ pub(super) fn record_codex_daemon_metadata(
     cwd: &str,
     env_vars: &[(&str, &str)],
 ) {
-    let AgentLaunchRoute::CodexDaemon { thread_id } = route else {
-        return;
+    let thread_id = match route {
+        AgentLaunchRoute::CodexDaemon { thread_id }
+        | AgentLaunchRoute::CodexDaemonTurnUnconfirmed { thread_id, .. } => thread_id,
+        AgentLaunchRoute::Standard | AgentLaunchRoute::ClaudeMessaging => return,
     };
 
     if let Err(error) = record_from_env(thread_id, Path::new(cwd), env_vars) {

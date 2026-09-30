@@ -1,12 +1,9 @@
 use std::fs::File;
 use std::path::Path;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 
 use super::AgentLaunchRoute;
-use super::prompt::{
-    apply_prompt_if_agent, clear_managed_codex_launch_env, wrap_in_interactive_shell,
-};
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::types::{Engine, ReasoningEffort, TMUX_SESSION_OPTION};
 use crate::infra::tmux;
@@ -47,17 +44,13 @@ enum LaunchState {
         prompt: String,
         _lock: Option<File>,
     },
-    Fallback(String),
 }
 
 pub(super) struct RecoverySpec<'a> {
     pub cwd: &'a Path,
     pub effort: Option<ReasoningEffort>,
     pub prompt_file: Option<&'a Path>,
-    pub command: &'a str,
-    pub model: Option<&'a str>,
     pub pane_id: Option<&'a str>,
-    pub env_vars: &'a [(&'a str, &'a str)],
 }
 
 impl Launch {
@@ -66,7 +59,7 @@ impl Launch {
         prompt: Option<&str>,
         pane_count: usize,
         cwd: &Path,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::prepare_with(engine, prompt, pane_count, || {
             let launch_lock = codex_steer::acquire_launch_lock(cwd)?;
             let client = codex_steer::Client::connect()?;
@@ -79,24 +72,21 @@ impl Launch {
         prompt: Option<&str>,
         pane_count: usize,
         connect: impl FnOnce() -> anyhow::Result<(Box<dyn AppServerClient>, Option<File>)>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let state = if engine != Engine::Codex || prompt.is_none() {
             LaunchState::Standard
         } else if pane_count != 1 {
-            LaunchState::Fallback(format!(
-                "daemon launch requires exactly one Codex pane, found {pane_count}"
-            ))
+            bail!("Codex daemon launch requires exactly one Codex pane, found {pane_count}");
         } else {
-            match connect() {
-                Ok((client, launch_lock)) => LaunchState::Connected {
-                    client,
-                    prompt: prompt.unwrap_or_default().to_string(),
-                    _lock: launch_lock,
-                },
-                Err(error) => LaunchState::Fallback(error.to_string()),
+            let (client, launch_lock) =
+                connect().context("Failed to connect to Codex app-server")?;
+            LaunchState::Connected {
+                client,
+                prompt: prompt.unwrap_or_default().to_string(),
+                _lock: launch_lock,
             }
         };
-        Self { state }
+        Ok(Self { state })
     }
 
     pub(super) fn uses_daemon(&self) -> bool {
@@ -119,68 +109,61 @@ impl Launch {
         self,
         spec: RecoverySpec<'_>,
     ) -> anyhow::Result<AgentLaunchRoute> {
-        let daemon_launch = self.uses_daemon();
-        let route = self.finish(spec.cwd, spec.effort);
-        match route {
-            AgentLaunchRoute::CodexDaemon { thread_id } => {
-                let pane_id = spec
-                    .pane_id
-                    .context("Codex daemon launch has no pane target")?;
-                tmux::set_pane_option(pane_id, TMUX_SESSION_OPTION, &thread_id).with_context(
-                    || format!("Failed to bind Codex session {thread_id} to pane {pane_id}"),
-                )?;
-                if let Some(path) = spec.prompt_file {
-                    std::fs::remove_file(path).with_context(|| {
-                        format!("Failed to remove prompt file {}", path.display())
-                    })?;
-                }
-                Ok(AgentLaunchRoute::CodexDaemon { thread_id })
-            }
-            AgentLaunchRoute::CodexArgvFallback { reason } if daemon_launch => {
-                let pane_id = spec
-                    .pane_id
-                    .context("Codex argv fallback has no pane target")?;
-                let command = apply_prompt_if_agent(
-                    spec.command,
-                    Engine::Codex,
-                    spec.model,
-                    spec.effort,
-                    spec.prompt_file,
-                    true,
-                );
-                let command =
-                    clear_managed_codex_launch_env(&command, Engine::Codex, daemon_launch);
-                let wrapped = wrap_in_interactive_shell(&command)?;
-                tmux::respawn_pane_with_env(pane_id, &wrapped, spec.env_vars).with_context(
-                    || format!("Codex daemon launch failed ({reason}); argv fallback also failed"),
-                )?;
-                Ok(AgentLaunchRoute::CodexArgvFallback { reason })
-            }
-            route => Ok(route),
-        }
+        self.finish_and_recover_with(spec, |pane_id, thread_id| {
+            tmux::set_pane_option(pane_id, TMUX_SESSION_OPTION, thread_id)
+                .map_err(anyhow::Error::new)
+        })
     }
 
-    fn finish(self, cwd: &Path, effort: Option<ReasoningEffort>) -> AgentLaunchRoute {
+    fn finish_and_recover_with(
+        self,
+        spec: RecoverySpec<'_>,
+        bind_pane: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<AgentLaunchRoute> {
+        let route = self.finish(spec.cwd, spec.effort)?;
+        let thread_id = match &route {
+            AgentLaunchRoute::CodexDaemon { thread_id }
+            | AgentLaunchRoute::CodexDaemonTurnUnconfirmed { thread_id, .. } => thread_id,
+            AgentLaunchRoute::Standard | AgentLaunchRoute::ClaudeMessaging => return Ok(route),
+        };
+        let pane_id = spec
+            .pane_id
+            .context("Codex daemon launch has no pane target")?;
+        bind_pane(pane_id, thread_id).with_context(|| {
+            format!("Failed to bind Codex session {thread_id} to pane {pane_id}")
+        })?;
+        if let Some(path) = spec.prompt_file {
+            std::fs::remove_file(path)
+                .with_context(|| format!("Failed to remove prompt file {}", path.display()))?;
+        }
+        Ok(route)
+    }
+
+    fn finish(
+        self,
+        cwd: &Path,
+        effort: Option<ReasoningEffort>,
+    ) -> anyhow::Result<AgentLaunchRoute> {
         match self.state {
-            LaunchState::Standard => AgentLaunchRoute::Standard,
-            LaunchState::Fallback(reason) => AgentLaunchRoute::CodexArgvFallback { reason },
+            LaunchState::Standard => Ok(AgentLaunchRoute::Standard),
             LaunchState::Connected {
                 mut client,
                 prompt,
                 _lock,
             } => {
-                let result: anyhow::Result<String> = (|| {
-                    let thread_id = client.wait_for_thread_started(cwd)?;
-                    client
-                        .start_turn(&thread_id, &prompt, effort)
-                        .map_err(anyhow::Error::new)?;
-                    Ok(thread_id)
-                })();
-                match result {
-                    Ok(thread_id) => AgentLaunchRoute::CodexDaemon { thread_id },
-                    Err(error) => AgentLaunchRoute::CodexArgvFallback {
-                        reason: error.to_string(),
-                    },
+                let thread_id = client
+                    .wait_for_thread_started(cwd)
+                    .context("Failed to wait for Codex app-server thread/start")?;
+                match client.start_turn(&thread_id, &prompt, effort) {
+                    Ok(()) => Ok(AgentLaunchRoute::CodexDaemon { thread_id }),
+                    Err(codex_steer::DeliveryError::Unconfirmed(error)) => {
+                        Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
+                            thread_id,
+                            reason: error.to_string(),
+                        })
+                    }
+                    Err(codex_steer::DeliveryError::NotDelivered(error)) => Err(error)
+                        .context("Codex app-server rejected the initial turn/start request"),
                 }
             }
         }
@@ -215,14 +198,6 @@ mod tests {
     #[rstest]
     #[case::non_codex(Engine::Claude, Some("prompt"), 1, AgentLaunchRoute::Standard)]
     #[case::missing_prompt(Engine::Codex, None, 1, AgentLaunchRoute::Standard)]
-    #[case::multiple_panes(
-        Engine::Codex,
-        Some("prompt"),
-        2,
-        AgentLaunchRoute::CodexArgvFallback {
-            reason: "daemon launch requires exactly one Codex pane, found 2".to_string(),
-        }
-    )]
     fn preflight_routes(
         #[case] engine: Engine,
         #[case] prompt: Option<&str>,
@@ -231,43 +206,127 @@ mod tests {
     ) {
         let launch = Launch::prepare_with(engine, prompt, pane_count, || {
             Err(anyhow::anyhow!("connect should not run"))
+        })
+        .expect("preflight should succeed");
+
+        assert_eq!(
+            launch
+                .finish(Path::new("/workspace/project-a"), None)
+                .map_err(|error| format!("{error:#}")),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn multiple_panes_fail_before_connecting() {
+        let result = Launch::prepare_with(Engine::Codex, Some("prompt"), 2, || {
+            panic!("app-server should not be contacted")
         });
 
         assert_eq!(
-            launch.finish(Path::new("/workspace/project-a"), None),
-            expected
+            result.err().map(|error| error.to_string()),
+            Some("Codex daemon launch requires exactly one Codex pane, found 2".to_string()),
+        );
+    }
+
+    #[test]
+    fn connection_failure_is_reported_before_pane_creation() {
+        let result = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Err(anyhow::anyhow!("app-server unavailable"))
+        });
+
+        assert_eq!(
+            result.err().map(|error| format!("{error:#}")),
+            Some("Failed to connect to Codex app-server: app-server unavailable".to_string()),
         );
     }
 
     #[rstest]
     #[case::success(
-        StubClient { thread: Ok("thread-a".to_string()), turn: Some(Ok(())) },
-        AgentLaunchRoute::CodexDaemon {
-            thread_id: "thread-a".to_string(),
-        }
+        StubClient { thread: Ok("thread-example".to_string()), turn: Some(Ok(())) },
+        Ok(AgentLaunchRoute::CodexDaemon {
+            thread_id: "thread-example".to_string(),
+        })
     )]
-    #[case::notification_failure(
-        StubClient { thread: Err(anyhow::anyhow!("notification unavailable")), turn: None },
-        AgentLaunchRoute::CodexArgvFallback { reason: "notification unavailable".to_string() }
+    #[case::thread_start_failure(
+        StubClient { thread: Err(anyhow::anyhow!("thread wait failed")), turn: None },
+        Err("Failed to wait for Codex app-server thread/start: thread wait failed".to_string())
     )]
     #[case::turn_rejected(
         StubClient {
-            thread: Ok("thread-a".to_string()),
+            thread: Ok("thread-example".to_string()),
             turn: Some(Err(codex_steer::DeliveryError::NotDelivered(anyhow::anyhow!("rejected")))),
         },
-        AgentLaunchRoute::CodexArgvFallback { reason: "rejected".to_string() }
+        Err("Codex app-server rejected the initial turn/start request: rejected".to_string())
     )]
-    fn connected_routes(#[case] client: StubClient, #[case] expected: AgentLaunchRoute) {
+    #[case::turn_unconfirmed(
+        StubClient {
+            thread: Ok("thread-example".to_string()),
+            turn: Some(Err(codex_steer::DeliveryError::Unconfirmed(anyhow::anyhow!("response unavailable")))),
+        },
+        Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
+            thread_id: "thread-example".to_string(),
+            reason: "response unavailable".to_string(),
+        })
+    )]
+    fn connected_routes(
+        #[case] client: StubClient,
+        #[case] expected: Result<AgentLaunchRoute, String>,
+    ) {
         let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
             Ok((Box::new(client), None))
-        });
+        })
+        .expect("connection should succeed");
 
         assert_eq!(
-            launch.finish(
-                Path::new("/workspace/project-a"),
-                Some(ReasoningEffort::Low)
-            ),
+            launch
+                .finish(
+                    Path::new("/workspace/project-a"),
+                    Some(ReasoningEffort::Low)
+                )
+                .map_err(|error| format!("{error:#}")),
             expected,
+        );
+    }
+
+    #[test]
+    fn unconfirmed_turn_binds_its_existing_thread_to_the_pane() {
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Err(codex_steer::DeliveryError::Unconfirmed(
+                        anyhow::anyhow!("response unavailable"),
+                    ))),
+                }),
+                None,
+            ))
+        })
+        .expect("connection should succeed");
+        let mut binding = None;
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+            },
+            |pane_id, thread_id| {
+                binding = Some((pane_id.to_string(), thread_id.to_string()));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (route.map_err(|error| format!("{error:#}")), binding,),
+            (
+                Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
+                    thread_id: "thread-example".to_string(),
+                    reason: "response unavailable".to_string(),
+                }),
+                Some(("%42".to_string(), "thread-example".to_string())),
+            ),
         );
     }
 }

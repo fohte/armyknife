@@ -415,6 +415,25 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
     } = common;
 
+    let preflight_plan = build_layout_plan(LayoutCommandsSpec {
+        session,
+        cwd,
+        window_name,
+        layout,
+        model,
+        reasoning_effort,
+        prompt_file: None,
+        engine,
+        env_vars,
+        background,
+        restore_automatic_rename,
+    });
+    let launch = AgentLaunch::prepare(
+        engine,
+        prompt,
+        preflight_plan.agent_commands.len(),
+        Path::new(cwd),
+    )?;
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
     let argv_plan = build_layout_plan(LayoutCommandsSpec {
@@ -430,12 +449,6 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
         restore_automatic_rename,
     });
-    let launch = AgentLaunch::prepare(
-        engine,
-        prompt,
-        argv_plan.agent_commands.len(),
-        Path::new(cwd),
-    );
     let remote_launch = launch.uses_remote();
     let launch_env_vars = launch_env_vars(env_vars, engine, remote_launch);
     let plan = if remote_launch {
@@ -478,19 +491,11 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
             .first()
             .map(|(pane_index, _)| format!("{window_id}.{pane_index}"))
     });
-    let command = plan
-        .agent_commands
-        .first()
-        .map(|(_, command)| command.as_str())
-        .unwrap_or_default();
     launch.finish_and_recover(AgentRecoverySpec {
         cwd: Path::new(cwd),
         effort: reasoning_effort,
         prompt_file: prompt_path,
-        command,
-        model,
         pane_id: agent_pane_id.as_deref(),
-        env_vars: &launch_env_vars,
     })
 }
 
@@ -507,7 +512,7 @@ pub(super) fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathB
     std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt to temp file")?;
 
     // Keep the temp file so it persists after this function returns.
-    // Messaging delivery or a successful argv fallback will delete it.
+    // Successful daemon or messaging routing deletes it.
     prompt_file
         .into_temp_path()
         .keep()

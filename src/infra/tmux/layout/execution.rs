@@ -15,7 +15,7 @@ pub(super) fn flatten_commands(commands: &[TmuxCommand]) -> Vec<&str> {
     args
 }
 
-/// Executes a layout and captures the stable window ID for launch fallback.
+/// Executes a layout and captures the stable window ID for Codex pane binding.
 /// Background layouts run `new-window` first, then rewrite the remaining
 /// `{session}:={window_name}.` pane targets to `{window_id}.` before running
 /// them. Foreground layouts keep the existing single tmux command sequence.

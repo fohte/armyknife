@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 
 use super::AgentLaunchRoute;
-use super::prompt::{apply_prompt_if_agent, wrap_in_interactive_shell};
 use crate::commands::agent::claude_registry::PeerConnection;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{claude_messaging, claude_registry};
@@ -61,20 +60,19 @@ enum LaunchState {
         client: Box<dyn MessagingClient>,
         prompt: String,
     },
-    Fallback(String),
 }
 
 pub(super) struct RecoverySpec<'a> {
-    pub effort: Option<ReasoningEffort>,
     pub prompt_file: Option<&'a Path>,
-    pub command: &'a str,
-    pub model: Option<&'a str>,
     pub pane_id: Option<&'a str>,
-    pub env_vars: &'a [(&'a str, &'a str)],
 }
 
 impl Launch {
-    pub(super) fn prepare(engine: Engine, prompt: Option<&str>, pane_count: usize) -> Self {
+    pub(super) fn prepare(
+        engine: Engine,
+        prompt: Option<&str>,
+        pane_count: usize,
+    ) -> anyhow::Result<Self> {
         Self::prepare_with(engine, prompt, pane_count, || Box::new(Client))
     }
 
@@ -83,20 +81,18 @@ impl Launch {
         prompt: Option<&str>,
         pane_count: usize,
         client: impl FnOnce() -> Box<dyn MessagingClient>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let state = if engine != Engine::Claude || prompt.is_none() {
             LaunchState::Standard
         } else if pane_count != 1 {
-            LaunchState::Fallback(format!(
-                "messaging launch requires exactly one Claude pane, found {pane_count}"
-            ))
+            bail!("Claude messaging launch requires exactly one Claude pane, found {pane_count}");
         } else {
             LaunchState::Messaging {
                 client: client(),
                 prompt: prompt.unwrap_or_default().to_string(),
             }
         };
-        Self { state }
+        Ok(Self { state })
     }
 
     pub(super) fn uses_messaging(&self) -> bool {
@@ -119,20 +115,13 @@ impl Launch {
         self,
         spec: RecoverySpec<'_>,
     ) -> anyhow::Result<AgentLaunchRoute> {
-        self.finish_and_recover_with(
-            spec,
-            tmux::get_pane_registry_location,
-            |pane_id, command, env_vars| {
-                tmux::respawn_pane_with_env(pane_id, command, env_vars).map_err(anyhow::Error::new)
-            },
-        )
+        self.finish_and_recover_with(spec, tmux::get_pane_registry_location)
     }
 
     fn finish_and_recover_with(
         self,
         spec: RecoverySpec<'_>,
         resolve_tmux_location: impl FnOnce(&str) -> Option<String>,
-        respawn: impl FnOnce(&str, &str, &[(&str, &str)]) -> anyhow::Result<()>,
     ) -> anyhow::Result<AgentLaunchRoute> {
         let messaging_launch = self.uses_messaging();
         let tmux_location = if messaging_launch {
@@ -140,7 +129,7 @@ impl Launch {
         } else {
             None
         };
-        let route = self.finish(tmux_location.as_deref());
+        let route = self.finish(tmux_location.as_deref())?;
         match route {
             AgentLaunchRoute::ClaudeMessaging => {
                 if let Some(path) = spec.prompt_file {
@@ -150,45 +139,23 @@ impl Launch {
                 }
                 Ok(AgentLaunchRoute::ClaudeMessaging)
             }
-            AgentLaunchRoute::ClaudeArgvFallback { reason } if messaging_launch => {
-                let pane_id = spec
-                    .pane_id
-                    .context("Claude argv fallback has no pane target")?;
-                let command = apply_prompt_if_agent(
-                    spec.command,
-                    Engine::Claude,
-                    spec.model,
-                    spec.effort,
-                    spec.prompt_file,
-                    true,
-                );
-                let wrapped = wrap_in_interactive_shell(&command)?;
-                respawn(pane_id, &wrapped, spec.env_vars).with_context(|| {
-                    format!("Claude messaging launch failed ({reason}); argv fallback also failed")
-                })?;
-                Ok(AgentLaunchRoute::ClaudeArgvFallback { reason })
-            }
             route => Ok(route),
         }
     }
 
-    fn finish(self, tmux_location: Option<&str>) -> AgentLaunchRoute {
+    fn finish(self, tmux_location: Option<&str>) -> anyhow::Result<AgentLaunchRoute> {
         match self.state {
-            LaunchState::Standard => AgentLaunchRoute::Standard,
-            LaunchState::Fallback(reason) => AgentLaunchRoute::ClaudeArgvFallback { reason },
+            LaunchState::Standard => Ok(AgentLaunchRoute::Standard),
             LaunchState::Messaging { mut client, prompt } => {
-                let result = (|| {
-                    let tmux_location =
-                        tmux_location.context("Claude messaging launch has no tmux location")?;
-                    let connection = client.wait_for_connection(tmux_location)?;
-                    client.send_message(&connection, &prompt)
-                })();
-                match result {
-                    Ok(()) => AgentLaunchRoute::ClaudeMessaging,
-                    Err(error) => AgentLaunchRoute::ClaudeArgvFallback {
-                        reason: error.to_string(),
-                    },
-                }
+                let tmux_location =
+                    tmux_location.context("Claude messaging launch has no tmux location")?;
+                let connection = client
+                    .wait_for_connection(tmux_location)
+                    .context("Failed to wait for Claude messaging connection")?;
+                client
+                    .send_message(&connection, &prompt)
+                    .context("Failed to send initial prompt through Claude messaging")?;
+                Ok(AgentLaunchRoute::ClaudeMessaging)
             }
         }
     }
@@ -257,14 +224,6 @@ mod tests {
     #[rstest]
     #[case::non_claude(Engine::Codex, Some("prompt"), 1, AgentLaunchRoute::Standard)]
     #[case::missing_prompt(Engine::Claude, None, 1, AgentLaunchRoute::Standard)]
-    #[case::multiple_panes(
-        Engine::Claude,
-        Some("prompt"),
-        2,
-        AgentLaunchRoute::ClaudeArgvFallback {
-            reason: "messaging launch requires exactly one Claude pane, found 2".to_string(),
-        }
-    )]
     fn preflight_routes(
         #[case] engine: Engine,
         #[case] prompt: Option<&str>,
@@ -273,9 +232,27 @@ mod tests {
     ) {
         let launch = Launch::prepare_with(engine, prompt, pane_count, || {
             panic!("client should not be created")
+        })
+        .expect("preflight should succeed");
+
+        assert_eq!(
+            launch
+                .finish(Some("example/repo:@1.%2"))
+                .map_err(|error| format!("{error:#}")),
+            Ok(expected),
+        );
+    }
+
+    #[test]
+    fn multiple_panes_fail_before_creating_client() {
+        let result = Launch::prepare_with(Engine::Claude, Some("prompt"), 2, || {
+            panic!("messaging client should not be created")
         });
 
-        assert_eq!(launch.finish(Some("example/repo:@1.%2")), expected);
+        assert_eq!(
+            result.err().map(|error| error.to_string()),
+            Some("Claude messaging launch requires exactly one Claude pane, found 2".to_string()),
+        );
     }
 
     #[test]
@@ -286,7 +263,8 @@ mod tests {
                 delivery: Some(Ok(())),
                 calls: Arc::new(Mutex::new(Vec::new())),
             })
-        });
+        })
+        .expect("messaging client should be created");
         let prompt_path = Path::new("/tmp/example-prompt.txt");
 
         let options = launch.command_options(Some(ReasoningEffort::Max), Some(prompt_path));
@@ -298,7 +276,7 @@ mod tests {
     #[case::success(
         Ok(connection()),
         Some(Ok(())),
-        AgentLaunchRoute::ClaudeMessaging,
+        Ok(AgentLaunchRoute::ClaudeMessaging),
         vec![
             Call::Wait("example/repo:@1.%2".to_string()),
             Call::Send(connection(), "prompt".to_string()),
@@ -307,17 +285,13 @@ mod tests {
     #[case::registry_failure(
         Err(anyhow::anyhow!("registry unavailable")),
         None,
-        AgentLaunchRoute::ClaudeArgvFallback {
-            reason: "registry unavailable".to_string(),
-        },
+        Err("Failed to wait for Claude messaging connection: registry unavailable".to_string()),
         vec![Call::Wait("example/repo:@1.%2".to_string())]
     )]
     #[case::delivery_failure(
         Ok(connection()),
         Some(Err(anyhow::anyhow!("socket unavailable"))),
-        AgentLaunchRoute::ClaudeArgvFallback {
-            reason: "socket unavailable".to_string(),
-        },
+        Err("Failed to send initial prompt through Claude messaging: socket unavailable".to_string()),
         vec![
             Call::Wait("example/repo:@1.%2".to_string()),
             Call::Send(connection(), "prompt".to_string()),
@@ -326,7 +300,7 @@ mod tests {
     fn messaging_routes(
         #[case] connection_result: anyhow::Result<PeerConnection>,
         #[case] delivery: Option<anyhow::Result<()>>,
-        #[case] expected_route: AgentLaunchRoute,
+        #[case] expected_route: Result<AgentLaunchRoute, String>,
         #[case] expected_calls: Vec<Call>,
     ) {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -335,33 +309,36 @@ mod tests {
             delivery,
             calls: Arc::clone(&calls),
         };
-        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || Box::new(client));
+        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || Box::new(client))
+            .expect("messaging client should be created");
 
         let route = launch.finish(Some("example/repo:@1.%2"));
         let actual_calls = calls.lock().unwrap().clone();
 
-        assert_eq!((route, actual_calls), (expected_route, expected_calls));
+        assert_eq!(
+            (route.map_err(|error| format!("{error:#}")), actual_calls),
+            (expected_route, expected_calls),
+        );
     }
 
     #[test]
-    fn missing_tmux_location_falls_back_before_registry_lookup() {
+    fn missing_tmux_location_fails_before_registry_lookup() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let client = StubClient {
             connection: Ok(connection()),
             delivery: Some(Ok(())),
             calls: Arc::clone(&calls),
         };
-        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || Box::new(client));
+        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || Box::new(client))
+            .expect("messaging client should be created");
 
         let route = launch.finish(None);
         let actual_calls = calls.lock().unwrap().clone();
 
         assert_eq!(
-            (route, actual_calls),
+            (route.map_err(|error| format!("{error:#}")), actual_calls),
             (
-                AgentLaunchRoute::ClaudeArgvFallback {
-                    reason: "Claude messaging launch has no tmux location".to_string(),
-                },
+                Err("Claude messaging launch has no tmux location".to_string()),
                 Vec::new(),
             ),
         );
@@ -376,19 +353,15 @@ mod tests {
                 delivery: Some(Ok(())),
                 calls: Arc::new(Mutex::new(Vec::new())),
             })
-        });
+        })
+        .expect("messaging client should be created");
 
         let route = launch.finish_and_recover_with(
             RecoverySpec {
-                effort: None,
                 prompt_file: Some(&prompt_path),
-                command: "claude",
-                model: None,
                 pane_id: Some("%2"),
-                env_vars: &[],
             },
             |_| Some("example/repo:@1.%2".to_string()),
-            |_, _, _| panic!("respawn should not run"),
         );
 
         assert_eq!(
@@ -401,7 +374,7 @@ mod tests {
     }
 
     #[rstest]
-    fn failed_delivery_respawns_with_recoverable_prompt_file(
+    fn failed_delivery_returns_error_and_preserves_prompt_file(
         prompt_file: (tempfile::TempDir, PathBuf),
     ) {
         let (_dir, prompt_path) = prompt_file;
@@ -411,57 +384,27 @@ mod tests {
                 delivery: Some(Err(anyhow::anyhow!("socket unavailable"))),
                 calls: Arc::new(Mutex::new(Vec::new())),
             })
-        });
-        let mut respawned = None;
-
-        let (route, expected_command) =
-            temp_env::with_var("SHELL", Some("/bin/example-shell"), || {
-                let route = launch.finish_and_recover_with(
-                    RecoverySpec {
-                        effort: Some(ReasoningEffort::Max),
-                        prompt_file: Some(&prompt_path),
-                        command: "claude",
-                        model: Some("example-model"),
-                        pane_id: Some("%2"),
-                        env_vars: &[("EXAMPLE_KEY", "example-value")],
-                    },
-                    |_| Some("example/repo:@1.%2".to_string()),
-                    |pane_id, command, env_vars| {
-                        respawned = Some((
-                            pane_id.to_string(),
-                            command.to_string(),
-                            env_vars
-                                .iter()
-                                .map(|(key, value)| (key.to_string(), value.to_string()))
-                                .collect(),
-                        ));
-                        Ok(())
-                    },
-                );
-                let argv_command = format!(
-                    "claude --model example-model --effort max \"$(cat {})\" && rm {}",
-                    prompt_path.display(),
-                    prompt_path.display(),
-                );
-                (route, wrap_in_interactive_shell(&argv_command).unwrap())
-            });
+        })
+        .expect("messaging client should be created");
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                prompt_file: Some(&prompt_path),
+                pane_id: Some("%2"),
+            },
+            |_| Some("example/repo:@1.%2".to_string()),
+        );
 
         assert_eq!(
             (
-                route.map_err(|error| error.to_string()),
+                route.map_err(|error| format!("{error:#}")),
                 prompt_path.exists(),
-                respawned,
             ),
             (
-                Ok(AgentLaunchRoute::ClaudeArgvFallback {
-                    reason: "socket unavailable".to_string(),
-                }),
+                Err(
+                    "Failed to send initial prompt through Claude messaging: socket unavailable"
+                        .to_string()
+                ),
                 true,
-                Some((
-                    "%2".to_string(),
-                    expected_command,
-                    vec![("EXAMPLE_KEY".to_string(), "example-value".to_string())],
-                )),
             ),
         );
     }
