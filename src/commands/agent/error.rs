@@ -28,6 +28,9 @@ pub enum CcError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
+    #[error("Cannot notify your own session '{0}'")]
+    SelfNotify(String),
+
     #[error("Session '{0}' has no tmux information (was not started in tmux)")]
     NoTmuxInfo(String),
 
