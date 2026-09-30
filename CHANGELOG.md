@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.344](https://github.com/fohte/armyknife/compare/v0.1.343...v0.1.344) (2026-09-30)
+
+
+### Bug Fixes
+
+* **agent:** remove argv fallback on initial prompt delivery failure ([#1010](https://github.com/fohte/armyknife/issues/1010)) ([8b62c42](https://github.com/fohte/armyknife/commit/8b62c42403b1e9e78eabed854e71da0a2bc3df0e))
+
 ## [0.1.343](https://github.com/fohte/armyknife/compare/v0.1.342...v0.1.343) (2026-09-30)
 
 
