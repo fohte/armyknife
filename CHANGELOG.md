@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.343](https://github.com/fohte/armyknife/compare/v0.1.342...v0.1.343) (2026-09-30)
+
+
+### Bug Fixes
+
+* **agent/peer:** reject notifications targeting the sender's own session ([#1007](https://github.com/fohte/armyknife/issues/1007)) ([bf28ff6](https://github.com/fohte/armyknife/commit/bf28ff61416123432b767131178f35ae02fb7857))
+
 ## [0.1.342](https://github.com/fohte/armyknife/compare/v0.1.341...v0.1.342) (2026-09-29)
 
 
