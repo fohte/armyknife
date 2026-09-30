@@ -361,6 +361,37 @@ fn count_panes(node: &LayoutNode) -> usize {
     }
 }
 
+/// Count the panes that would run the requested agent after layout retargeting.
+fn count_agent_panes(layout: &LayoutNode, engine: Engine) -> usize {
+    let mut commands = Vec::new();
+    collect_pane_commands(layout, &mut commands);
+
+    let retarget = !commands
+        .iter()
+        .any(|command| is_engine_command(command, engine));
+    commands
+        .iter()
+        .map(|command| {
+            if retarget {
+                retarget_agent_command(command, engine)
+            } else {
+                command.clone()
+            }
+        })
+        .filter(|command| is_engine_command(command, engine))
+        .count()
+}
+
+fn collect_pane_commands(node: &LayoutNode, commands: &mut Vec<String>) {
+    match node {
+        LayoutNode::Pane(pane) => commands.push(pane.command.clone()),
+        LayoutNode::Split(split) => {
+            collect_pane_commands(&split.first, commands);
+            collect_pane_commands(&split.second, commands);
+        }
+    }
+}
+
 /// Tmux session config shared by both `build_layout` and `split_pane`.
 pub struct TmuxSessionSpec<'a> {
     /// Target tmux session name.
@@ -415,6 +446,12 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
     } = common;
 
+    let launch = AgentLaunch::prepare(
+        engine,
+        prompt,
+        count_agent_panes(layout, engine),
+        Path::new(cwd),
+    )?;
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
     let prompt_path = prompt_file.as_deref();
     let argv_plan = build_layout_plan(LayoutCommandsSpec {
@@ -430,12 +467,6 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         background,
         restore_automatic_rename,
     });
-    let launch = AgentLaunch::prepare(
-        engine,
-        prompt,
-        argv_plan.agent_commands.len(),
-        Path::new(cwd),
-    );
     let remote_launch = launch.uses_remote();
     let launch_env_vars = launch_env_vars(env_vars, engine, remote_launch);
     let plan = if remote_launch {
@@ -478,19 +509,11 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
             .first()
             .map(|(pane_index, _)| format!("{window_id}.{pane_index}"))
     });
-    let command = plan
-        .agent_commands
-        .first()
-        .map(|(_, command)| command.as_str())
-        .unwrap_or_default();
     launch.finish_and_recover(AgentRecoverySpec {
         cwd: Path::new(cwd),
         effort: reasoning_effort,
         prompt_file: prompt_path,
-        command,
-        model,
         pane_id: agent_pane_id.as_deref(),
-        env_vars: &launch_env_vars,
     })
 }
 
@@ -507,7 +530,7 @@ pub(super) fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathB
     std::fs::write(prompt_file.path(), prompt).context("Failed to write prompt to temp file")?;
 
     // Keep the temp file so it persists after this function returns.
-    // Messaging delivery or a successful argv fallback will delete it.
+    // Successful daemon or messaging routing deletes it.
     prompt_file
         .into_temp_path()
         .keep()
@@ -545,26 +568,36 @@ mod tests {
         }),
         vec![(1, "codex --search".to_string())]
     )]
+    #[case::multiple_retargeted_panes(
+        LayoutNode::Split(SplitConfig {
+            direction: SplitDirection::Horizontal,
+            first: pane("claude"),
+            second: pane("claude --verbose"),
+        }),
+        vec![(1, "codex".to_string()), (2, "codex".to_string())]
+    )]
     fn layout_plan_identifies_agent_panes(
         #[case] layout: LayoutNode,
         #[case] expected: Vec<(usize, String)>,
     ) {
+        let actual = build_layout_plan(LayoutCommandsSpec {
+            session: "session-a",
+            cwd: "/workspace/project-a",
+            window_name: "window-a",
+            layout: &layout,
+            model: None,
+            reasoning_effort: None,
+            prompt_file: None,
+            engine: Engine::Codex,
+            env_vars: &[],
+            background: false,
+            restore_automatic_rename: false,
+        })
+        .agent_commands;
+
         assert_eq!(
-            build_layout_plan(LayoutCommandsSpec {
-                session: "session-a",
-                cwd: "/workspace/project-a",
-                window_name: "window-a",
-                layout: &layout,
-                model: None,
-                reasoning_effort: None,
-                prompt_file: None,
-                engine: Engine::Codex,
-                env_vars: &[],
-                background: false,
-                restore_automatic_rename: false,
-            })
-            .agent_commands,
-            expected,
+            (actual, count_agent_panes(&layout, Engine::Codex)),
+            (expected.clone(), expected.len()),
         );
     }
 

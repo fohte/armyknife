@@ -5,26 +5,29 @@ pub enum AgentLaunchRoute {
     Standard,
     /// Claude received its initial prompt through its messaging socket.
     ClaudeMessaging,
-    /// Claude was launched with the prompt in argv because messaging failed.
-    ClaudeArgvFallback { reason: String },
     /// Codex attached to the shared app-server and received its first turn by RPC.
     CodexDaemon { thread_id: String },
-    /// Codex was launched with the prompt in argv because the daemon path failed.
-    CodexArgvFallback { reason: String },
+    /// The initial Codex turn/start request was sent, but its response was not confirmed.
+    CodexDaemonTurnUnconfirmed { thread_id: String, reason: String },
 }
 
 impl AgentLaunchRoute {
+    pub(crate) fn codex_thread_id(&self) -> Option<&str> {
+        match self {
+            Self::CodexDaemon { thread_id }
+            | Self::CodexDaemonTurnUnconfirmed { thread_id, .. } => Some(thread_id),
+            Self::Standard | Self::ClaudeMessaging => None,
+        }
+    }
+
     pub fn display_suffix(&self) -> String {
         match self {
             Self::Standard => String::new(),
             Self::ClaudeMessaging => " (Claude messaging)".to_string(),
-            Self::ClaudeArgvFallback { reason } => {
-                format!(" (Claude argv fallback: {reason})")
-            }
             Self::CodexDaemon { .. } => " (Codex daemon)".to_string(),
-            Self::CodexArgvFallback { reason } => {
-                format!(" (Codex argv fallback: {reason})")
-            }
+            Self::CodexDaemonTurnUnconfirmed { reason, .. } => format!(
+                " (Codex daemon; warning: initial turn/start response was not confirmed: {reason})"
+            ),
         }
     }
 }
@@ -37,23 +40,18 @@ mod tests {
     #[rstest]
     #[case::standard(AgentLaunchRoute::Standard, "")]
     #[case::claude_messaging(AgentLaunchRoute::ClaudeMessaging, " (Claude messaging)")]
-    #[case::claude_fallback(
-        AgentLaunchRoute::ClaudeArgvFallback {
-            reason: "socket unavailable".to_string(),
-        },
-        " (Claude argv fallback: socket unavailable)"
-    )]
     #[case::codex_daemon(
         AgentLaunchRoute::CodexDaemon {
             thread_id: "thread-a".to_string(),
         },
         " (Codex daemon)"
     )]
-    #[case::codex_fallback(
-        AgentLaunchRoute::CodexArgvFallback {
-            reason: "daemon unavailable".to_string(),
+    #[case::codex_daemon_turn_unconfirmed(
+        AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
+            thread_id: "thread-example".to_string(),
+            reason: "response unavailable".to_string(),
         },
-        " (Codex argv fallback: daemon unavailable)"
+        " (Codex daemon; warning: initial turn/start response was not confirmed: response unavailable)"
     )]
     fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
         assert_eq!(route.display_suffix(), expected);

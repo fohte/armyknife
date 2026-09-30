@@ -14,7 +14,7 @@ pub(super) fn record_codex_daemon_metadata(
     cwd: &str,
     env_vars: &[(&str, &str)],
 ) {
-    let AgentLaunchRoute::CodexDaemon { thread_id } = route else {
+    let Some(thread_id) = route.codex_thread_id() else {
         return;
     };
 

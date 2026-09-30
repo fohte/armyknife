@@ -3,8 +3,6 @@
 
 use std::path::Path;
 
-use anyhow::Context;
-
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::env_var::EnvVars;
 
@@ -36,15 +34,6 @@ fn strip_program<'a>(command: &'a str, program: &str) -> Option<&'a str> {
     command
         .strip_prefix(program)
         .filter(|rest| rest.is_empty() || rest.starts_with(' '))
-}
-
-pub(super) fn wrap_in_interactive_shell(command: &str) -> anyhow::Result<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let exec_shell = shlex::try_join([shell.as_str(), "-i"])
-        .context("failed to quote the interactive fallback shell")?;
-    let script = format!("{command}; exec {exec_shell}");
-    shlex::try_join([shell.as_str(), "-i", "-c", &script])
-        .context("failed to quote the argv fallback command")
 }
 
 /// Removes the marker after the Codex command so a later manual launch in the
@@ -133,21 +122,6 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::path::PathBuf;
-
-    #[test]
-    fn wraps_fallback_in_interactive_shell() {
-        let actual = temp_env::with_var("SHELL", Some("/bin/example-shell"), || {
-            wrap_in_interactive_shell("agent 'example prompt'")
-        });
-
-        assert_eq!(
-            actual.map_err(|error| error.to_string()),
-            Ok(
-                "/bin/example-shell -i -c \"agent 'example prompt'; exec /bin/example-shell -i\""
-                    .to_string()
-            ),
-        );
-    }
 
     #[rstest]
     #[case::managed_codex(Engine::Codex, "codex", true, "codex; unset ")]

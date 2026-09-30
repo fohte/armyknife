@@ -70,7 +70,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         command,
     } = spec;
 
-    let launch = AgentLaunch::prepare(engine, prompt, 1, Path::new(cwd));
+    let launch = AgentLaunch::prepare(engine, prompt, 1, Path::new(cwd))?;
     let managed_codex_launch = launch.uses_remote();
     let launch_env_vars = launch_env_vars(env_vars, engine, managed_codex_launch);
     let prompt_file = prompt.map(write_prompt_file).transpose()?;
@@ -122,10 +122,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         cwd: Path::new(cwd),
         effort: reasoning_effort,
         prompt_file: prompt_file.as_deref(),
-        command,
-        model,
         pane_id: Some(&new_pane_id),
-        env_vars: &launch_env_vars,
     })?;
 
     Ok(SplitResult {
