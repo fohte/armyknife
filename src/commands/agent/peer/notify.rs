@@ -127,12 +127,21 @@ fn non_empty_env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+fn ensure_not_self_notify(session_id: &str, from: Option<&str>) -> Result<()> {
+    if from == Some(session_id) {
+        return Err(CcError::SelfNotify(session_id.to_string()).into());
+    }
+    Ok(())
+}
+
 pub fn notify(
     session_id: &str,
     message: &str,
     from: Option<&str>,
     from_engine_hint: Option<Engine>,
 ) -> Result<Delivery> {
+    ensure_not_self_notify(session_id, from)?;
+
     let session = store::load_session(session_id)?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
 
@@ -258,6 +267,47 @@ fn notify_readiness(status: SessionStatus) -> NotifyReadiness {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::same_session(
+        "session-a",
+        Some("session-a"),
+        Err("Cannot notify your own session 'session-a'".to_string())
+    )]
+    #[case::different_session("session-a", Some("session-b"), Ok(()))]
+    #[case::sender_unknown("session-a", None, Ok(()))]
+    fn self_notification_guard_cases(
+        #[case] session_id: &str,
+        #[case] from: Option<&str>,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        assert_eq!(
+            ensure_not_self_notify(session_id, from).map_err(|error| error.to_string()),
+            expected,
+        );
+    }
+
+    #[test]
+    fn run_rejects_notification_to_resolved_sender() {
+        let result = temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", Some("session-a")),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || {
+                run(&NotifyArgs {
+                    session_id: "session-a".to_string(),
+                    message: "hello".to_string(),
+                })
+            },
+        );
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err("Cannot notify your own session 'session-a'".to_string()),
+        );
+    }
 
     #[rstest]
     #[case::running(SessionStatus::Running, NotifyReadiness::Ready)]
