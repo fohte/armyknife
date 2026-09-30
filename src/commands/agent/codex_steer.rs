@@ -22,6 +22,8 @@ const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
 const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(30);
+const TURN_START_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod archive;
 
@@ -93,7 +95,7 @@ impl Client {
 
     /// Waits for the top-level thread created in `cwd` and returns its ID.
     pub fn wait_for_thread_started(&mut self, cwd: &Path) -> anyhow::Result<String> {
-        self.wait_for_thread_started_with_timeout(cwd, RESPONSE_TIMEOUT)
+        self.wait_for_thread_started_with_timeout(cwd, DEFAULT_THREAD_STARTED_TIMEOUT)
     }
 
     /// Waits for the top-level thread created in `cwd` using a custom read timeout.
@@ -133,6 +135,11 @@ impl Client {
         content: &str,
         effort: Option<ReasoningEffort>,
     ) -> Result<()> {
+        self.socket
+            .get_ref()
+            .set_read_timeout(Some(TURN_START_RESPONSE_TIMEOUT))
+            .context("failed to set Codex app-server `turn/start` response timeout")
+            .map_err(DeliveryError::NotDelivered)?;
         send_request(
             &mut self.socket,
             &turn_start_request(thread_id, content, effort),
@@ -413,6 +420,34 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    fn connected_client_and_server() -> anyhow::Result<(Client, WebSocket<UnixStream>)> {
+        let (client_stream, server_stream) = UnixStream::pair()?;
+        let server = std::thread::spawn(move || {
+            tungstenite::accept(server_stream).map_err(anyhow::Error::from)
+        });
+        let (socket, _) = client("ws://localhost/rpc", client_stream)?;
+        let server = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+
+        Ok((Client { socket }, server))
+    }
+
+    fn thread_started_message() -> Message {
+        Message::Text(
+            json!({
+                "method": "thread/started",
+                "params": {"thread": {
+                    "id": "thread-a",
+                    "cwd": "/workspace/project-a",
+                    "parentThreadId": null,
+                }},
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
     #[test]
     fn builds_initialize_request() {
         assert_eq!(
@@ -654,6 +689,85 @@ mod tests {
             "turn/start",
         );
         assert_eq!(actual.map_err(|error| error.to_string()), Ok(json!({})));
+    }
+
+    #[test]
+    fn start_turn_uses_a_fresh_response_timeout() -> anyhow::Result<()> {
+        let (mut client, server_socket) = connected_client_and_server()?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Value> {
+            let mut socket = server_socket;
+            socket.send(thread_started_message())?;
+            let Message::Text(request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let request = serde_json::from_str(&request)?;
+            std::thread::sleep(Duration::from_millis(350));
+            socket.send(Message::Text(
+                json!({"id": TURN_START_REQUEST_ID, "result": {}})
+                    .to_string()
+                    .into(),
+            ))?;
+            Ok(request)
+        });
+        let thread_id = client.wait_for_thread_started_with_timeout(
+            Path::new("/workspace/project-a"),
+            Duration::from_millis(250),
+        )?;
+
+        let result = client
+            .start_turn(&thread_id, "hello there", None)
+            .map_err(|error| error.to_string());
+        let request = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let actual = (
+            thread_id,
+            result,
+            request,
+            client.socket.get_ref().read_timeout()?,
+        );
+
+        assert_eq!(
+            actual,
+            (
+                "thread-a".to_string(),
+                Ok(()),
+                json!({
+                    "id": TURN_START_REQUEST_ID,
+                    "method": "turn/start",
+                    "params": {
+                        "threadId": "thread-a",
+                        "input": [{
+                            "type": "text",
+                            "text": "hello there",
+                            "textElements": [],
+                        }],
+                    },
+                }),
+                Some(TURN_START_RESPONSE_TIMEOUT),
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uses_extended_default_thread_started_timeout() -> anyhow::Result<()> {
+        let (mut client, mut server) = connected_client_and_server()?;
+        server.send(thread_started_message())?;
+        let thread_id = client
+            .wait_for_thread_started(Path::new("/workspace/project-a"))
+            .map_err(|error| error.to_string());
+        let timeout_exceeds_handshake = client
+            .socket
+            .get_ref()
+            .read_timeout()?
+            .is_some_and(|timeout| timeout > RESPONSE_TIMEOUT);
+
+        assert_eq!(
+            (thread_id, timeout_exceeds_handshake),
+            (Ok("thread-a".to_string()), true),
+        );
+        Ok(())
     }
 
     #[rstest]
