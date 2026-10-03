@@ -86,9 +86,73 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::named(
+    #[case::reset(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Reset),
+        ratatui::style::Color::Reset
+    )]
+    #[case::black(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Black),
+        ratatui::style::Color::Black
+    )]
+    #[case::red(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Red),
+        ratatui::style::Color::Red
+    )]
+    #[case::green(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Green),
+        ratatui::style::Color::Green
+    )]
+    #[case::yellow(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+        ratatui::style::Color::Yellow
+    )]
+    #[case::blue(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Blue),
+        ratatui::style::Color::Blue
+    )]
+    #[case::magenta(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Magenta),
+        ratatui::style::Color::Magenta
+    )]
+    #[case::cyan(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+        ratatui::style::Color::Cyan
+    )]
+    #[case::gray(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Gray),
+        ratatui::style::Color::Gray
+    )]
+    #[case::dark_gray(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::DarkGray),
+        ratatui::style::Color::DarkGray
+    )]
+    #[case::light_red(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightRed),
+        ratatui::style::Color::LightRed
+    )]
+    #[case::light_green(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightGreen),
+        ratatui::style::Color::LightGreen
+    )]
+    #[case::light_yellow(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightYellow),
+        ratatui::style::Color::LightYellow
+    )]
+    #[case::light_blue(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightBlue),
+        ratatui::style::Color::LightBlue
+    )]
+    #[case::light_magenta(
         AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightMagenta),
         ratatui::style::Color::LightMagenta
+    )]
+    #[case::light_cyan(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::LightCyan),
+        ratatui::style::Color::LightCyan
+    )]
+    #[case::white(
+        AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::White),
+        ratatui::style::Color::White
     )]
     #[case::rgb(AgentWorkTypeColor::Rgb([12, 34, 56]), ratatui::style::Color::Rgb(12, 34, 56))]
     #[case::indexed(AgentWorkTypeColor::Indexed(123), ratatui::style::Color::Indexed(123))]
