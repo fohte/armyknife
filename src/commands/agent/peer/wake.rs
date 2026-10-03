@@ -361,6 +361,7 @@ mod tests {
     fn session(engine: Engine, status: SessionStatus) -> Session {
         Session {
             session_id: SESSION_ID.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),

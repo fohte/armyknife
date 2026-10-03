@@ -225,6 +225,7 @@ mod tests {
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
             session_id: session_id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from(cwd),

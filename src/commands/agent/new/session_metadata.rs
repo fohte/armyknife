@@ -65,6 +65,7 @@ fn record_in(
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
+        work_type: None,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
@@ -118,6 +119,7 @@ mod tests {
             .expect("timestamp should be valid");
         Session {
             session_id: "thread-a".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/original"),
@@ -176,6 +178,7 @@ mod tests {
                 "last_message": null,
                 "current_tool": null,
                 "label": "explicit label",
+                "work_type": null,
                 "ancestor_session_ids": ["root", "parent"],
                 "pending_bg_task_ids": [],
                 "pending_agent_task_ids": [],

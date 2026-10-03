@@ -82,6 +82,7 @@ mod tests {
     fn session(session_id: &str) -> Session {
         Session {
             session_id: session_id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/test"),

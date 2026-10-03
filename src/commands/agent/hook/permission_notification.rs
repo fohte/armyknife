@@ -231,6 +231,7 @@ mod tests {
         let now = Utc::now();
         Session {
             session_id: "session-placeholder".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/session-placeholder".into(),

@@ -23,6 +23,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
+        work_type: None,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
@@ -74,6 +75,7 @@ mod tests {
         let now = Utc::now();
         Session {
             session_id: "resume-target".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/project"),
@@ -164,6 +166,7 @@ mod tests {
                 "last_message": null,
                 "current_tool": null,
                 "label": null,
+                "work_type": null,
                 "ancestor_session_ids": ["root", "parent"],
                 "pending_bg_task_ids": [],
                 "pending_agent_task_ids": [],

@@ -45,6 +45,7 @@ mod tests {
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
             session_id: "test-123".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),

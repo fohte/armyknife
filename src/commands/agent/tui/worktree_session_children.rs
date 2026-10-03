@@ -153,6 +153,7 @@ mod tests {
     fn session(id: &str, cwd: &Path, updated_at: DateTime<Utc>, pane: Option<&str>) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: cwd.to_path_buf(),

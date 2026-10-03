@@ -208,6 +208,7 @@ mod tests {
     fn session(status: SessionStatus, read_at: Option<chrono::DateTime<Utc>>) -> Session {
         Session {
             session_id: "test-123".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),

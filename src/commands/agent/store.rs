@@ -715,6 +715,7 @@ mod tests {
     fn create_test_session(id: &str) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -1503,6 +1504,7 @@ mod tests {
         ) -> Session {
             Session {
                 session_id: id.to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),

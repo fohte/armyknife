@@ -487,6 +487,7 @@ mod tests {
     fn session() -> Session {
         Session {
             session_id: "session-1".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test-repo"),

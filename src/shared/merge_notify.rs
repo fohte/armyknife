@@ -142,6 +142,7 @@ mod tests {
     ) -> Session {
         Session {
             session_id: session_id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd,

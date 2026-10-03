@@ -182,6 +182,7 @@ mod tests {
         let now = Utc::now();
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),

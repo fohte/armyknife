@@ -12,6 +12,7 @@ use super::chrome::render_with_time;
 pub(super) fn create_test_session(id: &str) -> Session {
     Session {
         session_id: id.to_string(),
+        work_type: None,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/home/user/project"),
