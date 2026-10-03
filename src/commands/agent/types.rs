@@ -131,6 +131,9 @@ pub struct Session {
     /// Short title for session identification (set via env var or auto-generated)
     #[serde(default)]
     pub label: Option<String>,
+    /// Workflow skill name that identifies this session's work type.
+    #[serde(default)]
+    pub work_type: Option<String>,
     /// Ancestor session IDs from root to immediate parent.
     /// Used to build tree view: if intermediate sessions are deleted,
     /// child sessions can still find their nearest living ancestor.
@@ -569,6 +572,7 @@ mod tests {
     fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
         Session {
             session_id: "s".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
@@ -629,9 +633,8 @@ mod tests {
     }
 
     #[test]
-    fn read_at_defaults_to_none_when_missing_from_json() {
-        // Existing on-disk sessions predate `read_at`; deserialization must
-        // treat them as unread rather than failing.
+    fn optional_fields_default_when_missing_from_json() {
+        // Existing on-disk sessions predate these fields and must still load.
         let json = serde_json::json!({
             "session_id": "legacy",
             "cwd": "/tmp/legacy",
@@ -644,7 +647,7 @@ mod tests {
         });
         let session: Session =
             serde_json::from_value(json).expect("legacy session should deserialize");
-        assert_eq!(session.read_at, None);
+        assert_eq!((session.read_at, session.work_type), (None, None));
     }
 
     #[test]

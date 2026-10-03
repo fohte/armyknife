@@ -11,10 +11,12 @@ mod env_overlay;
 mod legacy;
 #[cfg(feature = "schema-gen")]
 mod schema;
+mod work_type;
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 #[cfg(feature = "schema-gen")]
 pub use schema::generate_schema;
+pub use work_type::{AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeNamedColor};
 
 /// Top-level configuration for armyknife.
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -127,6 +129,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub codex: CodexConfig,
 
+    /// Display configuration for agent work types, keyed by skill name.
+    #[serde(default)]
+    pub work_types: HashMap<String, AgentWorkTypeConfig>,
+
     /// Worktree settings used by `a agent` and worktree cleanup commands.
     #[serde(default)]
     pub worktree: WorktreeConfig,
@@ -138,6 +144,13 @@ pub struct AgentConfig {
     /// Automatic `/compact` settings for idle sessions.
     #[serde(default)]
     pub auto_compact: AutoCompactConfig,
+}
+
+impl AgentConfig {
+    /// Look up the display configuration for a skill name.
+    pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
+        self.work_types.get(skill_name)
+    }
 }
 
 /// Worktree configuration.
@@ -741,6 +754,7 @@ mod tests {
                         model: None,
                         reasoning_effort: None,
                     },
+                    work_types: HashMap::new(),
                     worktree: WorktreeConfig {
                         dir: ".worktrees".to_string(),
                         branch_prefix: "fohte/".to_string(),
@@ -847,6 +861,88 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn parse_agent_without_work_types_defaults_to_empty_mapping() {
+        let config: Config = serde_yaml::from_str("agent: {}\n").unwrap();
+
+        assert_eq!(config.agent.work_types, HashMap::new());
+    }
+
+    #[test]
+    fn parse_agent_work_types_yaml() {
+        let yaml = indoc! {"
+            agent:
+              work_types:
+                sample-flow:
+                  icon: ◇
+                  color: cyan
+                rgb-flow:
+                  icon: ◆
+                  color: [12, 34, 56]
+                indexed-flow:
+                  icon: ○
+                  color: 123
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent.work_types,
+            HashMap::from([
+                (
+                    "sample-flow".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "◇".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                    },
+                ),
+                (
+                    "rgb-flow".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "◆".to_string(),
+                        color: AgentWorkTypeColor::Rgb([12, 34, 56]),
+                    },
+                ),
+                (
+                    "indexed-flow".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "○".to_string(),
+                        color: AgentWorkTypeColor::Indexed(123),
+                    },
+                ),
+            ])
+        );
+    }
+
+    #[rstest]
+    #[case::configured(
+        "sample-flow",
+        Some((
+            "◇",
+            AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan)
+        ))
+    )]
+    #[case::unconfigured("unknown-flow", None)]
+    fn agent_work_type_looks_up_by_skill_name(
+        #[case] skill_name: &str,
+        #[case] expected: Option<(&str, AgentWorkTypeColor)>,
+    ) {
+        let config = AgentConfig {
+            work_types: HashMap::from([(
+                "sample-flow".to_string(),
+                AgentWorkTypeConfig {
+                    icon: "◇".to_string(),
+                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                },
+            )]),
+            ..Default::default()
+        };
+        let actual = config
+            .work_type(skill_name)
+            .map(|work_type| (work_type.icon.as_str(), work_type.color));
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]

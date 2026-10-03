@@ -173,6 +173,7 @@ mod tests {
     fn stopped_session(updated_at: DateTime<Utc>) -> Session {
         Session {
             session_id: "sess".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp"),
             transcript_path: None,

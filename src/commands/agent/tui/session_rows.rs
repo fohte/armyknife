@@ -383,6 +383,7 @@ mod tests {
     fn create_test_session(id: &str, status: SessionStatus) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/home/user/project"),
             transcript_path: None,

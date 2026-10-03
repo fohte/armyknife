@@ -745,6 +745,7 @@ mod tests {
     fn session(id: &str, cwd: PathBuf) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd,
             transcript_path: None,

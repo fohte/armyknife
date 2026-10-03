@@ -47,6 +47,10 @@ For editor autocompletion, add the following to the top of your config file:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
 
 agent:
+  work_types: # skill names recognized as session work types
+    example-workflow:
+      icon: '◇'
+      color: cyan
   default_engine: claude # coding agent CLI for `a agent new` when `--engine` is omitted (default: "claude")
   codex: # defaults for `a agent new --engine codex` only; the `codex` you run yourself is unaffected
     model: gpt-5.6-luna # used when `--model` is omitted
@@ -86,6 +90,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
       review:
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
 ```
+
+`agent.work_types` maps exact skill names to an icon string and color. Only listed skills are recognized as session work types. Colors accept named ratatui colors, RGB triplets (`[r, g, b]`), and 256-color indices (`0` to `255`).
 
 ### Splitting public and private config
 

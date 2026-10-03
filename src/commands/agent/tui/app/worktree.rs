@@ -163,6 +163,7 @@ mod tests {
         let now = Utc::now();
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,

@@ -22,6 +22,7 @@
           "reasoning_effort": null
         },
         "default_engine": "claude",
+        "work_types": {},
         "worktree": {
           "branch_prefix": "fohte/",
           "dir": ".worktrees",
@@ -145,6 +146,14 @@
           "$ref": "#/$defs/Engine",
           "default": "claude"
         },
+        "work_types": {
+          "description": "Display configuration for agent work types, keyed by skill name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AgentWorkTypeConfig"
+          },
+          "default": {}
+        },
         "worktree": {
           "description": "Worktree settings used by `a agent` and worktree cleanup commands.",
           "$ref": "#/$defs/WorktreeConfig",
@@ -167,6 +176,73 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentWorkTypeColor": {
+      "description": "A terminal color accepted for an agent work type.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentWorkTypeNamedColor"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      ]
+    },
+    "AgentWorkTypeConfig": {
+      "description": "Display settings for a skill-backed agent work type.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Terminal color for this work type.",
+          "$ref": "#/$defs/AgentWorkTypeColor"
+        },
+        "icon": {
+          "description": "Icon shown for this work type.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "icon",
+        "color"
+      ]
+    },
+    "AgentWorkTypeNamedColor": {
+      "description": "A named terminal color accepted for an agent work type.",
+      "type": "string",
+      "enum": [
+        "reset",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "gray",
+        "dark_gray",
+        "light_red",
+        "light_green",
+        "light_yellow",
+        "light_blue",
+        "light_magenta",
+        "light_cyan",
+        "white"
+      ]
     },
     "AiConfig": {
       "description": "Settings under the `ai` key (used in both org and repo scopes).",

@@ -702,6 +702,7 @@ mod tests {
         fn session_with_ancestors(id: &str, ancestor_session_ids: Vec<String>) -> Session {
             Session {
                 session_id: id.to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,
@@ -761,6 +762,7 @@ mod tests {
         fn session_with_engine(id: &str, engine: Engine) -> Session {
             Session {
                 session_id: id.to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,
