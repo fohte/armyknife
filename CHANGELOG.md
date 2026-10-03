@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.357](https://github.com/fohte/armyknife/compare/v0.1.356...v0.1.357) (2026-10-03)
+
+
+### Features
+
+* **agent/watch:** display work type icons in session list ([#1041](https://github.com/fohte/armyknife/issues/1041)) ([2966fc3](https://github.com/fohte/armyknife/commit/2966fc35f461edba27f7f5d17f9f7fb986b2b59a))
+
 ## [0.1.356](https://github.com/fohte/armyknife/compare/v0.1.355...v0.1.356) (2026-10-03)
 
 
