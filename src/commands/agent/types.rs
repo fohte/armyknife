@@ -237,8 +237,8 @@ pub enum StatusColor {
     Dim,
 }
 
-/// Presentation-only status derived from `SessionStatus` plus session state
-/// that must never be persisted (unread, in-flight background tasks). See
+/// Presentation-only status derived from session status, unread state,
+/// pending background tasks, and linked crit reviews. See
 /// `Session::display_status`.
 ///
 /// Deliberately not `Serialize`/`Deserialize`: this is a derived, presentation-only
@@ -253,10 +253,8 @@ pub enum DisplayStatus {
     UnreadStopped,
     Paused,
     Ended,
-    /// Persisted `status` is `Stopped` (the main loop is idle) but a Bash
-    /// background task, Task-tool subagent, or `a agent bg run` task is still
-    /// in flight. See
-    /// `Session::has_pending_bg_tasks`.
+    /// The main loop is stopped with a pending background task and no linked
+    /// crit review. See `Session::has_pending_bg_tasks`.
     Background,
 }
 
@@ -272,7 +270,8 @@ impl Session {
     /// `a agent bg run`'s runtime marker. Shared by every consumer that must
     /// treat such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
-    /// `display_status` (report `Background` instead of `Stopped`).
+    /// `display_status` (report `Background` instead of `Stopped`, or
+    /// `WaitingInput` for a stopped session with a linked crit review).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
@@ -284,15 +283,19 @@ impl Session {
         !self.pending_permission_agent_ids.is_empty()
     }
 
-    /// Presentation status for this session. Distinguishes `Background`
-    /// (persisted `Stopped`, i.e. the main loop is idle, but a background
-    /// task keeps the user mid-task) from a session whose main loop is
-    /// actually active -- notification, `auto_pause`, `auto_compact`, and
-    /// `sweep` all keep reading the persisted `status` / `has_pending_bg_tasks`
-    /// directly and must not switch to this.
+    /// Presentation status for this session. A stopped main loop with pending
+    /// background work is `WaitingInput` when `crit_urls` is non-empty and
+    /// `Background` otherwise. Pending work is classified this way while
+    /// a crit daemon keeps its URL linked. Notification, `auto_pause`,
+    /// `auto_compact`, and `sweep` read persisted status or
+    /// `has_pending_bg_tasks` directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
         if self.status == SessionStatus::Stopped && self.has_pending_bg_tasks() {
-            return DisplayStatus::Background;
+            return if self.crit_urls.is_empty() {
+                DisplayStatus::Background
+            } else {
+                DisplayStatus::WaitingInput
+            };
         }
         if self.is_unread_stopped() {
             return DisplayStatus::UnreadStopped;
@@ -589,29 +592,38 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running_unread(SessionStatus::Running, None, false, "\u{25cf}")]
-    #[case::running_read(SessionStatus::Running, Some(()), false, "\u{25cf}")]
+    #[case::running_unread(SessionStatus::Running, None, false, false, "\u{25cf}")]
+    #[case::running_read(SessionStatus::Running, Some(()), false, false, "\u{25cf}")]
     // A session actually running is `Running` regardless of a bg task -- only
-    // an idle main loop with a pending bg task renders as `Background`.
-    #[case::running_with_bg_task(SessionStatus::Running, None, true, "\u{25cf}")]
-    #[case::stopped_with_bg_task(SessionStatus::Stopped, None, true, "\u{25ce}")]
-    #[case::waiting_unread(SessionStatus::WaitingInput, None, false, "\u{25d0}")]
-    #[case::stopped_unread(SessionStatus::Stopped, None, false, "\u{2731}")]
-    #[case::stopped_read(SessionStatus::Stopped, Some(()), false, "\u{25cb}")]
-    #[case::paused_unread(SessionStatus::Paused, None, false, "\u{23f8}")]
-    #[case::paused_read(SessionStatus::Paused, Some(()), false, "\u{23f8}")]
-    #[case::ended_unread(SessionStatus::Ended, None, false, "\u{25cb}")]
-    #[case::ended_read(SessionStatus::Ended, Some(()), false, "\u{25cb}")]
+    // an idle main loop with a pending bg task and no crit link renders as
+    // `Background`.
+    #[case::running_with_bg_task(SessionStatus::Running, None, true, false, "\u{25cf}")]
+    #[case::stopped_with_bg_task(SessionStatus::Stopped, None, true, false, "\u{25ce}")]
+    #[case::crit_review_waiting(SessionStatus::Stopped, Some(()), true, true, "\u{25d0}")]
+    #[case::running_with_crit_review(SessionStatus::Running, None, true, true, "\u{25cf}")]
+    #[case::crit_without_pending_task(SessionStatus::Stopped, Some(()), false, true, "\u{25cb}")]
+    #[case::waiting_unread(SessionStatus::WaitingInput, None, false, false, "\u{25d0}")]
+    #[case::stopped_unread(SessionStatus::Stopped, None, false, false, "\u{2731}")]
+    #[case::stopped_read(SessionStatus::Stopped, Some(()), false, false, "\u{25cb}")]
+    #[case::paused_unread(SessionStatus::Paused, None, false, false, "\u{23f8}")]
+    #[case::paused_read(SessionStatus::Paused, Some(()), false, false, "\u{23f8}")]
+    #[case::ended_unread(SessionStatus::Ended, None, false, false, "\u{25cb}")]
+    #[case::ended_read(SessionStatus::Ended, Some(()), false, false, "\u{25cb}")]
     fn session_display_symbol_table(
         #[case] status: SessionStatus,
         #[case] read_marker: Option<()>,
         #[case] has_bg_task: bool,
+        #[case] has_crit_link: bool,
         #[case] expected: &str,
     ) {
         let read_at = read_marker.map(|()| Utc::now());
         let mut s = session(status, read_at);
         if has_bg_task {
             s.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+        if has_crit_link {
+            s.crit_urls
+                .push("https://crit.example/review/1".to_string());
         }
         assert_eq!(s.display_symbol(), expected);
     }
