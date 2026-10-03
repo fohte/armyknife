@@ -43,8 +43,7 @@ pub struct ApprovalManager {
 
 impl ApprovalManager {
     pub fn new(document_path: &Path) -> Self {
-        let document_path =
-            fs::canonicalize(document_path).unwrap_or_else(|_| document_path.to_path_buf());
+        let document_path = canonical_document_path(document_path);
         let id = derive_approval_id(&document_path);
         let approve_path = approvals_dir().join(id);
         Self {
@@ -102,6 +101,24 @@ impl ApprovalManager {
             &input,
         )))
     }
+}
+
+fn canonical_document_path(document_path: &Path) -> PathBuf {
+    if let Ok(canonical_path) = fs::canonicalize(document_path) {
+        return canonical_path;
+    }
+
+    let Some(file_name) = document_path.file_name() else {
+        return document_path.to_path_buf();
+    };
+    let parent = document_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+
+    fs::canonicalize(parent)
+        .map(|canonical_parent| canonical_parent.join(file_name))
+        .unwrap_or_else(|_| document_path.to_path_buf())
 }
 
 /// Compute the opaque on-disk identifier for a document path.
@@ -379,6 +396,27 @@ mod tests {
         ApprovalManager::new(verify_path)
             .verify()
             .expect("verify approval through path alias");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn remove_finds_approval_after_document_deletion(env: Env) {
+        use std::os::unix::fs::symlink;
+
+        let document_path = env.doc("a.md", "hello");
+        let symlink_dir = env.docs_dir.path().join("alias");
+        symlink(env.docs_dir.path(), &symlink_dir).expect("create directory symlink");
+        let symlinked_path = symlink_dir.join("a.md");
+
+        ApprovalManager::new(&document_path)
+            .save()
+            .expect("save approval");
+        std::fs::remove_file(&document_path).expect("remove document");
+        ApprovalManager::new(&symlinked_path)
+            .remove()
+            .expect("remove approval through path alias");
+
+        assert!(!ApprovalManager::new(&document_path).exists());
     }
 
     #[rstest]
