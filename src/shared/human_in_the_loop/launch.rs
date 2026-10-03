@@ -33,6 +33,15 @@ where
             &review_args,
             done_fifo_path,
         )?;
+        super::notification::send_review_requested(
+            tmux_pane_id,
+            crate::shared::env_var::EnvVars::load()
+                .own_session_id()
+                .as_deref(),
+            document_path,
+            window_title,
+            editor_config,
+        );
         return Ok(());
     }
 

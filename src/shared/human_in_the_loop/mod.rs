@@ -13,6 +13,7 @@ mod error;
 pub mod exit_code;
 mod launch;
 mod lock;
+mod notification;
 mod pending_review;
 mod tmux;
 
