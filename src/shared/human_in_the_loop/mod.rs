@@ -71,8 +71,9 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// 3. Launches the review-complete command in a tmux floating pane or terminal
 /// 4. Blocks until the review-complete process signals completion via the FIFO
 ///
-/// The parent owns the lock for the full review lifecycle, so a failed
-/// terminal launch never leaves a stale lock behind.
+/// The parent keeps the lock's file handle through the FIFO wait and removes
+/// the lock if the child exits without cleanup. The child removes it on normal
+/// completion so the lock is released if the parent exits early.
 ///
 /// Returns the final document state after the user finishes editing, or `None`
 /// if the editor was already open. Returns `TerminalLaunchFailed` if the
@@ -583,6 +584,21 @@ mod tests {
                 LockGuard::is_locked(&document_path),
             ),
             (Some((document_path, ReviewTestSchema)), true, false,),
+        );
+    }
+
+    #[rstest]
+    fn start_review_releases_parent_lock_when_launch_fails(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let result = start_review_with_launcher::<ReviewTestSchema, _>(&document_path, |_, _| {
+            Err(HumanInTheLoopError::CommandFailed("launch failed".into()))
+        })
+        .map(|document| document.map(|document| document.path))
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, LockGuard::is_locked(&document_path)),
+            (Err("Command failed: launch failed".into()), false),
         );
     }
 

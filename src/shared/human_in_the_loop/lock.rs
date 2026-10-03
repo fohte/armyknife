@@ -64,11 +64,10 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
-/// RAII guard for cleanup after review-complete (lock file + tmux restore).
+/// Child-side cleanup guard for normal review completion.
 ///
-/// This guard is used in the review-complete process to ensure:
-/// 1. The lock file is always removed
-/// 2. The tmux session is restored (if applicable)
+/// The parent also holds the lock so it can remove it if the child is killed.
+/// This guard removes the lock if the parent exits before the editor does.
 pub struct CleanupGuard {
     lock_path: PathBuf,
     tmux_target: Option<String>,
@@ -88,21 +87,33 @@ impl Drop for CleanupGuard {
         // Remove lock file
         let _ = fs::remove_file(&self.lock_path);
 
-        restore_tmux_focus(self.tmux_target.as_deref());
-    }
-}
-
-fn restore_tmux_focus(tmux_target: Option<&str>) {
-    if let Some(target) = tmux_target {
-        let _ = tmux::focus_pane(target);
+        if let Some(ref target) = self.tmux_target {
+            let _ = tmux::focus_pane(target);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
+
+    struct ReviewDocumentFixture {
+        _temp_dir: TempDir,
+        path: PathBuf,
+    }
+
+    #[fixture]
+    fn review_document() -> ReviewDocumentFixture {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.md");
+        fs::write(&path, "content").unwrap();
+        ReviewDocumentFixture {
+            _temp_dir: temp_dir,
+            path,
+        }
+    }
 
     #[rstest]
     #[case::markdown("file.md", "file.md.lock")]
@@ -115,21 +126,18 @@ mod tests {
         assert_eq!(lock_path, PathBuf::from(expected));
     }
 
-    #[test]
-    fn lock_guard_creates_and_removes_lock_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let doc_path = temp_dir.path().join("test.md");
-        fs::write(&doc_path, "content").unwrap();
+    #[rstest]
+    fn lock_guard_creates_and_removes_lock_file(review_document: ReviewDocumentFixture) {
+        let doc_path = &review_document.path;
+        let lock_path = LockGuard::lock_path(doc_path);
 
-        let lock_path = LockGuard::lock_path(&doc_path);
-
-        let initially_locked = LockGuard::is_locked(&doc_path);
+        let initially_locked = LockGuard::is_locked(doc_path);
         let while_held;
         {
-            let _guard = LockGuard::acquire(&doc_path).unwrap();
-            while_held = (lock_path.exists(), LockGuard::is_locked(&doc_path));
+            let _guard = LockGuard::acquire(doc_path).unwrap();
+            while_held = (lock_path.exists(), LockGuard::is_locked(doc_path));
         }
-        let after_drop = (lock_path.exists(), LockGuard::is_locked(&doc_path));
+        let after_drop = (lock_path.exists(), LockGuard::is_locked(doc_path));
 
         assert_eq!(
             (initially_locked, while_held, after_drop),
@@ -137,50 +145,41 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lock_guard_does_not_replace_an_existing_lock() {
-        let temp_dir = TempDir::new().unwrap();
-        let doc_path = temp_dir.path().join("test.md");
-        fs::write(&doc_path, "content").unwrap();
-
-        let lock_path = LockGuard::lock_path(&doc_path);
+    #[rstest]
+    fn lock_guard_does_not_replace_an_existing_lock(review_document: ReviewDocumentFixture) {
+        let doc_path = &review_document.path;
+        let lock_path = LockGuard::lock_path(doc_path);
         fs::write(&lock_path, "another review").unwrap();
-        let acquired = LockGuard::acquire(&doc_path).is_ok();
+        let acquired = LockGuard::acquire(doc_path).is_ok();
         let contents = fs::read_to_string(lock_path).unwrap();
 
         assert_eq!((acquired, contents), (false, "another review".into()));
     }
 
-    #[test]
-    fn lock_guard_does_not_remove_a_replacement_lock() {
-        let temp_dir = TempDir::new().unwrap();
-        let doc_path = temp_dir.path().join("test.md");
-        fs::write(&doc_path, "content").unwrap();
-
-        let old_guard = LockGuard::acquire(&doc_path).unwrap();
-        fs::remove_file(LockGuard::lock_path(&doc_path)).unwrap();
-        let new_guard = LockGuard::acquire(&doc_path).unwrap();
+    #[rstest]
+    fn lock_guard_does_not_remove_a_replacement_lock(review_document: ReviewDocumentFixture) {
+        let doc_path = &review_document.path;
+        let old_guard = LockGuard::acquire(doc_path).unwrap();
+        fs::remove_file(LockGuard::lock_path(doc_path)).unwrap();
+        let new_guard = LockGuard::acquire(doc_path).unwrap();
         drop(old_guard);
-        let replacement_remains = LockGuard::is_locked(&doc_path);
+        let replacement_remains = LockGuard::is_locked(doc_path);
         drop(new_guard);
 
         assert_eq!(
-            (replacement_remains, LockGuard::is_locked(&doc_path)),
+            (replacement_remains, LockGuard::is_locked(doc_path)),
             (true, false),
         );
     }
 
-    #[test]
-    fn lock_guard_disarm_prevents_cleanup() {
-        let temp_dir = TempDir::new().unwrap();
-        let doc_path = temp_dir.path().join("test.md");
-        fs::write(&doc_path, "content").unwrap();
-
-        let lock_path = LockGuard::lock_path(&doc_path);
+    #[rstest]
+    fn lock_guard_disarm_prevents_cleanup(review_document: ReviewDocumentFixture) {
+        let doc_path = &review_document.path;
+        let lock_path = LockGuard::lock_path(doc_path);
 
         let while_held;
         {
-            let mut guard = LockGuard::acquire(&doc_path).unwrap();
+            let mut guard = LockGuard::acquire(doc_path).unwrap();
             while_held = lock_path.exists();
             guard.disarm();
         }
@@ -188,19 +187,16 @@ mod tests {
         assert_eq!((while_held, lock_path.exists()), (true, true));
     }
 
-    #[test]
-    fn cleanup_guard_removes_lock_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let doc_path = temp_dir.path().join("test.md");
-        fs::write(&doc_path, "content").unwrap();
-
-        let lock_path = LockGuard::lock_path(&doc_path);
+    #[rstest]
+    fn cleanup_guard_removes_lock_file(review_document: ReviewDocumentFixture) {
+        let doc_path = &review_document.path;
+        let lock_path = LockGuard::lock_path(doc_path);
         fs::write(&lock_path, "").unwrap();
 
         let existed_before_cleanup = lock_path.exists();
 
         {
-            let _guard = CleanupGuard::new(&doc_path, None);
+            let _guard = CleanupGuard::new(doc_path, None);
         }
 
         // Lock file should be removed when cleanup guard is dropped
