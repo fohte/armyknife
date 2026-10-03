@@ -20,55 +20,63 @@ pub(super) fn record_codex_daemon_metadata(
 
     if let Err(error) = record_from_env(thread_id, Path::new(cwd), env_vars) {
         eprintln!(
-            "[armyknife] warning: failed to save delegation metadata for Codex session {thread_id}: {error}"
+            "[armyknife] warning: failed to save session metadata for Codex session {thread_id}: {error}"
         );
     }
 }
 
 fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
-    let (label, work_type, ancestor_session_ids) = metadata_from_env(env_vars);
-    if label.is_none() && work_type.is_none() && ancestor_session_ids.is_empty() {
+    let sessions_dir = store::sessions_dir()?;
+    record_from_env_in(&sessions_dir, session_id, cwd, env_vars)
+}
+
+fn record_from_env_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    cwd: &Path,
+    env_vars: &[(&str, &str)],
+) -> Result<()> {
+    let metadata = metadata_from_env(env_vars);
+    if metadata.label.is_none()
+        && metadata.work_type.is_none()
+        && metadata.ancestor_session_ids.is_empty()
+    {
         return Ok(());
     }
 
-    record_in(
-        &store::sessions_dir()?,
-        session_id,
-        cwd,
-        label,
-        work_type,
-        &ancestor_session_ids,
-    )
+    record_in(sessions_dir, session_id, cwd, metadata)
 }
 
-fn metadata_from_env<'a>(
-    env_vars: &[(&str, &'a str)],
-) -> (Option<&'a str>, Option<&'a str>, Vec<String>) {
-    let label = env_vars
+#[derive(Debug, PartialEq, Eq)]
+struct SessionMetadata<'a> {
+    label: Option<&'a str>,
+    work_type: Option<&'a str>,
+    ancestor_session_ids: Vec<String>,
+}
+
+fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str> {
+    env_vars
         .iter()
-        .find(|(key, _)| *key == EnvVars::session_label_name())
+        .find(|(key, _)| *key == name)
         .map(|(_, value)| *value)
-        .filter(|value| !value.is_empty());
-    let work_type = env_vars
-        .iter()
-        .find(|(key, _)| *key == EnvVars::session_work_type_name())
-        .map(|(_, value)| *value)
-        .filter(|value| !value.is_empty());
-    let ancestor_session_ids = env_vars
-        .iter()
-        .find(|(key, _)| *key == EnvVars::ancestor_session_ids_name())
-        .map(|(_, value)| parse_ancestor_session_ids(value))
-        .unwrap_or_default();
-    (label, work_type, ancestor_session_ids)
+        .filter(|value| !value.is_empty())
+}
+
+fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
+    SessionMetadata {
+        label: non_empty_env(env_vars, EnvVars::session_label_name()),
+        work_type: non_empty_env(env_vars, EnvVars::session_work_type_name()),
+        ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
+            .map(parse_ancestor_session_ids)
+            .unwrap_or_default(),
+    }
 }
 
 fn record_in(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,
-    label: Option<&str>,
-    work_type: Option<&str>,
-    ancestor_session_ids: &[String],
+    metadata: SessionMetadata<'_>,
 ) -> Result<()> {
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
@@ -96,15 +104,15 @@ fn record_in(
         engine: Engine::Codex,
     });
 
-    if let Some(label) = label {
+    if let Some(label) = metadata.label {
         session.label = Some(label.to_string());
     }
     // Preserve a work type already recognized by a hook.
     if session.work_type.is_none() {
-        session.work_type = work_type.map(str::to_string);
+        session.work_type = metadata.work_type.map(str::to_string);
     }
-    if !ancestor_session_ids.is_empty() {
-        session.ancestor_session_ids = ancestor_session_ids.to_vec();
+    if !metadata.ancestor_session_ids.is_empty() {
+        session.ancestor_session_ids = metadata.ancestor_session_ids;
     }
 
     session_lock.save(&session)
@@ -173,9 +181,11 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
-            Some("explicit label"),
-            work_type,
-            &["root".to_string(), "parent".to_string()],
+            SessionMetadata {
+                label: Some("explicit label"),
+                work_type,
+                ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
+            },
         )
         .expect("record should succeed");
 
@@ -198,6 +208,46 @@ mod tests {
                 "label": "explicit label",
                 "work_type": expected_work_type,
                 "ancestor_session_ids": ["root", "parent"],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "codex"
+            })
+        );
+    }
+
+    #[rstest]
+    fn records_kind_without_other_metadata(sessions_dir: TempDir) {
+        let env_vars = [(EnvVars::session_work_type_name(), "sample-skill")];
+        record_from_env_in(
+            sessions_dir.path(),
+            "thread-a",
+            Path::new("/workspace/delegate"),
+            &env_vars,
+        )
+        .expect("record should succeed");
+
+        let mut actual = session_json(sessions_dir.path());
+        actual["created_at"] = json!("<timestamp>");
+        actual["updated_at"] = json!("<timestamp>");
+        assert_eq!(
+            actual,
+            json!({
+                "session_id": "thread-a",
+                "cwd": "/workspace/delegate",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "work_type": "sample-skill",
+                "ancestor_session_ids": [],
                 "pending_bg_task_ids": [],
                 "pending_agent_task_ids": [],
                 "pending_permission_agent_ids": [],
@@ -253,9 +303,11 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
-            label,
-            work_type,
-            &ancestors,
+            SessionMetadata {
+                label,
+                work_type,
+                ancestor_session_ids: ancestors,
+            },
         )
         .expect("record should succeed");
 
@@ -272,9 +324,11 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
-            None,
-            None,
-            &["parent".to_string()],
+            SessionMetadata {
+                label: None,
+                work_type: None,
+                ancestor_session_ids: vec!["parent".to_string()],
+            },
         )
         .expect("record should succeed");
         let mut expected = session_json(sessions_dir.path());
@@ -312,11 +366,11 @@ mod tests {
 
         assert_eq!(
             metadata_from_env(&env_vars),
-            (
-                Some("delegate label"),
-                Some("sample-skill"),
-                vec!["root".to_string(), "parent".to_string()]
-            )
+            SessionMetadata {
+                label: Some("delegate label"),
+                work_type: Some("sample-skill"),
+                ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
+            }
         );
     }
 }
