@@ -1,6 +1,6 @@
 //! Deferred self-archive for worktree cleanup.
 //!
-//! A Codex tool can run `a wm delete` inside the thread that cleanup must
+//! A Codex tool can run `a agent close` inside the thread that cleanup must
 //! archive. This detached worker waits for cleanup to exit before archiving it.
 
 use std::time::Duration;

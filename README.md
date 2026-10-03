@@ -344,7 +344,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
 | `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
-| `close [session_id] [--force]`                   | `c`     | Close an idle agent session and its tmux pane                             |
+| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                            |
 | `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
 | `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
@@ -406,9 +406,9 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [session_id] [--force]` (alias: `a ag c`) closes the session in the current pane when no ID is given. It refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked; `--force` overrides these checks. It also refuses when it cannot find the agent process for a session that has not ended or paused, or when the pane is no longer bound to that session. An already-removed pane is treated as closed.
+`a agent close [target] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch. A worktree target with multiple tracked sessions is ambiguous; pass a session ID to select one.
 
-The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Linked-worktree sessions are not supported by this command.
+The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked. It also refuses when it cannot find the agent process for a session that has not ended or paused, or when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` hook. An already-removed pane is treated as closed.
 
 `new` options:
 
@@ -579,7 +579,7 @@ myproject-7e
 
 For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If the app-server is unavailable, the thread belongs to an embedded app-server, or the server rejects the request, `notify` falls back to `codex queue --thread <session_id>` and prints the direct-delivery failure. The fallback requires `codex` in `PATH` with the target's `$CODEX_HOME`. A queued message is not delivered yet: the running `codex` polls about every 10 seconds and can start it only after the current turn finishes and the thread is idle. If both direct delivery and queueing fail, the command returns both errors. A `Paused` Codex target is resumed before delivery is attempted; if its thread is not registered yet, the resumed `codex` picks up the queued message when it loads the thread.
 
-`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a wm delete` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
+`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a agent close` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
 
 ```console
 $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
@@ -710,17 +710,17 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 Git worktree management with tmux integration.
 
-| Action              | Aliases  | Description                            |
-| ------------------- | -------- | -------------------------------------- |
-| `list`              | `ls`     | List all worktrees                     |
-| `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch       |
-| `clean`             | `c`      | Bulk delete merged or closed worktrees |
+| Action  | Aliases | Description                            |
+| ------- | ------- | -------------------------------------- |
+| `list`  | `ls`    | List all worktrees                     |
+| `clean` | `c`     | Bulk delete merged or closed worktrees |
 
 Use `a agent new --worktree=<branch>` to create a new worktree and open a tmux window.
+Use `a agent close <worktree>` to close its associated agent session and remove the worktree and branch.
 
-When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
+When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
-Deletion also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
+Worktree cleanup also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 
 `clean` options:
 

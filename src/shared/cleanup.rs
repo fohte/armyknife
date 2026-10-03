@@ -1,6 +1,6 @@
 //! Shared cleanup logic for agent sessions, notifications, and git worktrees.
 //!
-//! Both `agent watch` (session deletion) and `wm delete`/`wm clean` (worktree deletion)
+//! Both `agent watch` (session cleanup) and `agent close`/`wm clean` (worktree cleanup)
 //! need to clean up related resources. This module provides the shared logic to
 //! ensure consistent cleanup regardless of the entry point.
 
@@ -93,7 +93,7 @@ pub fn cleanup_worktree_by_name(
     // deletion succeeded.
     //
     // Clean up sessions BEFORE killing tmux windows: if the caller is running
-    // inside one of those windows (e.g. `a wm delete` invoked from the
+    // inside one of those windows (e.g. `a agent close` invoked from the
     // worktree's own pane), kill_window terminates the caller's pane and
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
@@ -134,7 +134,7 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
 ///
 /// Paused sessions were already SIGTERM'd by `agent sweep`, and Ended sessions
 /// exited on their own. In both cases the pane's foreground process is the
-/// user's shell (possibly the shell that just invoked `a wm delete` from
+/// user's shell (possibly the shell that just invoked `a agent close` from
 /// within the worktree). Signaling that shell would kill the very process we
 /// are running in, so restrict SIGTERM to statuses where a Claude process is
 /// still expected to be alive.
@@ -297,7 +297,7 @@ mod tests {
     fn should_sigterm_session_by_status(#[case] status: SessionStatus, #[case] expected: bool) {
         // Paused sessions were already SIGTERM'd by `agent sweep` so the pane
         // now hosts the user's shell -- signaling it would kill the caller
-        // when `a wm delete` runs from that same pane.
+        // when `a agent close` runs from that same pane.
         assert_eq!(should_sigterm_session(status), expected);
     }
 

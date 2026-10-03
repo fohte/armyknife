@@ -1,13 +1,12 @@
 use anyhow::{Context, Result, bail};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::infra::git::{
     GitRepo, MergeStatus, get_merge_status, get_repo_root, local_branch_exists,
 };
 use crate::infra::tmux;
 use crate::shared::cleanup;
-use crate::shared::config::load_config;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
@@ -16,46 +15,65 @@ use crate::shared::worktree::{
 };
 use crate::shared::worktree_error::WmError;
 
-pub async fn run(worktree_arg: Option<&str>, force: bool, skip_hooks: bool) -> Result<()> {
-    let config = load_config()?;
-    let worktree_path = resolve_worktree_path(
-        worktree_arg,
-        &config.agent.worktree.dir,
-        &config.agent.worktree.branch_prefix,
-    )?;
+pub(crate) struct WorktreeDeletePlan {
+    main_repo: GitRepo,
+    worktree_name: String,
+    branch_name: Option<String>,
+    worktree_path: PathBuf,
+    merge_status: Option<MergeStatus>,
+}
 
-    let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+pub(crate) async fn prepare(worktree_path: &Path, force: bool) -> Result<WorktreeDeletePlan> {
+    let repo = GitRepo::open_at(worktree_path).map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
-    let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
+    let worktree_path = repo.workdir().to_path_buf();
+    let worktree_path_str = worktree_path.to_string_lossy();
+    let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
     let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
-    // Check merge status before deletion (needs worktree to still exist)
     let merge_status = check_merge_status(branch_name.as_deref(), force).await?;
 
-    let worktree_abs = Path::new(&worktree_path);
+    Ok(WorktreeDeletePlan {
+        main_repo,
+        worktree_name,
+        branch_name,
+        worktree_path,
+        merge_status,
+    })
+}
+
+pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Result<()> {
+    let WorktreeDeletePlan {
+        main_repo,
+        worktree_name,
+        branch_name,
+        worktree_path,
+        merge_status,
+    } = plan;
+    let worktree_path_str = worktree_path.to_string_lossy();
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
-    // worktree's session files and, when `a wm delete` runs from the
+    // worktree's session files and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
     if let Some(branch) = branch_name.as_deref()
         && merge_status.as_ref().is_some_and(MergeStatus::is_merged)
     {
-        notify_delegator_of_merge(&main_repo, branch, worktree_abs).await;
+        notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
     }
 
     let hook_ran = run_pre_delete_hook(
         &main_repo,
         branch_name.as_deref(),
-        &worktree_path,
+        &worktree_path_str,
         skip_hooks,
     );
 
     // Capture the current tmux window ID before cleanup deletes it,
     // so we can close the window we're sitting in
-    let current_window_id = tmux::get_window_id_if_in_path(&worktree_path);
+    let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
 
-    let result = cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, worktree_abs)?;
+    let result = cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path)?;
 
     if !result.worktree_deleted {
         if hook_ran {
@@ -64,9 +82,9 @@ pub async fn run(worktree_arg: Option<&str>, force: bool, skip_hooks: bool) -> R
                  any process it stopped will not be restarted automatically"
             );
         }
-        bail!("Failed to remove worktree: {worktree_path}");
+        bail!("Failed to remove worktree: {worktree_path_str}");
     }
-    println!("Worktree removed: {worktree_path}");
+    println!("Worktree removed: {worktree_path_str}");
 
     if let Some(branch) = &result.branch_deleted {
         println!("Branch deleted: {branch}");
@@ -173,37 +191,29 @@ async fn check_merge_status(branch_name: Option<&str>, force: bool) -> Result<Op
     Ok(Some(merge_status))
 }
 
-/// Resolve the worktree path from the argument or current directory
-fn resolve_worktree_path(
-    worktree_arg: Option<&str>,
+/// Resolve the worktree path from the argument or current directory.
+pub(crate) fn resolve_worktree_path(
+    arg: &str,
     worktrees_dir: &str,
     branch_prefix: &str,
 ) -> Result<String> {
-    if let Some(arg) = worktree_arg {
-        // First, try to treat the argument as an existing path
-        if let Ok(path) = std::fs::canonicalize(arg) {
-            return Ok(path.to_string_lossy().to_string());
-        }
-
-        // Fall back to resolving the value as a branch/worktree name
-        let repo_root = get_repo_root()?;
-        let worktree_name = branch_to_worktree_name(arg, branch_prefix);
-        let candidate_path = format!("{repo_root}/{worktrees_dir}/{worktree_name}");
-
-        if std::path::Path::new(&candidate_path).exists() {
-            let path = std::fs::canonicalize(&candidate_path)
-                .context("Failed to canonicalize worktree path")?;
-            return Ok(path.to_string_lossy().to_string());
-        }
-
-        Err(WmError::WorktreeNotFound(arg.to_string()).into())
-    } else {
-        // Use current directory
-        Ok(std::env::current_dir()
-            .context("Failed to get current directory")?
-            .to_string_lossy()
-            .to_string())
+    // First, try to treat the argument as an existing path
+    if let Ok(path) = std::fs::canonicalize(arg) {
+        return Ok(path.to_string_lossy().to_string());
     }
+
+    // Fall back to resolving the value as a branch/worktree name
+    let repo_root = get_repo_root()?;
+    let worktree_name = branch_to_worktree_name(arg, branch_prefix);
+    let candidate_path = format!("{repo_root}/{worktrees_dir}/{worktree_name}");
+
+    if std::path::Path::new(&candidate_path).exists() {
+        let path = std::fs::canonicalize(&candidate_path)
+            .context("Failed to canonicalize worktree path")?;
+        return Ok(path.to_string_lossy().to_string());
+    }
+
+    Err(WmError::WorktreeNotFound(arg.to_string()).into())
 }
 
 #[cfg(test)]
@@ -246,29 +256,17 @@ mod tests {
 
         let wt_path = test_repo.worktree_path("feature");
         let result =
-            resolve_worktree_path(Some(wt_path.to_str().unwrap()), ".worktrees", "fohte/").unwrap();
+            resolve_worktree_path(wt_path.to_str().unwrap(), ".worktrees", "fohte/").unwrap();
 
         assert_eq!(result, wt_path.to_string_lossy().to_string());
     }
 
     #[test]
     fn resolve_worktree_path_with_nonexistent_returns_error() {
-        let result = resolve_worktree_path(
-            Some("/nonexistent/path/to/worktree"),
-            ".worktrees",
-            "fohte/",
-        );
+        let result = resolve_worktree_path("/nonexistent/path/to/worktree", ".worktrees", "fohte/");
         assert_eq!(
             result.unwrap_err().to_string(),
             "Worktree not found: /nonexistent/path/to/worktree"
         );
-    }
-
-    #[test]
-    fn resolve_worktree_path_with_none_returns_current_dir() {
-        let current = std::env::current_dir().unwrap();
-        let result = resolve_worktree_path(None, ".worktrees", "fohte/").unwrap();
-
-        assert_eq!(result, current.to_string_lossy().to_string());
     }
 }

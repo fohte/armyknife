@@ -112,14 +112,16 @@ pub(super) fn rollback_worktree(
         Ok(false) => {
             eprintln!(
                 "warning: worktree '{worktree_name}' could not be removed. \
-                 Run `a wm delete` or remove it manually before re-running `a agent new --worktree`."
+                 Run `a agent close <worktree>` or remove it manually before re-running \
+                 `a agent new --worktree`."
             );
             false
         }
         Err(e) => {
             eprintln!(
                 "warning: failed to remove worktree '{worktree_name}': {e}. \
-                 Run `a wm delete` or remove it manually before re-running `a agent new --worktree`."
+                 Run `a agent close <worktree>` or remove it manually before re-running \
+                 `a agent new --worktree`."
             );
             false
         }

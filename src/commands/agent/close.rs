@@ -1,6 +1,8 @@
 //! `a agent close` shuts down a tracked agent session and removes its tmux pane.
 
+use std::future::Future;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -13,47 +15,186 @@ use super::types::{Engine, Session, SessionStatus};
 use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
+use crate::shared::config::load_config;
+use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CloseArgs {
-    /// Session ID to close (defaults to the session in the current pane).
-    pub session_id: Option<String>,
+    /// Session ID, worktree name, or worktree path to close.
+    /// Defaults to the session in the current pane or the current worktree.
+    pub target: Option<String>,
 
-    /// Close the session even when it is active, has pending tasks, or has an unsent draft.
+    /// Override session safety checks and unmerged-worktree confirmation.
     #[arg(long)]
     pub force: bool,
+
+    /// Skip the pre-worktree-delete hook.
+    #[arg(long)]
+    pub skip_hooks: bool,
 }
 
-pub fn run(args: &CloseArgs) -> Result<()> {
-    let session_id = match args.session_id.as_deref() {
-        Some(session_id) => session_id.to_string(),
-        None => resume::resolve_session_id_from_pane()?,
+pub async fn run(args: &CloseArgs) -> Result<()> {
+    if let Some(target) = args.target.as_deref() {
+        return close_target(target, args).await;
+    }
+
+    let pane_session_id = resume::resolve_session_id_from_pane();
+    let worktree_root = if pane_session_id.is_err() {
+        let cwd = std::env::current_dir().context("Failed to get current directory")?;
+        linked_worktree_root(&cwd)
+    } else {
+        None
     };
-    let Some(mut session) = super::store::load_session(&session_id)? else {
+    match resolve_default_target(pane_session_id, worktree_root)? {
+        DefaultTarget::SessionId(session_id) => close_session_target(&session_id, args).await,
+        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args).await,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DefaultTarget {
+    SessionId(String),
+    Worktree(PathBuf),
+}
+
+fn resolve_default_target(
+    pane_session_id: Result<String>,
+    current_worktree_root: Option<PathBuf>,
+) -> Result<DefaultTarget> {
+    match pane_session_id {
+        Ok(session_id) => Ok(DefaultTarget::SessionId(session_id)),
+        Err(error) => current_worktree_root
+            .map(DefaultTarget::Worktree)
+            .ok_or(error),
+    }
+}
+
+async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
+    if !target.contains('/')
+        && !target.contains('\\')
+        && !target.contains("..")
+        && let Some(session) = super::store::load_session(target)?
+    {
+        return close_session_value(&session, args).await;
+    }
+
+    let config = load_config()?;
+    let worktree_path = worktree_delete::resolve_worktree_path(
+        target,
+        &config.agent.worktree.dir,
+        &config.agent.worktree.branch_prefix,
+    )?;
+    let worktree_path = PathBuf::from(worktree_path);
+    let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
+    close_worktree(&worktree_root, args).await
+}
+
+async fn close_session_target(session_id: &str, args: &CloseArgs) -> Result<()> {
+    let Some(session) = super::store::load_session(session_id)? else {
         bail!("Agent session `{session_id}` was not found");
     };
+    close_session_value(&session, args).await
+}
 
-    reject_linked_worktree(&session)?;
+async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> {
+    let Some(worktree_root) = linked_worktree_root(&session.cwd) else {
+        return close_tracked_session(session, args.force);
+    };
+
+    close_with_worktree_plan(
+        worktree_delete::prepare(&worktree_root, args.force),
+        || close_worktree_session(session, args.force),
+        |plan| worktree_delete::execute(plan, args.skip_hooks),
+    )
+    .await
+}
+
+async fn close_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
+    let sessions = super::store::list_sessions()?;
+    let session = select_worktree_session(&sessions, worktree_root)?;
+    close_with_worktree_plan(
+        worktree_delete::prepare(worktree_root, args.force),
+        || {
+            if let Some(session) = session {
+                close_worktree_session(session, args.force)?;
+            }
+            Ok(())
+        },
+        |plan| worktree_delete::execute(plan, args.skip_hooks),
+    )
+    .await
+}
+
+async fn close_with_worktree_plan<P, F>(
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce() -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    let plan = prepare.await?;
+    close_session()?;
+    remove_worktree(plan).await
+}
+
+fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
+    let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, args.force, &LiveCloseRuntime)
+    close_session(&session, force, &LiveCloseRuntime)
 }
 
-fn reject_linked_worktree(session: &Session) -> Result<()> {
-    let is_worktree = GitRepo::open_at(&session.cwd).is_ok_and(|repo| repo.is_worktree());
-    ensure_not_linked_worktree(session, is_worktree)
+fn close_worktree_session(session: &Session, force: bool) -> Result<()> {
+    let current_pane_id = tmux::current_pane_id_from_env();
+    if !should_gracefully_close_worktree_session(session, current_pane_id.as_deref()) {
+        return Ok(());
+    }
+    close_tracked_session(session, force)
 }
 
-fn ensure_not_linked_worktree(session: &Session, is_worktree: bool) -> Result<()> {
-    if is_worktree {
+fn should_gracefully_close_worktree_session(
+    session: &Session,
+    current_pane_id: Option<&str>,
+) -> bool {
+    session
+        .tmux_info
+        .as_ref()
+        .is_some_and(|info| current_pane_id != Some(info.pane_id.as_str()))
+}
+
+fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
+    let repo = GitRepo::open_at(path).ok()?;
+    repo.is_worktree().then(|| repo.workdir().to_path_buf())
+}
+
+fn path_is_within_worktree(path: &Path, worktree_root: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let worktree_root = worktree_root
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_root.to_path_buf());
+    path.starts_with(worktree_root)
+}
+
+fn select_worktree_session<'a>(
+    sessions: &'a [Session],
+    worktree_root: &Path,
+) -> Result<Option<&'a Session>> {
+    let mut matching = sessions
+        .iter()
+        .filter(|session| path_is_within_worktree(&session.cwd, worktree_root));
+    let Some(session) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
         bail!(
-            "Cannot close agent session `{}` because its working directory is a linked worktree",
-            session.session_id
+            "Multiple agent sessions are associated with worktree `{}`; pass a session ID to select one",
+            worktree_root.display()
         );
     }
-    Ok(())
+    Ok(Some(session))
 }
 
 trait CloseRuntime {
@@ -708,30 +849,169 @@ mod tests {
         );
     }
 
-    #[test]
-    fn linked_worktree_sessions_are_rejected() {
-        let result = ensure_not_linked_worktree(&session(), true);
+    #[rstest]
+    #[case::root(vec!["/tmp/worktrees/feature"], Ok(Some("session-0".to_string())))]
+    #[case::nested(vec!["/tmp/worktrees/feature/src"], Ok(Some("session-0".to_string())))]
+    #[case::sibling(vec!["/tmp/worktrees/feature-extra"], Ok(None))]
+    #[case::multiple(
+        vec!["/tmp/worktrees/feature", "/tmp/worktrees/feature/src"],
+        Err("Multiple agent sessions are associated with worktree `/tmp/worktrees/feature`; pass a session ID to select one".to_string())
+    )]
+    fn selects_a_unique_session_for_the_target_worktree(
+        #[case] session_cwds: Vec<&str>,
+        #[case] expected: std::result::Result<Option<String>, String>,
+    ) {
+        let sessions = session_cwds
+            .into_iter()
+            .enumerate()
+            .map(|(index, cwd)| {
+                let mut session = session();
+                session.session_id = format!("session-{index}");
+                session.cwd = PathBuf::from(cwd);
+                session
+            })
+            .collect::<Vec<_>>();
+        let actual = select_worktree_session(&sessions, Path::new("/tmp/worktrees/feature"))
+            .map(|session| session.map(|session| session.session_id.clone()))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::same_pane(Some("%42"), true, false)]
+    #[case::other_pane(Some("%99"), true, true)]
+    #[case::no_current_pane(None, true, true)]
+    #[case::missing_tmux_info(Some("%42"), false, false)]
+    fn skips_graceful_close_for_the_current_or_untracked_pane(
+        mut session: Session,
+        #[case] current_pane_id: Option<&str>,
+        #[case] has_tmux_info: bool,
+        #[case] expected: bool,
+    ) {
+        if !has_tmux_info {
+            session.tmux_info = None;
+        }
+        assert_eq!(
+            should_gracefully_close_worktree_session(&session, current_pane_id),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_worktree_confirmation_leaves_the_session_open() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_with_worktree_plan(
+            async {
+                calls.borrow_mut().push("prepare");
+                Err::<(), _>(anyhow::anyhow!("Cancelled."))
+            },
+            || {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
 
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Cannot close agent session `session-1` because its working directory is a linked worktree"
+            (result.unwrap_err().to_string(), calls.into_inner()),
+            ("Cancelled.".to_string(), vec!["prepare"]),
         );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_removes_after_closing_the_selected_session() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_with_worktree_plan(
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (result.is_ok(), calls.into_inner()),
+            (true, vec!["prepare", "close session", "remove worktree"]),
+        );
+    }
+
+    #[rstest]
+    #[case::pane_session_wins(Some("session-1"), Some("/tmp/worktrees/feature"), Ok(DefaultTarget::SessionId("session-1".to_string())))]
+    #[case::worktree_fallback(
+        None,
+        Some("/tmp/worktrees/feature"),
+        Ok(DefaultTarget::Worktree(PathBuf::from("/tmp/worktrees/feature")))
+    )]
+    #[case::preserves_pane_error(None, None, Err("no agent session for pane".to_string()))]
+    fn resolves_default_target_from_pane_or_current_worktree(
+        #[case] pane_session_id: Option<&str>,
+        #[case] worktree_root: Option<&str>,
+        #[case] expected: std::result::Result<DefaultTarget, String>,
+    ) {
+        let pane_session_id = pane_session_id
+            .map(|session_id| Ok(session_id.to_string()))
+            .unwrap_or_else(|| Err(anyhow::anyhow!("no agent session for pane")));
+        let worktree_root = worktree_root.map(PathBuf::from);
+        let actual = resolve_default_target(pane_session_id, worktree_root)
+            .map_err(|error| error.to_string());
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
     fn close_command_has_the_ag_c_alias() {
         use clap::Parser;
 
-        let parsed = crate::cli::Cli::try_parse_from(["a", "ag", "c", "session-1", "--force"])
-            .expect("the close command should parse");
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "ag",
+            "c",
+            "feature/worktree",
+            "--force",
+            "--skip-hooks",
+        ])
+        .expect("the close command should parse");
 
         let close_args = match parsed.command {
             crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => {
-                Some((args.session_id, args.force))
+                Some((args.target, args.force, args.skip_hooks))
             }
             _ => None,
         };
 
-        assert_eq!(close_args, Some((Some("session-1".to_string()), true)));
+        assert_eq!(
+            close_args,
+            Some((Some("feature/worktree".to_string()), true, true))
+        );
+    }
+
+    #[rstest]
+    #[case::delete(vec!["a", "wm", "delete"])]
+    #[case::d_alias(vec!["a", "wm", "d"])]
+    #[case::rm_alias(vec!["a", "wm", "rm"])]
+    fn wm_delete_command_and_aliases_are_removed(#[case] argv: Vec<&str>) {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from(argv);
+
+        assert_eq!(
+            parsed.err().map(|error| error.kind()),
+            Some(clap::error::ErrorKind::InvalidSubcommand)
+        );
     }
 }
