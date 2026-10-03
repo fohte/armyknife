@@ -471,6 +471,7 @@ mod tests {
             .map(|i| Session {
                 session_id: format!("session-{}", i),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from(format!("/project/{}", i)),
@@ -931,6 +932,7 @@ mod tests {
             Session {
                 session_id: "session-running".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/running"),
@@ -955,6 +957,7 @@ mod tests {
             Session {
                 session_id: "session-waiting".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/waiting"),
@@ -979,6 +982,7 @@ mod tests {
             Session {
                 session_id: "session-stopped".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/stopped"),
@@ -1003,6 +1007,7 @@ mod tests {
             Session {
                 session_id: "session-paused".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/paused"),
@@ -1247,6 +1252,7 @@ mod tests {
         Session {
             session_id: id.to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd,

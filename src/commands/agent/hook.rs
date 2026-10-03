@@ -415,6 +415,7 @@ fn process_hook_event_impl(
         Session {
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
+            work_type_pinned: env.session_work_type.is_some(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: input.cwd.clone(),
@@ -1678,6 +1679,7 @@ mod tests {
         let session = Session {
             session_id: "paused-sess".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2050,6 +2052,7 @@ mod tests {
         let session = Session {
             session_id: "end-sess".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2603,6 +2606,7 @@ mod tests {
         Session {
             session_id: "test-123".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2910,30 +2914,31 @@ mod tests {
             let mut actual = serde_json::to_value(session).expect("session should serialize");
             actual["created_at"] = serde_json::json!("<timestamp>");
             actual["updated_at"] = serde_json::json!("<timestamp>");
-            assert_eq!(
-                actual,
-                serde_json::json!({
-                    "session_id": "test-123",
-                    "work_type": expected_work_type,
-                    "cwd": "/tmp/test",
-                    "transcript_path": null,
-                    "tty": null,
-                    "tmux_info": null,
-                    "status": "running",
-                    "created_at": "<timestamp>",
-                    "updated_at": "<timestamp>",
-                    "last_message": null,
-                    "current_tool": null,
-                    "label": null,
-                    "ancestor_session_ids": [],
-                    "pending_bg_task_ids": [],
-                    "pending_agent_task_ids": [],
-                    "pending_permission_agent_ids": [],
-                    "read_at": null,
-                    "sweep_signaled": false,
-                    "engine": "claude"
-                })
-            );
+            let mut expected = serde_json::json!({
+                "session_id": "test-123",
+                "work_type": expected_work_type,
+                "cwd": "/tmp/test",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "ancestor_session_ids": [],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "claude"
+            });
+            if expected_work_type.is_some() {
+                expected["work_type_pinned"] = serde_json::json!(true);
+            }
+            assert_eq!(actual, expected);
         }
 
         #[test]
@@ -2998,6 +3003,7 @@ mod tests {
             Session {
                 session_id: session_id.to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),

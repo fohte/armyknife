@@ -716,6 +716,7 @@ mod tests {
         Session {
             session_id: id.to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -1505,6 +1506,7 @@ mod tests {
             Session {
                 session_id: id.to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),
