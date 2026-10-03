@@ -10,13 +10,13 @@ use super::worktree::{
     rollback_worktree,
 };
 use crate::commands::agent::error::CcError;
-use crate::commands::wm::git::branch_to_worktree_name;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{WorktreeCreationLock, get_main_branch_for_repo, open_repo_at};
 use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
+use crate::shared::worktree::branch_to_worktree_name;
 
 pub(super) fn run_worktree_creation(
     args: &NewArgs,

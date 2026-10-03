@@ -4,9 +4,21 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 
-use super::error::{Result, WmError};
+use super::worktree_error::{Result, WmError};
 use crate::infra::git::GitRepo;
 use crate::infra::git::cmd::run_git;
+
+/// Normalize a branch name to a worktree directory name.
+/// - Removes the given branch_prefix
+/// - Replaces slashes with dashes
+pub fn branch_to_worktree_name(branch: &str, branch_prefix: &str) -> String {
+    let name_no_prefix = branch.strip_prefix(branch_prefix).unwrap_or(branch);
+    name_no_prefix.replace('/', "-")
+}
+
+/// Default branch prefix for tests.
+#[cfg(test)]
+pub const BRANCH_PREFIX: &str = "fohte/";
 
 /// Get the main repository, resolving from a worktree if necessary.
 pub fn get_main_repo(repo: &GitRepo) -> Result<GitRepo> {
@@ -215,6 +227,42 @@ fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::simple("feature-branch", BRANCH_PREFIX, "feature-branch")]
+    #[case::with_prefix("fohte/feature-branch", BRANCH_PREFIX, "feature-branch")]
+    #[case::with_slash("feature/branch", BRANCH_PREFIX, "feature-branch")]
+    #[case::with_prefix_and_slash("fohte/feature/branch", BRANCH_PREFIX, "feature-branch")]
+    #[case::nested_slash("feature/sub/branch", BRANCH_PREFIX, "feature-sub-branch")]
+    #[case::custom_prefix("user/feature-branch", "user/", "feature-branch")]
+    #[case::custom_prefix_with_slash("user/feature/sub", "user/", "feature-sub")]
+    #[case::no_match("feature-branch", "other/", "feature-branch")]
+    #[case::empty_prefix("fohte/feature", "", "fohte-feature")]
+    fn test_branch_to_worktree_name(
+        #[case] branch: &str,
+        #[case] prefix: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(branch_to_worktree_name(branch, prefix), expected);
+    }
+
+    #[test]
+    fn branch_to_worktree_name_removes_prefix_and_slashes() {
+        assert_eq!(branch_to_worktree_name("feature", BRANCH_PREFIX), "feature");
+        assert_eq!(
+            branch_to_worktree_name("fohte/feature", BRANCH_PREFIX),
+            "feature"
+        );
+        assert_eq!(
+            branch_to_worktree_name("feature/sub", BRANCH_PREFIX),
+            "feature-sub"
+        );
+        assert_eq!(
+            branch_to_worktree_name("fohte/feature/sub", BRANCH_PREFIX),
+            "feature-sub"
+        );
+    }
 
     #[test]
     fn get_main_repo_from_main_returns_same_repo() {

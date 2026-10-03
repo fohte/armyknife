@@ -2,9 +2,11 @@ use std::path::PathBuf;
 
 use clap::Args;
 
-use super::error::{Result, WmError};
-use super::worktree::{get_main_worktree_info, get_main_worktree_path, list_linked_worktrees};
 use crate::infra::git::GitRepo;
+use crate::shared::worktree::{
+    get_main_worktree_info, get_main_worktree_path, list_linked_worktrees,
+};
+use crate::shared::worktree_error::{Result, WmError};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ListArgs {}

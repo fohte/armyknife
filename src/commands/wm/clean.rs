@@ -7,8 +7,6 @@ use chrono::Utc;
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use super::error::{Result, WmError};
-use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::commands::agent::auto_pause::parse_duration;
 use crate::commands::agent::session_status::list_sessions_with_bg_run_status;
 #[cfg(test)]
@@ -27,6 +25,8 @@ use crate::shared::config::load_config;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
+use crate::shared::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
+use crate::shared::worktree_error::{Result, WmError};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {

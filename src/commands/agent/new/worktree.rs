@@ -107,7 +107,7 @@ pub(super) fn rollback_worktree(
 ) {
     eprintln!("post-worktree-create hook failed; rolling back worktree '{worktree_name}'");
 
-    let removed = match crate::commands::wm::worktree::delete_worktree(repo, worktree_name) {
+    let removed = match crate::shared::worktree::delete_worktree(repo, worktree_name) {
         Ok(true) => true,
         Ok(false) => {
             eprintln!(
@@ -141,7 +141,7 @@ pub(super) fn rollback_worktree(
 
     match branch_rollback {
         BranchRollback::Delete => {
-            if crate::commands::wm::worktree::delete_branch_if_exists(repo, branch) {
+            if crate::shared::worktree::delete_branch_if_exists(repo, branch) {
                 eprintln!("Deleted branch '{branch}'");
             }
         }

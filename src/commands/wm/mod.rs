@@ -1,13 +1,6 @@
 mod clean;
 mod delete;
-mod error;
-pub(crate) use error::WmError;
-pub(crate) mod git;
 mod list;
-pub(crate) mod worktree;
-
-#[cfg(test)]
-mod tests;
 
 use clap::Subcommand;
 
