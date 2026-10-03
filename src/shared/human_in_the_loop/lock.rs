@@ -4,13 +4,10 @@ use std::path::{Path, PathBuf};
 use super::error::Result;
 use crate::infra::tmux;
 
-/// RAII guard for lock file cleanup in the review launcher.
-///
-/// When WezTerm fails to launch, this guard ensures the lock file is removed.
-/// When WezTerm launches successfully, call `disarm()` to prevent cleanup
-/// (the review-complete process will handle it).
+/// RAII guard for the lock file owned by a review launcher.
 pub struct LockGuard {
     lock_path: PathBuf,
+    lock_file: fs::File,
     disarmed: bool,
 }
 
@@ -18,9 +15,13 @@ impl LockGuard {
     /// Create a lock file and return a guard.
     pub fn acquire(document_path: &Path) -> Result<Self> {
         let lock_path = Self::lock_path(document_path);
-        fs::write(&lock_path, "")?;
+        let lock_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)?;
         Ok(Self {
             lock_path,
+            lock_file,
             disarmed: false,
         })
     }
@@ -38,9 +39,6 @@ impl LockGuard {
     }
 
     /// Prevent this guard from removing the lock file on drop.
-    ///
-    /// Call this after WezTerm launches successfully, since the review-complete
-    /// process will handle lock cleanup.
     pub fn disarm(&mut self) {
         self.disarmed = true;
     }
@@ -48,10 +46,22 @@ impl LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        if !self.disarmed {
+        if !self.disarmed
+            && let (Ok(owned), Ok(path)) = (
+                self.lock_file.metadata(),
+                fs::symlink_metadata(&self.lock_path),
+            )
+            && same_file(&owned, &path)
+        {
             let _ = fs::remove_file(&self.lock_path);
         }
     }
+}
+
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
 }
 
 /// RAII guard for cleanup after review-complete (lock file + tmux restore).
@@ -78,10 +88,13 @@ impl Drop for CleanupGuard {
         // Remove lock file
         let _ = fs::remove_file(&self.lock_path);
 
-        // Restore tmux pane focus
-        if let Some(ref target) = self.tmux_target {
-            let _ = tmux::focus_pane(target);
-        }
+        restore_tmux_focus(self.tmux_target.as_deref());
+    }
+}
+
+fn restore_tmux_focus(tmux_target: Option<&str>) {
+    if let Some(target) = tmux_target {
+        let _ = tmux::focus_pane(target);
     }
 }
 
@@ -92,10 +105,10 @@ mod tests {
     use tempfile::TempDir;
 
     #[rstest]
-    #[case("file.md", "file.md.lock")]
-    #[case("file.txt", "file.txt.lock")]
-    #[case("file", "file.lock")]
-    #[case("file.tar.gz", "file.tar.gz.lock")]
+    #[case::markdown("file.md", "file.md.lock")]
+    #[case::text("file.txt", "file.txt.lock")]
+    #[case::extensionless("file", "file.lock")]
+    #[case::compound_extension("file.tar.gz", "file.tar.gz.lock")]
     fn lock_path_appends_lock_extension(#[case] filename: &str, #[case] expected: &str) {
         let path = PathBuf::from(filename);
         let lock_path = LockGuard::lock_path(&path);
@@ -110,19 +123,51 @@ mod tests {
 
         let lock_path = LockGuard::lock_path(&doc_path);
 
-        // Lock file should not exist initially
-        assert!(!lock_path.exists());
-
+        let initially_locked = LockGuard::is_locked(&doc_path);
+        let while_held;
         {
             let _guard = LockGuard::acquire(&doc_path).unwrap();
-            // Lock file should exist while guard is held
-            assert!(lock_path.exists());
-            assert!(LockGuard::is_locked(&doc_path));
+            while_held = (lock_path.exists(), LockGuard::is_locked(&doc_path));
         }
+        let after_drop = (lock_path.exists(), LockGuard::is_locked(&doc_path));
 
-        // Lock file should be removed when guard is dropped
-        assert!(!lock_path.exists());
-        assert!(!LockGuard::is_locked(&doc_path));
+        assert_eq!(
+            (initially_locked, while_held, after_drop),
+            (false, (true, true), (false, false)),
+        );
+    }
+
+    #[test]
+    fn lock_guard_does_not_replace_an_existing_lock() {
+        let temp_dir = TempDir::new().unwrap();
+        let doc_path = temp_dir.path().join("test.md");
+        fs::write(&doc_path, "content").unwrap();
+
+        let lock_path = LockGuard::lock_path(&doc_path);
+        fs::write(&lock_path, "another review").unwrap();
+        let acquired = LockGuard::acquire(&doc_path).is_ok();
+        let contents = fs::read_to_string(lock_path).unwrap();
+
+        assert_eq!((acquired, contents), (false, "another review".into()));
+    }
+
+    #[test]
+    fn lock_guard_does_not_remove_a_replacement_lock() {
+        let temp_dir = TempDir::new().unwrap();
+        let doc_path = temp_dir.path().join("test.md");
+        fs::write(&doc_path, "content").unwrap();
+
+        let old_guard = LockGuard::acquire(&doc_path).unwrap();
+        fs::remove_file(LockGuard::lock_path(&doc_path)).unwrap();
+        let new_guard = LockGuard::acquire(&doc_path).unwrap();
+        drop(old_guard);
+        let replacement_remains = LockGuard::is_locked(&doc_path);
+        drop(new_guard);
+
+        assert_eq!(
+            (replacement_remains, LockGuard::is_locked(&doc_path)),
+            (true, false),
+        );
     }
 
     #[test]
@@ -133,17 +178,14 @@ mod tests {
 
         let lock_path = LockGuard::lock_path(&doc_path);
 
+        let while_held;
         {
             let mut guard = LockGuard::acquire(&doc_path).unwrap();
-            assert!(lock_path.exists());
+            while_held = lock_path.exists();
             guard.disarm();
         }
 
-        // Lock file should still exist after disarmed guard is dropped
-        assert!(lock_path.exists());
-
-        // Cleanup
-        fs::remove_file(&lock_path).unwrap();
+        assert_eq!((while_held, lock_path.exists()), (true, true));
     }
 
     #[test]
@@ -155,13 +197,17 @@ mod tests {
         let lock_path = LockGuard::lock_path(&doc_path);
         fs::write(&lock_path, "").unwrap();
 
-        assert!(lock_path.exists());
+        let existed_before_cleanup = lock_path.exists();
 
         {
             let _guard = CleanupGuard::new(&doc_path, None);
         }
 
         // Lock file should be removed when cleanup guard is dropped
-        assert!(!lock_path.exists());
+        let exists_after_cleanup = lock_path.exists();
+        assert_eq!(
+            (existed_before_cleanup, exists_after_cleanup),
+            (true, false)
+        );
     }
 }
