@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.353](https://github.com/fohte/armyknife/compare/v0.1.352...v0.1.353) (2026-10-03)
+
+
+### Features
+
+* **agent:** track session work types and support display configuration ([#1028](https://github.com/fohte/armyknife/issues/1028)) ([d9ce534](https://github.com/fohte/armyknife/commit/d9ce534c22b18a86084e891d41a0dfcae976db45))
+
 ## [0.1.352](https://github.com/fohte/armyknife/compare/v0.1.351...v0.1.352) (2026-10-03)
 
 
