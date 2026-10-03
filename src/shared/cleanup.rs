@@ -45,6 +45,15 @@ pub struct WorktreeCleanupResult {
 ///
 /// If `cwd` is not inside a git worktree, returns a default (no-op) result.
 pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupResult> {
+    cleanup_worktree_resources_with_post_delete(cwd, || {})
+}
+
+/// Cleans up a worktree and invokes `after_delete` after git removes it but
+/// before cleanup can terminate a pane running the caller.
+pub fn cleanup_worktree_resources_with_post_delete(
+    cwd: &Path,
+    after_delete: impl FnOnce(),
+) -> anyhow::Result<WorktreeCleanupResult> {
     let repo = match GitRepo::open_at(cwd) {
         Ok(r) => r,
         Err(_) => return Ok(WorktreeCleanupResult::default()),
@@ -64,7 +73,12 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
         Err(_) => return Ok(WorktreeCleanupResult::default()),
     };
 
-    let mut result = cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root)?;
+    let mut result = cleanup_worktree_by_name_with_post_delete(
+        &main_repo,
+        &worktree_name,
+        &worktree_root,
+        after_delete,
+    )?;
     if result.worktree_deleted {
         result.worktree_root = Some(worktree_root);
     }
@@ -80,6 +94,17 @@ pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
     worktree_path: &Path,
+) -> anyhow::Result<WorktreeCleanupResult> {
+    cleanup_worktree_by_name_with_post_delete(repo, worktree_name, worktree_path, || {})
+}
+
+/// Cleans up a worktree and invokes `after_delete` once git confirms removal,
+/// before session and tmux cleanup runs.
+pub fn cleanup_worktree_by_name_with_post_delete(
+    repo: &GitRepo,
+    worktree_name: &str,
+    worktree_path: &Path,
+    after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     // Collect tmux window IDs and process groups rooted in the worktree
     // before deleting it (the path must still exist to match against).
@@ -97,6 +122,7 @@ pub fn cleanup_worktree_by_name(
     // worktree's own pane), kill_window terminates the caller's pane and
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     if result.worktree_deleted {
+        after_delete();
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
         result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 

@@ -2,9 +2,9 @@
 
 armyknife supports git-style hooks for command lifecycle events. Place executable scripts in `~/.config/armyknife/hooks/` (or `$XDG_CONFIG_HOME/armyknife/hooks/`).
 
-A hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped.
+A synchronous hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped. `pre-worktree-delete` and `post-worktree-delete` are best-effort exceptions.
 
-> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. All hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file. `pre-worktree-delete` is an exception: it runs best-effort and never blocks deletion (see below).
+> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. Synchronous hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file. Worktree deletion hooks are exceptions: `pre-worktree-delete` runs best-effort and `post-worktree-delete` runs detached, so neither blocks deletion.
 
 ## `post-worktree-create`
 
@@ -55,6 +55,19 @@ Example: stop any process invoked against this worktree's path (e.g. a review-to
 # ~/.config/armyknife/hooks/pre-worktree-delete
 pkill -f "$ARMYKNIFE_WORKTREE_PATH" || true
 ```
+
+## `post-worktree-delete`
+
+Starts after a worktree has been removed successfully by `a agent close`, `a wm clean`, or the clean view in `a agent watch`. armyknife starts the hook in a detached session before it cleans up tmux panes, then continues without waiting for the hook to finish. A hook failure or a failure to start it does not undo deletion; startup failures are logged as warnings. The hook's working directory is the parent repository root.
+
+| Variable                  | Description                                                         |
+| ------------------------- | ------------------------------------------------------------------- |
+| `ARMYKNIFE_WORKTREE_PATH` | Absolute path of the deleted worktree                               |
+| `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree (empty string if it cannot be resolved) |
+| `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository                                  |
+| `ARMYKNIFE_MERGED`        | `true` if the branch was merged; otherwise `false`                  |
+
+Pass `--skip-hooks` to `a agent close` to skip both worktree deletion hooks.
 
 ## `pre-pr-review` and `pre-pr-submit`
 
