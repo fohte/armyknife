@@ -120,6 +120,8 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
 
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later; on older versions, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
+
 ## Commands
 
 ### `a update`
@@ -340,31 +342,32 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                           | Aliases | Description                                                               |
-| ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
-| `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
-| `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
-| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                            |
-| `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
-| `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
-| `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
-| `mark-read [-t <pane_id>]`                       |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
-| `resume [session_id]`                            | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
-| `resurrect save`                                 |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
-| `resurrect restore`                              |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
-| `peer parent`                                    |         | List the session that delegated to this one, if any (JSON)                |
-| `peer children`                                  |         | List the sessions this one delegated to (JSON)                            |
-| `peer list [-R <repo>]`                          |         | List tracked sessions, with their SendMessage names (JSON)                |
-| `peer me`                                        |         | Print the session running in the caller's own tmux pane (JSON)            |
-| `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
-| `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server) |
-| `crit add <url>`                                 |         | Associate a crit review with the calling session                          |
-| `crit open [--session <id> \| --pane <pane_id>]` |         | Toggle the latest associated review in a tmux floating pane               |
-| `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes           |
-| `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                  |
-| `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)             |
-| `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                    |
-| `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+| Action                                           | Aliases | Description                                                                                      |
+| ------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------ |
+| `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                                        |
+| `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane                                      |
+| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                                   |
+| `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                                            |
+| `list`                                           | `ls`    | List all Claude Code sessions with status                                                        |
+| `focus <session_id>`                             |         | Focus on a session's tmux pane                                                                   |
+| `mark-read [-t <pane_id>]`                       |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                                 |
+| `resume [session_id]`                            | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                         |
+| `resurrect save`                                 |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                               |
+| `resurrect restore`                              |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                            |
+| `notify-base-conflicts-detached`                 |         | Hidden worker for base-conflict notifications after merged worktree deletion; not for direct use |
+| `peer parent`                                    |         | List the session that delegated to this one, if any (JSON)                                       |
+| `peer children`                                  |         | List the sessions this one delegated to (JSON)                                                   |
+| `peer list [-R <repo>]`                          |         | List tracked sessions, with their SendMessage names (JSON)                                       |
+| `peer me`                                        |         | Print the session running in the caller's own tmux pane (JSON)                                   |
+| `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)                           |
+| `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server)                        |
+| `crit add <url>`                                 |         | Associate a crit review with the calling session                                                 |
+| `crit open [--session <id> \| --pane <pane_id>]` |         | Toggle the latest associated review in a tmux floating pane                                      |
+| `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes                                  |
+| `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                                         |
+| `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)                                    |
+| `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                                           |
+| `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty                           |
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
@@ -720,6 +723,8 @@ Use `a agent close <worktree>` to close its associated agent session and remove 
 
 When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
+After a merged worktree is removed, armyknife also fetches `origin` and checks the remaining branches in that repository against its default `main` or `master` branch with `git merge-tree`. Sessions whose working directory is inside a conflicting worktree receive a notification to run the `sync-base-branch` skill. This check runs in the detached cleanup worker and does not delay deletion; ended sessions are skipped.
+
 Worktree cleanup also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 
 `clean` options:
@@ -788,6 +793,12 @@ $ cd ~/ghq/github.com/fohte/dotfiles
 $ a config get repo.direct_commit
 true
 ```
+
+## Release
+
+Releases are automated with release-please. The [release workflow](.github/workflows/release-please.yml) creates or updates a release PR on pushes to `master` and automatically merges it. Merging the release PR creates a GitHub release; build jobs upload the pre-built binaries afterward.
+
+After the release PR is merged and the GitHub release has been created, run `a update`. You do not need to wait for the binaries to finish uploading: `a update` retries while your platform's asset is being uploaded. See [`a update`](#a-update) for retry timing.
 
 ## License
 

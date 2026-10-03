@@ -1,4 +1,5 @@
 pub mod active_session;
+pub mod base_conflict_notify;
 pub mod cache;
 pub mod cleanup;
 pub mod command;
@@ -20,4 +21,5 @@ pub mod update;
 pub mod worktree;
 pub mod worktree_delete;
 pub mod worktree_error;
+pub mod worktree_merge;
 pub mod yaml_frontmatter;
