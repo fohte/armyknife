@@ -6,7 +6,7 @@ use crate::commands::agent::tui::ui::helpers::DIM_FG;
 /// the linked tq task is closed -- this overrides the cursor-relatedness
 /// dimming entirely, so a closed task reads as closed regardless of which
 /// row is selected. Otherwise plain/default when the row's task is related
-/// to the cursor row's task (see `is_related_task` in the parent module),
+/// to the cursor row's task (see `is_related_task` in `session_rows`),
 /// `DIM_FG` otherwise. A channel separate from `own_title_style`'s
 /// `kin_color` -- session kinship colors the title, task
 /// kinship/closedness only ever colors the number.
