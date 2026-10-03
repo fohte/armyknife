@@ -629,9 +629,9 @@ mod tests {
 
     #[test]
     fn test_render_tmux_status_excludes_background_sessions() {
-        // A Stopped session with a pending bg task displays as `Background`
-        // (main loop is actually idle in this scenario), not `Stopped`, so it
-        // must not inflate the tmux status bar's stopped count.
+        // A Stopped session with a pending bg task and no crit link displays
+        // as `Background`, not `Stopped`, so it must not inflate the tmux
+        // status bar's stopped count.
         let sessions = vec![
             Session {
                 status: SessionStatus::Stopped,

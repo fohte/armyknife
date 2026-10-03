@@ -22,6 +22,7 @@ mod hook;
 mod list;
 mod mark_read;
 pub(crate) mod new;
+mod notify_base_conflicts_detached;
 pub(crate) mod pane;
 pub(crate) mod peer;
 mod resume;
@@ -55,6 +56,7 @@ pub use hook::permission_notification::DelayedPermissionNotificationArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
+pub use notify_base_conflicts_detached::NotifyBaseConflictsDetachedArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
@@ -154,6 +156,10 @@ pub enum AgentCommands {
     /// Code's exit.
     #[command(name = "delete-tq-session-detached", hide = true)]
     DeleteTqSessionDetached(DeleteTqSessionDetachedArgs),
+
+    /// Internal: notify sessions whose worktree branches conflict with the default branch.
+    #[command(name = "notify-base-conflicts-detached", hide = true)]
+    NotifyBaseConflictsDetached(NotifyBaseConflictsDetachedArgs),
 }
 
 impl AgentCommands {
@@ -182,6 +188,7 @@ impl AgentCommands {
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
             Self::ArchiveDetached(args) => archive_detached::run(args)?,
             Self::DeleteTqSessionDetached(args) => delete_tq_session_detached::run(args)?,
+            Self::NotifyBaseConflictsDetached(args) => notify_base_conflicts_detached::run(args)?,
         }
         Ok(())
     }

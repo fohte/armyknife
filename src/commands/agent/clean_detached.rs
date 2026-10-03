@@ -8,6 +8,7 @@
 //! whose `run_id` the caller passes in via `--run-id`, so it can later
 //! tail the same log and pick out just this run's events.
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -16,9 +17,11 @@ use anyhow::Result;
 use clap::Args;
 use tracing::Instrument;
 
+use crate::shared::base_conflict_notify::scan_and_notify_conflicting_worktrees;
 use crate::shared::cleanup;
 use crate::shared::log::short_run_id;
-use crate::shared::merge_notify::notify_delegator_if_merged_worktree_at;
+use crate::shared::merge_notify::notify_delegator_of_merge;
+use crate::shared::worktree_merge::find_merged_worktree_at;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanDetachedArgs {
@@ -57,7 +60,49 @@ async fn run_inner(args: &CleanDetachedArgs) -> Result<()> {
 
     let paths = collect_paths(args);
     let cleaner = RealCleaner;
-    run_with(&paths, &cleaner).instrument(span).await;
+    async {
+        let (merged_repos, ok, mut failed) = run_with(&paths, &cleaner).await;
+        for repo_path in merged_repos {
+            let scan_error_count = match scan_and_notify_conflicting_worktrees(&repo_path, &[]) {
+                Ok(errors) => {
+                    failed += errors.len();
+                    for error in &errors {
+                        tracing::warn!(
+                            target: EVENT_TARGET,
+                            event = "agent.clean.err",
+                            path = %error.path,
+                            msg = %error.message,
+                        );
+                    }
+                    errors.len()
+                }
+                Err(error) => {
+                    failed += 1;
+                    tracing::warn!(
+                        target: EVENT_TARGET,
+                        event = "agent.clean.err",
+                        path = %repo_path.display(),
+                        msg = format!("base conflict check failed: {error:#}"),
+                    );
+                    1
+                }
+            };
+            tracing::info!(
+                target: EVENT_TARGET,
+                event = "agent.clean.base_conflict_check.done",
+                repo = %repo_path.display(),
+                errors = scan_error_count,
+            );
+        }
+        tracing::info!(
+            target: EVENT_TARGET,
+            event = "agent.clean.done",
+            ok,
+            failed,
+        );
+    }
+    .instrument(span)
+    .await;
     Ok(())
 }
 
@@ -91,27 +136,29 @@ fn collect_paths(args: &CleanDetachedArgs) -> Vec<PathBuf> {
 /// Abstracts the worktree cleanup boundary so tests can avoid invoking
 /// real git/tmux.
 trait Cleaner {
-    async fn cleanup(&self, path: &Path) -> Result<()>;
+    async fn cleanup(&self, path: &Path) -> Result<Option<PathBuf>>;
 }
 
 struct RealCleaner;
 
 impl Cleaner for RealCleaner {
-    async fn cleanup(&self, path: &Path) -> Result<()> {
-        // Must run before cleanup_worktree_resources below: notification
-        // looks up delegate sessions and branch info from the worktree,
-        // both of which cleanup deletes.
-        notify_delegator_if_merged_worktree_at(path).await;
+    async fn cleanup(&self, path: &Path) -> Result<Option<PathBuf>> {
+        let merged_repo = if let Some(merged) = find_merged_worktree_at(path).await {
+            notify_delegator_of_merge(&merged.main_repo, &merged.branch, &merged.path).await;
+            Some(merged.main_repo.workdir().to_path_buf())
+        } else {
+            None
+        };
 
         let result = cleanup::cleanup_worktree_resources(path)?;
         if !result.worktree_deleted {
             anyhow::bail!("worktree not deleted: {}", path.display());
         }
-        Ok(())
+        Ok(merged_repo)
     }
 }
 
-async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
+async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) -> (BTreeSet<PathBuf>, usize, usize) {
     tracing::info!(
         target: EVENT_TARGET,
         event = "agent.clean.start",
@@ -120,10 +167,14 @@ async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
 
     let mut ok = 0usize;
     let mut failed = 0usize;
+    let mut merged_repos = BTreeSet::new();
     for path in paths {
         let path_str = path.to_string_lossy().into_owned();
         match cleaner.cleanup(path).await {
-            Ok(()) => {
+            Ok(merged_repo) => {
+                if let Some(repo_path) = merged_repo {
+                    merged_repos.insert(repo_path);
+                }
                 ok += 1;
                 tracing::info!(
                     target: EVENT_TARGET,
@@ -143,12 +194,7 @@ async fn run_with<C: Cleaner>(paths: &[PathBuf], cleaner: &C) {
         }
     }
 
-    tracing::info!(
-        target: EVENT_TARGET,
-        event = "agent.clean.done",
-        ok = ok,
-        failed = failed,
-    );
+    (merged_repos, ok, failed)
 }
 
 #[cfg(test)]
@@ -161,34 +207,57 @@ mod tests {
     use tempfile::TempDir;
 
     struct FakeCleaner {
-        plan: Vec<(String, std::result::Result<(), String>)>,
+        plan: Vec<(String, std::result::Result<Option<PathBuf>, String>)>,
         calls: RefCell<Vec<PathBuf>>,
     }
 
     impl Cleaner for FakeCleaner {
-        async fn cleanup(&self, path: &Path) -> Result<()> {
+        async fn cleanup(&self, path: &Path) -> Result<Option<PathBuf>> {
             self.calls.borrow_mut().push(path.to_path_buf());
             let s = path.to_string_lossy().to_string();
             for (p, outcome) in &self.plan {
                 if p == &s {
                     return match outcome {
-                        Ok(()) => Ok(()),
+                        Ok(repo_path) => Ok(repo_path.clone()),
                         Err(msg) => Err(anyhow::anyhow!(msg.clone())),
                     };
                 }
             }
-            Ok(())
+            Ok(None)
         }
     }
 
     #[tokio::test]
-    async fn run_with_continues_after_error() {
+    async fn run_with_continues_after_error_and_deduplicates_merged_repositories() {
         let cleaner = FakeCleaner {
-            plan: vec![("/a".to_string(), Err("nope".to_string()))],
+            plan: vec![
+                ("/a".to_string(), Ok(Some(PathBuf::from("/repo")))),
+                ("/b".to_string(), Err("nope".to_string())),
+                ("/c".to_string(), Ok(Some(PathBuf::from("/repo")))),
+            ],
             calls: RefCell::new(Vec::new()),
         };
-        run_with(&[PathBuf::from("/a"), PathBuf::from("/b")], &cleaner).await;
-        assert_eq!(cleaner.calls.borrow().len(), 2);
+        let outcome = run_with(
+            &[
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c"),
+            ],
+            &cleaner,
+        )
+        .await;
+
+        assert_eq!(
+            (outcome, cleaner.calls.borrow().clone()),
+            (
+                (BTreeSet::from([PathBuf::from("/repo")]), 2, 1),
+                vec![
+                    PathBuf::from("/a"),
+                    PathBuf::from("/b"),
+                    PathBuf::from("/c")
+                ],
+            )
+        );
     }
 
     #[rstest]

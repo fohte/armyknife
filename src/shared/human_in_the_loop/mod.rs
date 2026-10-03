@@ -11,6 +11,7 @@ mod document;
 mod editor;
 mod error;
 pub mod exit_code;
+mod launch;
 mod lock;
 mod tmux;
 
@@ -62,14 +63,13 @@ pub trait ReviewHandler<S: DocumentSchema> {
     }
 }
 
-/// Start a review session by launching a terminal with the configured editor.
+/// Start a review session in a tmux floating pane or configured terminal window.
 ///
 /// This function:
 /// 1. Checks for an existing lock (another editor already open)
-/// 2. Creates FIFOs for startup and completion signaling
-/// 3. Launches the configured terminal to run the review-complete command
-/// 4. Waits (with timeout) for the terminal to signal it actually started
-/// 5. Blocks until the review-complete process signals completion via the FIFO
+/// 2. Creates a FIFO for completion signaling
+/// 3. Launches the review-complete command in a tmux floating pane or terminal
+/// 4. Blocks until the review-complete process signals completion via the FIFO
 ///
 /// The lock file is written by `complete_review`, not here, so a failed
 /// terminal launch never leaves a stale lock behind.
@@ -94,10 +94,17 @@ where
         ));
     }
 
+    let tmux_pane_id = crate::infra::tmux::current_pane_id_from_env();
+    let document_path = if tmux_pane_id.is_some() {
+        std::fs::canonicalize(document_path)?
+    } else {
+        document_path.to_path_buf()
+    };
+
     // Check for existing lock. The lock is written by `complete_review` once
     // the editor actually launches, so its presence means another session is
     // in progress for this document.
-    if LockGuard::is_locked(document_path) {
+    if LockGuard::is_locked(&document_path) {
         eprintln!("Skipped: Editor is already open for this file.");
         return Ok(None);
     }
@@ -107,79 +114,25 @@ where
     // command via run_in_background) read the diff from stdout instead of
     // re-reading the whole file, which keeps token usage proportional to the
     // edit size rather than the file size.
-    let pre_edit = std::fs::read_to_string(document_path)?;
+    let pre_edit = std::fs::read_to_string(&document_path)?;
 
     // Create a FIFO for the review-complete process to signal completion.
     // The FifoCleanupGuard ensures the FIFO is removed on early return.
-    let done_fifo_path = create_fifo_with_suffix(document_path, ".done")?;
+    let done_fifo_path = create_fifo_with_suffix(&document_path, ".done")?;
     let mut done_fifo_cleanup = FifoCleanupGuard::new(&done_fifo_path);
 
-    // Create a second FIFO the wrapper shell writes to just before exec'ing
-    // the review-complete command. If the terminal emulator fails to launch
-    // (e.g., macOS is asleep and Ghostty can't initialize), this signal never
-    // arrives and we bail out with TerminalLaunchFailed instead of hanging
-    // forever waiting on the done FIFO.
-    let started_fifo_path = create_fifo_with_suffix(document_path, ".started")?;
-    let mut started_fifo_cleanup = FifoCleanupGuard::new(&started_fifo_path);
-
-    // Open the FIFO reader *before* launching the terminal to prevent a race
-    // condition: on Linux, launch_terminal blocks until the terminal closes,
-    // so complete_review signals the FIFO before we reach the read call.
-    // By opening the reader first (with O_NONBLOCK to avoid blocking on open),
-    // the writer's signal is buffered in the pipe and read picks it up later.
+    // Open the reader before launching either surface so a fast completion
+    // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
-    let started_fifo_reader = open_fifo_reader(&started_fifo_path)?;
 
-    // Get tmux session info for later restoration
-    let tmux_target = get_tmux_target();
-
-    // Get the path to the current executable
-    let exe_path = std::env::current_exe()?;
-
-    // Build the review-complete command arguments and append --done-fifo
-    let mut review_args =
-        handler.build_complete_args(document_path, tmux_target.as_deref(), window_title);
-    review_args.push("--done-fifo".into());
-    review_args.push(done_fifo_path.as_os_str().to_os_string());
-
-    // Launch terminal emulator
-    let options = LaunchOptions {
-        window_title: window_title.to_string(),
-        ..Default::default()
-    };
-
-    let outcome = launch_terminal(
-        &editor_config.terminal,
-        &options,
-        &exe_path,
-        &review_args,
-        Some(&started_fifo_path),
+    launch::launch_review::<S, _>(
+        tmux_pane_id.as_deref(),
+        &document_path,
+        &done_fifo_path,
+        window_title,
+        handler,
+        editor_config,
     )?;
-
-    if !outcome.status.success() {
-        return Err(HumanInTheLoopError::CommandFailed(format!(
-            "Terminal exited with status: {}",
-            outcome.status
-        )));
-    }
-
-    // If the launcher supports started-FIFO signaling, wait up to the startup
-    // timeout for the wrapper shell to announce itself. A timeout here means
-    // the terminal window never actually opened — report that distinctly so
-    // callers can retry (and, since no lock was created, nothing to clean up).
-    if outcome.signals_started {
-        wait_for_fifo_signal_with_timeout(
-            started_fifo_reader,
-            &started_fifo_path,
-            TERMINAL_STARTUP_TIMEOUT,
-        )?;
-    } else {
-        drop(started_fifo_reader);
-    }
-
-    // Started FIFO has done its job — let the cleanup guard remove it.
-    started_fifo_cleanup.disarm();
-    let _ = std::fs::remove_file(&started_fifo_path);
 
     // Wait for the review-complete process to finish via FIFO.
     // This blocks with no CPU usage until the other process writes to the FIFO.
@@ -191,7 +144,7 @@ where
 
     // Emit a diff of what the user edited so background callers can pick it
     // up from stdout without re-reading the file.
-    let post_edit = std::fs::read_to_string(document_path)?;
+    let post_edit = std::fs::read_to_string(&document_path)?;
     if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
         && e.kind() != std::io::ErrorKind::BrokenPipe
     {
@@ -200,7 +153,7 @@ where
 
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
-    let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
+    let document = Document::<S>::from_content(document_path, &post_edit)?;
     Ok(Some(document))
 }
 

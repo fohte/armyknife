@@ -12,10 +12,9 @@ use std::path::Path;
 
 use crate::commands::agent::peer::notify::notify as notify_peer_session;
 use crate::commands::agent::store;
-use crate::infra::git::{GitRepo, get_merge_status_for_repo, github_owner_and_repo};
+use crate::infra::git::{GitRepo, github_owner_and_repo};
 use crate::infra::github::{GitHubClient, PrClient};
 use crate::shared::sanitize::strip_angle_brackets;
-use crate::shared::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 
 /// Tracing target for failures on this path. The TUI clean view's detached
 /// child has its stderr wired to `/dev/null`, so the rotating log is the
@@ -61,50 +60,6 @@ pub async fn notify_delegator_of_merge(main_repo: &GitRepo, branch: &str, worktr
                 "failed to notify delegator session {delegator_id}: {e}"
             ));
         }
-    }
-}
-
-/// Resolves the branch and merge status for the worktree at `path` and, if
-/// the branch's PR has merged, notifies delegators. For entry points that
-/// only have a filesystem path to work with and no merge status computed
-/// ahead of time (the TUI clean view's detached child) -- costs one extra PR
-/// lookup per path, the same trade-off [`notify_delegator_of_merge`] already
-/// makes to recover the PR URL.
-///
-/// Silently does nothing if `path` isn't inside a worktree or the branch
-/// can't be resolved, matching `cleanup_worktree_resources`'s treatment of
-/// the same conditions.
-pub async fn notify_delegator_if_merged_worktree_at(path: &Path) {
-    let Ok(repo) = GitRepo::open_at(path) else {
-        return;
-    };
-    if !repo.is_worktree() {
-        return;
-    }
-    let Ok(main_repo) = get_main_repo(&repo) else {
-        return;
-    };
-    let worktree_root = repo.workdir().to_path_buf();
-    let Ok(worktree_name) = find_worktree_name(&main_repo, &worktree_root.to_string_lossy()) else {
-        return;
-    };
-    let Some(branch) = get_worktree_branch(&main_repo, &worktree_name) else {
-        return;
-    };
-
-    // Skip the network round trip entirely when there's no delegate to
-    // notify, mirroring notify_delegator_of_merge's own cheap-check-first
-    // ordering -- otherwise a batch clean of N worktrees with no delegates
-    // would cost N unnecessary GitHub API calls.
-    if find_delegate_sessions(&worktree_root).is_empty() {
-        return;
-    }
-
-    if get_merge_status_for_repo(&main_repo, &branch)
-        .await
-        .is_merged()
-    {
-        notify_delegator_of_merge(&main_repo, &branch, &worktree_root).await;
     }
 }
 
@@ -177,7 +132,6 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
-    use crate::shared::testing::TestRepo;
 
     fn make_session(
         session_id: &str,
@@ -325,20 +279,5 @@ mod tests {
                 この merge を待って止まっていたなら続けてください。待っていなかったなら何もしないでください。新しい作業を始めたり、委任先に返信したりする必要はありません。
                 </delegation-update>"}
         );
-    }
-
-    #[tokio::test]
-    async fn notify_delegator_if_merged_worktree_at_on_non_worktree_returns_early() {
-        let test_repo = TestRepo::new();
-
-        // Should return without panicking and without attempting any network
-        // call (a non-worktree path is rejected before merge status is
-        // ever checked).
-        notify_delegator_if_merged_worktree_at(&test_repo.path()).await;
-    }
-
-    #[tokio::test]
-    async fn notify_delegator_if_merged_worktree_at_on_nonexistent_path_returns_early() {
-        notify_delegator_if_merged_worktree_at(Path::new("/nonexistent/path/to/repo")).await;
     }
 }

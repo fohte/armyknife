@@ -238,26 +238,78 @@ where
 /// `spawn_event`/`failed_event` are the two callers' own tracing event names,
 /// so each keeps its own log identity.
 pub fn spawn_self_detached(spawn_event: &str, failed_event: &str, session_id: &str, args: &[&str]) {
+    spawn_self_detached_with_subject(
+        spawn_event,
+        failed_event,
+        DetachedSubject::Session(session_id),
+        args,
+    );
+}
+
+/// Spawns a detached invocation associated with a repository rather than a
+/// session, keeping the repository path under its own tracing field.
+pub fn spawn_self_detached_for_repo(
+    spawn_event: &str,
+    failed_event: &str,
+    repo_path: &Path,
+    args: &[&str],
+) {
+    spawn_self_detached_with_subject(
+        spawn_event,
+        failed_event,
+        DetachedSubject::Repository(repo_path),
+        args,
+    );
+}
+
+enum DetachedSubject<'a> {
+    Session(&'a str),
+    Repository(&'a Path),
+}
+
+fn spawn_self_detached_with_subject(
+    spawn_event: &str,
+    failed_event: &str,
+    subject: DetachedSubject<'_>,
+    args: &[&str],
+) {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(
-                event = failed_event,
-                session = session_id,
-                reason = "current_exe",
-                error = %e,
-            );
+            log_detached_spawn_failure(failed_event, &subject, "current_exe", &e);
             return;
         }
     };
-    tracing::info!(event = spawn_event, session = session_id);
+    log_detached_spawn_started(spawn_event, &subject);
     if let Err(e) = spawn_detached(exe, args.iter().copied(), None, &[]) {
-        tracing::warn!(
-            event = failed_event,
-            session = session_id,
-            reason = "spawn_detached",
-            error = %e,
-        );
+        log_detached_spawn_failure(failed_event, &subject, "spawn_detached", &e);
+    }
+}
+
+fn log_detached_spawn_started(event: &str, subject: &DetachedSubject<'_>) {
+    match subject {
+        DetachedSubject::Session(session_id) => {
+            tracing::info!(event, session = session_id);
+        }
+        DetachedSubject::Repository(repo_path) => {
+            tracing::info!(event, repo = %repo_path.display());
+        }
+    }
+}
+
+fn log_detached_spawn_failure(
+    event: &str,
+    subject: &DetachedSubject<'_>,
+    reason: &str,
+    error: &dyn std::fmt::Display,
+) {
+    match subject {
+        DetachedSubject::Session(session_id) => {
+            tracing::warn!(event, session = session_id, reason, error = %error);
+        }
+        DetachedSubject::Repository(repo_path) => {
+            tracing::warn!(event, repo = %repo_path.display(), reason, error = %error);
+        }
     }
 }
 
