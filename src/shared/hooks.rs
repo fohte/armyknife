@@ -1,7 +1,8 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::shared::{command, dirs};
+use crate::infra::process;
+use crate::shared::{command, dirs, env_var::EnvVars};
 
 /// Returns the path to a hook script: `{config_dir}/armyknife/hooks/{hook_name}`
 fn hook_path(hook_name: &str) -> Option<PathBuf> {
@@ -57,11 +58,101 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
     Ok(())
 }
 
+/// Starts a hook in a detached session and returns without waiting for it.
+///
+/// A missing hook is skipped. Spawn failures are returned so post hooks can
+/// report them without making cleanup fail.
+pub fn spawn_hook_detached(
+    hook_name: &str,
+    cwd: &Path,
+    env_vars: &[(&str, &str)],
+) -> anyhow::Result<bool> {
+    spawn_hook_detached_with(
+        hook_name,
+        cwd,
+        env_vars,
+        existing_hook_path,
+        |path, cwd, env_vars| {
+            process::spawn_detached(path, std::iter::empty::<&str>(), Some(cwd), env_vars)
+                .map_err(anyhow::Error::from)
+        },
+    )
+}
+
+fn spawn_hook_detached_with(
+    hook_name: &str,
+    cwd: &Path,
+    env_vars: &[(&str, &str)],
+    resolve_hook: impl FnOnce(&str) -> Option<PathBuf>,
+    spawn: impl FnOnce(&Path, &Path, &[(&str, &str)]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    let Some(path) = resolve_hook(hook_name) else {
+        return Ok(false);
+    };
+
+    let metadata = std::fs::metadata(&path)?;
+    if metadata.permissions().mode() & 0o111 == 0 {
+        anyhow::bail!("hook '{}' exists but is not executable", path.display());
+    }
+
+    spawn(&path, cwd, env_vars)?;
+    Ok(true)
+}
+
+/// Starts `post-worktree-delete` after a worktree is removed.
+///
+/// Hook startup is best-effort because the deletion has already succeeded.
+pub fn spawn_post_worktree_delete_hook(
+    repo_root: &Path,
+    worktree_path: &Path,
+    branch_name: Option<&str>,
+    merged: bool,
+) {
+    spawn_post_worktree_delete_hook_with(
+        repo_root,
+        worktree_path,
+        branch_name,
+        merged,
+        spawn_hook_detached,
+    );
+}
+
+fn spawn_post_worktree_delete_hook_with(
+    repo_root: &Path,
+    worktree_path: &Path,
+    branch_name: Option<&str>,
+    merged: bool,
+    spawn_hook: impl FnOnce(&str, &Path, &[(&str, &str)]) -> anyhow::Result<bool>,
+) {
+    let repo_root_value = repo_root.to_string_lossy();
+    let worktree_path = worktree_path.to_string_lossy();
+    let branch_name = branch_name.unwrap_or_default();
+    let merged = if merged { "true" } else { "false" };
+    let env_vars = [
+        (EnvVars::worktree_path_name(), worktree_path.as_ref()),
+        (EnvVars::branch_name_name(), branch_name),
+        (EnvVars::repo_root_name(), repo_root_value.as_ref()),
+        (EnvVars::merged_name(), merged),
+    ];
+
+    if let Err(error) = spawn_hook("post-worktree-delete", repo_root, &env_vars) {
+        tracing::warn!(
+            target: "armyknife::shared::hooks",
+            event = "hook.detached_spawn_failed",
+            hook = "post-worktree-delete",
+            worktree = %worktree_path,
+            error = %error,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::env_var::EnvVars;
+    use indoc::indoc;
     use rstest::rstest;
+    use std::cell::RefCell;
     use std::fs;
     use tempfile::TempDir;
 
@@ -172,5 +263,110 @@ mod tests {
         temp_env::with_vars([("XDG_CONFIG_HOME", Some("")), ("HOME", Some(""))], || {
             assert!(!hook_exists("post-worktree-create"));
         });
+    }
+
+    #[test]
+    fn spawn_hook_detached_passes_the_hook_path_cwd_and_environment() {
+        let dir = TempDir::new().unwrap();
+        let hook_file = setup_hook(
+            &dir,
+            "post-worktree-delete",
+            indoc! {"
+                #!/bin/sh
+            "},
+            true,
+        );
+        let cwd = dir.path().join("repository");
+        let env_vars = [("EXAMPLE_KEY", "example-value")];
+        let spawned = RefCell::new(None);
+
+        let result = spawn_hook_detached_with(
+            "post-worktree-delete",
+            &cwd,
+            &env_vars,
+            |_| Some(hook_file.clone()),
+            |path, cwd, env_vars| {
+                *spawned.borrow_mut() = Some((
+                    path.to_path_buf(),
+                    cwd.to_path_buf(),
+                    env_vars
+                        .iter()
+                        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                        .collect::<Vec<_>>(),
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            (result, spawned.into_inner()),
+            (
+                true,
+                Some((
+                    hook_file,
+                    cwd,
+                    vec![("EXAMPLE_KEY".to_string(), "example-value".to_string())],
+                )),
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::merged(true, Some("example/branch"), "true")]
+    #[case::unmerged(false, Some("example/branch"), "false")]
+    #[case::branch_unresolved(false, None, "false")]
+    fn post_worktree_delete_hook_passes_its_environment(
+        #[case] is_merged: bool,
+        #[case] branch: Option<&str>,
+        #[case] expected_merged: &str,
+    ) {
+        let repo_root = PathBuf::from("/tmp/example-repository");
+        let worktree_path = PathBuf::from("/tmp/example-repository/.worktrees/example");
+        let mut spawned = None;
+
+        spawn_post_worktree_delete_hook_with(
+            &repo_root,
+            &worktree_path,
+            branch,
+            is_merged,
+            |hook_name, cwd, env_vars| {
+                spawned = Some((
+                    hook_name.to_string(),
+                    cwd.to_path_buf(),
+                    env_vars
+                        .iter()
+                        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                        .collect::<Vec<_>>(),
+                ));
+                Ok(true)
+            },
+        );
+
+        assert_eq!(
+            spawned,
+            Some((
+                "post-worktree-delete".to_string(),
+                repo_root.clone(),
+                vec![
+                    (
+                        EnvVars::worktree_path_name().to_string(),
+                        worktree_path.to_string_lossy().into_owned(),
+                    ),
+                    (
+                        EnvVars::branch_name_name().to_string(),
+                        branch.unwrap_or_default().to_string(),
+                    ),
+                    (
+                        EnvVars::repo_root_name().to_string(),
+                        repo_root.to_string_lossy().into_owned(),
+                    ),
+                    (
+                        EnvVars::merged_name().to_string(),
+                        expected_merged.to_string(),
+                    ),
+                ],
+            )),
+        );
     }
 }

@@ -3,17 +3,17 @@ use std::path::{Path, PathBuf};
 use crate::infra::git::{GitRepo, get_merge_status_for_repo};
 use crate::shared::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 
-/// Worktree details needed by cleanup actions after merge status is resolved.
-pub struct MergedWorktree {
+/// Repository, branch, and merge status for a linked worktree being cleaned up.
+pub struct WorktreeCleanupInfo {
     pub main_repo: GitRepo,
-    pub branch: String,
+    pub branch: Option<String>,
     pub path: PathBuf,
+    pub merged: bool,
 }
 
-/// Resolves a worktree's repository and branch when its PR has merged.
-/// Returns `None` when the path is not a linked worktree or its branch is
-/// unresolved.
-pub async fn find_merged_worktree_at(path: &Path) -> Option<MergedWorktree> {
+/// Resolves cleanup metadata before a worktree is removed.
+/// Returns `None` when the path is not a linked worktree.
+pub async fn find_worktree_cleanup_info(path: &Path) -> Option<WorktreeCleanupInfo> {
     let Ok(repo) = GitRepo::open_at(path) else {
         return None;
     };
@@ -27,14 +27,19 @@ pub async fn find_merged_worktree_at(path: &Path) -> Option<MergedWorktree> {
     let Ok(worktree_name) = find_worktree_name(&main_repo, &worktree_root.to_string_lossy()) else {
         return None;
     };
-    let branch = get_worktree_branch(&main_repo, &worktree_name)?;
+    let branch = get_worktree_branch(&main_repo, &worktree_name);
+    let merged = if let Some(branch) = branch.as_deref() {
+        get_merge_status_for_repo(&main_repo, branch)
+            .await
+            .is_merged()
+    } else {
+        false
+    };
 
-    get_merge_status_for_repo(&main_repo, &branch)
-        .await
-        .is_merged()
-        .then_some(MergedWorktree {
-            main_repo,
-            branch,
-            path: worktree_root,
-        })
+    Some(WorktreeCleanupInfo {
+        main_repo,
+        branch,
+        path: worktree_root,
+        merged,
+    })
 }

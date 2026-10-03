@@ -14,6 +14,7 @@ const CC_NOTIFY: &str = "ARMYKNIFE_CC_NOTIFY";
 const WORKTREE_PATH: &str = "ARMYKNIFE_WORKTREE_PATH";
 const BRANCH_NAME: &str = "ARMYKNIFE_BRANCH_NAME";
 const REPO_ROOT: &str = "ARMYKNIFE_REPO_ROOT";
+const MERGED: &str = "ARMYKNIFE_MERGED";
 const PR_TITLE: &str = "ARMYKNIFE_PR_TITLE";
 const PR_BODY_FILE: &str = "ARMYKNIFE_PR_BODY_FILE";
 const PR_OWNER: &str = "ARMYKNIFE_PR_OWNER";
@@ -120,6 +121,11 @@ impl EnvVars {
     /// Returns the env var name for REPO_ROOT (used as key in env var pairs).
     pub fn repo_root_name() -> &'static str {
         REPO_ROOT
+    }
+
+    /// Returns the env var name for whether a deleted worktree was merged.
+    pub fn merged_name() -> &'static str {
+        MERGED
     }
 
     /// Returns the env var name for PR_TITLE (passed to `pre-pr-submit` hook).
