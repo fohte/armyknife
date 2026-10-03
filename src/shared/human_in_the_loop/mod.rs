@@ -71,8 +71,9 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// 3. Launches the review-complete command in a tmux floating pane or terminal
 /// 4. Blocks until the review-complete process signals completion via the FIFO
 ///
-/// The lock file is written by `complete_review`, not here, so a failed
-/// terminal launch never leaves a stale lock behind.
+/// The parent keeps the lock's file handle through the FIFO wait and removes
+/// the lock if the child exits without cleanup. The child removes it on normal
+/// completion so the lock is released if the parent exits early.
 ///
 /// Returns the final document state after the user finishes editing, or `None`
 /// if the editor was already open. Returns `TerminalLaunchFailed` if the
@@ -101,38 +102,54 @@ where
         document_path.to_path_buf()
     };
 
-    // Check for existing lock. The lock is written by `complete_review` once
-    // the editor actually launches, so its presence means another session is
-    // in progress for this document.
-    if LockGuard::is_locked(&document_path) {
-        eprintln!("Skipped: Editor is already open for this file.");
-        return Ok(None);
-    }
+    start_review_with_launcher::<S, _>(&document_path, |document_path, done_fifo_path| {
+        launch::launch_review::<S, H>(
+            tmux_pane_id.as_deref(),
+            document_path,
+            done_fifo_path,
+            window_title,
+            handler,
+            editor_config,
+        )
+    })
+}
+
+fn start_review_with_launcher<S, L>(
+    document_path: &Path,
+    launch_review: L,
+) -> Result<Option<Document<S>>>
+where
+    S: DocumentSchema,
+    L: FnOnce(&Path, &Path) -> Result<()>,
+{
+    let _lock_guard = match LockGuard::acquire(document_path) {
+        Ok(guard) => guard,
+        Err(HumanInTheLoopError::Io(error))
+            if error.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            eprintln!("Skipped: Editor is already open for this file.");
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
 
     // Snapshot the document before the editor opens so we can emit a diff
     // afterwards. Background callers (e.g. Claude Code skills launching this
     // command via run_in_background) read the diff from stdout instead of
     // re-reading the whole file, which keeps token usage proportional to the
     // edit size rather than the file size.
-    let pre_edit = std::fs::read_to_string(&document_path)?;
+    let pre_edit = std::fs::read_to_string(document_path)?;
 
     // Create a FIFO for the review-complete process to signal completion.
     // The FifoCleanupGuard ensures the FIFO is removed on early return.
-    let done_fifo_path = create_fifo_with_suffix(&document_path, ".done")?;
+    let done_fifo_path = create_fifo_with_suffix(document_path, ".done")?;
     let mut done_fifo_cleanup = FifoCleanupGuard::new(&done_fifo_path);
 
     // Open the reader before launching either surface so a fast completion
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    launch::launch_review::<S, _>(
-        tmux_pane_id.as_deref(),
-        &document_path,
-        &done_fifo_path,
-        window_title,
-        handler,
-        editor_config,
-    )?;
+    launch_review(document_path, &done_fifo_path)?;
 
     // Wait for the review-complete process to finish via FIFO.
     // This blocks with no CPU usage until the other process writes to the FIFO.
@@ -144,7 +161,7 @@ where
 
     // Emit a diff of what the user edited so background callers can pick it
     // up from stdout without re-reading the file.
-    let post_edit = std::fs::read_to_string(&document_path)?;
+    let post_edit = std::fs::read_to_string(document_path)?;
     if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
         && e.kind() != std::io::ErrorKind::BrokenPipe
     {
@@ -153,7 +170,7 @@ where
 
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
-    let document = Document::<S>::from_content(document_path, &post_edit)?;
+    let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
     Ok(Some(document))
 }
 
@@ -205,13 +222,6 @@ where
     S: DocumentSchema,
     H: ReviewHandler<S>,
 {
-    // Create the lock file here (not in start_review) so it only exists once
-    // the terminal has actually launched and we're about to run the editor.
-    // If the terminal never starts (e.g., macOS asleep), no lock is written
-    // and the next invocation isn't blocked by a stale `.lock`.
-    let mut lock_guard = LockGuard::acquire(document_path)?;
-    lock_guard.disarm();
-
     // Ensure cleanup happens even on panic.
     let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
 
@@ -446,7 +456,33 @@ fn signal_fifo(fifo_path: &Path) {
 mod tests {
     use super::*;
     use rstest::{fixture, rstest};
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    struct ReviewTestSchema;
+
+    impl DocumentSchema for ReviewTestSchema {
+        fn is_approved(&self) -> bool {
+            false
+        }
+    }
+
+    struct ReviewDocumentFixture {
+        _temp_dir: TempDir,
+        path: PathBuf,
+    }
+
+    #[fixture]
+    fn review_document() -> ReviewDocumentFixture {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let path = temp_dir.path().join("review.md");
+        std::fs::write(&path, "draft").expect("write document");
+        ReviewDocumentFixture {
+            _temp_dir: temp_dir,
+            path,
+        }
+    }
 
     struct FifoReaderFixture {
         _temp: TempDir,
@@ -521,6 +557,104 @@ mod tests {
         use std::os::unix::fs::FileTypeExt;
         let metadata = std::fs::metadata(&fifo).expect("stat fifo");
         assert!(metadata.file_type().is_fifo(), "expected FIFO file type");
+    }
+
+    #[rstest]
+    fn start_review_releases_parent_lock_after_done_fifo_signal(
+        review_document: ReviewDocumentFixture,
+    ) {
+        let document_path = review_document.path;
+        let mut lock_was_held_during_launch = false;
+
+        let result = start_review_with_launcher::<ReviewTestSchema, _>(
+            &document_path,
+            |path, done_fifo_path| {
+                lock_was_held_during_launch = LockGuard::is_locked(path);
+                signal_fifo(done_fifo_path);
+                Ok(())
+            },
+        )
+        .expect("start review")
+        .map(|document| (document.path, document.frontmatter));
+
+        assert_eq!(
+            (
+                result,
+                lock_was_held_during_launch,
+                LockGuard::is_locked(&document_path),
+            ),
+            (Some((document_path, ReviewTestSchema)), true, false,),
+        );
+    }
+
+    #[rstest]
+    fn start_review_releases_parent_lock_when_launch_fails(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let result = start_review_with_launcher::<ReviewTestSchema, _>(&document_path, |_, _| {
+            Err(HumanInTheLoopError::CommandFailed("launch failed".into()))
+        })
+        .map(|document| document.map(|document| document.path))
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, LockGuard::is_locked(&document_path)),
+            (Err("Command failed: launch failed".into()), false),
+        );
+    }
+
+    #[rstest]
+    fn start_review_does_not_remove_a_newer_review_lock(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let mut lock_was_held_during_launch = false;
+        let mut newer_review_lock = None;
+
+        let result = start_review_with_launcher::<ReviewTestSchema, _>(
+            &document_path,
+            |path, done_fifo_path| {
+                lock_was_held_during_launch = LockGuard::is_locked(path);
+                drop(CleanupGuard::new(path, None));
+                newer_review_lock = Some(LockGuard::acquire(path).expect("new review lock"));
+                signal_fifo(done_fifo_path);
+                Ok(())
+            },
+        )
+        .expect("start review")
+        .map(|document| (document.path, document.frontmatter));
+        let lock_after_start_review = LockGuard::is_locked(&document_path);
+        drop(newer_review_lock);
+
+        assert_eq!(
+            (
+                result,
+                lock_was_held_during_launch,
+                lock_after_start_review,
+                LockGuard::is_locked(&document_path),
+            ),
+            (Some((document_path, ReviewTestSchema)), true, true, false,),
+        );
+    }
+
+    #[rstest]
+    fn start_review_skips_without_removing_an_existing_lock(
+        review_document: ReviewDocumentFixture,
+    ) {
+        let document_path = review_document.path;
+        let lock_path = LockGuard::lock_path(&document_path);
+        std::fs::write(&lock_path, "another review").expect("write existing lock");
+        let mut launch_called = false;
+
+        let result = start_review_with_launcher::<ReviewTestSchema, _>(&document_path, |_, _| {
+            launch_called = true;
+            Ok(())
+        })
+        .expect("skip existing review")
+        .map(|document| document.path);
+        let lock_contents = std::fs::read_to_string(lock_path).expect("read existing lock");
+
+        assert_eq!(
+            (result, launch_called, lock_contents),
+            (None, false, "another review".into())
+        );
     }
 
     // The exact diff format is covered by `shared::diff` tests; here we only
