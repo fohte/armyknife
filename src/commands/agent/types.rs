@@ -272,7 +272,8 @@ impl Session {
     /// `a agent bg run`'s runtime marker. Shared by every consumer that must
     /// treat such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
-    /// `display_status` (report `Background` instead of `Stopped`).
+    /// `display_status` (report `Background` instead of `Stopped`, or
+    /// `WaitingInput` when a crit review is linked).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
@@ -284,15 +285,18 @@ impl Session {
         !self.pending_permission_agent_ids.is_empty()
     }
 
-    /// Presentation status for this session. Distinguishes `Background`
-    /// (persisted `Stopped`, i.e. the main loop is idle, but a background
-    /// task keeps the user mid-task) from a session whose main loop is
-    /// actually active -- notification, `auto_pause`, `auto_compact`, and
-    /// `sweep` all keep reading the persisted `status` / `has_pending_bg_tasks`
-    /// directly and must not switch to this.
+    /// Presentation status for this session. A linked crit review with a
+    /// pending background task is treated as `WaitingInput`; other sessions
+    /// with a pending background task are `Background`. Notification,
+    /// `auto_pause`, `auto_compact`, and `sweep` read persisted status or
+    /// `has_pending_bg_tasks` directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
         if self.status == SessionStatus::Stopped && self.has_pending_bg_tasks() {
-            return DisplayStatus::Background;
+            return if self.crit_urls.is_empty() {
+                DisplayStatus::Background
+            } else {
+                DisplayStatus::WaitingInput
+            };
         }
         if self.is_unread_stopped() {
             return DisplayStatus::UnreadStopped;
@@ -586,6 +590,28 @@ mod tests {
             sweep_signaled: false,
             engine: Engine::Claude,
         }
+    }
+
+    #[rstest]
+    #[case::crit_review_waiting(SessionStatus::Stopped, true, true, DisplayStatus::WaitingInput)]
+    #[case::running_with_crit_review(SessionStatus::Running, true, true, DisplayStatus::Running)]
+    #[case::background_without_crit(SessionStatus::Stopped, false, true, DisplayStatus::Background)]
+    #[case::crit_without_pending_task(SessionStatus::Stopped, true, false, DisplayStatus::Stopped)]
+    fn session_display_status_table(
+        #[case] status: SessionStatus,
+        #[case] has_crit_link: bool,
+        #[case] has_bg_task: bool,
+        #[case] expected: DisplayStatus,
+    ) {
+        let mut s = session(status, Some(Utc::now()));
+        if has_crit_link {
+            s.crit_urls
+                .push("https://crit.example/review/1".to_string());
+        }
+        if has_bg_task {
+            s.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+        assert_eq!(s.display_status(), expected);
     }
 
     #[rstest]
