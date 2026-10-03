@@ -156,7 +156,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
-            Self::Close(args) => close::run(args)?,
+            Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,

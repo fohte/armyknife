@@ -14,7 +14,7 @@ Runs after `a agent new --worktree` finishes creating a worktree. If the hook ex
 - A branch that pre-existed and was only checked out is left alone.
 - A branch that `--force` rewrote is restored to its previous tip.
 
-If the worktree cannot be removed automatically, the branch is left intact and `a agent new --worktree` points the user at `a wm delete` for manual cleanup.
+If the worktree cannot be removed automatically, the branch is left intact and `a agent new --worktree` points the user at `a agent close <worktree>` for manual cleanup.
 
 The hook runs under a per-repository lock because it may update shared Git config. Other `a agent new --worktree` calls for that repository wait until the hook or its rollback finishes. A waiting call prints a message. Do not invoke `a agent new --worktree` for the same repository from this hook; the nested call would wait for the outer call to release the lock.
 
@@ -36,7 +36,7 @@ jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
 
 ## `pre-worktree-delete`
 
-Runs before `a wm delete` (aliases `d`, `rm`) removes the worktree directory. Unlike other hooks, failures here are best-effort: a non-zero exit or a non-executable hook only logs a warning to stderr, and the worktree is deleted anyway. Deleting a worktree is something the user explicitly asked for, so a broken cleanup hook should not block it.
+Runs before `a agent close` removes the worktree directory. Unlike other hooks, failures here are best-effort: a non-zero exit or a non-executable hook only logs a warning to stderr, and the worktree is deleted anyway. Closing a worktree is something the user explicitly asked for, so a broken cleanup hook should not block it.
 
 Use this to clean up processes tied to the worktree's lifecycle (e.g. a daemon started by a `post-worktree-create` hook) before the directory disappears out from under them.
 
@@ -46,7 +46,7 @@ Use this to clean up processes tied to the worktree's lifecycle (e.g. a daemon s
 | `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree (empty string if it cannot be resolved) |
 | `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository                                  |
 
-Pass `--skip-hooks` to `a wm delete` to skip this hook entirely.
+Pass `--skip-hooks` to `a agent close` to skip this hook entirely.
 
 Example: stop any process invoked against this worktree's path (e.g. a review-tool daemon started by a `post-worktree-create` hook).
 

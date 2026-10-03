@@ -23,7 +23,7 @@ pub async fn run(worktree_arg: Option<&str>, force: bool, skip_hooks: bool) -> R
         &config.wm.branch_prefix,
     )?;
 
-    let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;
+    let repo = GitRepo::open_at(Path::new(&worktree_path)).map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
     let worktree_name = find_worktree_name(&main_repo, &worktree_path)?;
@@ -35,7 +35,7 @@ pub async fn run(worktree_arg: Option<&str>, force: bool, skip_hooks: bool) -> R
     let worktree_abs = Path::new(&worktree_path);
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
-    // worktree's session files and, when `a wm delete` runs from the
+    // worktree's session files and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
     if let Some(branch) = branch_name.as_deref()
         && merge_status.as_ref().is_some_and(MergeStatus::is_merged)
@@ -173,7 +173,7 @@ async fn check_merge_status(branch_name: Option<&str>, force: bool) -> Result<Op
 }
 
 /// Resolve the worktree path from the argument or current directory
-fn resolve_worktree_path(
+pub(crate) fn resolve_worktree_path(
     worktree_arg: Option<&str>,
     worktrees_dir: &str,
     branch_prefix: &str,

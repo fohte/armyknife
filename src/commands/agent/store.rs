@@ -663,9 +663,9 @@ where
                 .is_some_and(|info| !is_pane_alive(&info.pane_id));
 
         // Orphaned sessions: the worktree (cwd) is gone but the session file
-        // lingered, e.g. `wm delete` raced with `kill_window`, the worktree
+        // lingered after worktree cleanup raced with `kill_window`, the worktree
         // was removed by another tool, or a straggler hook (a Notification
-        // fired after `wm delete` already cleaned up the session file)
+        // fired after cleanup already removed the session file)
         // recreated the file with no tmux_info. A deleted worktree means the
         // session is done regardless of status, even if its tmux pane
         // happens to still be attachable. Ended is handled by
@@ -1054,7 +1054,7 @@ mod tests {
             let mut session = create_test_session(session_id);
             session.status = status;
             // tmux_info is None here to also cover the straggler-hook case:
-            // a Notification fired after `wm delete` recreates the file with
+            // a Notification fired after worktree cleanup recreates the file with
             // no pane info, so `stale_pane` alone would never catch it.
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");

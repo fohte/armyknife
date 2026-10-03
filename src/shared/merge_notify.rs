@@ -2,7 +2,7 @@
 //! merged, so a delegator blocked on "wait for this PR to merge" can
 //! continue.
 //!
-//! Shared by all three worktree-deletion entry points (`wm delete`, `wm
+//! Shared by all three worktree-cleanup entry points (`agent close`, `wm
 //! clean`, and the TUI clean view's detached `agent clean-detached` child) so
 //! the notification fires identically regardless of which one removes a
 //! merged worktree.
@@ -19,7 +19,7 @@ use crate::shared::sanitize::strip_angle_brackets;
 
 /// Tracing target for failures on this path. The TUI clean view's detached
 /// child has its stderr wired to `/dev/null`, so the rotating log is the
-/// only channel that reaches it; interactive callers (`wm delete`, `wm
+/// only channel that reaches it; interactive callers (`agent close`, `wm
 /// clean`) additionally get the same message on stderr.
 const EVENT_TARGET: &str = "armyknife::shared::merge_notify";
 
@@ -108,7 +108,7 @@ pub async fn notify_delegator_if_merged_worktree_at(path: &Path) {
     }
 }
 
-/// Emits a warning both to stderr (visible for interactive `wm delete` / `wm
+/// Emits a warning both to stderr (visible for interactive `agent close` / `wm
 /// clean`) and to the shared tracing log (the only channel that reaches the
 /// TUI clean view's detached child).
 fn warn_notify_failure(msg: &str) {
@@ -223,7 +223,7 @@ mod tests {
 
         let sessions = [
             // Matches: cwd inside worktree, has an ancestor. Already
-            // `Ended` -- must still be found, since `wm delete` typically
+            // `Ended` -- must still be found, since worktree cleanup typically
             // runs after the delegate session has finished and exited.
             make_session(
                 "delegate-1",

@@ -4,7 +4,7 @@
 //! `a agent peer` and `a agent peer wake` both assume a Claude Code session is
 //! driving them (the session resolves a name, then calls its own
 //! `SendMessage` tool). Some notifications have no session in the loop --
-//! e.g. reporting that a delegated PR merged from inside `a wm delete`
+//! e.g. reporting that a delegated PR merged from inside `a agent close`
 //! itself. This command is that missing send path: a Claude Code target gets
 //! `claude_messaging`'s direct socket write, while a Codex target is steered
 //! through its app-server and falls back to `codex queue` when unavailable.
@@ -87,7 +87,7 @@ fn delivery_output(session_id: &str, delivery: &Delivery) -> Option<String> {
 /// hook) before each engine's own ambient session env var -- present for a
 /// plain `claude`/`codex` CLI invocation, including one whose hooks aren't
 /// registered.
-/// Returns `None` when nothing resolves (e.g. `a wm delete` has no session
+/// Returns `None` when nothing resolves (e.g. `a agent close` has no session
 /// in the loop), which sends the message unwrapped.
 ///
 /// The paired `Engine` is only a fallback guess, used by [`notify`] when the
