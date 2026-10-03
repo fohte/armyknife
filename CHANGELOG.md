@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.359](https://github.com/fohte/armyknife/compare/v0.1.358...v0.1.359) (2026-10-03)
+
+
+### Bug Fixes
+
+* **hitl:** canonicalize document paths for approval checks ([#1046](https://github.com/fohte/armyknife/issues/1046)) ([bade625](https://github.com/fohte/armyknife/commit/bade625ed0d1d9e39a2bccfc60aa08a555b0167e))
+
 ## [0.1.358](https://github.com/fohte/armyknife/compare/v0.1.357...v0.1.358) (2026-10-03)
 
 
