@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.358](https://github.com/fohte/armyknife/compare/v0.1.357...v0.1.358) (2026-10-03)
+
+
+### Bug Fixes
+
+* **agent:** open floating panes from Codex sessions ([#1043](https://github.com/fohte/armyknife/issues/1043)) ([7efd02f](https://github.com/fohte/armyknife/commit/7efd02f28e35c06eaad88d3de847291bd1c05a0b))
+
 ## [0.1.357](https://github.com/fohte/armyknife/compare/v0.1.356...v0.1.357) (2026-10-03)
 
 
