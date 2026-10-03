@@ -5,13 +5,13 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::infra::external_tool::ExternalTool;
-use crate::shared::config::{Config, Terminal};
+use crate::shared::config::{Config, Terminal, load_config_or_default};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct DoctorArgs {}
 
 pub fn run(_args: &DoctorArgs) -> Result<()> {
-    let config = crate::shared::config::load_config().unwrap_or_default();
+    let config = load_config_or_default();
     let tools = selected_tools(&config);
     let rows: Vec<Row> = tools.iter().map(|t| check(*t)).collect();
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);

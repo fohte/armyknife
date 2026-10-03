@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use super::{
-    AgentConfig, AutoCompactConfig, AutoPauseConfig, EditorConfig, LayoutNode, NotificationConfig,
-    OrgConfig, RepoConfig, default_branch_prefix, default_worktrees_dir,
-};
+use super::{AgentConfig, EditorConfig, NotificationConfig, OrgConfig, RepoConfig};
 
 #[derive(Default, Serialize, schemars::JsonSchema)]
 #[schemars(
@@ -17,12 +14,6 @@ struct ConfigSchema {
     /// `a agent` settings.
     #[serde(default)]
     agent: AgentConfig,
-    /// Legacy worktree settings. Use `agent.worktree` instead.
-    #[serde(default)]
-    wm: LegacyWmSchema,
-    /// Legacy session settings. Use `agent.auto_pause` and `agent.auto_compact` instead.
-    #[serde(default)]
-    cc: LegacyCcSchema,
     /// Terminal/editor settings for human-in-the-loop reviews.
     #[serde(default)]
     editor: EditorConfig,
@@ -37,42 +28,7 @@ struct ConfigSchema {
     orgs: HashMap<String, OrgConfig>,
 }
 
-#[derive(Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct LegacyWmSchema {
-    #[serde(default = "default_worktrees_dir")]
-    #[schemars(default = "default_worktrees_dir")]
-    worktrees_dir: String,
-    #[serde(default = "default_branch_prefix")]
-    #[schemars(default = "default_branch_prefix")]
-    branch_prefix: String,
-    #[serde(default)]
-    layout: LayoutNode,
-    #[serde(default)]
-    repos_root: Option<String>,
-}
-
-impl Default for LegacyWmSchema {
-    fn default() -> Self {
-        Self {
-            worktrees_dir: default_worktrees_dir(),
-            branch_prefix: default_branch_prefix(),
-            layout: LayoutNode::default(),
-            repos_root: None,
-        }
-    }
-}
-
-#[derive(Default, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct LegacyCcSchema {
-    #[serde(default)]
-    auto_pause: AutoPauseConfig,
-    #[serde(default)]
-    auto_compact: AutoCompactConfig,
-}
-
-/// Generate JSON Schema for the current config keys and their legacy aliases.
+/// Generate JSON Schema for the current config keys.
 pub fn generate_schema() -> schemars::Schema {
     schemars::schema_for!(ConfigSchema)
 }

@@ -1,4 +1,4 @@
-//! Common worktree operations shared between delete, clean, and list commands.
+//! Common worktree operations shared by worktree cleanup commands.
 
 use std::path::PathBuf;
 
@@ -131,23 +131,6 @@ pub fn get_main_worktree_path(repo: &GitRepo) -> Result<PathBuf> {
     } else {
         Ok(repo.workdir().to_path_buf())
     }
-}
-
-/// Get the branch and commit for the main worktree.
-pub fn get_main_worktree_info(repo: &GitRepo) -> (String, String) {
-    let main_repo = if repo.is_worktree() {
-        repo.main_repo().ok()
-    } else {
-        None
-    };
-    let target = main_repo.as_ref().unwrap_or(repo);
-    let branch = target
-        .current_branch()
-        .unwrap_or_else(|_| "(unknown)".to_string());
-    let commit = target
-        .short_hash("HEAD")
-        .unwrap_or_else(|_| "(none)".to_string());
-    (branch, commit)
 }
 
 /// Raw worktree-list entry from `git worktree list --porcelain`.
@@ -407,28 +390,6 @@ mod tests {
         let path = get_main_worktree_path(&wt_repo).unwrap();
 
         assert_eq!(path.canonicalize().unwrap(), test_repo.path());
-    }
-
-    #[test]
-    fn get_main_worktree_info_returns_branch_and_commit() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let (branch, commit) = get_main_worktree_info(&repo);
-
-        assert_eq!(branch, "master");
-        assert_eq!(commit.len(), 7);
-    }
-
-    #[test]
-    fn get_main_worktree_info_from_worktree_returns_main_branch() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("feature");
-
-        let wt_repo = crate::infra::git::open_repo_at(&test_repo.worktree_path("feature")).unwrap();
-
-        let (branch, _commit) = get_main_worktree_info(&wt_repo);
-        assert_eq!(branch, "master");
     }
 
     #[test]

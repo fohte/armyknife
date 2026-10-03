@@ -93,10 +93,7 @@ mod tests {
     #[rstest]
     #[case::agent_worktree_dir("agent.worktree.dir", ".worktrees")]
     #[case::agent_worktree_branch_prefix("agent.worktree.branch_prefix", "fohte/")]
-    #[case::legacy_wm_worktrees_dir("wm.worktrees_dir", ".worktrees")]
-    #[case::legacy_wm_branch_prefix("wm.branch_prefix", "fohte/")]
     #[case::agent_auto_pause_timeout("agent.auto_pause.timeout", "30m")]
-    #[case::legacy_cc_auto_pause_timeout("cc.auto_pause.timeout", "30m")]
     #[case::editor_editor_command("editor.editor_command", "nvim")]
     #[case::editor_terminal("editor.terminal", "wezterm")]
     #[case::notification_enabled("notification.enabled", "true")]
@@ -109,18 +106,15 @@ mod tests {
     #[rstest]
     #[case::agent_worktree_dir("agent.worktree.dir", Some(".wt"))]
     #[case::agent_worktree_branch_prefix("agent.worktree.branch_prefix", Some("user/"))]
-    #[case::legacy_wm_worktrees_dir("wm.worktrees_dir", Some(".wt"))]
-    #[case::legacy_wm_branch_prefix("wm.branch_prefix", Some("user/"))]
     #[case::agent_auto_pause_timeout("agent.auto_pause.timeout", Some("40m"))]
-    #[case::legacy_cc_auto_pause_timeout("cc.auto_pause.timeout", Some("40m"))]
     #[case::notification_enabled("notification.enabled", Some("false"))]
     #[case::notification_sound("notification.sound", Some("Ping"))]
     fn get_value_returns_custom_values(#[case] key: &str, #[case] expected: Option<&str>) {
         let cfg = config_from_yaml(indoc! {"
-            wm:
-              worktrees_dir: .wt
-              branch_prefix: user/
-            cc:
+            agent:
+              worktree:
+                dir: .wt
+                branch_prefix: user/
               auto_pause:
                 timeout: 40m
             notification:
@@ -132,7 +126,9 @@ mod tests {
 
     #[rstest]
     #[case::top_level("nonexistent")]
-    #[case::nested("wm.nonexistent")]
+    #[case::nested("agent.nonexistent")]
+    #[case::legacy_wm("wm.worktrees_dir")]
+    #[case::legacy_cc("cc.auto_pause.timeout")]
     fn get_value_returns_none_for_unknown_key(#[case] key: &str) {
         let cfg = Config::default();
         assert_eq!(cfg.get_value(key, None), None);
@@ -142,9 +138,9 @@ mod tests {
     fn get_value_returns_object_for_map_key() {
         let cfg = Config::default();
         assert_eq!(
-            cfg.get_value("wm", None),
+            cfg.get_value("agent.worktree", None),
             Some(serde_json::json!({
-                "worktrees_dir": ".worktrees",
+                "dir": ".worktrees",
                 "branch_prefix": "fohte/",
                 "layout": serde_json::to_value(Config::default().agent.worktree.layout).unwrap(),
                 "repos_root": null,

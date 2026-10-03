@@ -7,7 +7,6 @@ use crate::commands::config::ConfigCommands;
 use crate::commands::doctor::DoctorArgs;
 use crate::commands::gh::GhCommands;
 use crate::commands::name_branch::NameBranchArgs;
-use crate::commands::wm::WmCommands;
 
 #[derive(Parser)]
 #[command(
@@ -46,10 +45,6 @@ pub enum Commands {
 
     /// Generate a branch name from a description using AI
     NameBranch(NameBranchArgs),
-
-    /// Git worktree manager
-    #[command(subcommand)]
-    Wm(WmCommands),
 
     /// Check availability and versions of external tools armyknife depends on
     Doctor(DoctorArgs),

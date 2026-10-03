@@ -1004,7 +1004,9 @@ mod tests {
     #[case::delete(vec!["a", "wm", "delete"])]
     #[case::d_alias(vec!["a", "wm", "d"])]
     #[case::rm_alias(vec!["a", "wm", "rm"])]
-    fn wm_delete_command_and_aliases_are_removed(#[case] argv: Vec<&str>) {
+    #[case::clean(vec!["a", "wm", "clean"])]
+    #[case::list(vec!["a", "wm", "list"])]
+    fn wm_commands_are_removed(#[case] argv: Vec<&str>) {
         use clap::Parser;
 
         let parsed = crate::cli::Cli::try_parse_from(argv);

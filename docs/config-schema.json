@@ -40,21 +40,6 @@
         }
       }
     },
-    "cc": {
-      "description": "Legacy session settings. Use `agent.auto_pause` and `agent.auto_compact` instead.",
-      "$ref": "#/$defs/LegacyCcSchema",
-      "default": {
-        "auto_compact": {
-          "enabled": true,
-          "idle_timeout": "4m30s",
-          "min_context_tokens": 180000
-        },
-        "auto_pause": {
-          "enabled": true,
-          "timeout": "30m"
-        }
-      }
-    },
     "editor": {
       "description": "Terminal/editor settings for human-in-the-loop reviews.",
       "$ref": "#/$defs/EditorConfig",
@@ -87,26 +72,6 @@
         "$ref": "#/$defs/RepoConfig"
       },
       "default": {}
-    },
-    "wm": {
-      "description": "Legacy worktree settings. Use `agent.worktree` instead.",
-      "$ref": "#/$defs/LegacyWmSchema",
-      "default": {
-        "branch_prefix": "fohte/",
-        "layout": {
-          "direction": "horizontal",
-          "first": {
-            "command": "nvim",
-            "focus": true
-          },
-          "second": {
-            "command": "claude",
-            "focus": false
-          }
-        },
-        "repos_root": null,
-        "worktrees_dir": ".worktrees"
-      }
     }
   },
   "additionalProperties": false,
@@ -314,62 +279,6 @@
         }
       ]
     },
-    "LegacyCcSchema": {
-      "type": "object",
-      "properties": {
-        "auto_compact": {
-          "$ref": "#/$defs/AutoCompactConfig",
-          "default": {
-            "enabled": true,
-            "idle_timeout": "4m30s",
-            "min_context_tokens": 180000
-          }
-        },
-        "auto_pause": {
-          "$ref": "#/$defs/AutoPauseConfig",
-          "default": {
-            "enabled": true,
-            "timeout": "30m"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "LegacyWmSchema": {
-      "type": "object",
-      "properties": {
-        "branch_prefix": {
-          "type": "string",
-          "default": "fohte/"
-        },
-        "layout": {
-          "$ref": "#/$defs/LayoutNode",
-          "default": {
-            "direction": "horizontal",
-            "first": {
-              "command": "nvim",
-              "focus": true
-            },
-            "second": {
-              "command": "claude",
-              "focus": false
-            }
-          }
-        },
-        "repos_root": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "worktrees_dir": {
-          "type": "string",
-          "default": ".worktrees"
-        }
-      },
-      "additionalProperties": false
-    },
     "NotificationConfig": {
       "description": "Notification configuration.",
       "type": "object",
@@ -560,7 +469,7 @@
           }
         },
         "repos_root": {
-          "description": "Root directory containing git repositories.\nUsed by `a wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
+          "description": "Root directory containing git repositories.\nUsed by `a agent clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
           "type": [
             "string",
             "null"

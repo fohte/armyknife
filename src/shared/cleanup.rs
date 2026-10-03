@@ -1,6 +1,6 @@
 //! Shared cleanup logic for agent sessions, notifications, and git worktrees.
 //!
-//! Both `agent watch` (session cleanup) and `agent close`/`wm clean` (worktree cleanup)
+//! Both `agent watch` (session cleanup) and `agent close`/`agent clean` (worktree cleanup)
 //! need to clean up related resources. This module provides the shared logic to
 //! ensure consistent cleanup regardless of the entry point.
 

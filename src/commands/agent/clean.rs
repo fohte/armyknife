@@ -308,7 +308,7 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    // wm clean may be invoked from a non-tmux context (cron, plain shell);
+    // agent clean may be invoked from a non-tmux context (cron, plain shell);
     // fall back to the no-op probe so we never block on tmux calls.
     if std::env::var_os("TMUX").is_some() {
         protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
@@ -638,6 +638,30 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    #[test]
+    fn agent_clean_accepts_worktree_cleanup_options() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "agent",
+            "clean",
+            "--dry-run",
+            "--all",
+            "--force",
+        ])
+        .expect("the clean command should parse");
+
+        let clean_args = match parsed.command {
+            crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
+                Some((args.dry_run, args.all, args.force))
+            }
+            _ => None,
+        };
+
+        assert_eq!(clean_args, Some((true, true, true)));
+    }
 
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
         let now = Utc::now();

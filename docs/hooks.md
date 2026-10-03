@@ -58,7 +58,7 @@ pkill -f "$ARMYKNIFE_WORKTREE_PATH" || true
 
 ## `post-worktree-delete`
 
-Starts after a worktree has been removed successfully by `a agent close`, `a wm clean`, or the clean view in `a agent watch`. armyknife starts the hook in a detached session before it cleans up tmux panes, then continues without waiting for the hook to finish. A hook failure or a failure to start it does not undo deletion; startup failures are logged as warnings. The hook's working directory is the parent repository root.
+Starts after a worktree has been removed successfully by `a agent close`, `a agent clean`, or the clean view in `a agent watch`. armyknife starts the hook in a detached session before it cleans up tmux panes, then continues without waiting for the hook to finish. A hook failure or a failure to start it does not undo deletion; startup failures are logged as warnings. The hook's working directory is the parent repository root.
 
 This hook lets repository-specific scripts perform follow-up work after deletion. The built-in base-conflict notification was removed; add any replacement behavior to this hook. For example, gate repository-specific follow-up work on the merge status:
 
