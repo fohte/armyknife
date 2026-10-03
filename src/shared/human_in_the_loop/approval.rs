@@ -34,8 +34,8 @@ pub static TEST_APPROVAL_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync:
 ///
 /// The approval record lives under the user's state directory keyed by
 /// an opaque, key-derived id, not next to the document. Callers must
-/// pass the same `document_path` representation to `save` and `verify`;
-/// the id is computed from path bytes verbatim.
+/// use a path that resolves to the same document for `save` and `verify`;
+/// paths are canonicalized when possible so aliases share an id.
 pub struct ApprovalManager {
     approve_path: PathBuf,
     document_path: PathBuf,
@@ -43,11 +43,13 @@ pub struct ApprovalManager {
 
 impl ApprovalManager {
     pub fn new(document_path: &Path) -> Self {
-        let id = derive_approval_id(document_path);
+        let document_path =
+            fs::canonicalize(document_path).unwrap_or_else(|_| document_path.to_path_buf());
+        let id = derive_approval_id(&document_path);
         let approve_path = approvals_dir().join(id);
         Self {
             approve_path,
-            document_path: document_path.to_path_buf(),
+            document_path,
         }
     }
 
@@ -352,6 +354,31 @@ mod tests {
         let ma = ApprovalManager::new(&a);
         let mb = ApprovalManager::new(&b);
         assert_ne!(ma.approve_path(), mb.approve_path());
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::canonical_save_symlink_verify(true)]
+    #[case::symlink_save_canonical_verify(false)]
+    fn path_aliases_share_approval(env: Env, #[case] save_canonical: bool) {
+        use std::os::unix::fs::symlink;
+
+        let canonical_path = env.doc("a.md", "hello");
+        let symlink_path = env.docs_dir.path().join("a-link.md");
+        symlink(&canonical_path, &symlink_path).expect("create document symlink");
+
+        let (save_path, verify_path) = if save_canonical {
+            (&canonical_path, &symlink_path)
+        } else {
+            (&symlink_path, &canonical_path)
+        };
+
+        ApprovalManager::new(save_path)
+            .save()
+            .expect("save approval");
+        ApprovalManager::new(verify_path)
+            .verify()
+            .expect("verify approval through path alias");
     }
 
     #[rstest]
