@@ -17,5 +17,7 @@ pub mod table;
 #[cfg(test)]
 pub mod testing;
 pub mod update;
+pub mod worktree;
 pub mod worktree_delete;
+pub mod worktree_error;
 pub mod yaml_frontmatter;
