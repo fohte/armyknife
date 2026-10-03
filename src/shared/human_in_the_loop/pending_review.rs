@@ -23,7 +23,7 @@ impl PendingReviewGuard {
             }
         };
 
-        match Self::new(&sessions_dir, session_id) {
+        match Self::for_session(&sessions_dir, &session_id) {
             Ok(guard) => Some(guard),
             Err(error) => {
                 tracing::warn!(
@@ -35,16 +35,16 @@ impl PendingReviewGuard {
         }
     }
 
-    fn new(sessions_dir: &Path, session_id: String) -> anyhow::Result<Self> {
+    pub(super) fn for_session(sessions_dir: &Path, session_id: &str) -> anyhow::Result<Self> {
         let review_id = uuid::Uuid::new_v4().to_string();
-        store::update_session_in(sessions_dir, &session_id, |session| {
+        store::update_session_in(sessions_dir, session_id, |session| {
             session.pending_human_review_ids.insert(review_id.clone());
             true
         })?;
 
         Ok(Self {
             sessions_dir: sessions_dir.to_path_buf(),
-            session_id,
+            session_id: session_id.to_string(),
             review_id,
         })
     }
@@ -113,9 +113,9 @@ mod tests {
             .expect("session should be saved");
 
         let ((remaining_after_first_finishes, remaining_after_all_finish), second_id) = {
-            let first = PendingReviewGuard::new(&sessions_dir, "session-a".to_string())
+            let first = PendingReviewGuard::for_session(&sessions_dir, "session-a")
                 .expect("first marker should be added");
-            let second = PendingReviewGuard::new(&sessions_dir, "session-a".to_string())
+            let second = PendingReviewGuard::for_session(&sessions_dir, "session-a")
                 .expect("second marker should be added");
             let second_id = second.review_id.clone();
 

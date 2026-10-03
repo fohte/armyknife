@@ -116,6 +116,8 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
     /// IDs of Human-in-the-Loop reviews currently waiting for the user.
+    /// A process killed before cleanup can leave a marker; display status
+    /// considers it only while some background task is still pending.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub pending_human_review_ids: BTreeSet<String>,
     pub cwd: PathBuf,
@@ -257,7 +259,7 @@ pub enum DisplayStatus {
     Paused,
     Ended,
     /// The main loop is stopped with a pending background task and no linked
-    /// crit review. See `Session::has_pending_bg_tasks`.
+    /// crit or Human-in-the-Loop review. See `Session::has_pending_bg_tasks`.
     Background,
 }
 
@@ -274,7 +276,8 @@ impl Session {
     /// treat such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
     /// `display_status` (report `Background` instead of `Stopped`, or
-    /// `WaitingInput` for a stopped session with a linked crit review).
+    /// `WaitingInput` for a stopped session with a linked crit review or
+    /// pending Human-in-the-Loop review).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
