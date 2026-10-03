@@ -488,9 +488,9 @@ fn process_hook_event_impl(
     // when it finishes -- so a non-empty set here means "the user is still
     // mid-task even though Claude's main loop went idle":
     //
-    // - `display_status` reports `Background` instead of `Stopped` while any
-    //   id is pending, so `agent list` / `agent watch` / tmux don't show the
-    //   session as fully idle.
+    // - With pending work, `display_status` reports `WaitingInput` when a
+    //   crit URL is linked and `Background` otherwise, so
+    //   `agent list` / `agent watch` / tmux don't show the session as idle.
     // - `auto_compact` skips the synthetic Stop while any id is pending.
     // - `sweep` does not SIGTERM the session while any id is pending
     //   (otherwise a long-running task gets killed mid-flight).
@@ -966,8 +966,8 @@ fn export_session_id_to_env_file(session_id: &str) {
 /// A `Stop` (or `Notification(idle_prompt)`) while a Bash bg shell or
 /// Task-tool subagent is still pending (see `Session::has_pending_bg_tasks`)
 /// still resolves to `Stopped` here: the main loop really did go idle.
-/// `Session::display_status` is what surfaces the distinction (`Background`
-/// instead of `Stopped`) for `agent list` / `agent watch` / tmux.
+/// `Session::display_status` surfaces it as `Background`, or `WaitingInput`
+/// when a crit URL is linked, for `agent list` / `agent watch` / tmux.
 fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
     match event {
         HookEvent::Stop => SessionStatus::Stopped,

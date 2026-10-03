@@ -512,8 +512,8 @@ mod tests {
     #[test]
     fn test_section_of_stopped_with_pending_bg_task_is_running() {
         // `display_status()` reports `Background` for a Stopped session with
-        // a pending bg task, and Background must group with Running -- the
-        // user's mental model is "still mid-task", not "idle".
+        // a pending bg task and no crit link, and Background groups with
+        // Running because the session is still mid-task.
         let mut session = create_test_session("s1", SessionStatus::Stopped);
         session.pending_bg_task_ids.insert("bg-1".to_string());
         assert_eq!(section_of(&session), Section::Running);

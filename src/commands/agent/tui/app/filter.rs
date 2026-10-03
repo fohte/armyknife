@@ -531,8 +531,8 @@ mod tests {
     }
 
     #[rstest]
-    // A Stopped session with a pending bg task renders as `Background`,
-    // which groups with `Running` in the section list (see
+    // A Stopped session with a pending bg task and no crit link renders as
+    // `Background`, which groups with `Running` in the section list (see
     // `session_rows::section_of`) -- the `Running` filter must match it
     // too, not just a raw-`Running` session.
     #[case::running_filter_matches_background(SessionStatus::Running, vec!["running-1", "bg-1"])]
