@@ -794,6 +794,12 @@ $ a config get repo.direct_commit
 true
 ```
 
+## Release
+
+Releases are automated with release-please. The [release workflow](.github/workflows/release-please.yml) creates or updates a release PR on pushes to `master` and automatically merges it. Merging the release PR creates a GitHub release; build jobs upload the pre-built binaries afterward.
+
+After the release PR is merged and the GitHub release has been created, run `a update`. You do not need to wait for the binaries to finish uploading: `a update` retries while your platform's asset is being uploaded. See [`a update`](#a-update) for retry timing.
+
 ## License
 
 [MIT](LICENSE)
