@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.348](https://github.com/fohte/armyknife/compare/v0.1.347...v0.1.348) (2026-10-03)
+
+
+### Bug Fixes
+
+* **agent:** show sessions waiting for crit review as waiting for input ([#1020](https://github.com/fohte/armyknife/issues/1020)) ([be05c97](https://github.com/fohte/armyknife/commit/be05c97ff00628cf32a3682a1874961ae5d3da43))
+
 ## [0.1.347](https://github.com/fohte/armyknife/compare/v0.1.346...v0.1.347) (2026-10-03)
 
 
