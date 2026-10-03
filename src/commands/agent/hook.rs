@@ -405,7 +405,6 @@ fn process_hook_event_impl(
     let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| {
-        // Read initial session metadata from environment variables (set by `a agent new`)
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()
@@ -415,7 +414,17 @@ fn process_hook_event_impl(
         Session {
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
-            work_type_pinned: env.session_work_type.is_some(),
+            // A new ID in a pane that already tracked a session is a restart or
+            // `/clear`; it must not inherit that launch's kind pin.
+            work_type_pinned: env.session_work_type.is_some()
+                && input.source.as_deref() != Some("clear")
+                && tmux_info.as_ref().is_none_or(|info| {
+                    !pane_binding::has_other_session_on_pane(
+                        sessions_dir,
+                        &input.session_id,
+                        &info.pane_id,
+                    )
+                }),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: input.cwd.clone(),
@@ -2939,6 +2948,76 @@ mod tests {
                 expected["work_type_pinned"] = serde_json::json!(true);
             }
             assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn session_start_clear_does_not_pin_initial_work_type() {
+            let temp_dir = create_temp_sessions_dir();
+
+            temp_env::with_vars(
+                [(EnvVars::session_work_type_name(), Some("sample-skill"))],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::SessionStart,
+                        create_test_input_with_source(None, Some("clear")),
+                        temp_dir.path(),
+                        &SideEffects::none(),
+                    )
+                    .expect("session-start clear should succeed");
+                },
+            );
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("load should succeed")
+                .expect("session should exist");
+            let mut actual = serde_json::to_value(session).expect("session should serialize");
+            actual["created_at"] = serde_json::json!("<timestamp>");
+            actual["updated_at"] = serde_json::json!("<timestamp>");
+            assert_eq!(
+                actual,
+                serde_json::json!({
+                    "session_id": "test-123",
+                    "work_type": "sample-skill",
+                    "cwd": "/tmp/test",
+                    "transcript_path": null,
+                    "tty": null,
+                    "tmux_info": null,
+                    "status": "running",
+                    "created_at": "<timestamp>",
+                    "updated_at": "<timestamp>",
+                    "last_message": null,
+                    "current_tool": null,
+                    "label": null,
+                    "ancestor_session_ids": [],
+                    "pending_bg_task_ids": [],
+                    "pending_agent_task_ids": [],
+                    "pending_permission_agent_ids": [],
+                    "read_at": null,
+                    "sweep_signaled": false,
+                    "engine": "claude"
+                }),
+            );
+        }
+
+        #[test]
+        fn detects_previous_session_in_the_same_pane() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut previous = create_test_session(Some(TmuxInfo {
+                session_name: "main".to_string(),
+                window_name: "example".to_string(),
+                window_index: 0,
+                pane_id: "%1".to_string(),
+            }));
+            previous.session_id = "previous-session".to_string();
+            store::save_session_to(temp_dir.path(), &previous).expect("session should save");
+
+            let actual = [
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "new-session", "%1"),
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "previous-session", "%1"),
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "new-session", "%2"),
+            ];
+
+            assert_eq!(actual, [true, false, false]);
         }
 
         #[test]

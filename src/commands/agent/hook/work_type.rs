@@ -288,6 +288,14 @@ mod tests {
             },
         }),
     )]
+    #[case::claude_slash_prompt(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "claude", "prompt": "/flow-two continue"}),
+    )]
+    #[case::codex_prompt_mention(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "codex", "prompt": "Please use $flow-two for this task."}),
+    )]
     fn preserves_pinned_work_type(
         agent_config: AgentConfig,
         hook_input_factory: HookInputFactory,
@@ -298,10 +306,17 @@ mod tests {
         let mut session = session_factory(Some("flow-one"));
         session.work_type_pinned = true;
         let input = hook_input_factory(extra);
+        let normalize = |session: &Session| {
+            let mut value = serde_json::to_value(session).expect("session should serialize");
+            value["created_at"] = json!("<timestamp>");
+            value["updated_at"] = json!("<timestamp>");
+            value
+        };
+        let expected = normalize(&session);
 
         update_session_work_type(&mut session, event, &input, &agent_config);
 
-        assert_eq!(session.work_type, Some("flow-one".to_owned()));
+        assert_eq!(normalize(&session), expected);
     }
 
     #[rstest]

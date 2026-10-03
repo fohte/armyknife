@@ -50,6 +50,40 @@ pub(super) fn clear_managed_codex_launch_env(
     format!("{command}; unset {}", EnvVars::codex_managed_launch_name())
 }
 
+/// Removes the launch kind from the pane shell and scopes it to one agent process.
+pub(super) fn scope_session_work_type(
+    command: &str,
+    engine: Engine,
+    env_vars: &[(&str, &str)],
+) -> String {
+    let Some((_, work_type)) = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::session_work_type_name())
+    else {
+        return command.to_string();
+    };
+
+    let key = EnvVars::session_work_type_name();
+    // Managed Codex records the kind against its thread ID after launch.
+    let managed_codex_launch = engine == Engine::Codex
+        && env_vars
+            .iter()
+            .any(|(key, value)| *key == EnvVars::codex_managed_launch_name() && *value == "1");
+    let scoped_command = if is_engine_command(command, engine) && !managed_codex_launch {
+        let escaped_work_type = shlex::try_quote(work_type)
+            .map(|quoted| quoted.into_owned())
+            .unwrap_or_else(|_| format!("'{}'", work_type.replace('\'', "'\\''")));
+        format!("{key}={escaped_work_type} {command}")
+    } else {
+        command.to_string()
+    };
+
+    // tmux unsets its session environment after pane creation, but the pane's
+    // shell already inherited it. Clear it before running the first command so
+    // later agents launched from that shell cannot mistake it for a new kind.
+    format!("unset {key}; {scoped_command}")
+}
+
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
 /// engine's effort flag (`--effort` for claude, `-c model_reasoning_effort=` for
 /// codex) right after the program name
@@ -142,6 +176,52 @@ mod tests {
         };
 
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::claude_launch(
+        "claude --model example",
+        Engine::Claude,
+        "unset ARMYKNIFE_SESSION_WORK_TYPE; ARMYKNIFE_SESSION_WORK_TYPE=sample-skill claude --model example"
+    )]
+    #[case::codex_launch(
+        "codex",
+        Engine::Codex,
+        "unset ARMYKNIFE_SESSION_WORK_TYPE; ARMYKNIFE_SESSION_WORK_TYPE=sample-skill codex"
+    )]
+    #[case::editor_pane("nvim", Engine::Claude, "unset ARMYKNIFE_SESSION_WORK_TYPE; nvim")]
+    fn scopes_session_work_type_to_agent_process(
+        #[case] command: &str,
+        #[case] engine: Engine,
+        #[case] expected: &str,
+    ) {
+        let env_vars = [(EnvVars::session_work_type_name(), "sample-skill")];
+
+        assert_eq!(
+            scope_session_work_type(command, engine, &env_vars),
+            expected
+        );
+    }
+
+    #[test]
+    fn scope_session_work_type_leaves_commands_without_kind_unchanged() {
+        assert_eq!(
+            scope_session_work_type("claude", Engine::Claude, &[]),
+            "claude"
+        );
+    }
+
+    #[test]
+    fn scope_session_work_type_omits_managed_codex_environment() {
+        let env_vars = [
+            (EnvVars::session_work_type_name(), "sample-skill"),
+            (EnvVars::codex_managed_launch_name(), "1"),
+        ];
+
+        assert_eq!(
+            scope_session_work_type("codex", Engine::Codex, &env_vars),
+            format!("unset {}; codex", EnvVars::session_work_type_name()),
+        );
     }
 
     #[rstest]
