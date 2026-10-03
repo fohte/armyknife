@@ -1,6 +1,6 @@
 [package]
 name = "config-schema-gen"
-version = "0.1.355"
+version = "0.1.356"
 edition = "2024"
 publish = false
 description = "Dev-only generator for armyknife's Config JSON Schema"
