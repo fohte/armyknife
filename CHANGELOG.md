@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.346](https://github.com/fohte/armyknife/compare/v0.1.345...v0.1.346) (2026-10-03)
+
+
+### Features
+
+* **config:** relocate configuration keys under agent ([#1016](https://github.com/fohte/armyknife/issues/1016)) ([6b1b585](https://github.com/fohte/armyknife/commit/6b1b585868311f91903160c861b893745bfabedd))
+
 ## [0.1.345](https://github.com/fohte/armyknife/compare/v0.1.344...v0.1.345) (2026-10-03)
 
 
