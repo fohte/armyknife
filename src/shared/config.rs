@@ -65,21 +65,16 @@ impl Config {
             let org_config = self.orgs.get(owner).unwrap_or(&default_org_config);
             let value = serde_json::to_value(org_config).ok()?;
             resolve_json_path(&value, org_key)
-        } else if key == "wm" {
-            Some(serde_json::json!({
-                "worktrees_dir": &self.agent.worktree.dir,
-                "branch_prefix": &self.agent.worktree.branch_prefix,
-                "layout": &self.agent.worktree.layout,
-                "repos_root": &self.agent.worktree.repos_root,
-            }))
-        } else if key == "cc" {
-            Some(serde_json::json!({
-                "auto_pause": &self.agent.auto_pause,
-                "auto_compact": &self.agent.auto_compact,
-            }))
         } else {
             let value = serde_json::to_value(self).ok()?;
-            resolve_json_path(&value, &legacy_config_path(key))
+            let agent = serde_json::to_value(&self.agent).ok()?;
+            if let Some(value) = legacy::legacy_section_value(key, &agent) {
+                Some(value)
+            } else {
+                let current_path =
+                    legacy::normalize_path(key, ".").unwrap_or_else(|| key.to_string());
+                resolve_json_path(&value, &current_path)
+            }
         }
     }
 
@@ -100,34 +95,6 @@ impl Config {
         }
         None
     }
-}
-
-fn legacy_config_path(key: &str) -> String {
-    if let Some(path) = key.strip_prefix("wm.") {
-        let path = if let Some(suffix) = path.strip_prefix("worktrees_dir")
-            && (suffix.is_empty() || suffix.starts_with('.'))
-        {
-            format!("dir{suffix}")
-        } else {
-            path.to_string()
-        };
-        return format!("agent.worktree.{path}");
-    }
-
-    for (legacy, current) in [
-        ("cc.auto_pause", "agent.auto_pause"),
-        ("cc.auto_compact", "agent.auto_compact"),
-    ] {
-        if key == legacy
-            || key
-                .strip_prefix(legacy)
-                .is_some_and(|suffix| suffix.starts_with('.'))
-        {
-            return format!("{current}{}", &key[legacy.len()..]);
-        }
-    }
-
-    key.to_string()
 }
 
 /// Resolve a dot-separated path against a JSON value. Null is treated as
@@ -684,6 +651,11 @@ fn merged_yaml_from_dir(dir: &Path) -> anyhow::Result<Option<serde_yaml::Value>>
                 path: path.clone(),
                 message: e.to_string(),
             })?;
+        let value =
+            legacy::normalize_config_file(value).map_err(|message| ConfigError::ParseError {
+                path: path.clone(),
+                message,
+            })?;
         if value.is_null() {
             continue;
         }
@@ -1063,6 +1035,59 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::empty_agent(indoc! {"
+        agent:
+        wm:
+          worktrees_dir: .legacy
+          branch_prefix: legacy/
+        cc:
+          auto_pause:
+            timeout: 20m
+          auto_compact:
+            idle_timeout: 3m
+    "})]
+    #[case::null_agent_subsections(indoc! {"
+        agent:
+          worktree: null
+          auto_pause: null
+          auto_compact: null
+        wm:
+          worktrees_dir: .legacy
+          branch_prefix: legacy/
+        cc:
+          auto_pause:
+            timeout: 20m
+          auto_compact:
+            idle_timeout: 3m
+    "})]
+    fn legacy_values_survive_null_current_agent_sections(#[case] yaml: &str) {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".legacy".to_string(),
+                        branch_prefix: "legacy/".to_string(),
+                        ..Default::default()
+                    },
+                    auto_pause: AutoPauseConfig {
+                        timeout: "20m".to_string(),
+                        ..Default::default()
+                    },
+                    auto_compact: AutoCompactConfig {
+                        idle_timeout: "3m".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
     #[test]
     fn parse_empty_yaml_uses_all_defaults() {
         let yaml = "{}";
@@ -1342,6 +1367,44 @@ mod tests {
 
         let config = load_config_from_dir(dir.path()).unwrap();
         assert_eq!(config.notification.sound, "FromYml");
+    }
+
+    #[test]
+    fn load_config_from_dir_later_legacy_key_overrides_earlier_current_key() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("base.yaml"),
+            indoc! {"
+                agent:
+                  worktree:
+                    dir: .earlier
+            "},
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("work.yaml"),
+            indoc! {"
+                wm:
+                  worktrees_dir: .later
+            "},
+        )
+        .unwrap();
+
+        let config = load_config_from_dir(dir.path()).unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".later".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
     }
 
     #[rstest]
@@ -1630,6 +1693,29 @@ mod tests {
     }
 
     #[test]
+    fn load_config_legacy_wm_env_overrides_yaml() {
+        let dir = TempDir::new().unwrap();
+
+        let config =
+            config_with_env_vars(dir.path(), &[("ARMYKNIFE_WM__WORKTREES_DIR", ".legacy")])
+                .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".legacy".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn load_config_env_overlay_works_without_any_yaml_config() {
         let dir = TempDir::new().unwrap();
         // dir/armyknife is never created, so there's no config directory at all.
@@ -1711,6 +1797,29 @@ mod tests {
     fn generate_schema_returns_valid_json_with_title(schema_value: serde_json::Value) {
         // schemars generates a title from the struct name
         assert_eq!(schema_value["title"], "Config");
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_has_current_and_legacy_top_level_config_keys(
+        schema_value: serde_json::Value,
+    ) {
+        let runtime_value = serde_json::to_value(Config::default()).unwrap();
+        let runtime_keys = runtime_value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .chain(["wm".to_string(), "cc".to_string()])
+            .collect::<std::collections::BTreeSet<_>>();
+        let schema_keys = schema_value["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(schema_keys, runtime_keys);
     }
 
     #[cfg(feature = "schema-gen")]

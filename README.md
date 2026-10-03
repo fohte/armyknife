@@ -107,7 +107,7 @@ ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false
 
 maps to `agent.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
 
-Legacy `wm:` and `cc:` config sections and their `ARMYKNIFE_WM__*` / `ARMYKNIFE_CC__*` environment variables remain supported during migration. When both legacy and `agent:` settings provide the same value, the `agent:` setting takes precedence.
+Legacy `wm.*` settings map to `agent.worktree.*`; `wm.worktrees_dir` maps to `agent.worktree.dir`. `cc.auto_pause` and `cc.auto_compact` map to `agent.auto_pause` and `agent.auto_compact`. The legacy sections and `ARMYKNIFE_WM__*` / `ARMYKNIFE_CC__*` environment variables remain supported during migration. Within one YAML file, an `agent:` value takes precedence over its legacy alias; across files, the later file wins. For environment variables, `ARMYKNIFE_AGENT__*` takes precedence over its legacy alias.
 
 Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name. `orgs.*` entries aren't reachable either, since org logins are matched case-sensitively but the overlay lowercases every path segment.
 
@@ -727,7 +727,7 @@ Deletion also sends SIGTERM to any process group still rooted in the worktree (e
 | Option          | Description                                                                       |
 | --------------- | --------------------------------------------------------------------------------- |
 | `-n, --dry-run` | Show what would be deleted without actually deleting                              |
-| `--all`         | Clean worktrees across all repositories under `repos_root`                        |
+| `--all`         | Clean worktrees across all repositories under `agent.worktree.repos_root`         |
 | `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
 
 Worktrees with an active agent session (not paused or ended, with pending

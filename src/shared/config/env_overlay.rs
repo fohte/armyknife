@@ -1,6 +1,6 @@
 //! `ARMYKNIFE_*` environment variable overlay for `Config`.
 
-use super::merge_yaml;
+use super::{legacy, merge_yaml};
 
 /// Builds a YAML overlay from `ARMYKNIFE_*` env vars (highest priority),
 /// merged on top of the YAML config files. Strips `ARMYKNIFE_`, lowercases
@@ -88,35 +88,9 @@ pub(super) fn env_overlay_from(
 
 fn normalize_legacy_path(path: &str) -> (String, bool) {
     let path = path.to_ascii_lowercase();
-    if let Some(suffix) = path.strip_prefix("wm__") {
-        let is_legacy_worktrees_dir =
-            suffix == "worktrees_dir" || suffix.starts_with("worktrees_dir__");
-        if ["branch_prefix", "layout", "repos_root"]
-            .iter()
-            .any(|field| suffix == *field || suffix.starts_with(&format!("{field}__")))
-            || is_legacy_worktrees_dir
-        {
-            let suffix = if is_legacy_worktrees_dir {
-                suffix.replacen("worktrees_dir", "dir", 1)
-            } else {
-                suffix.to_string()
-            };
-            return (format!("agent__worktree__{suffix}"), true);
-        }
-        return (path, true);
-    }
-
-    for field in ["auto_pause", "auto_compact"] {
-        let legacy_prefix = format!("cc__{field}");
-        if path == legacy_prefix || path.starts_with(&format!("{legacy_prefix}__")) {
-            return (
-                format!("agent__{field}{}", &path[legacy_prefix.len()..]),
-                true,
-            );
-        }
-    }
-
-    (path, false)
+    let is_legacy = legacy::is_legacy_section_path(&path, "__");
+    let normalized = legacy::normalize_path(&path, "__").unwrap_or(path);
+    (normalized, is_legacy)
 }
 
 #[cfg(test)]
