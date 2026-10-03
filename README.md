@@ -405,7 +405,9 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [session_id]` (alias: `a ag c`) closes the session in the current pane when no ID is given. It refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft; `--force` overrides those checks. It sends Ctrl+D and waits for the agent to exit, then sends SIGTERM if needed. The pane is removed only after the agent exits. Linked-worktree sessions are not supported by this command.
+`a agent close [session_id] [--force]` (alias: `a ag c`) closes the session in the current pane when no ID is given. It refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked; `--force` overrides these checks. It also refuses when it cannot find the agent process for a session that has not ended or paused, or when the pane is no longer bound to that session. An already-removed pane is treated as closed.
+
+The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Linked-worktree sessions are not supported by this command.
 
 `new` options:
 

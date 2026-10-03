@@ -42,7 +42,12 @@ pub fn run(args: &CloseArgs) -> Result<()> {
 }
 
 fn reject_linked_worktree(session: &Session) -> Result<()> {
-    if GitRepo::open_at(&session.cwd).is_ok_and(|repo| repo.is_worktree()) {
+    let is_worktree = GitRepo::open_at(&session.cwd).is_ok_and(|repo| repo.is_worktree());
+    ensure_not_linked_worktree(session, is_worktree)
+}
+
+fn ensure_not_linked_worktree(session: &Session, is_worktree: bool) -> Result<()> {
+    if is_worktree {
         bail!(
             "Cannot close agent session `{}` because its working directory is a linked worktree",
             session.session_id
@@ -52,7 +57,7 @@ fn reject_linked_worktree(session: &Session) -> Result<()> {
 }
 
 trait CloseRuntime {
-    fn pane_is_alive(&self, pane_id: &str) -> bool;
+    fn pane_exists(&self, pane_id: &str) -> Result<bool>;
     fn pane_session_id(&self, pane_id: &str) -> Option<String>;
     fn has_draft(&self, pane_id: &str, engine: Engine) -> Option<bool>;
     fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>>;
@@ -65,8 +70,8 @@ trait CloseRuntime {
 struct LiveCloseRuntime;
 
 impl CloseRuntime for LiveCloseRuntime {
-    fn pane_is_alive(&self, pane_id: &str) -> bool {
-        tmux::is_pane_alive(pane_id)
+    fn pane_exists(&self, pane_id: &str) -> Result<bool> {
+        Ok(tmux::list_all_pane_ids()?.contains(pane_id))
     }
 
     fn pane_session_id(&self, pane_id: &str) -> Option<String> {
@@ -112,7 +117,7 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         .map(|info| info.pane_id.as_str())
         .context("Agent session has no tmux pane")?;
 
-    if !runtime.pane_is_alive(pane_id) {
+    if !runtime.pane_exists(pane_id)? {
         return Ok(());
     }
     ensure_pane_session(runtime, pane_id, &session.session_id)?;
@@ -135,7 +140,16 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
     match runtime.resolve_agent_pid(pane_id, session.engine)? {
         Some(pid) => {
             let exited = match runtime.request_graceful_quit(pane_id, pid) {
-                Ok(exited) => exited,
+                Ok(true) => true,
+                Ok(false) => {
+                    tracing::warn!(
+                        event = "agent.close.ctrl_d_timeout",
+                        session = %session.session_id,
+                        pane_id,
+                        pid,
+                    );
+                    false
+                }
                 Err(error) => {
                     tracing::warn!(
                         event = "agent.close.ctrl_d_failed",
@@ -168,18 +182,16 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
                 }
             }
         }
-        None if !force
-            && !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) =>
-        {
+        None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
             bail!(
-                "Could not find a running agent process for session `{}`; pass --force to remove its pane",
+                "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
             );
         }
         None => {}
     }
 
-    if runtime.pane_is_alive(pane_id) {
+    if runtime.pane_exists(pane_id)? {
         ensure_pane_session(runtime, pane_id, &session.session_id)?;
         runtime.kill_pane(pane_id)?;
     }
@@ -231,7 +243,7 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
-        PaneAlive(String),
+        PaneExists(String),
         PaneSession(String),
         Draft(String, Engine),
         ResolvePid(String, Engine),
@@ -243,7 +255,7 @@ mod tests {
 
     struct FakeRuntime {
         calls: RefCell<Vec<Call>>,
-        pane_alive: bool,
+        pane_exists: Result<bool>,
         pane_session_id: Option<String>,
         draft: Option<bool>,
         pid: Option<u32>,
@@ -256,7 +268,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 calls: RefCell::new(Vec::new()),
-                pane_alive: true,
+                pane_exists: Ok(true),
                 pane_session_id: Some("session-1".to_string()),
                 draft: Some(false),
                 pid: Some(42),
@@ -268,11 +280,14 @@ mod tests {
     }
 
     impl CloseRuntime for FakeRuntime {
-        fn pane_is_alive(&self, pane_id: &str) -> bool {
+        fn pane_exists(&self, pane_id: &str) -> Result<bool> {
             self.calls
                 .borrow_mut()
-                .push(Call::PaneAlive(pane_id.to_string()));
-            self.pane_alive
+                .push(Call::PaneExists(pane_id.to_string()));
+            match &self.pane_exists {
+                Ok(exists) => Ok(*exists),
+                Err(error) => Err(anyhow::anyhow!(error.to_string())),
+            }
         }
 
         fn pane_session_id(&self, pane_id: &str) -> Option<String> {
@@ -392,7 +407,7 @@ mod tests {
                 }
                 .to_string(),
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                 ],
             ),
@@ -425,7 +440,7 @@ mod tests {
             (
                 expected_error.to_string(),
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::Draft("%42".to_string(), Engine::Claude),
                 ],
@@ -444,16 +459,49 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
             ),
+        );
+    }
+
+    #[test]
+    fn close_fails_when_tmux_cannot_confirm_whether_the_pane_exists() {
+        let runtime = FakeRuntime {
+            pane_exists: Err(anyhow::anyhow!("tmux is unavailable")),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session(), false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "tmux is unavailable".to_string(),
+                vec![Call::PaneExists("%42".to_string())],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_succeeds_without_action_when_the_pane_is_gone() {
+        let runtime = FakeRuntime {
+            pane_exists: Ok(false),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session(), false, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (true, vec![Call::PaneExists("%42".to_string())]),
         );
     }
 
@@ -471,14 +519,43 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::KillPane("%42".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_falls_back_to_sigterm_when_ctrl_d_fails() {
+        let runtime = FakeRuntime {
+            graceful_result: Err(io::Error::other("tmux send-keys failed")),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session(), false, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (
+                true,
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::Draft("%42".to_string(), Engine::Claude),
+                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::GracefulQuit("%42".to_string(), 42),
+                    Call::Sigterm(42),
+                    Call::WaitForExit(42),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -503,11 +580,11 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -529,7 +606,7 @@ mod tests {
             (
                 "Pane `%42` is no longer bound to agent session `session-1`".to_string(),
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                 ],
             ),
@@ -552,7 +629,7 @@ mod tests {
                 "Agent session `session-1` did not exit after SIGTERM; its pane was left open"
                     .to_string(),
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
@@ -564,26 +641,41 @@ mod tests {
         );
     }
 
-    #[test]
-    fn close_refuses_to_remove_a_stopped_session_without_a_resolved_agent() {
+    #[rstest]
+    #[case::normal(false)]
+    #[case::forced(true)]
+    fn close_refuses_to_remove_a_stopped_session_without_a_resolved_agent(
+        session: Session,
+        #[case] force: bool,
+    ) {
         let runtime = FakeRuntime {
             pid: None,
             ..FakeRuntime::default()
         };
 
-        let result = close_session(&session(), false, &runtime);
+        let result = close_session(&session, force, &runtime);
+
+        let expected_calls = if force {
+            vec![
+                Call::PaneExists("%42".to_string()),
+                Call::PaneSession("%42".to_string()),
+                Call::ResolvePid("%42".to_string(), Engine::Claude),
+            ]
+        } else {
+            vec![
+                Call::PaneExists("%42".to_string()),
+                Call::PaneSession("%42".to_string()),
+                Call::Draft("%42".to_string(), Engine::Claude),
+                Call::ResolvePid("%42".to_string(), Engine::Claude),
+            ]
+        };
 
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
-                "Could not find a running agent process for session `session-1`; pass --force to remove its pane"
+                "Could not find a running agent process for session `session-1`; its pane was left open"
                     .to_string(),
-                vec![
-                    Call::PaneAlive("%42".to_string()),
-                    Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
-                ],
+                expected_calls,
             ),
         );
     }
@@ -604,15 +696,25 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
-                    Call::PaneAlive("%42".to_string()),
+                    Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
             ),
+        );
+    }
+
+    #[test]
+    fn linked_worktree_sessions_are_rejected() {
+        let result = ensure_not_linked_worktree(&session(), true);
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cannot close agent session `session-1` because its working directory is a linked worktree"
         );
     }
 
