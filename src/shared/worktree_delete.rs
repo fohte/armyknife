@@ -104,17 +104,35 @@ fn run_pre_delete_hook(
     worktree_path: &str,
     skip_hooks: bool,
 ) -> bool {
+    run_pre_delete_hook_with(
+        repo,
+        branch_name,
+        worktree_path,
+        skip_hooks,
+        hooks::hook_exists,
+        hooks::run_hook,
+    )
+}
+
+fn run_pre_delete_hook_with(
+    repo: &GitRepo,
+    branch_name: Option<&str>,
+    worktree_path: &str,
+    skip_hooks: bool,
+    hook_exists: impl FnOnce(&str) -> bool,
+    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> anyhow::Result<()>,
+) -> bool {
     if skip_hooks {
         eprintln!("Skipping pre-worktree-delete hook (--skip-hooks)");
         return false;
     }
 
-    if !hooks::hook_exists("pre-worktree-delete") {
+    if !hook_exists("pre-worktree-delete") {
         return false;
     }
 
     let branch_name = branch_name.unwrap_or_default();
-    if let Err(e) = hooks::run_hook(
+    if let Err(e) = run_hook(
         "pre-worktree-delete",
         &[
             (EnvVars::worktree_path_name(), worktree_path),
@@ -189,32 +207,10 @@ fn resolve_worktree_path(
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use rstest::rstest;
-    use tempfile::TempDir;
 
     use super::*;
     use crate::shared::testing::TestRepo;
-
-    /// Installs an executable `pre-worktree-delete` hook under a fresh
-    /// `XDG_CONFIG_HOME` that touches `marker` and exits non-zero, so tests
-    /// can assert both "was it invoked" and "does a failing hook still not
-    /// block the caller".
-    fn install_failing_hook(config_home: &std::path::Path, marker: &std::path::Path) {
-        let hooks_dir = config_home.join("armyknife").join("hooks");
-        std::fs::create_dir_all(&hooks_dir).unwrap();
-        let hook_file = hooks_dir.join("pre-worktree-delete");
-        let script = indoc::formatdoc! {"
-            #!/bin/sh
-            touch {marker}
-            exit 1
-        ", marker = marker.display()};
-        std::fs::write(&hook_file, script).unwrap();
-        let mut perms = std::fs::metadata(&hook_file).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&hook_file, perms).unwrap();
-    }
 
     #[rstest]
     #[case::skip_hooks_true_never_invokes(true, true, false)]
@@ -225,34 +221,21 @@ mod tests {
         #[case] hook_installed: bool,
         #[case] expect_invoked: bool,
     ) {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("feature");
-        let repo = test_repo.open();
-        let worktree_path = test_repo.worktree_path("feature");
-
-        let config_home = TempDir::new().unwrap();
-        let marker = config_home.path().join("marker");
-        if hook_installed {
-            install_failing_hook(config_home.path(), &marker);
-        }
-
-        let hook_ran = temp_env::with_vars(
-            [(
-                "XDG_CONFIG_HOME",
-                Some(config_home.path().to_str().unwrap()),
-            )],
-            || {
-                run_pre_delete_hook(
-                    &repo,
-                    Some("feature"),
-                    worktree_path.to_str().unwrap(),
-                    skip_hooks,
-                )
+        let repo = TestRepo::new().open();
+        let mut hook_invoked = false;
+        let hook_ran = run_pre_delete_hook_with(
+            &repo,
+            Some("feature"),
+            "/path/to/worktree",
+            skip_hooks,
+            |_| hook_installed,
+            |_, _| {
+                hook_invoked = true;
+                Err(anyhow::anyhow!("hook failed"))
             },
         );
 
-        assert_eq!(marker.exists(), expect_invoked);
-        assert_eq!(hook_ran, expect_invoked);
+        assert_eq!((hook_ran, hook_invoked), (expect_invoked, expect_invoked));
     }
 
     #[test]
@@ -274,7 +257,10 @@ mod tests {
             ".worktrees",
             "fohte/",
         );
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Worktree not found: /nonexistent/path/to/worktree"
+        );
     }
 
     #[test]
