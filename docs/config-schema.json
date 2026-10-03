@@ -8,16 +8,41 @@
       "description": "`a agent` settings.",
       "$ref": "#/$defs/AgentConfig",
       "default": {
+        "auto_compact": {
+          "enabled": true,
+          "idle_timeout": "4m30s",
+          "min_context_tokens": 180000
+        },
+        "auto_pause": {
+          "enabled": true,
+          "timeout": "30m"
+        },
         "codex": {
           "model": null,
           "reasoning_effort": null
         },
-        "default_engine": "claude"
+        "default_engine": "claude",
+        "worktree": {
+          "branch_prefix": "fohte/",
+          "dir": ".worktrees",
+          "layout": {
+            "direction": "horizontal",
+            "first": {
+              "command": "nvim",
+              "focus": true
+            },
+            "second": {
+              "command": "claude",
+              "focus": false
+            }
+          },
+          "repos_root": null
+        }
       }
     },
     "cc": {
-      "description": "Claude Code session monitoring settings.",
-      "$ref": "#/$defs/CcConfig",
+      "description": "Legacy session settings. Use `agent.auto_pause` and `agent.auto_compact` instead.",
+      "$ref": "#/$defs/LegacyCcSchema",
       "default": {
         "auto_compact": {
           "enabled": true,
@@ -64,8 +89,8 @@
       "default": {}
     },
     "wm": {
-      "description": "Worktree management settings.",
-      "$ref": "#/$defs/WmConfig",
+      "description": "Legacy worktree settings. Use `agent.worktree` instead.",
+      "$ref": "#/$defs/LegacyWmSchema",
       "default": {
         "branch_prefix": "fohte/",
         "layout": {
@@ -90,6 +115,23 @@
       "description": "`a agent` settings.",
       "type": "object",
       "properties": {
+        "auto_compact": {
+          "description": "Automatic `/compact` settings for idle sessions.",
+          "$ref": "#/$defs/AutoCompactConfig",
+          "default": {
+            "enabled": true,
+            "idle_timeout": "4m30s",
+            "min_context_tokens": 180000
+          }
+        },
+        "auto_pause": {
+          "description": "Automatic pause settings for long-stopped sessions.",
+          "$ref": "#/$defs/AutoPauseConfig",
+          "default": {
+            "enabled": true,
+            "timeout": "30m"
+          }
+        },
         "codex": {
           "description": "Defaults applied to `a agent new --engine codex` sessions only.",
           "$ref": "#/$defs/CodexConfig",
@@ -102,6 +144,26 @@
           "description": "Coding agent CLI `a agent new` launches when `--engine` is omitted\n(default: \"claude\"). Overridable for a single invocation via\n`ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
           "default": "claude"
+        },
+        "worktree": {
+          "description": "Worktree settings used by `a agent` and worktree cleanup commands.",
+          "$ref": "#/$defs/WorktreeConfig",
+          "default": {
+            "branch_prefix": "fohte/",
+            "dir": ".worktrees",
+            "layout": {
+              "direction": "horizontal",
+              "first": {
+                "command": "nvim",
+                "focus": true
+              },
+              "second": {
+                "command": "claude",
+                "focus": false
+              }
+            },
+            "repos_root": null
+          }
         }
       },
       "additionalProperties": false
@@ -179,30 +241,6 @@
       },
       "additionalProperties": false
     },
-    "CcConfig": {
-      "description": "Claude Code session monitoring configuration.",
-      "type": "object",
-      "properties": {
-        "auto_compact": {
-          "description": "Automatic `/compact` settings for idle sessions while the prompt cache\nis still warm.",
-          "$ref": "#/$defs/AutoCompactConfig",
-          "default": {
-            "enabled": true,
-            "idle_timeout": "4m30s",
-            "min_context_tokens": 180000
-          }
-        },
-        "auto_pause": {
-          "description": "Automatic pause settings for long-stopped sessions.",
-          "$ref": "#/$defs/AutoPauseConfig",
-          "default": {
-            "enabled": true,
-            "timeout": "30m"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
     "CodexConfig": {
       "description": "Per-invocation `codex` defaults. Passed on the command line rather than\nwritten to `~/.codex/config.toml`, so a hand-run `codex` is unaffected.",
       "type": "object",
@@ -275,6 +313,62 @@
           "$ref": "#/$defs/PaneConfig"
         }
       ]
+    },
+    "LegacyCcSchema": {
+      "type": "object",
+      "properties": {
+        "auto_compact": {
+          "$ref": "#/$defs/AutoCompactConfig",
+          "default": {
+            "enabled": true,
+            "idle_timeout": "4m30s",
+            "min_context_tokens": 180000
+          }
+        },
+        "auto_pause": {
+          "$ref": "#/$defs/AutoPauseConfig",
+          "default": {
+            "enabled": true,
+            "timeout": "30m"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LegacyWmSchema": {
+      "type": "object",
+      "properties": {
+        "branch_prefix": {
+          "type": "string",
+          "default": "fohte/"
+        },
+        "layout": {
+          "$ref": "#/$defs/LayoutNode",
+          "default": {
+            "direction": "horizontal",
+            "first": {
+              "command": "nvim",
+              "focus": true
+            },
+            "second": {
+              "command": "claude",
+              "focus": false
+            }
+          }
+        },
+        "repos_root": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "worktrees_dir": {
+          "type": "string",
+          "default": ".worktrees"
+        }
+      },
+      "additionalProperties": false
     },
     "NotificationConfig": {
       "description": "Notification configuration.",
@@ -436,14 +530,19 @@
         }
       ]
     },
-    "WmConfig": {
-      "description": "Worktree management configuration.",
+    "WorktreeConfig": {
+      "description": "Worktree configuration.",
       "type": "object",
       "properties": {
         "branch_prefix": {
           "description": "Branch prefix (default: \"fohte/\").",
           "type": "string",
           "default": "fohte/"
+        },
+        "dir": {
+          "description": "Worktree directory name (default: \".worktrees\").",
+          "type": "string",
+          "default": ".worktrees"
         },
         "layout": {
           "description": "tmux pane layout definition.",
@@ -461,17 +560,12 @@
           }
         },
         "repos_root": {
-          "description": "Root directory containing git repositories.\nUsed by `wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
+          "description": "Root directory containing git repositories.\nUsed by `a wm clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
           "type": [
             "string",
             "null"
           ],
           "default": null
-        },
-        "worktrees_dir": {
-          "description": "Worktree directory name (default: \".worktrees\").",
-          "type": "string",
-          "default": ".worktrees"
         }
       },
       "additionalProperties": false

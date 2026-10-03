@@ -51,18 +51,17 @@ agent:
   codex: # defaults for `a agent new --engine codex` only; the `codex` you run yourself is unaffected
     model: gpt-5.6-luna # used when `--model` is omitted
     reasoning_effort: max # low | medium | high | xhigh | max; applied when `--reasoning-effort` is omitted
-
-wm:
-  worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
-  branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
-  repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
-  layout: # tmux pane layout for `a agent new --worktree`
-    direction: horizontal
-    first:
-      command: nvim
-      focus: true
-    second:
-      command: claude
+  worktree:
+    dir: .worktrees # worktree directory name (default: ".worktrees")
+    branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
+    repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
+    layout: # tmux pane layout for `a agent new --worktree`
+      direction: horizontal
+      first:
+        command: nvim
+        focus: true
+      second:
+        command: claude
 
 editor:
   terminal: ghostty # terminal emulator: "wezterm" (default) or "ghostty"
@@ -103,10 +102,12 @@ ln -s ~/work/dotfiles-private/armyknife.yaml ~/.config/armyknife/work.yaml
 Any scalar config value (string, bool, number) can also be set via an `ARMYKNIFE_*` environment variable, which takes priority over every YAML file. Strip the `ARMYKNIFE_` prefix, lowercase what remains, and join the config key path with `__` (double underscore, since key names themselves contain `_`). For example:
 
 ```sh
-ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false
+ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false
 ```
 
-maps to `cc.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
+maps to `agent.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
+
+Legacy `wm.*` settings map to `agent.worktree.*`; `wm.worktrees_dir` maps to `agent.worktree.dir`. `cc.auto_pause` and `cc.auto_compact` map to `agent.auto_pause` and `agent.auto_compact`. The legacy sections and `ARMYKNIFE_WM__*` / `ARMYKNIFE_CC__*` environment variables remain supported during migration. Within one YAML file, an `agent:` value takes precedence over its legacy alias; across files, the later file wins. For environment variables, `ARMYKNIFE_AGENT__*` takes precedence over its legacy alias.
 
 Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name. `orgs.*` entries aren't reachable either, since org logins are matched case-sensitively but the overlay lowercases every path segment.
 
@@ -444,7 +445,7 @@ With `--prompt`, Claude messaging requires exactly one Claude pane. A layout wit
 
 The daemon route marks its Codex pane as armyknife-managed, so an environment where `codex` is aliased to `a agent codex` does not perform pane binding twice. A hand-run `a agent codex` keeps its normal pane binding behavior.
 
-With `--worktree`, the session runs in `config.wm.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. With `--prompt`, the layout must contain exactly one Codex pane because `thread/started` does not identify its originating pane.
+With `--worktree`, the session runs in `config.agent.worktree.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. With `--prompt`, the layout must contain exactly one Codex pane because `thread/started` does not identify its originating pane.
 
 A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
@@ -624,7 +625,7 @@ The `install`, `uninstall`, and `status` subcommands require macOS. The launchd 
 Configure via `~/.config/armyknife/config.yaml`:
 
 ```yaml
-cc:
+agent:
   auto_pause:
     enabled: true # default: true
     timeout: 30m # default: "30m" (accepts "30s", "10m", "1h30m", etc.)
@@ -650,7 +651,7 @@ Each new Stop hook cancels the previously-armed worker for the same pane via the
 Configure via `~/.config/armyknife/config.yaml`:
 
 ```yaml
-cc:
+agent:
   auto_compact:
     enabled: true # default: true
     idle_timeout: 4m30s # default: "4m30s" (slightly under the 5m prompt cache TTL)
@@ -726,7 +727,7 @@ Worktree cleanup also sends SIGTERM to any process group still rooted in the wor
 | Option          | Description                                                                       |
 | --------------- | --------------------------------------------------------------------------------- |
 | `-n, --dry-run` | Show what would be deleted without actually deleting                              |
-| `--all`         | Clean worktrees across all repositories under `repos_root`                        |
+| `--all`         | Clean worktrees across all repositories under `agent.worktree.repos_root`         |
 | `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
 
 Worktrees with an active agent session (not paused or ended, with pending
@@ -768,12 +769,12 @@ Configuration management.
 
 #### `a config get <key>`
 
-Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
+Get a configuration value by dot-separated key. Supports any config field (e.g., `agent.worktree.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
 ```sh
-$ a config get wm.branch_prefix
+$ a config get agent.worktree.branch_prefix
 fohte/
 
 $ a config get notification.sound

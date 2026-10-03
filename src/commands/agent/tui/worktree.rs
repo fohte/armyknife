@@ -34,9 +34,9 @@ pub fn canonicalize_or_self(path: &Path) -> PathBuf {
 
 /// Discover linked worktrees under `repos_root` on a background thread.
 pub fn discover_worktree_rows(repos_root: &Path, worktrees_dir: &str) -> Vec<WorktreeRow> {
-    use crate::commands::wm::worktree::list_linked_worktrees;
     use crate::infra::git::open_repo_at;
     use crate::shared::repos_root::discover_repos_with_worktrees;
+    use crate::shared::worktree::list_linked_worktrees;
 
     let mut rows = Vec::new();
     for repo_path in discover_repos_with_worktrees(repos_root, worktrees_dir) {

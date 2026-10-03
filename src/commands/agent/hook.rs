@@ -680,7 +680,7 @@ fn process_hook_event_impl(
             );
         } else {
             let config = config::load_config().unwrap_or_default();
-            if config.cc.auto_compact.enabled {
+            if config.agent.auto_compact.enabled {
                 auto_compact::spawn_in_background(&session.session_id);
             } else {
                 tracing::info!(

@@ -2,17 +2,18 @@ use anyhow::{Context, Result, bail};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::commands::wm::WmError;
-use crate::commands::wm::git::{
-    branch_to_worktree_name, get_merge_status, get_repo_root, local_branch_exists,
+use crate::infra::git::{
+    GitRepo, MergeStatus, get_merge_status, get_repo_root, local_branch_exists,
 };
-use crate::commands::wm::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
-use crate::infra::git::{GitRepo, MergeStatus};
 use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
+use crate::shared::worktree::{
+    branch_to_worktree_name, find_worktree_name, get_main_repo, get_worktree_branch,
+};
+use crate::shared::worktree_error::WmError;
 
 pub(crate) struct WorktreeDeletePlan {
     main_repo: GitRepo,

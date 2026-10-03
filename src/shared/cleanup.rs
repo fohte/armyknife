@@ -9,13 +9,13 @@ use std::path::Path;
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
-use crate::commands::wm::worktree::{
-    delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
-    get_worktree_branch,
-};
 use crate::infra::git::GitRepo;
 use crate::infra::process;
 use crate::infra::tmux;
+use crate::shared::worktree::{
+    delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
+    get_worktree_branch,
+};
 
 /// Result of worktree resource cleanup.
 #[derive(Debug, Default)]

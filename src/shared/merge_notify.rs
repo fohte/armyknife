@@ -12,10 +12,10 @@ use std::path::Path;
 
 use crate::commands::agent::peer::notify::notify as notify_peer_session;
 use crate::commands::agent::store;
-use crate::commands::wm::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 use crate::infra::git::{GitRepo, get_merge_status_for_repo, github_owner_and_repo};
 use crate::infra::github::{GitHubClient, PrClient};
 use crate::shared::sanitize::strip_angle_brackets;
+use crate::shared::worktree::{find_worktree_name, get_main_repo, get_worktree_branch};
 
 /// Tracing target for failures on this path. The TUI clean view's detached
 /// child has its stderr wired to `/dev/null`, so the rotating log is the

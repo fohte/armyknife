@@ -7,8 +7,6 @@ use chrono::Utc;
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use super::error::{Result, WmError};
-use super::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::commands::agent::auto_pause::parse_duration;
 use crate::commands::agent::session_status::list_sessions_with_bg_run_status;
 #[cfg(test)]
@@ -27,6 +25,8 @@ use crate::shared::config::load_config;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
+use crate::shared::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
+use crate::shared::worktree_error::{Result, WmError};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -117,10 +117,10 @@ struct RepoWorktreeData {
 /// 3. Determine merge status from PR info (branches without PR are kept)
 async fn run_all(args: &CleanArgs) -> Result<()> {
     let config = load_config()?;
-    let repos_root = resolve_repos_root(config.wm.repos_root.as_deref())
+    let repos_root = resolve_repos_root(config.agent.worktree.repos_root.as_deref())
         .context("Failed to resolve repos root")?;
 
-    let repo_paths = discover_repos_with_worktrees(&repos_root, &config.wm.worktrees_dir);
+    let repo_paths = discover_repos_with_worktrees(&repos_root, &config.agent.worktree.dir);
     if repo_paths.is_empty() {
         println!(
             "No repositories with worktrees found under {}",
@@ -304,7 +304,7 @@ fn apply_active_session_protection(
 
     let timeout = load_config()
         .ok()
-        .and_then(|c| parse_duration(&c.cc.auto_pause.timeout).ok())
+        .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
     // wm clean may be invoked from a non-tmux context (cron, plain shell);

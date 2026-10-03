@@ -84,8 +84,8 @@ async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
     let config = load_config()?;
     let worktree_path = worktree_delete::resolve_worktree_path(
         target,
-        &config.wm.worktrees_dir,
-        &config.wm.branch_prefix,
+        &config.agent.worktree.dir,
+        &config.agent.worktree.branch_prefix,
     )?;
     let worktree_path = PathBuf::from(worktree_path);
     let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
