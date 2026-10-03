@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.354](https://github.com/fohte/armyknife/compare/v0.1.353...v0.1.354) (2026-10-03)
+
+
+### Features
+
+* **agent:** show Human-in-the-Loop sessions waiting for approval in NEEDS YOU ([#1035](https://github.com/fohte/armyknife/issues/1035)) ([4ff7632](https://github.com/fohte/armyknife/commit/4ff7632c3b008d047802b3494655eae459f6c80f))
+
 ## [0.1.353](https://github.com/fohte/armyknife/compare/v0.1.352...v0.1.353) (2026-10-03)
 
 
