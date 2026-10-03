@@ -32,7 +32,7 @@ pub(super) struct TmuxWindowSpec<'a> {
 
 /// Setup a tmux window with the given layout.
 pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result<AgentLaunchRoute> {
-    let target_session = tmux::get_session_name(spec.repo_root, &config.wm.worktrees_dir);
+    let target_session = tmux::get_session_name(spec.repo_root, &config.agent.worktree.dir);
 
     tmux::ensure_session(&target_session, spec.repo_root)
         .context("Failed to ensure tmux session")?;

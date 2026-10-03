@@ -297,11 +297,11 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
 
     let result = (|| -> std::result::Result<Vec<super::worktree::WorktreeRow>, String> {
         let config = load_config().map_err(|e| e.to_string())?;
-        let repos_root =
-            resolve_repos_root(config.wm.repos_root.as_deref()).map_err(|e| e.to_string())?;
+        let repos_root = resolve_repos_root(config.agent.worktree.repos_root.as_deref())
+            .map_err(|e| e.to_string())?;
         Ok(super::worktree::discover_worktree_rows(
             &repos_root,
-            &config.wm.worktrees_dir,
+            &config.agent.worktree.dir,
         ))
     })();
 

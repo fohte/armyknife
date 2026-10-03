@@ -20,8 +20,8 @@ pub async fn run(worktree_arg: Option<&str>, force: bool, skip_hooks: bool) -> R
     let config = load_config()?;
     let worktree_path = resolve_worktree_path(
         worktree_arg,
-        &config.wm.worktrees_dir,
-        &config.wm.branch_prefix,
+        &config.agent.worktree.dir,
+        &config.agent.worktree.branch_prefix,
     )?;
 
     let repo = GitRepo::open_from_env().map_err(|_| WmError::NotInGitRepo)?;

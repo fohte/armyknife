@@ -60,7 +60,7 @@ pub struct CommonNewArgs {
     /// Coding agent CLI to launch for the new session. Falls back to
     /// `config.agent.default_engine` (default: `claude`) when omitted.
     ///
-    /// With `--worktree`, `config.wm.layout` panes running `claude` are
+    /// With `--worktree`, `config.agent.worktree.layout` panes running `claude` are
     /// replaced by this engine's CLI (without their arguments) unless the
     /// layout already has a pane for it; other panes are left as written.
     #[arg(long, value_enum)]
@@ -314,7 +314,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
     let differs = should_open_window(
         repo_root,
         &caller_repo_root(&current_dir),
-        &config.wm.worktrees_dir,
+        &config.agent.worktree.dir,
     );
 
     // Window mode doesn't need a pane, so it's also the fallback when the

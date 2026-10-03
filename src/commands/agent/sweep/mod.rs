@@ -100,16 +100,16 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     // Respect the enabled flag unless a manual --timeout override was given.
     // (A manual `--timeout 1s` run is an explicit opt-in; we should honor it
     // even if the user set `enabled: false` in their config.)
-    if args.timeout.is_none() && !config.cc.auto_pause.enabled {
+    if args.timeout.is_none() && !config.agent.auto_pause.enabled {
         return Ok(());
     }
 
     let timeout_str = args
         .timeout
         .clone()
-        .unwrap_or_else(|| config.cc.auto_pause.timeout.clone());
+        .unwrap_or_else(|| config.agent.auto_pause.timeout.clone());
     let timeout = auto_pause::parse_duration(&timeout_str)
-        .with_context(|| format!("invalid cc.auto_pause.timeout `{timeout_str}`"))?;
+        .with_context(|| format!("invalid agent.auto_pause.timeout `{timeout_str}`"))?;
 
     let sessions_dir = store::sessions_dir()?;
     let tasks_dir = super::bg_tasks::tasks_dir()?;
