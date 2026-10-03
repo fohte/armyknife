@@ -26,11 +26,11 @@ pub(super) fn run_worktree_creation(
     config: &Config,
 ) -> Result<()> {
     let repo = open_repo_at(Path::new(repo_root)).map_err(|_| CcError::NotInGitRepo)?;
-    let branch_prefix = &config.wm.branch_prefix;
+    let branch_prefix = &config.agent.worktree.branch_prefix;
 
     // Determine worktree directory name from branch name
     let worktree_name = branch_to_worktree_name(name, branch_prefix);
-    let worktrees_dir = format!("{repo_root}/{}", config.wm.worktrees_dir);
+    let worktrees_dir = format!("{repo_root}/{}", config.agent.worktree.dir);
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
 
     // Ensure worktrees directory exists
@@ -199,7 +199,7 @@ pub(super) fn run_worktree_creation(
             repo_root,
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
             window_name: &worktree_name,
-            layout: &config.wm.layout,
+            layout: &config.agent.worktree.layout,
             model: model.as_deref(),
             reasoning_effort,
             prompt: final_prompt.as_deref(),

@@ -90,7 +90,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         session = %args.session,
     );
     let cfg = config::load_config().unwrap_or_default();
-    if !cfg.cc.auto_compact.enabled {
+    if !cfg.agent.auto_compact.enabled {
         // Hook may still spawn us if config was edited mid-flight; bail out
         // so we don't waste a sleep.
         tracing::info!(
@@ -101,11 +101,11 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         return Ok(());
     }
 
-    let idle_timeout =
-        auto_pause::parse_duration(&cfg.cc.auto_compact.idle_timeout).with_context(|| {
+    let idle_timeout = auto_pause::parse_duration(&cfg.agent.auto_compact.idle_timeout)
+        .with_context(|| {
             format!(
-                "invalid cc.auto_compact.idle_timeout `{}`",
-                cfg.cc.auto_compact.idle_timeout
+                "invalid agent.auto_compact.idle_timeout `{}`",
+                cfg.agent.auto_compact.idle_timeout
             )
         })?;
 
@@ -197,7 +197,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         wake_input_present = wake_input.is_some(),
         branch_merged = ?branch_merged,
         context_tokens = ?context_tokens,
-        min_context_tokens = cfg.cc.auto_compact.min_context_tokens,
+        min_context_tokens = cfg.agent.auto_compact.min_context_tokens,
     );
 
     let decision = decide_compact(CompactInputs {
@@ -209,7 +209,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         wake_input,
         branch_merged,
         context_tokens,
-        min_context_tokens: cfg.cc.auto_compact.min_context_tokens,
+        min_context_tokens: cfg.agent.auto_compact.min_context_tokens,
     });
 
     tracing::info!(

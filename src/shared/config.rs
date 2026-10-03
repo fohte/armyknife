@@ -8,21 +8,20 @@ use crate::commands::ai::review::reviewer::Reviewer;
 
 mod codex;
 mod env_overlay;
+mod legacy;
+#[cfg(feature = "schema-gen")]
+mod schema;
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
+#[cfg(feature = "schema-gen")]
+pub use schema::generate_schema;
 
 /// Top-level configuration for armyknife.
-#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Default, Serialize, PartialEq)]
 pub struct Config {
     /// `a agent` settings.
     #[serde(default)]
     pub agent: AgentConfig,
-
-    /// Worktree management settings.
-    #[serde(default)]
-    pub wm: WmConfig,
 
     /// Terminal/editor settings for human-in-the-loop reviews.
     #[serde(default)]
@@ -31,10 +30,6 @@ pub struct Config {
     /// Notification settings.
     #[serde(default)]
     pub notification: NotificationConfig,
-
-    /// Claude Code session monitoring settings.
-    #[serde(default)]
-    pub cc: CcConfig,
 
     /// Per-repository configuration, keyed by "owner/repo".
     #[serde(default)]
@@ -70,9 +65,21 @@ impl Config {
             let org_config = self.orgs.get(owner).unwrap_or(&default_org_config);
             let value = serde_json::to_value(org_config).ok()?;
             resolve_json_path(&value, org_key)
+        } else if key == "wm" {
+            Some(serde_json::json!({
+                "worktrees_dir": &self.agent.worktree.dir,
+                "branch_prefix": &self.agent.worktree.branch_prefix,
+                "layout": &self.agent.worktree.layout,
+                "repos_root": &self.agent.worktree.repos_root,
+            }))
+        } else if key == "cc" {
+            Some(serde_json::json!({
+                "auto_pause": &self.agent.auto_pause,
+                "auto_compact": &self.agent.auto_compact,
+            }))
         } else {
             let value = serde_json::to_value(self).ok()?;
-            resolve_json_path(&value, key)
+            resolve_json_path(&value, &legacy_config_path(key))
         }
     }
 
@@ -93,6 +100,34 @@ impl Config {
         }
         None
     }
+}
+
+fn legacy_config_path(key: &str) -> String {
+    if let Some(path) = key.strip_prefix("wm.") {
+        let path = if let Some(suffix) = path.strip_prefix("worktrees_dir")
+            && (suffix.is_empty() || suffix.starts_with('.'))
+        {
+            format!("dir{suffix}")
+        } else {
+            path.to_string()
+        };
+        return format!("agent.worktree.{path}");
+    }
+
+    for (legacy, current) in [
+        ("cc.auto_pause", "agent.auto_pause"),
+        ("cc.auto_compact", "agent.auto_compact"),
+    ] {
+        if key == legacy
+            || key
+                .strip_prefix(legacy)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+        {
+            return format!("{current}{}", &key[legacy.len()..]);
+        }
+    }
+
+    key.to_string()
 }
 
 /// Resolve a dot-separated path against a JSON value. Null is treated as
@@ -124,17 +159,29 @@ pub struct AgentConfig {
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]
     pub codex: CodexConfig,
+
+    /// Worktree settings used by `a agent` and worktree cleanup commands.
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
+
+    /// Automatic pause settings for long-stopped sessions.
+    #[serde(default)]
+    pub auto_pause: AutoPauseConfig,
+
+    /// Automatic `/compact` settings for idle sessions.
+    #[serde(default)]
+    pub auto_compact: AutoCompactConfig,
 }
 
-/// Worktree management configuration.
+/// Worktree configuration.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct WmConfig {
+pub struct WorktreeConfig {
     /// Worktree directory name (default: ".worktrees").
     #[serde(default = "default_worktrees_dir")]
     #[cfg_attr(feature = "schema-gen", schemars(default = "default_worktrees_dir"))]
-    pub worktrees_dir: String,
+    pub dir: String,
 
     /// Branch prefix (default: "fohte/").
     #[serde(default = "default_branch_prefix")]
@@ -146,16 +193,16 @@ pub struct WmConfig {
     pub layout: LayoutNode,
 
     /// Root directory containing git repositories.
-    /// Used by `wm clean --all` to discover repositories.
+    /// Used by `a wm clean --all` to discover repositories.
     /// Falls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.
     #[serde(default)]
     pub repos_root: Option<String>,
 }
 
-impl Default for WmConfig {
+impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
-            worktrees_dir: default_worktrees_dir(),
+            dir: default_worktrees_dir(),
             branch_prefix: default_branch_prefix(),
             layout: LayoutNode::default(),
             repos_root: None,
@@ -367,21 +414,6 @@ pub struct AiReviewConfig {
     pub reviewers: Option<Vec<Reviewer>>,
 }
 
-/// Claude Code session monitoring configuration.
-#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct CcConfig {
-    /// Automatic pause settings for long-stopped sessions.
-    #[serde(default)]
-    pub auto_pause: AutoPauseConfig,
-
-    /// Automatic `/compact` settings for idle sessions while the prompt cache
-    /// is still warm.
-    #[serde(default)]
-    pub auto_compact: AutoCompactConfig,
-}
-
 /// Configuration for automatically pausing sessions that stay in the Stopped
 /// state for longer than `timeout`.
 ///
@@ -540,8 +572,16 @@ pub fn load_config() -> anyhow::Result<Config> {
     // and `deserialize_config(None, _)` never looks at `blame_path`.
     let blame_path = dir.unwrap_or_default();
 
-    let Some(overlay) = env_overlay() else {
-        return deserialize_config(yaml_merged, &blame_path);
+    deserialize_config_with_overlay(yaml_merged, &blame_path, env_overlay())
+}
+
+fn deserialize_config_with_overlay(
+    yaml_merged: Option<serde_yaml::Value>,
+    blame_path: &Path,
+    overlay: Option<serde_yaml::Value>,
+) -> anyhow::Result<Config> {
+    let Some(overlay) = overlay else {
+        return deserialize_config(yaml_merged, blame_path);
     };
     let combined = match yaml_merged.clone() {
         Some(base) => merge_yaml(base, overlay),
@@ -554,14 +594,14 @@ pub fn load_config() -> anyhow::Result<Config> {
         // the YAML-only value to find out: if that succeeds, the environment
         // is at fault.
         Err(e) => {
-            if deserialize_config(yaml_merged, &blame_path).is_ok() {
+            if deserialize_config(yaml_merged, blame_path).is_ok() {
                 Err(ConfigError::EnvParseError {
                     message: e.to_string(),
                 }
                 .into())
             } else {
                 Err(ConfigError::ParseError {
-                    path: blame_path,
+                    path: blame_path.to_path_buf(),
                     message: e.to_string(),
                 }
                 .into())
@@ -695,18 +735,9 @@ fn merge_yaml(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml
     }
 }
 
-/// Generate JSON Schema for the Config struct.
-///
-/// Only compiled with the `schema-gen` feature, which is enabled by the
-/// `config-schema-gen` workspace member.
-#[cfg(feature = "schema-gen")]
-pub fn generate_schema() -> schemars::Schema {
-    schemars::schema_for!(Config)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::env_overlay::with_isolated_env_overlay;
+    use super::env_overlay::env_overlay_from;
     use super::*;
     use crate::commands::agent::types::ReasoningEffort;
     use indoc::{formatdoc, indoc};
@@ -716,57 +747,113 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn config_with_env_vars(dir: &Path, vars: &[(&str, &str)]) -> anyhow::Result<Config> {
+        let yaml_merged = merged_yaml_from_dir(dir)?;
+        let overlay = env_overlay_from(
+            vars.iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+        deserialize_config_with_overlay(yaml_merged, dir, overlay)
+    }
+
     #[test]
     fn config_default_has_expected_values() {
         let config = Config::default();
 
-        assert_eq!(config.agent.default_engine, Engine::Claude);
-        assert_eq!(config.wm.worktrees_dir, ".worktrees");
-        assert_eq!(config.wm.branch_prefix, "fohte/");
         assert_eq!(
-            config.wm.layout,
-            LayoutNode::Split(SplitConfig {
-                direction: SplitDirection::Horizontal,
-                first: Box::new(LayoutNode::Pane(PaneConfig {
-                    command: "nvim".to_string(),
-                    focus: true,
-                })),
-                second: Box::new(LayoutNode::Pane(PaneConfig {
-                    command: "claude".to_string(),
-                    focus: false,
-                })),
-            })
+            config,
+            Config {
+                agent: AgentConfig {
+                    default_engine: Engine::Claude,
+                    codex: CodexConfig {
+                        model: None,
+                        reasoning_effort: None,
+                    },
+                    worktree: WorktreeConfig {
+                        dir: ".worktrees".to_string(),
+                        branch_prefix: "fohte/".to_string(),
+                        layout: LayoutNode::Split(SplitConfig {
+                            direction: SplitDirection::Horizontal,
+                            first: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "nvim".to_string(),
+                                focus: true,
+                            })),
+                            second: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "claude".to_string(),
+                                focus: false,
+                            })),
+                        }),
+                        repos_root: None,
+                    },
+                    auto_pause: AutoPauseConfig {
+                        enabled: true,
+                        timeout: "30m".to_string(),
+                    },
+                    auto_compact: AutoCompactConfig {
+                        enabled: true,
+                        idle_timeout: "4m30s".to_string(),
+                        min_context_tokens: 180_000,
+                    },
+                },
+                editor: EditorConfig {
+                    terminal: Terminal::Wezterm,
+                    editor_command: "nvim".to_string(),
+                    focus_app: None,
+                },
+                notification: NotificationConfig {
+                    enabled: true,
+                    sound: "Glass".to_string(),
+                },
+                repos: HashMap::new(),
+                orgs: HashMap::new(),
+            }
         );
-        assert_eq!(config.editor.terminal, Terminal::Wezterm);
-        assert_eq!(config.editor.editor_command, "nvim");
-        assert_eq!(config.editor.focus_app, None);
-        assert_eq!(config.editor.focus_app(), "WezTerm");
-        assert!(config.notification.enabled);
-        assert_eq!(config.notification.sound, "Glass");
-        assert!(config.repos.is_empty());
     }
 
     #[test]
     fn auto_compact_default_is_enabled_with_cache_friendly_timeout() {
         let cfg = AutoCompactConfig::default();
-        assert!(cfg.enabled);
-        assert_eq!(cfg.idle_timeout, "4m30s");
-        assert_eq!(cfg.min_context_tokens, 180_000);
+        assert_eq!(
+            cfg,
+            AutoCompactConfig {
+                enabled: true,
+                idle_timeout: "4m30s".to_string(),
+                min_context_tokens: 180_000,
+            }
+        );
     }
 
-    #[test]
-    fn parse_auto_compact_yaml() {
-        let yaml = indoc! {"
-            cc:
-              auto_compact:
-                enabled: true
-                idle_timeout: 3m
-                min_context_tokens: 200000
-        "};
+    #[rstest]
+    #[case::current(indoc! {"
+        agent:
+          auto_compact:
+            enabled: true
+            idle_timeout: 3m
+            min_context_tokens: 200000
+    "})]
+    #[case::legacy(indoc! {"
+        cc:
+          auto_compact:
+            enabled: true
+            idle_timeout: 3m
+            min_context_tokens: 200000
+    "})]
+    fn parse_auto_compact_yaml(#[case] yaml: &str) {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert!(config.cc.auto_compact.enabled);
-        assert_eq!(config.cc.auto_compact.idle_timeout, "3m");
-        assert_eq!(config.cc.auto_compact.min_context_tokens, 200_000);
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    auto_compact: AutoCompactConfig {
+                        enabled: true,
+                        idle_timeout: "3m".to_string(),
+                        min_context_tokens: 200_000,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
@@ -805,16 +892,18 @@ mod tests {
     #[test]
     fn parse_full_yaml_config() {
         let yaml = indoc! {"
-            wm:
-              worktrees_dir: .wt
-              branch_prefix: user/
-              layout:
-                direction: vertical
-                first:
-                  command: vim
-                  focus: true
-                second:
-                  command: bash
+            agent:
+              worktree:
+                dir: .wt
+                branch_prefix: user/
+                layout:
+                  direction: vertical
+                  first:
+                    command: vim
+                    focus: true
+                  second:
+                    command: bash
+                repos_root: /example/repos
             editor:
               terminal: ghostty
               editor_command: vim
@@ -825,45 +914,153 @@ mod tests {
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(config.wm.worktrees_dir, ".wt");
-        assert_eq!(config.wm.branch_prefix, "user/");
         assert_eq!(
-            config.wm.layout,
-            LayoutNode::Split(SplitConfig {
-                direction: SplitDirection::Vertical,
-                first: Box::new(LayoutNode::Pane(PaneConfig {
-                    command: "vim".to_string(),
-                    focus: true,
-                })),
-                second: Box::new(LayoutNode::Pane(PaneConfig {
-                    command: "bash".to_string(),
-                    focus: false,
-                })),
-            })
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".wt".to_string(),
+                        branch_prefix: "user/".to_string(),
+                        layout: LayoutNode::Split(SplitConfig {
+                            direction: SplitDirection::Vertical,
+                            first: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "vim".to_string(),
+                                focus: true,
+                            })),
+                            second: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "bash".to_string(),
+                                focus: false,
+                            })),
+                        }),
+                        repos_root: Some("/example/repos".to_string()),
+                    },
+                    ..Default::default()
+                },
+                editor: EditorConfig {
+                    terminal: Terminal::Ghostty,
+                    editor_command: "vim".to_string(),
+                    focus_app: Some("Alacritty".to_string()),
+                },
+                notification: NotificationConfig {
+                    enabled: false,
+                    sound: "Ping".to_string(),
+                },
+                ..Default::default()
+            }
         );
-        assert_eq!(config.editor.terminal, Terminal::Ghostty);
-        assert_eq!(config.editor.editor_command, "vim");
-        assert_eq!(config.editor.focus_app, Some("Alacritty".to_string()));
-        assert_eq!(config.editor.focus_app(), "Alacritty");
-        assert!(!config.notification.enabled);
-        assert_eq!(config.notification.sound, "Ping");
     }
 
     #[test]
-    fn parse_partial_yaml_uses_defaults() {
+    fn parse_legacy_wm_yaml_uses_defaults() {
         let yaml = indoc! {"
             wm:
               worktrees_dir: custom-worktrees
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(config.wm.worktrees_dir, "custom-worktrees");
-        // Other wm fields use defaults
-        assert_eq!(config.wm.branch_prefix, "fohte/");
-        assert_eq!(config.wm.layout, LayoutNode::default());
-        // Other sections use defaults
-        assert_eq!(config.editor, EditorConfig::default());
-        assert_eq!(config.notification, NotificationConfig::default());
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: "custom-worktrees".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_legacy_wm_yaml_maps_all_worktree_fields() {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            wm:
+              worktrees_dir: .legacy-worktrees
+              branch_prefix: legacy/
+              layout:
+                direction: vertical
+                first:
+                  command: editor
+                  focus: true
+                second:
+                  command: shell
+              repos_root: /path/to/repositories
+        "})
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".legacy-worktrees".to_string(),
+                        branch_prefix: "legacy/".to_string(),
+                        layout: LayoutNode::Split(SplitConfig {
+                            direction: SplitDirection::Vertical,
+                            first: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "editor".to_string(),
+                                focus: true,
+                            })),
+                            second: Box::new(LayoutNode::Pane(PaneConfig {
+                                command: "shell".to_string(),
+                                focus: false,
+                            })),
+                        }),
+                        repos_root: Some("/path/to/repositories".to_string()),
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn agent_keys_override_legacy_sections() {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            agent:
+              worktree:
+                dir: .current
+                branch_prefix: current/
+              auto_pause:
+                timeout: 10m
+              auto_compact:
+                idle_timeout: 2m
+            wm:
+              worktrees_dir: .legacy
+              branch_prefix: legacy/
+            cc:
+              auto_pause:
+                timeout: 20m
+              auto_compact:
+                idle_timeout: 3m
+        "})
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".current".to_string(),
+                        branch_prefix: "current/".to_string(),
+                        ..Default::default()
+                    },
+                    auto_pause: AutoPauseConfig {
+                        timeout: "10m".to_string(),
+                        ..Default::default()
+                    },
+                    auto_compact: AutoCompactConfig {
+                        idle_timeout: "2m".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
@@ -1199,9 +1396,9 @@ mod tests {
         .unwrap();
 
         let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config.wm.worktrees_dir, "custom-wt");
+        assert_eq!(config.agent.worktree.dir, "custom-wt");
         // Other wm fields use defaults
-        assert_eq!(config.wm.branch_prefix, "fohte/");
+        assert_eq!(config.agent.worktree.branch_prefix, "fohte/");
         // Other sections use defaults entirely
         assert_eq!(config.editor, EditorConfig::default());
         assert_eq!(config.notification, NotificationConfig::default());
@@ -1302,7 +1499,7 @@ mod tests {
         .unwrap();
 
         let config = load_config_from_dir(dir.path()).unwrap();
-        assert_eq!(config.wm.worktrees_dir, "kept");
+        assert_eq!(config.agent.worktree.dir, "kept");
     }
 
     #[test]
@@ -1348,7 +1545,7 @@ mod tests {
         fs::write(
             config_dir.join("config.yaml"),
             indoc! {"
-                cc:
+                agent:
                   auto_compact:
                     enabled: true
                     idle_timeout: 3m
@@ -1357,21 +1554,20 @@ mod tests {
         )
         .unwrap();
 
-        let config = with_isolated_env_overlay(
-            vec![
-                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
-                ("ARMYKNIFE_CC__AUTO_COMPACT__ENABLED", Some("false")),
-                ("ARMYKNIFE_CC__AUTO_COMPACT__IDLE_TIMEOUT", Some("5m")),
-                ("ARMYKNIFE_CC__AUTO_COMPACT__MIN_CONTEXT_TOKENS", Some("42")),
+        let config = config_with_env_vars(
+            &config_dir,
+            &[
+                ("ARMYKNIFE_CC__AUTO_COMPACT__ENABLED", "false"),
+                ("ARMYKNIFE_CC__AUTO_COMPACT__IDLE_TIMEOUT", "5m"),
+                ("ARMYKNIFE_CC__AUTO_COMPACT__MIN_CONTEXT_TOKENS", "42"),
             ],
-            load_config,
         )
         .unwrap();
 
         assert_eq!(
             config,
             Config {
-                cc: CcConfig {
+                agent: AgentConfig {
                     auto_compact: AutoCompactConfig {
                         enabled: false,
                         idle_timeout: "5m".to_string(),
@@ -1389,14 +1585,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // dir/armyknife is never created: no YAML sets agent.default_engine either.
 
-        let config = with_isolated_env_overlay(
-            vec![
-                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
-                ("ARMYKNIFE_AGENT__DEFAULT_ENGINE", Some("codex")),
-            ],
-            load_config,
-        )
-        .unwrap();
+        let config =
+            config_with_env_vars(dir.path(), &[("ARMYKNIFE_AGENT__DEFAULT_ENGINE", "codex")])
+                .unwrap();
 
         assert_eq!(
             config,
@@ -1411,18 +1602,40 @@ mod tests {
     }
 
     #[test]
+    fn load_config_current_env_overrides_legacy_env() {
+        let dir = TempDir::new().unwrap();
+
+        let config = config_with_env_vars(
+            dir.path(),
+            &[
+                ("ARMYKNIFE_WM__WORKTREES_DIR", ".legacy"),
+                ("ARMYKNIFE_AGENT__WORKTREE__DIR", ".current"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                agent: AgentConfig {
+                    worktree: WorktreeConfig {
+                        dir: ".current".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn load_config_env_overlay_works_without_any_yaml_config() {
         let dir = TempDir::new().unwrap();
         // dir/armyknife is never created, so there's no config directory at all.
 
-        let config = with_isolated_env_overlay(
-            vec![
-                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
-                ("ARMYKNIFE_NOTIFICATION__SOUND", Some("Ping")),
-            ],
-            load_config,
-        )
-        .unwrap();
+        let config =
+            config_with_env_vars(dir.path(), &[("ARMYKNIFE_NOTIFICATION__SOUND", "Ping")]).unwrap();
 
         assert_eq!(
             config,
@@ -1440,13 +1653,7 @@ mod tests {
     fn load_config_unknown_env_key_errors_and_blames_environment() {
         let dir = TempDir::new().unwrap();
 
-        let err = with_isolated_env_overlay(
-            vec![
-                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
-                ("ARMYKNIFE_WM__TYPO", Some("1")),
-            ],
-            || load_config().unwrap_err(),
-        );
+        let err = config_with_env_vars(dir.path(), &[("ARMYKNIFE_WM__TYPO", "1")]).unwrap_err();
 
         let config_err = err.downcast_ref::<ConfigError>().unwrap();
         match config_err {
@@ -1458,39 +1665,6 @@ mod tests {
             }
             other => panic!("expected EnvParseError, got: {other:?}"),
         }
-    }
-
-    #[test]
-    fn load_config_from_dir_ignores_armyknife_env_vars() {
-        // load_config_from_dir is called directly by tests and must not read
-        // ARMYKNIFE_* environment variables, or tests would become flaky
-        // depending on what's exported in the running shell.
-        let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("config.yaml"),
-            indoc! {"
-                notification:
-                  sound: FromYaml
-            "},
-        )
-        .unwrap();
-
-        let config =
-            temp_env::with_vars([("ARMYKNIFE_NOTIFICATION__SOUND", Some("FromEnv"))], || {
-                load_config_from_dir(dir.path())
-            })
-            .unwrap();
-
-        assert_eq!(
-            config,
-            Config {
-                notification: NotificationConfig {
-                    sound: "FromYaml".to_string(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        );
     }
 
     #[rstest]
@@ -1541,35 +1715,57 @@ mod tests {
 
     #[cfg(feature = "schema-gen")]
     #[rstest]
-    fn generate_schema_contains_wm_description(schema_value: serde_json::Value) {
+    fn generate_schema_contains_agent_and_legacy_descriptions(schema_value: serde_json::Value) {
         // Doc comments should appear as descriptions in the schema
-        let wm_desc = schema_value["properties"]["wm"]["description"]
-            .as_str()
-            .unwrap_or("");
-        assert_eq!(wm_desc, "Worktree management settings.");
+        assert_eq!(
+            (
+                schema_value["properties"]["agent"]["description"].as_str(),
+                schema_value["properties"]["wm"]["description"].as_str(),
+                schema_value["properties"]["cc"]["description"].as_str(),
+            ),
+            (
+                Some("`a agent` settings."),
+                Some("Legacy worktree settings. Use `agent.worktree` instead."),
+                Some(
+                    "Legacy session settings. Use `agent.auto_pause` and `agent.auto_compact` instead."
+                ),
+            )
+        );
     }
 
     #[cfg(feature = "schema-gen")]
     #[rstest]
     fn generate_schema_contains_default_values(schema_value: serde_json::Value) {
         // Default values from schemars(default = ...) should appear in the schema.
-        // Navigate through $ref to find WmConfig properties.
+        // Navigate through $ref to find canonical and compatibility properties.
         let defs = &schema_value["$defs"];
-        let wm_defaults = &defs["WmConfig"]["properties"];
-        assert_eq!(wm_defaults["worktrees_dir"]["default"], ".worktrees");
-        assert_eq!(wm_defaults["branch_prefix"]["default"], "fohte/");
+        let worktree_defaults = &defs["WorktreeConfig"]["properties"];
+        let legacy_worktree_defaults = &defs["LegacyWmSchema"]["properties"];
+        assert_eq!(
+            (
+                worktree_defaults["dir"]["default"].clone(),
+                worktree_defaults["branch_prefix"]["default"].clone(),
+                legacy_worktree_defaults["worktrees_dir"]["default"].clone(),
+                legacy_worktree_defaults["branch_prefix"]["default"].clone(),
+            ),
+            (
+                serde_json::json!(".worktrees"),
+                serde_json::json!("fohte/"),
+                serde_json::json!(".worktrees"),
+                serde_json::json!("fohte/"),
+            )
+        );
 
         let notification_defaults = &defs["NotificationConfig"]["properties"];
-        assert_eq!(notification_defaults["sound"]["default"], "Glass");
-
         let editor_defaults = &defs["EditorConfig"]["properties"];
-        assert_eq!(editor_defaults["editor_command"]["default"], "nvim");
-
-        // Terminal enum default is handled by #[default] attribute
         let terminal_def = &defs["Terminal"];
-        assert!(
-            terminal_def["oneOf"].is_array() || terminal_def["enum"].is_array(),
-            "Terminal should be an enum in the schema"
+        assert_eq!(
+            (
+                notification_defaults["sound"]["default"].clone(),
+                editor_defaults["editor_command"]["default"].clone(),
+                terminal_def["oneOf"].is_array() || terminal_def["enum"].is_array(),
+            ),
+            (serde_json::json!("Glass"), serde_json::json!("nvim"), true,)
         );
     }
 }

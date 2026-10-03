@@ -7,7 +7,7 @@ use anyhow::Context;
 /// Resolve the repos root directory.
 ///
 /// Priority:
-/// 1. Explicit config value (from config.yaml `wm.repos_root`)
+/// 1. Explicit config value (from config.yaml `agent.worktree.repos_root`)
 /// 2. `GHQ_ROOT` environment variable (first entry if colon-separated)
 /// 3. git config `ghq.root` (via gitconfig file)
 /// 4. Default: `~/ghq`

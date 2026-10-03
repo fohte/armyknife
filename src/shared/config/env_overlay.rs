@@ -6,8 +6,9 @@ use super::merge_yaml;
 /// merged on top of the YAML config files. Strips `ARMYKNIFE_`, lowercases
 /// the rest, and splits on `__` (not `_`, since keys like `auto_compact`
 /// contain it) into a config dot-path — e.g.
-/// `ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false` maps to
-/// `cc.auto_compact.enabled`. Values parse as YAML scalars.
+/// `ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false` maps to
+/// `agent.auto_compact.enabled`. Legacy `WM` and `CC` paths are normalized to
+/// their `agent` paths. Values parse as YAML scalars.
 ///
 /// Paths without `__` are skipped, since every `Config` field is a struct
 /// and no real override is single-segment; this also avoids misreading
@@ -16,10 +17,17 @@ use super::merge_yaml;
 /// contain `/` and org logins can't be safely case-folded.
 /// Returns `None` when no variable maps to a config path.
 pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
+    env_overlay_from(std::env::vars())
+}
+
+pub(super) fn env_overlay_from(
+    vars: impl IntoIterator<Item = (String, String)>,
+) -> Option<serde_yaml::Value> {
     const PREFIX: &str = "ARMYKNIFE_";
 
-    let mut overlay: Option<serde_yaml::Value> = None;
-    for (name, raw_value) in std::env::vars() {
+    let mut legacy_overlay: Option<serde_yaml::Value> = None;
+    let mut current_overlay: Option<serde_yaml::Value> = None;
+    for (name, raw_value) in vars {
         let Some(path) = name.strip_prefix(PREFIX) else {
             continue;
         };
@@ -52,48 +60,76 @@ pub(super) fn env_overlay() -> Option<serde_yaml::Value> {
             _ => serde_yaml::Value::String(raw_value),
         };
 
+        let (path, is_legacy) = normalize_legacy_path(path);
         let mut node = scalar;
-        for segment in path.to_ascii_lowercase().rsplit("__") {
+        for segment in path.rsplit("__") {
             let mut mapping = serde_yaml::Mapping::new();
             mapping.insert(serde_yaml::Value::String(segment.to_string()), node);
             node = serde_yaml::Value::Mapping(mapping);
         }
 
-        overlay = Some(match overlay {
+        let overlay = if is_legacy {
+            &mut legacy_overlay
+        } else {
+            &mut current_overlay
+        };
+        *overlay = Some(match overlay.take() {
             None => node,
             Some(base) => merge_yaml(base, node),
         });
     }
 
-    overlay
+    match (legacy_overlay, current_overlay) {
+        (Some(legacy), Some(current)) => Some(merge_yaml(legacy, current)),
+        (Some(legacy), None) => Some(legacy),
+        (None, current) => current,
+    }
 }
 
-/// Clears every ambient `ARMYKNIFE_*` variable that `env_overlay()` would
-/// pick up (path contains `__`) before applying `extra`, so tests aren't
-/// flaky depending on what's exported in the invoking shell — including
-/// this feature's own overrides in a dev setup that dogfoods it. Shared by
-/// this module's tests and `config`'s, so both stay isolated the same way.
-#[cfg(test)]
-pub(super) fn with_isolated_env_overlay<R>(
-    extra: Vec<(&str, Option<&str>)>,
-    f: impl FnOnce() -> R,
-) -> R {
-    let mut vars: Vec<(String, Option<String>)> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("ARMYKNIFE_") && k.contains("__"))
-        .map(|(k, _)| (k, None))
-        .collect();
-    vars.extend(
-        extra
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.map(str::to_string))),
-    );
-    temp_env::with_vars(vars, f)
+fn normalize_legacy_path(path: &str) -> (String, bool) {
+    let path = path.to_ascii_lowercase();
+    if let Some(suffix) = path.strip_prefix("wm__") {
+        let is_legacy_worktrees_dir =
+            suffix == "worktrees_dir" || suffix.starts_with("worktrees_dir__");
+        if ["branch_prefix", "layout", "repos_root"]
+            .iter()
+            .any(|field| suffix == *field || suffix.starts_with(&format!("{field}__")))
+            || is_legacy_worktrees_dir
+        {
+            let suffix = if is_legacy_worktrees_dir {
+                suffix.replacen("worktrees_dir", "dir", 1)
+            } else {
+                suffix.to_string()
+            };
+            return (format!("agent__worktree__{suffix}"), true);
+        }
+        return (path, true);
+    }
+
+    for field in ["auto_pause", "auto_compact"] {
+        let legacy_prefix = format!("cc__{field}");
+        if path == legacy_prefix || path.starts_with(&format!("{legacy_prefix}__")) {
+            return (
+                format!("agent__{field}{}", &path[legacy_prefix.len()..]),
+                true,
+            );
+        }
+    }
+
+    (path, false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    fn overlay_from(vars: &[(&str, &str)]) -> Option<serde_yaml::Value> {
+        env_overlay_from(
+            vars.iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        )
+    }
 
     #[rstest]
     #[case::bool_false("false", serde_yaml::Value::Bool(false))]
@@ -112,10 +148,7 @@ mod tests {
         #[case] raw_value: &str,
         #[case] expected_scalar: serde_yaml::Value,
     ) {
-        let overlay = with_isolated_env_overlay(
-            vec![("ARMYKNIFE_NOTIFICATION__SOUND", Some(raw_value))],
-            env_overlay,
-        );
+        let overlay = overlay_from(&[("ARMYKNIFE_NOTIFICATION__SOUND", raw_value)]);
 
         let mut notification = serde_yaml::Mapping::new();
         notification.insert(
@@ -135,7 +168,7 @@ mod tests {
     #[case::lowercase("ARMYKNIFE_ORGS__SOMEORG__AI__REVIEW__REVIEWERS")]
     #[case::mixed_case("ARMYKNIFE_Orgs__SomeOrg__AI__REVIEW__REVIEWERS")]
     fn env_overlay_skips_orgs_paths(#[case] var_name: &str) {
-        let overlay = with_isolated_env_overlay(vec![(var_name, Some("devin"))], env_overlay);
+        let overlay = overlay_from(&[(var_name, "devin")]);
 
         assert_eq!(overlay, None);
     }

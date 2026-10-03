@@ -21,7 +21,7 @@ pub(super) struct SplitPaneSetupSpec<'a> {
 
 /// Builds the `set-environment` (if any) + `split-window` command sequence.
 /// Always splits horizontally (side-by-side): this path has no layout
-/// config, unlike `--worktree`'s `config.wm.layout`.
+/// config, unlike `--worktree`'s `config.agent.worktree.layout`.
 pub(super) fn build_split_pane_setup_commands(spec: SplitPaneSetupSpec) -> Vec<TmuxCommand> {
     let mut commands = set_environment_commands(spec.session, spec.env_vars);
     let mut split_args = vec!["split-window"];
