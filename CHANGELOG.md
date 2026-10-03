@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.356](https://github.com/fohte/armyknife/compare/v0.1.355...v0.1.356) (2026-10-03)
+
+
+### Features
+
+* **agent:** record workflow skill invocations as work type via hooks ([#1039](https://github.com/fohte/armyknife/issues/1039)) ([026005c](https://github.com/fohte/armyknife/commit/026005c012b5f88807b65dfb866e8ea0f44c8c22))
+
+## [0.1.355](https://github.com/fohte/armyknife/compare/v0.1.354...v0.1.355) (2026-10-03)
+
+
+### Features
+
+* **agent:** allow specifying work kind when starting a session ([#1037](https://github.com/fohte/armyknife/issues/1037)) ([304776d](https://github.com/fohte/armyknife/commit/304776d756ebf47c1af91f65dcc8300edd531c94))
+
+## [0.1.354](https://github.com/fohte/armyknife/compare/v0.1.353...v0.1.354) (2026-10-03)
+
+
+### Features
+
+* **agent:** show Human-in-the-Loop sessions waiting for approval in NEEDS YOU ([#1035](https://github.com/fohte/armyknife/issues/1035)) ([4ff7632](https://github.com/fohte/armyknife/commit/4ff7632c3b008d047802b3494655eae459f6c80f))
+
 ## [0.1.353](https://github.com/fohte/armyknife/compare/v0.1.352...v0.1.353) (2026-10-03)
 
 

@@ -391,6 +391,10 @@ pub struct HookInput {
     #[serde(default)]
     pub source: Option<String>,
 
+    // UserPromptSubmit event fields
+    #[serde(default)]
+    pub prompt: Option<String>,
+
     // Notification event fields
     #[serde(default)]
     pub notification_type: Option<String>,
@@ -481,6 +485,8 @@ pub struct BackgroundTask {
 pub struct ToolInput {
     /// Command for Bash tool
     pub command: Option<String>,
+    /// Skill name for Claude Code's Skill tool
+    pub skill: Option<String>,
     /// File path for Read/Write/Edit tools
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
@@ -495,6 +501,7 @@ impl<'de> Deserialize<'de> for ToolInput {
         let field = |key: &str| value.get(key)?.as_str().map(str::to_string);
         Ok(Self {
             command: field("command"),
+            skill: field("skill"),
             file_path: field("file_path"),
             pattern: field("pattern"),
         })
@@ -747,6 +754,7 @@ mod tests {
     ) -> ToolInput {
         ToolInput {
             command: command.map(str::to_string),
+            skill: None,
             file_path: file_path.map(str::to_string),
             pattern: pattern.map(str::to_string),
         }

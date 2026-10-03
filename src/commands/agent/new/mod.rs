@@ -40,6 +40,10 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub label: Option<String>,
 
+    /// Initial work type for the new session, using the workflow skill name.
+    #[arg(long)]
+    pub kind: Option<String>,
+
     /// Model for the new session. Passed through to `<engine> --model`.
     /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
     /// (e.g. "claude-fable-5"). For `--engine codex`, falls back to
@@ -193,13 +197,16 @@ fn tq_parent_session_env_var() -> Option<(String, String)> {
         .map(|id| ("TQ_PARENT_SESSION_ID".to_string(), id))
 }
 
-/// Build tmux session-level env vars for the child session's `--label`,
+/// Build tmux session-level env vars for the child session's `--label` and `--kind`,
 /// ancestor-session-id chain, and tq parent session ID. Shared between the
 /// worktree and no-worktree flows.
 fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     let mut env_vars: Vec<(String, String)> = Vec::new();
     if let Some(ref label) = common.label {
         env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
+    }
+    if let Some(ref kind) = common.kind {
+        env_vars.push((EnvVars::session_work_type_name().to_string(), kind.clone()));
     }
     // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
     // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
@@ -436,6 +443,14 @@ mod tests {
         assert_eq!(cli.args.common.reasoning_effort, expected);
     }
 
+    #[rstest]
+    #[case::omitted(&["a"], None)]
+    #[case::explicit_kind(&["a", "--kind", "sample-skill"], Some("sample-skill"))]
+    fn kind_value_parses(#[case] argv: &[&str], #[case] expected: Option<&str>) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        assert_eq!(cli.args.common.kind.as_deref(), expected);
+    }
+
     fn codex_defaults() -> Config {
         Config {
             agent: crate::shared::config::AgentConfig {
@@ -541,5 +556,41 @@ mod tests {
         temp_env::with_vars([("TQ_SESSION_ID", env_value)], || {
             assert_eq!(tq_parent_session_env_var(), expected);
         });
+    }
+
+    #[rstest]
+    #[case::omitted(None, vec![])]
+    #[case::explicit_kind(
+        Some("sample-skill"),
+        vec![(
+            EnvVars::session_work_type_name().to_string(),
+            "sample-skill".to_string(),
+        )]
+    )]
+    fn build_env_vars_passes_kind(
+        #[case] kind: Option<&str>,
+        #[case] expected: Vec<(String, String)>,
+    ) {
+        temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+                ("TQ_SESSION_ID", None::<&str>),
+            ],
+            || {
+                let common = CommonNewArgs {
+                    prompt: None,
+                    agent: false,
+                    label: None,
+                    kind: kind.map(str::to_string),
+                    model: None,
+                    parent_session_id: None,
+                    repo: None,
+                    engine: None,
+                    reasoning_effort: None,
+                };
+                assert_eq!(build_env_vars(&common).unwrap(), expected);
+            },
+        );
     }
 }
