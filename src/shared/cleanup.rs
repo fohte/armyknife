@@ -45,6 +45,17 @@ pub struct WorktreeCleanupResult {
 ///
 /// If `cwd` is not inside a git worktree, returns a default (no-op) result.
 pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupResult> {
+    // The session-list TUI does not resolve merge status before deleting a
+    // worktree, so this path intentionally does not invoke post-delete hooks.
+    cleanup_worktree_resources_with_post_delete(cwd, || {})
+}
+
+/// Cleans up a worktree and invokes `after_delete` after git removes it but
+/// before cleanup can terminate a pane running the caller.
+pub fn cleanup_worktree_resources_with_post_delete(
+    cwd: &Path,
+    after_delete: impl FnOnce(),
+) -> anyhow::Result<WorktreeCleanupResult> {
     let repo = match GitRepo::open_at(cwd) {
         Ok(r) => r,
         Err(_) => return Ok(WorktreeCleanupResult::default()),
@@ -64,15 +75,16 @@ pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupR
         Err(_) => return Ok(WorktreeCleanupResult::default()),
     };
 
-    let mut result = cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root)?;
+    let mut result =
+        cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root, after_delete)?;
     if result.worktree_deleted {
         result.worktree_root = Some(worktree_root);
     }
     Ok(result)
 }
 
-/// Cleans up all resources for a worktree identified by `repo` and `worktree_name`:
-/// worktree itself, branch, tmux windows, agent session files, and notifications.
+/// Cleans up a worktree and invokes `after_delete` once git confirms removal,
+/// before session and tmux cleanup runs.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
 /// tmux window and session file lookup.
@@ -80,6 +92,7 @@ pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
     worktree_path: &Path,
+    after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     // Collect tmux window IDs and process groups rooted in the worktree
     // before deleting it (the path must still exist to match against).
@@ -89,14 +102,11 @@ pub fn cleanup_worktree_by_name(
 
     let mut result = delete_worktree_and_branch(repo, worktree_name);
 
-    // Only clean up tmux windows, sessions, and processes if worktree
-    // deletion succeeded.
-    //
     // Clean up sessions BEFORE killing tmux windows: if the caller is running
     // inside one of those windows (e.g. `a agent close` invoked from the
     // worktree's own pane), kill_window terminates the caller's pane and
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
-    if result.worktree_deleted {
+    run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
         result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 
@@ -105,9 +115,20 @@ pub fn cleanup_worktree_by_name(
                 result.windows_closed += 1;
             }
         }
-    }
+    });
 
     Ok(result)
+}
+
+fn run_post_delete_cleanup(
+    worktree_deleted: bool,
+    after_delete: impl FnOnce(),
+    cleanup: impl FnOnce(),
+) {
+    if worktree_deleted {
+        after_delete();
+        cleanup();
+    }
 }
 
 /// Deletes a git worktree and its associated branch.
@@ -284,6 +305,25 @@ mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
+    use std::cell::RefCell;
+
+    #[rstest]
+    #[case::deleted(true, vec!["hook", "cleanup"])]
+    #[case::not_deleted(false, vec![])]
+    fn post_delete_cleanup_runs_only_after_successful_deletion(
+        #[case] worktree_deleted: bool,
+        #[case] expected: Vec<&str>,
+    ) {
+        let events = RefCell::new(Vec::new());
+
+        run_post_delete_cleanup(
+            worktree_deleted,
+            || events.borrow_mut().push("hook"),
+            || events.borrow_mut().push("cleanup"),
+        );
+
+        assert_eq!(events.into_inner(), expected);
+    }
 
     // Tests exercise delete_worktree_and_branch directly to avoid depending
     // on tmux or session store I/O.

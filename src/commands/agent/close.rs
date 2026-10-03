@@ -31,7 +31,7 @@ pub struct CloseArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Skip the pre-worktree-delete hook.
+    /// Skip worktree deletion hooks.
     #[arg(long)]
     pub skip_hooks: bool,
 }

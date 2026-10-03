@@ -6,7 +6,6 @@ use crate::infra::git::{
     GitRepo, MergeStatus, get_merge_status, get_repo_root, local_branch_exists,
 };
 use crate::infra::tmux;
-use crate::shared::base_conflict_notify::spawn_for_merged_deletion;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -57,11 +56,11 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session files and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
+    let merged = merge_status.as_ref().is_some_and(MergeStatus::is_merged);
     if let Some(branch) = branch_name.as_deref()
-        && merge_status.as_ref().is_some_and(MergeStatus::is_merged)
+        && merged
     {
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
-        spawn_for_merged_deletion(main_repo.workdir(), std::slice::from_ref(&worktree_path));
     }
 
     let hook_ran = run_pre_delete_hook(
@@ -75,7 +74,17 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // so we can close the window we're sitting in
     let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
 
-    let result = cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path)?;
+    let result =
+        cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path, || {
+            if !skip_hooks {
+                hooks::spawn_post_worktree_delete_hook(
+                    main_repo.workdir(),
+                    &worktree_path,
+                    branch_name.as_deref(),
+                    merged,
+                );
+            }
+        })?;
 
     if !result.worktree_deleted {
         if hook_ran {
