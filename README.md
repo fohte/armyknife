@@ -93,7 +93,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
 ```
 
-`agent.work_types` associates exact skill names with icon and color metadata. This mapping does not trigger skill detection or add icons to the session list. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
+`agent.work_types` associates exact skill names with icon and color metadata. Configured icons appear before session titles in `a agent watch`; the mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
 ### Splitting public and private config
 

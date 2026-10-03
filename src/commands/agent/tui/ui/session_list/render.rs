@@ -118,19 +118,21 @@ mod tests {
     use crate::commands::agent::tui::ui::helpers::DIM_FG;
     use crate::commands::agent::tui::ui::test_support::{
         create_test_session, render_buffer, render_buffer_with, render_to_string,
-        render_to_string_with,
+        render_to_string_with, render_to_string_with_agent_config,
     };
     use crate::commands::agent::types::SessionStatus;
-    use crate::shared::config::{AgentWorkTypeColor, AgentWorkTypeConfig};
+    use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
     use rstest::{fixture, rstest};
     use unicode_width::UnicodeWidthStr;
 
     use super::super::items::{
-        MIN_WORK_TYPE_COLUMN_WIDTH, TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_INDENT,
+        MIN_WORK_TYPE_COLUMN_WIDTH, TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_BASE_INDENT,
     };
 
+    const WAITING_QUESTION_INDENT: usize =
+        WAITING_QUESTION_BASE_INDENT + MIN_WORK_TYPE_COLUMN_WIDTH;
     const TASK_NUMBER_COLUMN_START: usize =
         WAITING_QUESTION_INDENT - TASK_NUMBER_COLUMN_WIDTH - MIN_WORK_TYPE_COLUMN_WIDTH;
     #[test]
@@ -202,17 +204,18 @@ mod tests {
         unknown.label = Some("Unknown".to_string());
 
         let sessions = vec![configured, unconfigured, unknown];
-        let output = render_to_string_with(&sessions, Some(1), now, 80, 12, |app| {
-            app.agent_config.work_types.insert(
-                "demo-skill".to_string(),
-                AgentWorkTypeConfig {
-                    icon: "\u{e0b1}".to_string(),
-                    color: AgentWorkTypeColor::Named(
-                        crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
-                    ),
-                },
-            );
-        });
+        let mut agent_config = AgentConfig::default();
+        agent_config.work_types.insert(
+            "demo-skill".to_string(),
+            AgentWorkTypeConfig {
+                icon: "\u{e0b1}".to_string(),
+                color: AgentWorkTypeColor::Named(
+                    crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                ),
+            },
+        );
+        let output =
+            render_to_string_with_agent_config(&sessions, Some(1), now, 80, 12, agent_config);
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle

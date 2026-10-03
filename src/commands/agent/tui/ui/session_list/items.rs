@@ -40,17 +40,14 @@ const TIME_COLUMN_WIDTH: usize = 9;
 const MIN_TITLE_WIDTH: usize = 10;
 /// Prefix width before the work type column. Added to the configured work
 /// type column width to align questions with the title.
-const WAITING_QUESTION_BASE_INDENT: usize =
+pub(super) const WAITING_QUESTION_BASE_INDENT: usize =
     MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH;
-/// Default absolute question-line column when work type icons use one cell.
-pub(super) const WAITING_QUESTION_INDENT: usize =
-    WAITING_QUESTION_BASE_INDENT + MIN_WORK_TYPE_COLUMN_WIDTH;
 /// Below this age, the time column renders in the default (bright)
 /// foreground; at or above it, it dims to `DIM_FG`. Independent of status
 /// color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
-/// Variable width of the title column after the fixed columns, floored so it
-/// never disappears on narrow terminals.
+/// Width of the work type icon column plus its trailing gap, expanded for the
+/// widest configured icon so every row's title starts in the same column.
 fn work_type_column_width(app: &App) -> usize {
     app.agent_config
         .work_types
@@ -62,16 +59,11 @@ fn work_type_column_width(app: &App) -> usize {
         + 1
 }
 
+/// Variable width left for the title after fixed columns, floored so it never
+/// disappears on narrow terminals.
 fn title_column_width(term_width: usize, work_type_column_width: usize) -> usize {
     term_width
-        .saturating_sub(
-            MARKER_WIDTH
-                + STATUS_COLUMN_WIDTH
-                + REPO_COLUMN_WIDTH
-                + TASK_NUMBER_COLUMN_WIDTH
-                + work_type_column_width
-                + TIME_COLUMN_WIDTH,
-        )
+        .saturating_sub(WAITING_QUESTION_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
         .max(MIN_TITLE_WIDTH)
 }
 
@@ -296,8 +288,7 @@ pub(super) fn build_session_item(
             .or(session.last_message.as_deref())
             .unwrap_or("");
         let quoted = format!("\u{201c}{question}\u{201d}");
-        let question_indent = WAITING_QUESTION_INDENT
-            + work_type_column_width.saturating_sub(MIN_WORK_TYPE_COLUMN_WIDTH);
+        let question_indent = WAITING_QUESTION_BASE_INDENT + work_type_column_width;
         let quoted_width = term_width.saturating_sub(question_indent);
         let truncated_quoted = truncate(&quoted, quoted_width);
         // ratatui reserves the marker column on every line of a multi-line
