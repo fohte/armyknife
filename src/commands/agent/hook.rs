@@ -630,9 +630,8 @@ fn process_hook_event_impl(
     }
 
     // Send notification if applicable (errors are logged but don't fail the hook).
-    // Use default config if loading fails to avoid config errors blocking notifications.
     if side_effects.notifications {
-        let config = config::load_config().unwrap_or_default();
+        let config = config::load_config_or_default();
         if should_notify(event, session.has_pending_bg_tasks(), &config) {
             if event == HookEvent::PermissionRequest {
                 let message = permission_notification_message(&input);
@@ -680,7 +679,7 @@ fn process_hook_event_impl(
                 pending = session.pending_bg_task_ids.len(),
             );
         } else {
-            let config = config::load_config().unwrap_or_default();
+            let config = config::load_config_or_default();
             if config.agent.auto_compact.enabled {
                 auto_compact::spawn_in_background(&session.session_id);
             } else {

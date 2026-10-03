@@ -2,7 +2,7 @@
 //! merged, so a delegator blocked on "wait for this PR to merge" can
 //! continue.
 //!
-//! Shared by all three worktree-cleanup entry points (`agent close`, `wm
+//! Shared by all three worktree-cleanup entry points (`agent close`, `agent
 //! clean`, and the TUI clean view's detached `agent clean-detached` child) so
 //! the notification fires identically regardless of which one removes a
 //! merged worktree.
@@ -18,7 +18,7 @@ use crate::shared::sanitize::strip_angle_brackets;
 
 /// Tracing target for failures on this path. The TUI clean view's detached
 /// child has its stderr wired to `/dev/null`, so the rotating log is the
-/// only channel that reaches it; interactive callers (`agent close`, `wm
+/// only channel that reaches it; interactive callers (`agent close`, `agent
 /// clean`) additionally get the same message on stderr.
 const EVENT_TARGET: &str = "armyknife::shared::merge_notify";
 

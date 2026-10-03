@@ -1,14 +1,13 @@
 //! `ARMYKNIFE_*` environment variable overlay for `Config`.
 
-use super::{legacy, merge_yaml};
+use super::merge_yaml;
 
 /// Builds a YAML overlay from `ARMYKNIFE_*` env vars (highest priority),
 /// merged on top of the YAML config files. Strips `ARMYKNIFE_`, lowercases
 /// the rest, and splits on `__` (not `_`, since keys like `auto_compact`
 /// contain it) into a config dot-path — e.g.
 /// `ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false` maps to
-/// `agent.auto_compact.enabled`. Legacy `WM` and `CC` paths are normalized to
-/// their `agent` paths. Values parse as YAML scalars.
+/// `agent.auto_compact.enabled`. Values parse as YAML scalars.
 ///
 /// Paths without `__` are skipped, since every `Config` field is a struct
 /// and no real override is single-segment; this also avoids misreading
@@ -25,8 +24,7 @@ pub(super) fn env_overlay_from(
 ) -> Option<serde_yaml::Value> {
     const PREFIX: &str = "ARMYKNIFE_";
 
-    let mut legacy_overlay: Option<serde_yaml::Value> = None;
-    let mut current_overlay: Option<serde_yaml::Value> = None;
+    let mut overlay: Option<serde_yaml::Value> = None;
     for (name, raw_value) in vars {
         let Some(path) = name.strip_prefix(PREFIX) else {
             continue;
@@ -60,7 +58,7 @@ pub(super) fn env_overlay_from(
             _ => serde_yaml::Value::String(raw_value),
         };
 
-        let (path, is_legacy) = normalize_legacy_path(path);
+        let path = path.to_ascii_lowercase();
         let mut node = scalar;
         for segment in path.rsplit("__") {
             let mut mapping = serde_yaml::Mapping::new();
@@ -68,29 +66,13 @@ pub(super) fn env_overlay_from(
             node = serde_yaml::Value::Mapping(mapping);
         }
 
-        let overlay = if is_legacy {
-            &mut legacy_overlay
-        } else {
-            &mut current_overlay
-        };
-        *overlay = Some(match overlay.take() {
+        overlay = Some(match overlay.take() {
             None => node,
             Some(base) => merge_yaml(base, node),
         });
     }
 
-    match (legacy_overlay, current_overlay) {
-        (Some(legacy), Some(current)) => Some(merge_yaml(legacy, current)),
-        (Some(legacy), None) => Some(legacy),
-        (None, current) => current,
-    }
-}
-
-fn normalize_legacy_path(path: &str) -> (String, bool) {
-    let path = path.to_ascii_lowercase();
-    let is_legacy = legacy::is_legacy_section_path(&path, "__");
-    let normalized = legacy::normalize_path(&path, "__").unwrap_or(path);
-    (normalized, is_legacy)
+    overlay
 }
 
 #[cfg(test)]

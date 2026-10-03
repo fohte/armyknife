@@ -6,6 +6,7 @@ pub(crate) mod bg_tasks;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;
+mod clean;
 mod clean_detached;
 mod close;
 mod codex;
@@ -42,6 +43,7 @@ pub use archive_detached::ArchiveDetachedArgs;
 pub(crate) use archive_detached::spawn_after_parent_exit;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
+pub use clean::CleanArgs;
 pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
 pub use codex::CodexArgs;
@@ -70,6 +72,9 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Delete merged or closed worktrees
+    Clean(CleanArgs),
 
     /// Safely close an agent session and its tmux pane
     #[command(visible_alias = "c")]
@@ -162,6 +167,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Clean(args) => clean::run(args).await?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,

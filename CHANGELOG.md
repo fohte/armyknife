@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.350](https://github.com/fohte/armyknife/compare/v0.1.349...v0.1.350) (2026-10-03)
+
+
+### Features
+
+* **agent:** remove wm commands and legacy configuration key fallbacks ([#1025](https://github.com/fohte/armyknife/issues/1025)) ([aadd883](https://github.com/fohte/armyknife/commit/aadd883db745d184ea3351ad9dd2a79e9c4610bc))
+
 ## [0.1.349](https://github.com/fohte/armyknife/compare/v0.1.348...v0.1.349) (2026-10-03)
 
 
