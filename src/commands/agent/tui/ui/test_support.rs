@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::worktree::WorktreeRow;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::shared::config::AgentConfig;
 
 use super::chrome::render_with_time;
 
@@ -72,13 +73,36 @@ pub(super) fn render_buffer_with<F>(
 where
     F: FnOnce(&mut App),
 {
+    render_buffer_with_agent_config(
+        sessions,
+        selected_index,
+        now,
+        width,
+        height,
+        AgentConfig::default(),
+        setup,
+    )
+}
+
+pub(super) fn render_buffer_with_agent_config<F>(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+    agent_config: AgentConfig,
+    setup: F,
+) -> ratatui::buffer::Buffer
+where
+    F: FnOnce(&mut App),
+{
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    let mut app = App::with_sessions(sessions.to_vec());
+    let mut app = App::with_sessions_and_agent_config(sessions.to_vec(), agent_config);
     app.list_state.select(selected_index);
     setup(&mut app);
 
@@ -118,6 +142,32 @@ where
     F: FnOnce(&mut App),
 {
     let buffer = render_buffer_with(sessions, selected_index, now, width, height, setup);
+    buffer_to_string(buffer)
+}
+
+/// Renders the full UI with injected agent settings, matching App startup's
+/// config path without depending on the user's config directory.
+pub(super) fn render_to_string_with_agent_config(
+    sessions: &[Session],
+    selected_index: Option<usize>,
+    now: DateTime<Utc>,
+    width: u16,
+    height: u16,
+    agent_config: AgentConfig,
+) -> String {
+    let buffer = render_buffer_with_agent_config(
+        sessions,
+        selected_index,
+        now,
+        width,
+        height,
+        agent_config,
+        |_| {},
+    );
+    buffer_to_string(buffer)
+}
+
+fn buffer_to_string(buffer: ratatui::buffer::Buffer) -> String {
     let mut output = String::new();
 
     for y in 0..buffer.area.height {

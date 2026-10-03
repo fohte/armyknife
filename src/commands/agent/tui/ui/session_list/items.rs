@@ -28,33 +28,42 @@ const MARKER_WIDTH: usize = 1;
 const STATUS_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the repo column, left-aligned and space-padded.
 const REPO_COLUMN_WIDTH: usize = 16;
-/// Fixed width for the task number and its gap before the title column.
+/// Fixed width of the task number column.
 pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
+/// Minimum width of the work type icon plus its trailing gap. The icon portion
+/// grows when a configured icon occupies more than one terminal column.
+pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
-/// Absolute column where a `WaitingInput` session's question line starts:
-/// same width as the marker, status, repo, and task-number columns, so the
-/// question sits under the title column rather than the repo column.
-pub(super) const WAITING_QUESTION_INDENT: usize =
+/// Prefix width before the work type column. Added to the configured work
+/// type column width to align questions with the title.
+pub(super) const WAITING_QUESTION_BASE_INDENT: usize =
     MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH;
 /// Below this age, the time column renders in the default (bright)
 /// foreground; at or above it, it dims to `DIM_FG`. Independent of status
 /// color, so a stale RUNNING session's time still reads as stale.
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
-/// Variable width of the title column: whatever's left after the fixed
-/// marker/status/repo/task-number/time columns, floored so it never disappears.
-fn title_column_width(term_width: usize) -> usize {
+/// Width of the work type icon column plus its trailing gap, expanded for the
+/// widest configured icon so every row's title starts in the same column.
+fn work_type_column_width(app: &App) -> usize {
+    app.agent_config
+        .work_types
+        .values()
+        .map(|config| config.icon.width())
+        .max()
+        .unwrap_or(1)
+        .max(MIN_WORK_TYPE_COLUMN_WIDTH - 1)
+        + 1
+}
+
+/// Variable width left for the title after fixed columns, floored so it never
+/// disappears on narrow terminals.
+fn title_column_width(term_width: usize, work_type_column_width: usize) -> usize {
     term_width
-        .saturating_sub(
-            MARKER_WIDTH
-                + STATUS_COLUMN_WIDTH
-                + REPO_COLUMN_WIDTH
-                + TASK_NUMBER_COLUMN_WIDTH
-                + TIME_COLUMN_WIDTH,
-        )
+        .saturating_sub(WAITING_QUESTION_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
         .max(MIN_TITLE_WIDTH)
 }
 
@@ -225,7 +234,26 @@ pub(super) fn build_session_item(
         vec![Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH))]
     };
 
-    let title_width = title_column_width(term_width);
+    let work_type_column_width = work_type_column_width(app);
+    let work_type_spans = session
+        .work_type
+        .as_deref()
+        .and_then(|skill_name| app.agent_config.work_type(skill_name))
+        .map_or_else(
+            || vec![Span::raw(" ".repeat(work_type_column_width))],
+            |config| {
+                let icon_width = config.icon.width();
+                vec![
+                    Span::styled(
+                        config.icon.clone(),
+                        Style::default().fg(Color::from(config.color)),
+                    ),
+                    Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
+                ]
+            },
+        );
+
+    let title_width = title_column_width(term_width, work_type_column_width);
     let title_style = own_title_style(is_idle, title_kin_color);
     let title_spans = build_title_spans(entry, app, &own_title, title_width, query, title_style);
 
@@ -244,6 +272,7 @@ pub(super) fn build_session_item(
         Span::styled(repo_col, Style::default().fg(DIM_FG)),
     ];
     spans.extend(task_number_spans);
+    spans.extend(work_type_spans);
     spans.extend(title_spans);
     spans.push(Span::styled(time_col, time_style));
 
@@ -259,13 +288,14 @@ pub(super) fn build_session_item(
             .or(session.last_message.as_deref())
             .unwrap_or("");
         let quoted = format!("\u{201c}{question}\u{201d}");
-        let quoted_width = term_width.saturating_sub(WAITING_QUESTION_INDENT);
+        let question_indent = WAITING_QUESTION_BASE_INDENT + work_type_column_width;
+        let quoted_width = term_width.saturating_sub(question_indent);
         let truncated_quoted = truncate(&quoted, quoted_width);
         // ratatui reserves the marker column on every line of a multi-line
         // `ListItem`, not just the first, so our own content only needs to
-        // cover the columns before the title to reach `WAITING_QUESTION_INDENT`.
+        // cover the columns before the title to reach `question_indent`.
         lines.push(Line::from(vec![
-            Span::raw(" ".repeat(WAITING_QUESTION_INDENT - MARKER_WIDTH)),
+            Span::raw(" ".repeat(question_indent - MARKER_WIDTH)),
             Span::styled(truncated_quoted, Style::default().fg(DIM_FG)),
         ]));
     }

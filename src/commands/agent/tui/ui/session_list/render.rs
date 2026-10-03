@@ -118,17 +118,23 @@ mod tests {
     use crate::commands::agent::tui::ui::helpers::DIM_FG;
     use crate::commands::agent::tui::ui::test_support::{
         create_test_session, render_buffer, render_buffer_with, render_to_string,
-        render_to_string_with,
+        render_to_string_with, render_to_string_with_agent_config,
     };
     use crate::commands::agent::types::SessionStatus;
+    use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
     use rstest::{fixture, rstest};
     use unicode_width::UnicodeWidthStr;
 
-    use super::super::items::{TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_INDENT};
+    use super::super::items::{
+        MIN_WORK_TYPE_COLUMN_WIDTH, TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_BASE_INDENT,
+    };
 
-    const TASK_NUMBER_COLUMN_START: usize = WAITING_QUESTION_INDENT - TASK_NUMBER_COLUMN_WIDTH;
+    const WAITING_QUESTION_INDENT: usize =
+        WAITING_QUESTION_BASE_INDENT + MIN_WORK_TYPE_COLUMN_WIDTH;
+    const TASK_NUMBER_COLUMN_START: usize =
+        WAITING_QUESTION_INDENT - TASK_NUMBER_COLUMN_WIDTH - MIN_WORK_TYPE_COLUMN_WIDTH;
     #[test]
     fn test_time_column_dims_after_one_hour_independent_of_status() {
         let now = Utc::now();
@@ -176,6 +182,135 @@ mod tests {
         assert_eq!(buffer[(3, 6)].fg, DIM_FG);
     }
 
+    #[test]
+    fn test_render_work_type_icon_and_blank_slots_keep_titles_aligned() {
+        let now = Utc::now();
+
+        let mut configured = create_test_session("configured");
+        configured.updated_at = now;
+        configured.status = SessionStatus::Running;
+        configured.work_type = Some("demo-skill".to_string());
+        configured.label = Some("Configured".to_string());
+
+        let mut unconfigured = create_test_session("unconfigured");
+        unconfigured.updated_at = now;
+        unconfigured.status = SessionStatus::Running;
+        unconfigured.label = Some("Unconfigured".to_string());
+
+        let mut unknown = create_test_session("unknown");
+        unknown.updated_at = now;
+        unknown.status = SessionStatus::Running;
+        unknown.work_type = Some("missing-skill".to_string());
+        unknown.label = Some("Unknown".to_string());
+
+        let sessions = vec![configured, unconfigured, unknown];
+        let mut agent_config = AgentConfig::default();
+        agent_config.work_types.insert(
+            "demo-skill".to_string(),
+            AgentWorkTypeConfig {
+                icon: "\u{e0b1}".to_string(),
+                color: AgentWorkTypeColor::Named(
+                    crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                ),
+            },
+        );
+        let output =
+            render_to_string_with_agent_config(&sessions, Some(1), now, 80, 12, agent_config);
+
+        let expected = indoc! {"
+             agent watch                                    0 needs you · 3 running · 0 idle
+             ── RUNNING (3) ────────────────────────────────────────────────────────────────
+            >● project               \u{e0b1} Configured                                   just now
+             ● project                 Unconfigured                                 just now
+             ● project                 Unknown                                      just now
+
+
+
+
+
+
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_wide_work_type_icon_keeps_title_and_question_aligned() {
+        let now = Utc::now();
+
+        let mut waiting = create_test_session("wide");
+        waiting.updated_at = now;
+        waiting.status = SessionStatus::WaitingInput;
+        waiting.work_type = Some("wide-skill".to_string());
+        waiting.label = Some("Wide".to_string());
+        waiting.current_tool = Some("Choose".to_string());
+
+        let mut unknown = create_test_session("unknown");
+        unknown.updated_at = now;
+        unknown.status = SessionStatus::Running;
+        unknown.work_type = Some("missing-skill".to_string());
+        unknown.label = Some("Blank".to_string());
+
+        let sessions = vec![waiting, unknown];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 12, |app| {
+            app.agent_config.work_types.insert(
+                "wide-skill".to_string(),
+                AgentWorkTypeConfig {
+                    icon: "界".to_string(),
+                    color: AgentWorkTypeColor::Named(
+                        crate::shared::config::AgentWorkTypeNamedColor::Red,
+                    ),
+                },
+            );
+        });
+
+        let expected = indoc! {"
+             agent watch                                    1 needs you · 1 running · 0 idle
+             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
+            >◐ project               界  Wide                                        just now
+                                        “Choose”
+
+             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ● project                  Blank                                       just now
+
+
+
+
+             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_work_type_icon_uses_configured_color() {
+        let now = Utc::now();
+        let mut session = create_test_session("configured");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+        session.work_type = Some("demo-skill".to_string());
+
+        let buffer = render_buffer_with(&[session], Some(1), now, 80, 9, |app| {
+            app.agent_config.work_types.insert(
+                "demo-skill".to_string(),
+                AgentWorkTypeConfig {
+                    icon: "\u{e0b1}".to_string(),
+                    color: AgentWorkTypeColor::Named(
+                        crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                    ),
+                },
+            );
+        });
+
+        let icon_column = (WAITING_QUESTION_INDENT - MIN_WORK_TYPE_COLUMN_WIDTH) as u16;
+        assert_eq!(
+            (
+                buffer[(icon_column, 2)].symbol(),
+                buffer[(icon_column, 2)].fg
+            ),
+            ("\u{e0b1}", Color::LightBlue)
+        );
+    }
+
     // =========================================================================
     // Full-screen integration tests (TRIAGE inbox layout)
     // =========================================================================
@@ -194,7 +329,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                        just now
+            >● project                 project                                      just now
 
 
 
@@ -236,7 +371,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         #42   project                                        just now
+            >● project         #42     project                                      just now
 
 
 
@@ -352,7 +487,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >◎ project               project                                        just now
+            >◎ project                 project                                      just now
 
 
 
@@ -381,8 +516,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project                                        just now
-                                     “Which approach do you prefer?”
+            >◐ project                 project                                      just now
+                                       “Which approach do you prefer?”
 
 
 
@@ -409,8 +544,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project                                        just now
-                                     “”
+            >◐ project                 project                                      just now
+                                       “”
 
 
 
@@ -445,9 +580,9 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
              ── RUNNING (3) ────────────────────────────────────────────────────────────────
-            >● project               project ▸2                                     just now
-             ● project               project › project                              just now
-             ● project               project › project                              just now
+            >● project                 project ▸2                                   just now
+             ● project                 project › project                            just now
+             ● project                 project › project                            just now
 
 
 
@@ -477,11 +612,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               project › project                                    2m
-                                     “Pick one”
+            >◐ project                 project › project                                  2m
+                                       “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project               project ▸1                                     just now
+             ● project                 project ▸1                                   just now
 
 
 
@@ -526,11 +661,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                        just now
-                                     “Pick one”
+             ◐ project                 project                                      just now
+                                       “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                        just now
+            >● project                 project                                      just now
 
 
 
@@ -569,17 +704,17 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 2 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                        just now
-                                     “Pick one”
+             ◐ project                 project                                      just now
+                                       “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project               project                                        just now
+             ● project                 project                                      just now
 
              ── UNREAD (1) ─────────────────────────────────────────────────────────────────
-             ✱ project               project                                        just now
+             ✱ project                 project                                      just now
 
              ── PAUSED (1) ─────────────────────────────────────────────────────────────────
-            >⏸ project               project                                        just now
+            >⏸ project                 project                                      just now
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
@@ -602,11 +737,11 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
              ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project               project                                        just now
-                                     “Pick one”
+             ◐ project                 project                                      just now
+                                       “Pick one”
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project               project                                        just now
+            >● project                 project                                      just now
 
 
 
@@ -631,8 +766,8 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    0 needs you · 0 running · 2 idle
             ── PAUSED (2) ─────────────────────────────────────────────────────────────────
-            ⏸ project               project                                        just now
-            ⏸ project               project                                        just now
+            ⏸ project                 project                                      just now
+            ⏸ project                 project                                      just now
 
 
 

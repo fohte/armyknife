@@ -2,6 +2,7 @@ use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
+use crate::shared::config::AgentConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
@@ -60,6 +61,8 @@ pub enum AppMode {
 pub struct App {
     /// All sessions loaded from disk.
     pub sessions: Vec<Session>,
+    /// Makes work type display settings available without reloading config during rendering.
+    pub(super) agent_config: AgentConfig,
     /// State for the list widget (tracks selected index).
     pub list_state: ListState,
     /// Whether the application should quit.
@@ -149,7 +152,8 @@ impl App {
     /// the currently focused pane's session ID via an environment variable.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
-        let mut app = Self::with_sessions(sessions);
+        let agent_config = crate::shared::config::load_config_or_default().agent;
+        let mut app = Self::with_sessions_and_agent_config(sessions, agent_config);
         app.sidebar_visible = true;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
@@ -170,7 +174,16 @@ impl App {
 
     /// Creates a new App instance with the given sessions.
     /// Useful for testing without disk I/O.
+    #[cfg(test)]
     pub fn with_sessions(sessions: Vec<Session>) -> Self {
+        Self::with_sessions_and_agent_config(sessions, AgentConfig::default())
+    }
+
+    /// Shares initialization between startup and tests that inject agent settings.
+    pub(super) fn with_sessions_and_agent_config(
+        sessions: Vec<Session>,
+        agent_config: AgentConfig,
+    ) -> Self {
         let list_state = ListState::default();
 
         // Build initial filtered indices (all sessions)
@@ -181,6 +194,7 @@ impl App {
 
         let mut app = Self {
             sessions,
+            agent_config,
             list_state,
             should_quit: false,
             error_message: None,
