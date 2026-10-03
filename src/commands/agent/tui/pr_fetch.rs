@@ -17,7 +17,7 @@ use crate::infra::git::{GitRepo, github_owner_and_repo, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
 
 /// Timeout the clean view uses for its own active-session check. Unlike
-/// `wm clean` / `agent sweep`, which wait out `auto_pause.timeout` before
+/// `agent clean` / `agent sweep`, which wait out `auto_pause.timeout` before
 /// treating a `Stopped` session as gone (giving the user a grace period
 /// to keep typing), the clean view treats `Stopped` as "done responding,
 /// nothing running" the moment it happens: zero grace period, so only a

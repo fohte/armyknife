@@ -6,6 +6,7 @@ pub(crate) mod bg_tasks;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;
+mod clean;
 mod clean_detached;
 mod close;
 mod codex;
@@ -21,6 +22,7 @@ mod hook;
 mod list;
 mod mark_read;
 pub(crate) mod new;
+mod notify_base_conflicts_detached;
 pub(crate) mod pane;
 pub(crate) mod peer;
 mod resume;
@@ -41,6 +43,7 @@ pub use archive_detached::ArchiveDetachedArgs;
 pub(crate) use archive_detached::spawn_after_parent_exit;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
+pub use clean::CleanArgs;
 pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
 pub use codex::CodexArgs;
@@ -53,6 +56,7 @@ pub use hook::permission_notification::DelayedPermissionNotificationArgs;
 pub use list::ListArgs;
 pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
+pub use notify_base_conflicts_detached::NotifyBaseConflictsDetachedArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
@@ -68,6 +72,9 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Delete merged or closed worktrees
+    Clean(CleanArgs),
 
     /// Safely close an agent session and its tmux pane
     #[command(visible_alias = "c")]
@@ -149,6 +156,10 @@ pub enum AgentCommands {
     /// Code's exit.
     #[command(name = "delete-tq-session-detached", hide = true)]
     DeleteTqSessionDetached(DeleteTqSessionDetachedArgs),
+
+    /// Internal: notify sessions whose worktree branches conflict with the default branch.
+    #[command(name = "notify-base-conflicts-detached", hide = true)]
+    NotifyBaseConflictsDetached(NotifyBaseConflictsDetachedArgs),
 }
 
 impl AgentCommands {
@@ -156,6 +167,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Clean(args) => clean::run(args).await?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,
@@ -176,6 +188,7 @@ impl AgentCommands {
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
             Self::ArchiveDetached(args) => archive_detached::run(args)?,
             Self::DeleteTqSessionDetached(args) => delete_tq_session_detached::run(args)?,
+            Self::NotifyBaseConflictsDetached(args) => notify_base_conflicts_detached::run(args)?,
         }
         Ok(())
     }

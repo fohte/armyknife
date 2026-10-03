@@ -877,7 +877,7 @@ mod tests {
         #[case] pending_agent_task: bool,
         #[case] expected: (bool, CleanSection),
     ) {
-        // The clean view passes timeout=0 in production (unlike `wm clean` /
+        // The clean view passes timeout=0 in production (unlike `agent clean` /
         // `agent sweep`, which wait out `auto_pause.timeout`), so a `Stopped`
         // session is active only while a bg/agent task is still pending.
         let mut stopped = session("s1", PathBuf::from("/tmp/r1/wt-a"));

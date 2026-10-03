@@ -35,6 +35,8 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, and compaction settings under `agent.auto_compact`.
+
 For editor autocompletion, add the following to the top of your config file:
 
 ```yaml
@@ -58,7 +60,7 @@ agent:
   worktree:
     dir: .worktrees # worktree directory name (default: ".worktrees")
     branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
-    repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
+    repos_root: ~/ghq # root directory for repo discovery in `a agent clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
     layout: # tmux pane layout for `a agent new --worktree`
       direction: horizontal
       first:
@@ -113,8 +115,6 @@ ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false
 
 maps to `agent.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
 
-Legacy `wm.*` settings map to `agent.worktree.*`; `wm.worktrees_dir` maps to `agent.worktree.dir`. `cc.auto_pause` and `cc.auto_compact` map to `agent.auto_pause` and `agent.auto_compact`. The legacy sections and `ARMYKNIFE_WM__*` / `ARMYKNIFE_CC__*` environment variables remain supported during migration. Within one YAML file, an `agent:` value takes precedence over its legacy alias; across files, the later file wins. For environment variables, `ARMYKNIFE_AGENT__*` takes precedence over its legacy alias.
-
 Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name. `orgs.*` entries aren't reachable either, since org logins are matched case-sensitively but the overlay lowercases every path segment.
 
 ### Supported Terminal Emulators
@@ -125,6 +125,8 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | ---------------- | ----------------- |
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
+
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later; on older versions, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
 
 ## Commands
 
@@ -346,31 +348,33 @@ a gh pr-review reply review <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                           | Aliases | Description                                                               |
-| ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
-| `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
-| `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
-| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                            |
-| `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
-| `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
-| `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
-| `mark-read [-t <pane_id>]`                       |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
-| `resume [session_id]`                            | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
-| `resurrect save`                                 |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
-| `resurrect restore`                              |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
-| `peer parent`                                    |         | List the session that delegated to this one, if any (JSON)                |
-| `peer children`                                  |         | List the sessions this one delegated to (JSON)                            |
-| `peer list [-R <repo>]`                          |         | List tracked sessions, with their SendMessage names (JSON)                |
-| `peer me`                                        |         | Print the session running in the caller's own tmux pane (JSON)            |
-| `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)    |
-| `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server) |
-| `crit add <url>`                                 |         | Associate a crit review with the calling session                          |
-| `crit open [--session <id> \| --pane <pane_id>]` |         | Toggle the latest associated review in a tmux floating pane               |
-| `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes           |
-| `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                  |
-| `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)             |
-| `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                    |
-| `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+| Action                                           | Aliases | Description                                                                                      |
+| ------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------ |
+| `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                                        |
+| `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane                                      |
+| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                                   |
+| `clean [--dry-run] [--all] [--force]`            |         | Delete merged or closed worktrees                                                                |
+| `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                                            |
+| `list`                                           | `ls`    | List all Claude Code sessions with status                                                        |
+| `focus <session_id>`                             |         | Focus on a session's tmux pane                                                                   |
+| `mark-read [-t <pane_id>]`                       |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                                 |
+| `resume [session_id]`                            | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                         |
+| `resurrect save`                                 |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                               |
+| `resurrect restore`                              |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                            |
+| `notify-base-conflicts-detached`                 |         | Hidden worker for base-conflict notifications after merged worktree deletion; not for direct use |
+| `peer parent`                                    |         | List the session that delegated to this one, if any (JSON)                                       |
+| `peer children`                                  |         | List the sessions this one delegated to (JSON)                                                   |
+| `peer list [-R <repo>]`                          |         | List tracked sessions, with their SendMessage names (JSON)                                       |
+| `peer me`                                        |         | Print the session running in the caller's own tmux pane (JSON)                                   |
+| `peer wake <session_id>`                         |         | Resume a paused peer session; print its SendMessage name (Claude only)                           |
+| `peer notify <session_id> -m <text>`             |         | Send a message to another session (SendMessage socket / Codex app-server)                        |
+| `crit add <url>`                                 |         | Associate a crit review with the calling session                                                 |
+| `crit open [--session <id> \| --pane <pane_id>]` |         | Toggle the latest associated review in a tmux floating pane                                      |
+| `bg run -- <cmd> [args...]`                      |         | Run a command detached and notify this session when it finishes                                  |
+| `sweep`                                          |         | Pause long-stopped sessions (run periodically or manual)                                         |
+| `auto-compact schedule --session <id>`           |         | Detached worker spawned by the Stop hook (not for direct use)                                    |
+| `window-status <window_id>`                      |         | Print status symbols for the sessions in a tmux window                                           |
+| `pane-has-paused <pane_id>`                      |         | Print `1` when the pane holds a Paused Claude Code session, else empty                           |
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
@@ -387,7 +391,7 @@ set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
 
 On wide terminals, `a agent watch` shows a tq task sidebar beside the session list. Use `C-b` to show or hide the sidebar, and `Enter` to apply a task or project filter. Task filters include descendant tasks; the **タスクなし** row shows sessions without linked tq tasks. Moving either the sidebar cursor or session-list cursor highlights matching rows in the other pane. `Tab` switches focus and moves the other pane's cursor to its first matching row. When the sidebar cursor is **すべて**, `Tab` moves the session-list cursor to its first session; if a matching session is hidden by the current sidebar filter, `Tab` applies the cursor's filter first. Press `r` while the sidebar has focus to refresh tq data. On narrow terminals, the sidebar and session list use separate screens: press `Enter` on a sidebar row to show its matching sessions, then press `Esc` to return to the task or **タスクなし** row linked to the selected session. `Esc` clears search, status, or drill-down filters before returning. At startup in the narrow layout, `ARMYKNIFE_FOCUS_SESSION` opens the session list first; otherwise the sidebar is shown.
 
-`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active and the main loop is stopped, `a agent list`, `a agent watch`, and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a wm clean` also preserves its worktree unless `--force` is set.
+`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active and the main loop is stopped, `a agent list`, `a agent watch`, and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
 Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files are written under the system temporary directory and may be removed by the OS.
 
@@ -712,23 +716,17 @@ armyknife is the only place that distinguishes a `Paused` session (auto-paused b
 
 Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
 
-### `a wm`
+### `a agent clean`
 
-Git worktree management with tmux integration.
+Delete merged or closed worktrees in the current repository. Pass `--all` to scan repositories under `agent.worktree.repos_root`.
 
-| Action  | Aliases | Description                            |
-| ------- | ------- | -------------------------------------- |
-| `list`  | `ls`    | List all worktrees                     |
-| `clean` | `c`     | Bulk delete merged or closed worktrees |
+When `a agent close`, `a agent clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
-Use `a agent new --worktree=<branch>` to create a new worktree and open a tmux window.
-Use `a agent close <worktree>` to close its associated agent session and remove the worktree and branch.
-
-When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
+After a merged worktree is removed, armyknife also fetches `origin` and checks the remaining branches in that repository against its default `main` or `master` branch with `git merge-tree`. Sessions whose working directory is inside a conflicting worktree receive a notification to run the `sync-base-branch` skill. This check runs in the detached cleanup worker and does not delay deletion; ended sessions are skipped.
 
 Worktree cleanup also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 
-`clean` options:
+Options:
 
 | Option          | Description                                                                       |
 | --------------- | --------------------------------------------------------------------------------- |
@@ -794,6 +792,12 @@ $ cd ~/ghq/github.com/fohte/dotfiles
 $ a config get repo.direct_commit
 true
 ```
+
+## Release
+
+Releases are automated with release-please. The [release workflow](.github/workflows/release-please.yml) creates or updates a release PR on pushes to `master` and automatically merges it. Merging the release PR creates a GitHub release; build jobs upload the pre-built binaries afterward.
+
+After the release PR is merged and the GitHub release has been created, run `a update`. You do not need to wait for the binaries to finish uploading: `a update` retries while your platform's asset is being uploaded. See [`a update`](#a-update) for retry timing.
 
 ## License
 

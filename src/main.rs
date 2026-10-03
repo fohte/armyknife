@@ -39,7 +39,6 @@ async fn run() -> Result<()> {
         Commands::Doctor(args) => armyknife::commands::doctor::run(&args)?,
         Commands::Gh(gh_cmd) => gh_cmd.run().await?,
         Commands::NameBranch(args) => args.run()?,
-        Commands::Wm(wm_cmd) => wm_cmd.run().await?,
         Commands::Update => update::do_update()?,
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

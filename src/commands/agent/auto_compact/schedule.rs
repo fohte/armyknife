@@ -89,7 +89,7 @@ async fn run_inner(args: &ScheduleArgs) -> Result<()> {
         event = "agent.auto_compact.schedule.start",
         session = %args.session,
     );
-    let cfg = config::load_config().unwrap_or_default();
+    let cfg = config::load_config_or_default();
     if !cfg.agent.auto_compact.enabled {
         // Hook may still spawn us if config was edited mid-flight; bail out
         // so we don't waste a sleep.

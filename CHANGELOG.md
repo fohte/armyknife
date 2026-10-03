@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.350](https://github.com/fohte/armyknife/compare/v0.1.349...v0.1.350) (2026-10-03)
+
+
+### Features
+
+* **agent:** remove wm commands and legacy configuration key fallbacks ([#1025](https://github.com/fohte/armyknife/issues/1025)) ([aadd883](https://github.com/fohte/armyknife/commit/aadd883db745d184ea3351ad9dd2a79e9c4610bc))
+
+## [0.1.349](https://github.com/fohte/armyknife/compare/v0.1.348...v0.1.349) (2026-10-03)
+
+
+### Features
+
+* **hitl:** open review editor in a floating pane within tmux ([#1022](https://github.com/fohte/armyknife/issues/1022)) ([73c4924](https://github.com/fohte/armyknife/commit/73c49242784332bcc2d4fa455d4428fb16ac0f37))
+* **wm:** notify sessions of worktrees conflicting with base ([#1023](https://github.com/fohte/armyknife/issues/1023)) ([5b1f888](https://github.com/fohte/armyknife/commit/5b1f888fb82655a6a721598236a4a3da47e23141))
+
 ## [0.1.348](https://github.com/fohte/armyknife/compare/v0.1.347...v0.1.348) (2026-10-03)
 
 

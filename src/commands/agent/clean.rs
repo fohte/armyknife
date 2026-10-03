@@ -21,6 +21,7 @@ use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{
     DraftProbe, NoDraftProbe, TmuxDraftProbe, contains_active_session,
 };
+use crate::shared::base_conflict_notify::spawn_for_merged_deletion;
 use crate::shared::config::load_config;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -307,7 +308,7 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    // wm clean may be invoked from a non-tmux context (cron, plain shell);
+    // agent clean may be invoked from a non-tmux context (cron, plain shell);
     // fall back to the no-op probe so we never block on tmux calls.
     if std::env::var_os("TMUX").is_some() {
         protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
@@ -510,6 +511,8 @@ async fn delete_worktrees_single_repo(
     repo: &GitRepo,
     worktrees: &[CleanWorktreeInfo],
 ) -> Result<()> {
+    spawn_base_conflict_check(repo, worktrees.iter());
+
     let mut deleted_count = 0;
 
     for info in worktrees {
@@ -562,6 +565,8 @@ async fn delete_worktrees_all_repos(
             }
         };
 
+        spawn_base_conflict_check(&repo, infos.iter().copied());
+
         for info in infos {
             // Must run before cleanup_worktree_by_name below: notification
             // looks up delegate sessions by worktree path, and cleanup
@@ -588,6 +593,22 @@ async fn delete_worktrees_all_repos(
     println!("Done. Deleted {deleted_count} worktree(s).");
 
     Ok(())
+}
+
+fn spawn_base_conflict_check<'a>(
+    repo: &GitRepo,
+    infos: impl IntoIterator<Item = &'a CleanWorktreeInfo>,
+) {
+    let infos: Vec<_> = infos.into_iter().collect();
+    if !infos.iter().any(|info| info.status.is_merged()) {
+        return;
+    }
+
+    let exclude_paths = infos
+        .iter()
+        .map(|info| info.wt.path.clone())
+        .collect::<Vec<_>>();
+    spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
 }
 
 /// Collect all worktrees and categorize them by merge status
@@ -633,6 +654,30 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    #[test]
+    fn agent_clean_accepts_worktree_cleanup_options() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "agent",
+            "clean",
+            "--dry-run",
+            "--all",
+            "--force",
+        ])
+        .expect("the clean command should parse");
+
+        let clean_args = match parsed.command {
+            crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
+                Some((args.dry_run, args.all, args.force))
+            }
+            _ => None,
+        };
+
+        assert_eq!(clean_args, Some((true, true, true)));
+    }
 
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
         let now = Utc::now();

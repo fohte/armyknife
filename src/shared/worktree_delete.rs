@@ -6,6 +6,7 @@ use crate::infra::git::{
     GitRepo, MergeStatus, get_merge_status, get_repo_root, local_branch_exists,
 };
 use crate::infra::tmux;
+use crate::shared::base_conflict_notify::spawn_for_merged_deletion;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -60,6 +61,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         && merge_status.as_ref().is_some_and(MergeStatus::is_merged)
     {
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
+        spawn_for_merged_deletion(main_repo.workdir(), std::slice::from_ref(&worktree_path));
     }
 
     let hook_ran = run_pre_delete_hook(

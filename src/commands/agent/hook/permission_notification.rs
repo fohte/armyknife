@@ -105,7 +105,7 @@ pub(crate) fn run(args: &DelayedPermissionNotificationArgs) -> Result<()> {
         session
     };
 
-    let config = config::load_config().unwrap_or_default();
+    let config = config::load_config_or_default();
     if !is_notification_enabled(&config) {
         tracing::info!(
             event = "agent.permission_notification.exit",

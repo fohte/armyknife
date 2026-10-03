@@ -51,30 +51,15 @@ pub(crate) fn open_crit_pane(spec: CritPaneSpec<'_>) -> Result<()> {
     // shpool does not restore modifyOtherKeys across session attaches.
     let command = format!("printf '\\033[>4;2m' && exec {shpool_command}");
 
-    let title = tmux_title(spec.title);
-    let crit_pane_id = super::run_tmux_output(&[
-        "new-pane",
-        "-P",
-        "-F",
-        "#{pane_id}",
-        "-x",
-        "90%",
-        "-y",
-        "90%",
-        "-X",
-        "5%",
-        "-Y",
-        "5%",
-        "-S",
-        "fg=colour98",
-        "-t",
-        spec.parent_pane_id,
-        command.as_str(),
-    ])?;
-    let pane_setup = (|| {
+    let crit_pane_id = super::open_floating_pane(super::FloatingPaneSpec {
+        parent_pane_id: spec.parent_pane_id,
+        title: spec.title,
+        command: command.as_ref(),
+    })?;
+    let pane_setup: super::Result<()> = (|| {
         super::set_pane_option(&crit_pane_id, CRIT_PANE_PORT_OPTION, &spec.port.to_string())?;
         super::set_pane_option(&crit_pane_id, CRIT_PANE_OPTION, spec.parent_pane_id)?;
-        super::run_tmux(&["select-pane", "-T", &title, "-t", &crit_pane_id])
+        Ok(())
     })();
     if let Err(error) = pane_setup {
         let _ = close_crit_pane(&crit_pane_id);
@@ -89,12 +74,4 @@ fn tool_path(tool: ExternalTool) -> Result<String> {
         .to_str()
         .map(str::to_string)
         .with_context(|| format!("{} executable path is not valid UTF-8", tool.name()))
-}
-
-fn tmux_title(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .replace('#', "##")
 }
