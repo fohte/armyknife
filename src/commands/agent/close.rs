@@ -1,5 +1,6 @@
 //! `a agent close` shuts down a tracked agent session and removes its tmux pane.
 
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -82,7 +83,7 @@ async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
 
     let config = load_config()?;
     let worktree_path = worktree_delete::resolve_worktree_path(
-        Some(target),
+        target,
         &config.wm.worktrees_dir,
         &config.wm.branch_prefix,
     )?;
@@ -100,31 +101,68 @@ async fn close_session_target(session_id: &str, args: &CloseArgs) -> Result<()> 
 
 async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> {
     let Some(worktree_root) = linked_worktree_root(&session.cwd) else {
-        let mut session = session.clone();
-        super::session_status::include_pending_status(&mut session);
-        return close_session(&session, args.force, &LiveCloseRuntime);
+        return close_tracked_session(session, args.force);
     };
 
-    let mut session = session.clone();
-    super::session_status::include_pending_status(&mut session);
-    close_session(&session, args.force, &LiveCloseRuntime)?;
-    remove_worktree(&worktree_root, args).await
+    close_with_worktree_plan(
+        worktree_delete::prepare(&worktree_root, args.force),
+        || close_worktree_session(session, args.force),
+        |plan| worktree_delete::execute(plan, args.skip_hooks),
+    )
+    .await
 }
 
 async fn close_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
     let sessions = super::store::list_sessions()?;
-    if let Some(session) = select_worktree_session(&sessions, worktree_root)? {
-        let mut session = session.clone();
-        super::session_status::include_pending_status(&mut session);
-        close_session(&session, args.force, &LiveCloseRuntime)?;
-    }
-
-    remove_worktree(worktree_root, args).await
+    let session = select_worktree_session(&sessions, worktree_root)?;
+    close_with_worktree_plan(
+        worktree_delete::prepare(worktree_root, args.force),
+        || {
+            if let Some(session) = session {
+                close_worktree_session(session, args.force)?;
+            }
+            Ok(())
+        },
+        |plan| worktree_delete::execute(plan, args.skip_hooks),
+    )
+    .await
 }
 
-async fn remove_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
-    let worktree_path = worktree_root.to_string_lossy().into_owned();
-    worktree_delete::run(Some(&worktree_path), args.force, args.skip_hooks).await
+async fn close_with_worktree_plan<P, F>(
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce() -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    let plan = prepare.await?;
+    close_session()?;
+    remove_worktree(plan).await
+}
+
+fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
+    let mut session = session.clone();
+    super::session_status::include_pending_status(&mut session);
+    close_session(&session, force, &LiveCloseRuntime)
+}
+
+fn close_worktree_session(session: &Session, force: bool) -> Result<()> {
+    let current_pane_id = tmux::current_pane_id_from_env();
+    if !should_gracefully_close_worktree_session(session, current_pane_id.as_deref()) {
+        return Ok(());
+    }
+    close_tracked_session(session, force)
+}
+
+fn should_gracefully_close_worktree_session(
+    session: &Session,
+    current_pane_id: Option<&str>,
+) -> bool {
+    session
+        .tmux_info
+        .as_ref()
+        .is_some_and(|info| current_pane_id != Some(info.pane_id.as_str()))
 }
 
 fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
@@ -838,6 +876,78 @@ mod tests {
             .map_err(|error| error.to_string());
 
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::same_pane(Some("%42"), true, false)]
+    #[case::other_pane(Some("%99"), true, true)]
+    #[case::no_current_pane(None, true, true)]
+    #[case::missing_tmux_info(Some("%42"), false, false)]
+    fn skips_graceful_close_for_the_current_or_untracked_pane(
+        mut session: Session,
+        #[case] current_pane_id: Option<&str>,
+        #[case] has_tmux_info: bool,
+        #[case] expected: bool,
+    ) {
+        if !has_tmux_info {
+            session.tmux_info = None;
+        }
+        assert_eq!(
+            should_gracefully_close_worktree_session(&session, current_pane_id),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_worktree_confirmation_leaves_the_session_open() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_with_worktree_plan(
+            async {
+                calls.borrow_mut().push("prepare");
+                Err::<(), _>(anyhow::anyhow!("Cancelled."))
+            },
+            || {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), calls.into_inner()),
+            ("Cancelled.".to_string(), vec!["prepare"]),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_removes_after_closing_the_selected_session() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_with_worktree_plan(
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (result.is_ok(), calls.into_inner()),
+            (true, vec!["prepare", "close session", "remove worktree"]),
+        );
     }
 
     #[rstest]

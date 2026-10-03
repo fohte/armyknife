@@ -715,6 +715,7 @@ Git worktree management with tmux integration.
 | `clean` | `c`     | Bulk delete merged or closed worktrees |
 
 Use `a agent new --worktree=<branch>` to create a new worktree and open a tmux window.
+Use `a agent close <worktree>` to close its associated agent session and remove the worktree and branch.
 
 When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
