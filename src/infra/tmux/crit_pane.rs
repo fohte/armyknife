@@ -31,7 +31,7 @@ pub(crate) fn find_crit_panes_for_port(port: u16) -> super::Result<Vec<String>> 
 }
 
 pub(crate) fn close_crit_pane(pane_id: &str) -> super::Result<()> {
-    super::run_tmux(&["kill-pane", "-t", pane_id])
+    super::kill_pane(pane_id)
 }
 
 pub(crate) fn open_crit_pane(spec: CritPaneSpec<'_>) -> Result<()> {

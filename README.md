@@ -343,6 +343,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
 | `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
+| `close [session_id] [--force]`                   | `c`     | Close an idle agent session and its tmux pane                             |
 | `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
 | `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
@@ -403,6 +404,8 @@ The completion message has this form:
 ```
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
+
+`a agent close [session_id]` (alias: `a ag c`) closes the session in the current pane when no ID is given. It refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft; `--force` overrides those checks. It sends Ctrl+D and waits for the agent to exit, then sends SIGTERM if needed. The pane is removed only after the agent exits. Linked-worktree sessions are not supported by this command.
 
 `new` options:
 

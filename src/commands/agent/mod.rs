@@ -7,6 +7,7 @@ pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;
 mod clean_detached;
+mod close;
 mod codex;
 mod codex_queue;
 pub(crate) mod codex_steer;
@@ -41,6 +42,7 @@ pub(crate) use archive_detached::spawn_after_parent_exit;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
 pub use clean_detached::CleanDetachedArgs;
+pub use close::CloseArgs;
 pub use codex::CodexArgs;
 pub use crit::CritCommands;
 pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
@@ -66,6 +68,10 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Safely close an agent session and its tmux pane
+    #[command(visible_alias = "c")]
+    Close(CloseArgs),
 
     /// Associate crit reviews with agent sessions and open them in tmux floating panes
     #[command(subcommand)]
@@ -150,6 +156,7 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Close(args) => close::run(args)?,
             Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,

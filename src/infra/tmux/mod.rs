@@ -301,6 +301,11 @@ pub fn kill_window(window_id: &str) -> Result<()> {
     run_tmux(&["kill-window", "-t", window_id])
 }
 
+/// Kill a tmux pane by its ID.
+pub fn kill_pane(pane_id: &str) -> Result<()> {
+    run_tmux(&["kill-pane", "-t", pane_id])
+}
+
 /// Get all window IDs that have panes with working directories inside the given path.
 ///
 /// This searches all tmux sessions and returns unique window IDs where any pane
