@@ -4,7 +4,7 @@ Optional integrations that wire armyknife into tmux's event model.
 
 ## Unread stopped sessions (tmux `pane-focus-in`)
 
-A stopped session that has not been focused since it most recently entered the stopped state renders as `✱` (unread) in `a agent watch`, `a agent list`, the tree under `a wm` views, and the per-window `@armyknife-cc-window-status` indicator. Focusing the pane marks the session read and reverts the indicator to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
+A stopped session that has not been focused since it most recently entered the stopped state renders as `✱` (unread) in `a agent watch`, its clean view, `a agent list`, and the per-window `@armyknife-cc-window-status` indicator. Focusing the pane marks the session read and reverts the indicator to `○`. Every new Stop event re-clears the read mark so a follow-up turn surfaces as unread again, even if you had already focused the same session earlier.
 
 Wire `a agent mark-read` into tmux's `pane-focus-in` hook so any path of focusing the pane (TUI `f` key, tmux keybindings, mouse, etc.) clears the unread state:
 
