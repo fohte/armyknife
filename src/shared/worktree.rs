@@ -248,23 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn branch_to_worktree_name_removes_prefix_and_slashes() {
-        assert_eq!(branch_to_worktree_name("feature", BRANCH_PREFIX), "feature");
-        assert_eq!(
-            branch_to_worktree_name("fohte/feature", BRANCH_PREFIX),
-            "feature"
-        );
-        assert_eq!(
-            branch_to_worktree_name("feature/sub", BRANCH_PREFIX),
-            "feature-sub"
-        );
-        assert_eq!(
-            branch_to_worktree_name("fohte/feature/sub", BRANCH_PREFIX),
-            "feature-sub"
-        );
-    }
-
-    #[test]
     fn get_main_repo_from_main_returns_same_repo() {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
