@@ -402,7 +402,7 @@ fn process_hook_event_impl(
     let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| {
-        // Read label and ancestor chain from environment variables (set by `a agent new`)
+        // Read initial session metadata from environment variables (set by `a agent new`)
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()
@@ -411,7 +411,7 @@ fn process_hook_event_impl(
 
         Session {
             session_id: input.session_id.clone(),
-            work_type: None,
+            work_type: env.session_work_type.clone(),
             crit_urls: Vec::new(),
             cwd: input.cwd.clone(),
             transcript_path: input.transcript_path.clone(),
@@ -2871,6 +2871,57 @@ mod tests {
                 result,
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
+            );
+        }
+
+        #[rstest]
+        #[case::provided(Some("sample-skill"), Some("sample-skill"))]
+        #[case::omitted(None, None)]
+        fn user_prompt_submit_uses_initial_work_type_from_env(
+            #[case] env_work_type: Option<&str>,
+            #[case] expected_work_type: Option<&str>,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+
+            temp_env::with_vars([(EnvVars::session_work_type_name(), env_work_type)], || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    create_test_input(None),
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("user-prompt-submit should succeed");
+            });
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("load should succeed")
+                .expect("session should exist");
+            let mut actual = serde_json::to_value(session).expect("session should serialize");
+            actual["created_at"] = serde_json::json!("<timestamp>");
+            actual["updated_at"] = serde_json::json!("<timestamp>");
+            assert_eq!(
+                actual,
+                serde_json::json!({
+                    "session_id": "test-123",
+                    "work_type": expected_work_type,
+                    "cwd": "/tmp/test",
+                    "transcript_path": null,
+                    "tty": null,
+                    "tmux_info": null,
+                    "status": "running",
+                    "created_at": "<timestamp>",
+                    "updated_at": "<timestamp>",
+                    "last_message": null,
+                    "current_tool": null,
+                    "label": null,
+                    "ancestor_session_ids": [],
+                    "pending_bg_task_ids": [],
+                    "pending_agent_task_ids": [],
+                    "pending_permission_agent_ids": [],
+                    "read_at": null,
+                    "sweep_signaled": false,
+                    "engine": "claude"
+                })
             );
         }
 

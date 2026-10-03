@@ -26,8 +26,8 @@ pub(super) fn record_codex_daemon_metadata(
 }
 
 fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
-    let (label, ancestor_session_ids) = metadata_from_env(env_vars);
-    if label.is_none() && ancestor_session_ids.is_empty() {
+    let (label, work_type, ancestor_session_ids) = metadata_from_env(env_vars);
+    if label.is_none() && work_type.is_none() && ancestor_session_ids.is_empty() {
         return Ok(());
     }
 
@@ -36,14 +36,22 @@ fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> R
         session_id,
         cwd,
         label,
+        work_type,
         &ancestor_session_ids,
     )
 }
 
-fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> (Option<&'a str>, Vec<String>) {
+fn metadata_from_env<'a>(
+    env_vars: &[(&str, &'a str)],
+) -> (Option<&'a str>, Option<&'a str>, Vec<String>) {
     let label = env_vars
         .iter()
         .find(|(key, _)| *key == EnvVars::session_label_name())
+        .map(|(_, value)| *value)
+        .filter(|value| !value.is_empty());
+    let work_type = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::session_work_type_name())
         .map(|(_, value)| *value)
         .filter(|value| !value.is_empty());
     let ancestor_session_ids = env_vars
@@ -51,7 +59,7 @@ fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> (Option<&'a str>, Vec<
         .find(|(key, _)| *key == EnvVars::ancestor_session_ids_name())
         .map(|(_, value)| parse_ancestor_session_ids(value))
         .unwrap_or_default();
-    (label, ancestor_session_ids)
+    (label, work_type, ancestor_session_ids)
 }
 
 fn record_in(
@@ -59,6 +67,7 @@ fn record_in(
     session_id: &str,
     cwd: &Path,
     label: Option<&str>,
+    work_type: Option<&str>,
     ancestor_session_ids: &[String],
 ) -> Result<()> {
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
@@ -90,6 +99,10 @@ fn record_in(
     if let Some(label) = label {
         session.label = Some(label.to_string());
     }
+    // Preserve a work type already recognized by a hook.
+    if session.work_type.is_none() {
+        session.work_type = work_type.map(str::to_string);
+    }
     if !ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = ancestor_session_ids.to_vec();
     }
@@ -118,7 +131,7 @@ mod tests {
             .expect("timestamp should be valid");
         Session {
             session_id: "thread-a".to_string(),
-            work_type: None,
+            work_type: Some("detected-skill".to_string()),
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/workspace/original"),
             transcript_path: Some(PathBuf::from("/tmp/transcript.jsonl")),
@@ -149,12 +162,19 @@ mod tests {
     }
 
     #[rstest]
-    fn creates_session_before_hook_runs(sessions_dir: TempDir) {
+    #[case::with_work_type(Some("sample-skill"), Some("sample-skill"))]
+    #[case::without_work_type(None, None)]
+    fn creates_session_before_hook_runs(
+        sessions_dir: TempDir,
+        #[case] work_type: Option<&str>,
+        #[case] expected_work_type: Option<&str>,
+    ) {
         record_in(
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
             Some("explicit label"),
+            work_type,
             &["root".to_string(), "parent".to_string()],
         )
         .expect("record should succeed");
@@ -176,7 +196,7 @@ mod tests {
                 "last_message": null,
                 "current_tool": null,
                 "label": "explicit label",
-                "work_type": null,
+                "work_type": expected_work_type,
                 "ancestor_session_ids": ["root", "parent"],
                 "pending_bg_task_ids": [],
                 "pending_agent_task_ids": [],
@@ -191,27 +211,35 @@ mod tests {
     #[rstest]
     #[case::explicit_metadata(
         Some("explicit label"),
+        Some("sample-skill"),
         &["new-parent"],
         Some("explicit label"),
+        Some("detected-skill"),
         &["new-parent"]
     )]
-    #[case::omitted_label_preserves_generated(
+    #[case::omitted_metadata_preserves_existing(
+        None,
         None,
         &["new-parent"],
         Some("generated label"),
+        Some("detected-skill"),
         &["new-parent"]
     )]
     #[case::empty_ancestors_preserve_existing(
         Some("explicit label"),
+        Some("sample-skill"),
         &[],
         Some("explicit label"),
+        Some("detected-skill"),
         &["existing-parent"]
     )]
     fn updates_only_non_empty_metadata_after_hook_runs(
         sessions_dir: TempDir,
         #[case] label: Option<&str>,
+        #[case] work_type: Option<&str>,
         #[case] ancestors: &[&str],
         #[case] expected_label: Option<&str>,
+        #[case] expected_work_type: Option<&str>,
         #[case] expected_ancestors: &[&str],
     ) {
         let existing = existing_session();
@@ -226,12 +254,14 @@ mod tests {
             "thread-a",
             Path::new("/workspace/delegate"),
             label,
+            work_type,
             &ancestors,
         )
         .expect("record should succeed");
 
         let mut expected = serde_json::to_value(existing).expect("session should serialize");
         expected["label"] = json!(expected_label);
+        expected["work_type"] = json!(expected_work_type);
         expected["ancestor_session_ids"] = json!(expected_ancestors);
         assert_eq!(session_json(sessions_dir.path()), expected);
     }
@@ -242,6 +272,7 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
+            None,
             None,
             &["parent".to_string()],
         )
@@ -275,6 +306,7 @@ mod tests {
         let env_vars = [
             ("UNRELATED", "value"),
             (EnvVars::session_label_name(), "delegate label"),
+            (EnvVars::session_work_type_name(), "sample-skill"),
             (EnvVars::ancestor_session_ids_name(), "root, parent"),
         ];
 
@@ -282,6 +314,7 @@ mod tests {
             metadata_from_env(&env_vars),
             (
                 Some("delegate label"),
+                Some("sample-skill"),
                 vec!["root".to_string(), "parent".to_string()]
             )
         );
