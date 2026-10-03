@@ -74,11 +74,8 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // so we can close the window we're sitting in
     let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
 
-    let result = cleanup::cleanup_worktree_by_name_with_post_delete(
-        &main_repo,
-        &worktree_name,
-        &worktree_path,
-        || {
+    let result =
+        cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path, || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
                     main_repo.workdir(),
@@ -87,8 +84,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                     merged,
                 );
             }
-        },
-    )?;
+        })?;
 
     if !result.worktree_deleted {
         if hook_ran {

@@ -722,7 +722,7 @@ Use `a agent close <worktree>` to close its associated agent session and remove 
 
 When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
-After a worktree is removed successfully, armyknife starts the configured `post-worktree-delete` hook in a detached session. The hook receives the deleted worktree path, branch, repository root, and whether the branch was merged; see [Hooks](docs/hooks.md#post-worktree-delete).
+After `a agent close`, `a wm clean`, or the TUI clean view removes a worktree successfully, armyknife starts the configured `post-worktree-delete` hook in a detached session. The hook receives the deleted worktree path, branch, repository root, and whether the branch was merged; see [Hooks](docs/hooks.md#post-worktree-delete).
 
 Worktree cleanup also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 

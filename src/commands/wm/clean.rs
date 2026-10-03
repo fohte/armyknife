@@ -514,26 +514,7 @@ async fn delete_worktrees_single_repo(
     let mut deleted_count = 0;
 
     for info in worktrees {
-        // Must run before cleanup_worktree_by_name below: notification looks
-        // up delegate sessions by worktree path, and cleanup deletes those
-        // same session files.
-        if info.status.is_merged() {
-            notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
-        }
-
-        let result = crate::shared::cleanup::cleanup_worktree_by_name_with_post_delete(
-            repo,
-            &info.wt.name,
-            &info.wt.path,
-            || {
-                hooks::spawn_post_worktree_delete_hook(
-                    repo.workdir(),
-                    &info.wt.path,
-                    hook_branch_name(&info.wt.branch),
-                    info.status.is_merged(),
-                );
-            },
-        )?;
+        let result = delete_one_worktree(repo, info).await?;
 
         if result.worktree_deleted {
             println!("Deleted: {}", info.wt.name);
@@ -575,26 +556,7 @@ async fn delete_worktrees_all_repos(
         };
 
         for info in infos {
-            // Must run before cleanup_worktree_by_name below: notification
-            // looks up delegate sessions by worktree path, and cleanup
-            // deletes those same session files.
-            if info.status.is_merged() {
-                notify_delegator_of_merge(&repo, &info.wt.branch, &info.wt.path).await;
-            }
-
-            let result = crate::shared::cleanup::cleanup_worktree_by_name_with_post_delete(
-                &repo,
-                &info.wt.name,
-                &info.wt.path,
-                || {
-                    hooks::spawn_post_worktree_delete_hook(
-                        repo.workdir(),
-                        &info.wt.path,
-                        hook_branch_name(&info.wt.branch),
-                        info.status.is_merged(),
-                    );
-                },
-            )?;
+            let result = delete_one_worktree(&repo, info).await?;
 
             if result.worktree_deleted {
                 println!("Deleted: {repo_name}/{}", info.wt.name);
@@ -608,6 +570,25 @@ async fn delete_worktrees_all_repos(
     println!("Done. Deleted {deleted_count} worktree(s).");
 
     Ok(())
+}
+
+async fn delete_one_worktree(
+    repo: &GitRepo,
+    info: &CleanWorktreeInfo,
+) -> Result<crate::shared::cleanup::WorktreeCleanupResult> {
+    // Delegate metadata is stored in session files that cleanup removes.
+    if info.status.is_merged() {
+        notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
+    }
+
+    crate::shared::cleanup::cleanup_worktree_by_name(repo, &info.wt.name, &info.wt.path, || {
+        hooks::spawn_post_worktree_delete_hook(
+            repo.workdir(),
+            &info.wt.path,
+            hook_branch_name(&info.wt.branch),
+            info.status.is_merged(),
+        );
+    })
 }
 
 fn hook_branch_name(branch: &str) -> Option<&str> {

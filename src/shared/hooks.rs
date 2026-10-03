@@ -150,6 +150,7 @@ fn spawn_post_worktree_delete_hook_with(
 mod tests {
     use super::*;
     use crate::shared::env_var::EnvVars;
+    use indoc::indoc;
     use rstest::rstest;
     use std::cell::RefCell;
     use std::fs;
@@ -267,7 +268,14 @@ mod tests {
     #[test]
     fn spawn_hook_detached_passes_the_hook_path_cwd_and_environment() {
         let dir = TempDir::new().unwrap();
-        let hook_file = setup_hook(&dir, "post-worktree-delete", "#!/bin/sh\n", true);
+        let hook_file = setup_hook(
+            &dir,
+            "post-worktree-delete",
+            indoc! {"
+                #!/bin/sh
+            "},
+            true,
+        );
         let cwd = dir.path().join("repository");
         let env_vars = [("EXAMPLE_KEY", "example-value")];
         let spawned = RefCell::new(None);
