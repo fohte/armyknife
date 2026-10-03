@@ -2,6 +2,7 @@ use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
+use crate::shared::config::AgentConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::ListState;
@@ -60,6 +61,8 @@ pub enum AppMode {
 pub struct App {
     /// All sessions loaded from disk.
     pub sessions: Vec<Session>,
+    /// Display configuration for skill-backed work types.
+    pub(super) agent_config: AgentConfig,
     /// State for the list widget (tracks selected index).
     pub list_state: ListState,
     /// Whether the application should quit.
@@ -150,6 +153,7 @@ impl App {
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let mut app = Self::with_sessions(sessions);
+        app.agent_config = crate::shared::config::load_config_or_default().agent;
         app.sidebar_visible = true;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
@@ -181,6 +185,7 @@ impl App {
 
         let mut app = Self {
             sessions,
+            agent_config: AgentConfig::default(),
             list_state,
             should_quit: false,
             error_message: None,
