@@ -6,6 +6,7 @@ mod floating_pane;
 pub mod layout;
 mod pane_info;
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 use std::time::Duration;
@@ -72,10 +73,10 @@ impl fmt::Display for CommandFailedError {
 }
 
 impl TmuxError {
-    fn command_failed(args: &[&str], message: impl Into<String>, stderr: Option<String>) -> Self {
+    fn command_failed(args: &[String], message: impl Into<String>, stderr: Option<String>) -> Self {
         Self::CommandFailed(CommandFailedError {
             command: "tmux".to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args.to_vec(),
             message: message.into(),
             stderr,
         })
@@ -98,19 +99,23 @@ pub type Result<T> = std::result::Result<T, TmuxError>;
 const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Run a tmux command and return stdout on success.
-pub(crate) fn run_tmux_output(args: &[&str]) -> Result<String> {
+pub(crate) fn run_tmux_output<S: AsRef<OsStr>>(args: &[S]) -> Result<String> {
     let mut command = ExternalTool::Tmux.command();
     command.args(args);
+    let display_args = args
+        .iter()
+        .map(|arg| arg.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
 
     let output = process::run_with_timeout(command, TMUX_COMMAND_TIMEOUT)
-        .map_err(|e| TmuxError::command_failed(args, e.to_string(), None))?;
+        .map_err(|e| TmuxError::command_failed(&display_args, e.to_string(), None))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(TmuxError::command_failed(
-            args,
+            &display_args,
             "command exited with non-zero status",
             Some(stderr),
         ))

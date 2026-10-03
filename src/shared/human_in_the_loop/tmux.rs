@@ -49,7 +49,9 @@ fn review_pane_command(
 
     command.push("_ARMYKNIFE_DONE_FIFO=");
     command.push(shell_quote(done_fifo_path.as_os_str()));
-    command.push("; trap 'printf 0 2>/dev/null > \"$_ARMYKNIFE_DONE_FIFO\"' EXIT; ");
+    command.push(
+        "; trap '_ARMYKNIFE_EXIT_STATUS=$?; [ -p \"$_ARMYKNIFE_DONE_FIFO\" ] && { exec 3<>\"$_ARMYKNIFE_DONE_FIFO\" && printf 0 >&3; } 2>/dev/null; exit \"$_ARMYKNIFE_EXIT_STATUS\"' EXIT; ",
+    );
     command.push(shell_quote(executable));
     for arg in args {
         command.push(" ");
@@ -59,7 +61,13 @@ fn review_pane_command(
 }
 
 fn review_pane_environment() -> Vec<(OsString, OsString)> {
-    std::env::vars_os()
+    select_review_pane_environment(std::env::vars_os())
+}
+
+fn select_review_pane_environment(
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    vars.into_iter()
         .filter(|(name, _)| {
             let name = name.as_bytes();
             valid_environment_name(name)
@@ -116,12 +124,46 @@ mod tests {
             &environment,
         );
         let expected = [
-            b"export HOME='/tmp/sample home'; export PATH='/tmp/sample bin'; _ARMYKNIFE_DONE_FIFO='/tmp/done '\\''fifo'\\'''; trap 'printf 0 2>/dev/null > \"$_ARMYKNIFE_DONE_FIFO\"' EXIT; '/tmp/sample app' '--document' 'doc-".as_slice(),
+            b"export HOME='/tmp/sample home'; export PATH='/tmp/sample bin'; _ARMYKNIFE_DONE_FIFO='/tmp/done '\\''fifo'\\'''; trap '_ARMYKNIFE_EXIT_STATUS=$?; [ -p \"$_ARMYKNIFE_DONE_FIFO\" ] && { exec 3<>\"$_ARMYKNIFE_DONE_FIFO\" && printf 0 >&3; } 2>/dev/null; exit \"$_ARMYKNIFE_EXIT_STATUS\"' EXIT; '/tmp/sample app' '--document' 'doc-".as_slice(),
             &[0xff],
             b".md'".as_slice(),
         ]
         .concat();
 
         assert_eq!(command.as_os_str().as_bytes(), expected.as_slice());
+    }
+
+    #[test]
+    fn review_pane_environment_keeps_editor_and_terminal_configuration() {
+        let vars = vec![
+            (
+                OsString::from("XDG_CONFIG_HOME"),
+                OsString::from("/tmp/config"),
+            ),
+            (
+                OsString::from("ARMYKNIFE_EDITOR__EDITOR_COMMAND"),
+                OsString::from("nvim --clean"),
+            ),
+            (OsString::from("HOME"), OsString::from("/tmp/home")),
+            (OsString::from("PATH"), OsString::from("/tmp/bin")),
+            (OsString::from("TMUX"), OsString::from("/tmp/tmux")),
+            (OsString::from("ARMYKNIFE_UNRELATED"), OsString::from("x")),
+        ];
+
+        assert_eq!(
+            select_review_pane_environment(vars),
+            vec![
+                (
+                    OsString::from("ARMYKNIFE_EDITOR__EDITOR_COMMAND"),
+                    OsString::from("nvim --clean"),
+                ),
+                (OsString::from("HOME"), OsString::from("/tmp/home")),
+                (OsString::from("PATH"), OsString::from("/tmp/bin")),
+                (
+                    OsString::from("XDG_CONFIG_HOME"),
+                    OsString::from("/tmp/config")
+                ),
+            ],
+        );
     }
 }

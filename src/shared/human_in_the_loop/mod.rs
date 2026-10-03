@@ -63,7 +63,7 @@ pub trait ReviewHandler<S: DocumentSchema> {
     }
 }
 
-/// Start a review session by launching a terminal with the configured editor.
+/// Start a review session in a tmux floating pane or configured terminal window.
 ///
 /// This function:
 /// 1. Checks for an existing lock (another editor already open)
@@ -125,10 +125,8 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let tmux_target = get_tmux_target();
     launch::launch_review::<S, _>(
         tmux_pane_id.as_deref(),
-        tmux_target.as_deref(),
         &document_path,
         &done_fifo_path,
         window_title,

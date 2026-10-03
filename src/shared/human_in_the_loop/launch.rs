@@ -10,7 +10,6 @@ use super::{
 
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
-    tmux_target: Option<&str>,
     document_path: &Path,
     done_fifo_path: &Path,
     window_title: &str,
@@ -22,7 +21,7 @@ where
     H: ReviewHandler<S>,
 {
     let exe_path = std::env::current_exe()?;
-    let mut review_args = handler.build_complete_args(document_path, tmux_target, window_title);
+    let mut review_args = handler.build_complete_args(document_path, tmux_pane_id, window_title);
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 

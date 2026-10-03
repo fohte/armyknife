@@ -120,7 +120,7 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
 
-When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later. Outside tmux, `editor.terminal` selects the terminal window as usual.
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later; on older versions, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
 
 ## Commands
 
