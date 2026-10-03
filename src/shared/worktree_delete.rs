@@ -204,6 +204,10 @@ pub(crate) fn resolve_worktree_path(
         return Ok(path.to_string_lossy().to_string());
     }
 
+    if Path::new(arg).is_absolute() {
+        return Err(WmError::WorktreeNotFound(arg.to_string()).into());
+    }
+
     // Fall back to resolving the value as a branch/worktree name
     let repo_root = get_repo_root()?;
     let worktree_name = branch_to_worktree_name(arg, branch_prefix);
