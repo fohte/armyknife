@@ -411,6 +411,7 @@ fn process_hook_event_impl(
 
         Session {
             session_id: input.session_id.clone(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: input.cwd.clone(),
             transcript_path: input.transcript_path.clone(),
@@ -1668,6 +1669,7 @@ mod tests {
 
         let session = Session {
             session_id: "paused-sess".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -2038,6 +2040,7 @@ mod tests {
 
         let session = Session {
             session_id: "end-sess".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -2589,6 +2592,7 @@ mod tests {
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
             session_id: "test-123".to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -2931,6 +2935,7 @@ mod tests {
             let now = Utc::now();
             Session {
                 session_id: session_id.to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: std::path::PathBuf::from("/tmp/test"),
                 transcript_path: None,

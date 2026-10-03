@@ -470,6 +470,7 @@ mod tests {
         let sessions: Vec<Session> = (0..count)
             .map(|i| Session {
                 session_id: format!("session-{}", i),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from(format!("/project/{}", i)),
                 transcript_path: None,
@@ -928,6 +929,7 @@ mod tests {
         let sessions: Vec<Session> = vec![
             Session {
                 session_id: "session-running".to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/running"),
                 transcript_path: None,
@@ -950,6 +952,7 @@ mod tests {
             },
             Session {
                 session_id: "session-waiting".to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/waiting"),
                 transcript_path: None,
@@ -972,6 +975,7 @@ mod tests {
             },
             Session {
                 session_id: "session-stopped".to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/stopped"),
                 transcript_path: None,
@@ -994,6 +998,7 @@ mod tests {
             },
             Session {
                 session_id: "session-paused".to_string(),
+                work_type: None,
                 crit_urls: Vec::new(),
                 cwd: PathBuf::from("/project/paused"),
                 transcript_path: None,
@@ -1236,6 +1241,7 @@ mod tests {
     fn session_with_cwd(id: &str, cwd: PathBuf) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd,
             transcript_path: None,

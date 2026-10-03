@@ -607,6 +607,7 @@ mod tests {
     fn make_session(id: &str, status: SessionStatus, updated_at: DateTime<Utc>) -> Session {
         Session {
             session_id: id.to_string(),
+            work_type: None,
             crit_urls: Vec::new(),
             cwd: PathBuf::from("/tmp"),
             transcript_path: None,
