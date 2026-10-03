@@ -438,7 +438,7 @@ The command sends Ctrl+D and waits up to five seconds for the agent to exit, the
 
 Worktree creation in the same repository is serialized through the `post-worktree-create` hook. Concurrent calls wait for the hook or its rollback to finish.
 
-Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking session. When they match and the caller is running inside a tmux pane (`$TMUX_PANE` is set), it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or there's no pane to split -- it opens a new tmux window in the target repo's own tmux session.
+Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking session. When they match and the caller pane resolves from `$TMUX_PANE` or the invoking agent session's recorded tmux pane, it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or no caller pane can be resolved -- it opens a new tmux window in the target repo's own tmux session.
 
 `a agent new` auto-detects the `CLAUDECODE` environment variable: when set (e.g. invoked from a Claude Code Bash tool), the split or new window is built in the background without stealing focus from the current pane/window. Run from a human shell, focus switches to the new pane or window as before.
 

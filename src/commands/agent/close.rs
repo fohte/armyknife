@@ -148,7 +148,7 @@ fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
 }
 
 fn close_worktree_session(session: &Session, force: bool) -> Result<()> {
-    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id(None);
+    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
     if !should_gracefully_close_worktree_session(session, current_pane_id.as_deref()) {
         return Ok(());
     }

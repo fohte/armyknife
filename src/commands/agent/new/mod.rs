@@ -319,7 +319,7 @@ fn run_session_only_inner(args: &NewArgs, repo_root: &str, config: &Config) -> R
 
     // Window mode doesn't need a pane, so it remains the fallback when no
     // caller pane can be resolved.
-    match crate::shared::caller_pane::resolve_caller_pane_id(None) {
+    match crate::shared::caller_pane::resolve_caller_pane_id() {
         Some(target_pane) if !differs => {
             let route = setup_split_pane(TmuxSplitPaneSpec {
                 target_pane: &target_pane,

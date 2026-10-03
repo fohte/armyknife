@@ -67,7 +67,7 @@ pub fn run(command: &CritCommands) -> Result<()> {
 
 fn add(args: &AddArgs) -> Result<()> {
     let Some(session_id) = EnvVars::load().own_session_id() else {
-        if let Some(pane_id) = caller_pane::resolve_caller_pane_id(None) {
+        if let Some(pane_id) = caller_pane::resolve_caller_pane_id() {
             return add_without_agent_session(args, &pane_id);
         }
 
@@ -104,7 +104,7 @@ fn add(args: &AddArgs) -> Result<()> {
     lock.save(&session)?;
     tracing::info!(event = "agent.crit.add.registered");
 
-    if let Some(pane_id) = caller_pane::resolve_caller_pane_id(Some(&session))
+    if let Some(pane_id) = caller_pane::pane_id_for_session(&session)
         && let Err(error) = pane::set_crit_url(&pane_id, &args.url)
     {
         tracing::warn!(
