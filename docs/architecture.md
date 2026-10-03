@@ -24,7 +24,7 @@ a [<scope>...] <action>
 
 ### Naming Convention
 
-- **Scope**: Noun or abbreviation representing the domain (e.g., `ai`, `wm`, `gh`)
+- **Scope**: Noun or abbreviation representing the domain (e.g., `ai`, `agent`, `gh`)
 - **Action**: Verb representing what to do (e.g., `new`, `submit`, `update`)
 
 ## Module Structure

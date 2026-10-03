@@ -1000,11 +1000,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agent_clean_accepts_worktree_cleanup_options() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "agent",
+            "clean",
+            "--dry-run",
+            "--all",
+            "--force",
+        ])
+        .expect("the clean command should parse");
+
+        let clean_args = match parsed.command {
+            crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
+                Some((args.dry_run, args.all, args.force))
+            }
+            _ => None,
+        };
+
+        assert_eq!(clean_args, Some((true, true, true)));
+    }
+
     #[rstest]
     #[case::delete(vec!["a", "wm", "delete"])]
     #[case::d_alias(vec!["a", "wm", "d"])]
     #[case::rm_alias(vec!["a", "wm", "rm"])]
-    fn wm_delete_command_and_aliases_are_removed(#[case] argv: Vec<&str>) {
+    #[case::clean(vec!["a", "wm", "clean"])]
+    #[case::list(vec!["a", "wm", "list"])]
+    fn wm_commands_are_removed(#[case] argv: Vec<&str>) {
         use clap::Parser;
 
         let parsed = crate::cli::Cli::try_parse_from(argv);

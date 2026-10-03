@@ -1,7 +1,7 @@
 //! Shared "is this agent session still active?" predicate.
 //!
 //! `agent sweep` uses this to decide whether to pause a Stopped session;
-//! `wm clean` uses it to protect worktrees that still host live sessions
+//! `agent clean` uses it to protect worktrees that still host live sessions
 //! from being deleted. Keeping the definition in one place ensures the two
 //! features cannot drift apart.
 //!

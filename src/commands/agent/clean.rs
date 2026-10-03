@@ -307,7 +307,7 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    // wm clean may be invoked from a non-tmux context (cron, plain shell);
+    // agent clean may be invoked from a non-tmux context (cron, plain shell);
     // fall back to the no-op probe so we never block on tmux calls.
     if std::env::var_os("TMUX").is_some() {
         protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);

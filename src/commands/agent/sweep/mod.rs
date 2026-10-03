@@ -169,7 +169,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
 
 /// Adds the "which pid hosts this session?" question on top of the shared
 /// `DraftProbe`. Sweep is the only caller that needs to actually kill a
-/// process; wm clean can use a plain `DraftProbe` and skip the snapshot
+/// process; agent clean can use a plain `DraftProbe` and skip the snapshot
 /// walk entirely.
 pub(crate) trait SessionProbe: DraftProbe {
     /// Returns the pid of the live process hosting `session` (per
@@ -333,7 +333,7 @@ where
         // process backing this session crashed or was killed outside of
         // sweep's own SIGTERM path, no further hook will ever fire for it,
         // so those sets would otherwise stay non-empty forever and
-        // permanently block both auto-pause here and `wm clean`'s worktree
+        // permanently block both auto-pause here and `agent clean`'s worktree
         // protection. Once sweep can independently confirm no `claude` pid
         // resolves for the session, treat any pending ids as stale and drop
         // them before making the pause decision.
