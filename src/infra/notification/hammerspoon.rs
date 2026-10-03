@@ -99,7 +99,8 @@ fn build_send_lua(notification: &Notification) -> String {
         ));
     }
 
-    let load_content_image = if let Some(app_icon) = notification.app_icon() {
+    // Bound image loading so an unreachable URL cannot delay notification delivery indefinitely.
+    let send_notification = if let Some(app_icon) = notification.app_icon() {
         parts.push(format!(
             "n:contentImage(hs.image.imageFromPath({}))",
             lua_quote(app_icon)
@@ -108,19 +109,19 @@ fn build_send_lua(notification: &Notification) -> String {
     } else {
         notification.content_image_url().map(|content_image_url| {
             format!(
-            "hs.image.imageFromURL({}, function(content_image) if content_image and n:delivered() then n:contentImage(content_image); n:send() end end)",
-            lua_quote(content_image_url),
+                "local sent = false; local send_notification = function(content_image) if not sent then sent = true; if content_image then pcall(function() n:contentImage(content_image) end) end; n:send() end end; local image_timeout = hs.timer.doAfter(1, function() send_notification(nil) end); hs.image.imageFromURL({}, function(content_image) if not sent then image_timeout:stop(); send_notification(content_image) end end)",
+                lua_quote(content_image_url),
             )
         })
     };
 
     // Disable auto-withdraw so the notification stays until clicked or explicitly removed
     parts.push("n:withdrawAfter(0)".to_string());
-    parts.push("n:send()".to_string());
 
-    // Send before fetching so a slow network cannot delay review notification delivery.
-    if let Some(load_content_image) = load_content_image {
-        parts.push(load_content_image);
+    if let Some(send_notification) = send_notification {
+        parts.push(send_notification);
+    } else {
+        parts.push("n:send()".to_string());
     }
 
     parts.join("; ")
@@ -159,13 +160,13 @@ mod tests {
     use crate::infra::notification::Notification;
 
     #[test]
-    fn sends_before_async_content_image_fetch() {
+    fn attaches_async_content_image_before_sending_once() {
         let notification = Notification::new("Review", "sample message")
             .with_content_image_url("https://images.example.test/mark.png");
 
         assert_eq!(
             build_send_lua(&notification),
-            "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); n:withdrawAfter(0); n:send(); hs.image.imageFromURL(\"https://images.example.test/mark.png\", function(content_image) if content_image and n:delivered() then n:contentImage(content_image); n:send() end end)",
+            "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); n:withdrawAfter(0); local sent = false; local send_notification = function(content_image) if not sent then sent = true; if content_image then pcall(function() n:contentImage(content_image) end) end; n:send() end end; local image_timeout = hs.timer.doAfter(1, function() send_notification(nil) end); hs.image.imageFromURL(\"https://images.example.test/mark.png\", function(content_image) if not sent then image_timeout:stop(); send_notification(content_image) end end)",
         );
     }
 }
