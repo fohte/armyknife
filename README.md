@@ -35,6 +35,8 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, and compaction settings under `agent.auto_compact`.
+
 For editor autocompletion, add the following to the top of your config file:
 
 ```yaml
@@ -343,6 +345,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
 | `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
 | `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                            |
+| `clean [--dry-run] [--all] [--force]`            |         | Delete merged or closed worktrees                                         |
 | `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
 | `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |

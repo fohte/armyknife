@@ -634,6 +634,30 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
+    #[test]
+    fn agent_clean_accepts_worktree_cleanup_options() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "agent",
+            "clean",
+            "--dry-run",
+            "--all",
+            "--force",
+        ])
+        .expect("the clean command should parse");
+
+        let clean_args = match parsed.command {
+            crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
+                Some((args.dry_run, args.all, args.force))
+            }
+            _ => None,
+        };
+
+        assert_eq!(clean_args, Some((true, true, true)));
+    }
+
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
         let now = Utc::now();
         Session {

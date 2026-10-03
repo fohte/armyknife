@@ -535,6 +535,14 @@ pub fn load_config() -> anyhow::Result<Config> {
     deserialize_config_with_overlay(yaml_merged, &blame_path, env_overlay())
 }
 
+/// Load configuration and warn before falling back to defaults on failure.
+pub(crate) fn load_config_or_default() -> Config {
+    load_config().unwrap_or_else(|error| {
+        tracing::warn!(%error, "Failed to load configuration; using defaults");
+        Config::default()
+    })
+}
+
 fn deserialize_config_with_overlay(
     yaml_merged: Option<serde_yaml::Value>,
     blame_path: &Path,
@@ -904,17 +912,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::wm(indoc! {"
-        wm:
-          worktrees_dir: .worktrees
-    "})]
-    #[case::cc(indoc! {"
-        cc:
-          auto_pause:
-            timeout: 30m
-    "})]
-    fn parse_legacy_config_sections_rejects_unknown_fields(#[case] yaml: &str) {
-        assert!(serde_yaml::from_str::<Config>(yaml).is_err());
+    #[case::wm(indoc! {"wm: {}"}, "wm")]
+    #[case::cc(indoc! {"cc: {}"}, "cc")]
+    fn parse_legacy_config_sections_reject_unknown_fields(#[case] yaml: &str, #[case] key: &str) {
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let error = serde_yaml::from_value::<Config>(value).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "unknown field `{key}`, expected one of `agent`, `editor`, `notification`, `repos`, `orgs`"
+            )
+        );
     }
 
     #[test]
@@ -1470,12 +1479,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::wm("ARMYKNIFE_WM__WORKTREES_DIR")]
-    #[case::cc("ARMYKNIFE_CC__AUTO_PAUSE__TIMEOUT")]
-    fn load_config_rejects_legacy_env_sections(#[case] name: &str) {
+    #[case::wm("ARMYKNIFE_WM__WORKTREES_DIR", "wm")]
+    #[case::cc("ARMYKNIFE_CC__AUTO_PAUSE__TIMEOUT", "cc")]
+    fn load_config_rejects_legacy_env_sections(#[case] name: &str, #[case] key: &str) {
         let dir = TempDir::new().unwrap();
 
-        assert!(config_with_env_vars(dir.path(), &[(name, "30m")]).is_err());
+        let error = config_with_env_vars(dir.path(), &[(name, "30m")]).unwrap_err();
+        let config_error = error.downcast_ref::<ConfigError>().unwrap();
+        let expected = format!(
+            "unknown field `{key}`, expected one of `agent`, `editor`, `notification`, `repos`, `orgs`"
+        );
+        match config_error {
+            ConfigError::EnvParseError { message } => assert_eq!(message, &expected),
+            other => panic!("expected EnvParseError, got: {other:?}"),
+        }
     }
 
     #[test]

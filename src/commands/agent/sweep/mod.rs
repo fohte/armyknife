@@ -95,7 +95,7 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     let span = tracing::info_span!("agent.sweep", run_id = %run_id);
     let _entered = span.enter();
 
-    let config = config::load_config().unwrap_or_default();
+    let config = config::load_config_or_default();
 
     // Respect the enabled flag unless a manual --timeout override was given.
     // (A manual `--timeout 1s` run is an explicit opt-in; we should honor it
