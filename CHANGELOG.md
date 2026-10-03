@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.351](https://github.com/fohte/armyknife/compare/v0.1.350...v0.1.351) (2026-10-03)
+
+
+### Bug Fixes
+
+* **hitl:** prevent stale locks when closing floating panes ([#1029](https://github.com/fohte/armyknife/issues/1029)) ([0200416](https://github.com/fohte/armyknife/commit/02004160dee0a99620c2b7211b2a4cf14db22b63))
+
 ## [0.1.350](https://github.com/fohte/armyknife/compare/v0.1.349...v0.1.350) (2026-10-03)
 
 
