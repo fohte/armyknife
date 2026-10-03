@@ -154,6 +154,7 @@ mod tests {
         Session {
             session_id: id.to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: cwd.to_path_buf(),
             transcript_path: None,
             tty: None,

@@ -66,6 +66,7 @@ fn record_in(
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
         crit_urls: Vec::new(),
+        pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
         transcript_path: None,
         tty: None,
@@ -118,6 +119,7 @@ mod tests {
         Session {
             session_id: "thread-a".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/original"),
             transcript_path: Some(PathBuf::from("/tmp/transcript.jsonl")),
             tty: Some("/dev/ttys001".to_string()),

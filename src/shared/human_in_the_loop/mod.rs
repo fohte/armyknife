@@ -12,6 +12,7 @@ mod editor;
 mod error;
 pub mod exit_code;
 mod lock;
+mod pending_review;
 mod tmux;
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -181,9 +182,12 @@ where
     started_fifo_cleanup.disarm();
     let _ = std::fs::remove_file(&started_fifo_path);
 
-    // Wait for the review-complete process to finish via FIFO.
-    // This blocks with no CPU usage until the other process writes to the FIFO.
-    wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+    {
+        let _pending_review = pending_review::PendingReviewGuard::for_current_session();
+        // Wait for the review-complete process to finish via FIFO.
+        // This blocks with no CPU usage until the other process writes to the FIFO.
+        wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+    }
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
     done_fifo_cleanup.disarm();

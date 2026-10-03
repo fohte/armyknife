@@ -13,6 +13,7 @@ pub(super) fn create_test_session(id: &str) -> Session {
     Session {
         session_id: id.to_string(),
         crit_urls: Vec::new(),
+        pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/home/user/project"),
         transcript_path: None,
         tty: None,

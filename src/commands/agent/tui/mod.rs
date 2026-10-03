@@ -471,6 +471,7 @@ mod tests {
             .map(|i| Session {
                 session_id: format!("session-{}", i),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from(format!("/project/{}", i)),
                 transcript_path: None,
                 tty: None,
@@ -929,6 +930,7 @@ mod tests {
             Session {
                 session_id: "session-running".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/running"),
                 transcript_path: None,
                 tty: None,
@@ -951,6 +953,7 @@ mod tests {
             Session {
                 session_id: "session-waiting".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/waiting"),
                 transcript_path: None,
                 tty: None,
@@ -973,6 +976,7 @@ mod tests {
             Session {
                 session_id: "session-stopped".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/stopped"),
                 transcript_path: None,
                 tty: None,
@@ -995,6 +999,7 @@ mod tests {
             Session {
                 session_id: "session-paused".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/paused"),
                 transcript_path: None,
                 tty: None,
@@ -1237,6 +1242,7 @@ mod tests {
         Session {
             session_id: id.to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd,
             transcript_path: None,
             tty: None,

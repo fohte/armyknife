@@ -384,6 +384,7 @@ mod tests {
         Session {
             session_id: id.to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/home/user/project"),
             transcript_path: None,
             tty: None,
@@ -517,6 +518,17 @@ mod tests {
         let mut session = create_test_session("s1", SessionStatus::Stopped);
         session.pending_bg_task_ids.insert("bg-1".to_string());
         assert_eq!(section_of(&session), Section::Running);
+    }
+
+    #[test]
+    fn test_section_of_human_review_wait_with_pending_bg_task_is_needs_you() {
+        let mut session = create_test_session("review", SessionStatus::Stopped);
+        session.pending_bg_task_ids.insert("task-1".to_string());
+        session
+            .pending_human_review_ids
+            .insert("review-id".to_string());
+
+        assert_eq!(section_of(&session), Section::NeedsYou);
     }
 
     #[test]

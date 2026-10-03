@@ -232,6 +232,7 @@ mod tests {
         Session {
             session_id: "session-placeholder".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: "/tmp/session-placeholder".into(),
             transcript_path: None,
             tty: None,

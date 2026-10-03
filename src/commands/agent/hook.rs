@@ -412,6 +412,7 @@ fn process_hook_event_impl(
         Session {
             session_id: input.session_id.clone(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: input.cwd.clone(),
             transcript_path: input.transcript_path.clone(),
             tty: None,
@@ -1670,6 +1671,7 @@ mod tests {
         let session = Session {
             session_id: "paused-sess".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
             tty: None,
@@ -2040,6 +2042,7 @@ mod tests {
         let session = Session {
             session_id: "end-sess".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
             tty: None,
@@ -2591,6 +2594,7 @@ mod tests {
         Session {
             session_id: "test-123".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
             tty: None,
@@ -2933,6 +2937,7 @@ mod tests {
             Session {
                 session_id: session_id.to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),
                 transcript_path: None,
                 tty: None,

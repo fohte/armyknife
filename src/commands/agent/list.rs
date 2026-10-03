@@ -250,6 +250,7 @@ mod tests {
         Session {
             session_id: "test-123".to_string(),
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/home/user/projects/myproject"),
             transcript_path: None,
             tty: None,
@@ -399,6 +400,7 @@ mod tests {
             Session {
                 session_id: "s1".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/running"),
                 transcript_path: None,
                 tty: None,
@@ -421,6 +423,7 @@ mod tests {
             Session {
                 session_id: "s2".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/waiting"),
                 transcript_path: None,
                 tty: None,
@@ -443,6 +446,7 @@ mod tests {
             Session {
                 session_id: "s3".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/stopped"),
                 transcript_path: None,
                 tty: None,
@@ -465,6 +469,7 @@ mod tests {
             Session {
                 session_id: "s4".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/background"),
                 transcript_path: None,
                 tty: None,
@@ -649,6 +654,22 @@ mod tests {
     }
 
     #[test]
+    fn test_render_tmux_status_counts_human_review_as_waiting() {
+        let sessions = vec![Session {
+            status: SessionStatus::Stopped,
+            pending_bg_task_ids: std::collections::BTreeSet::from(["task-1".to_string()]),
+            pending_human_review_ids: std::collections::BTreeSet::from(["review-id".to_string()]),
+            ..create_test_session()
+        }];
+        let mut output = Vec::new();
+        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            "#[fg=yellow]\u{25d0} 1#[default]"
+        );
+    }
+
+    #[test]
     fn test_render_tmux_status_mixed_waiting_and_stopped() {
         let sessions = vec![
             Session {
@@ -755,6 +776,7 @@ mod tests {
             Session {
                 session_id: "s1".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/home/user/webapp"),
                 transcript_path: None,
                 tty: None,
@@ -782,6 +804,7 @@ mod tests {
             Session {
                 session_id: "s2".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/home/user/api"),
                 transcript_path: None,
                 tty: None,
@@ -809,6 +832,7 @@ mod tests {
             Session {
                 session_id: "s3".to_string(),
                 crit_urls: Vec::new(),
+                pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/home/user/docs"),
                 transcript_path: None,
                 tty: None,
