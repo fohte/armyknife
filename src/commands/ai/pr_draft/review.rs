@@ -149,6 +149,7 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
         &window_title,
         &PrDraftReviewHandler,
         &config.editor,
+        config.notification.enabled,
     ))?;
 
     // If the editor was already open, exit with a distinct code so callers

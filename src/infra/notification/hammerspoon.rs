@@ -99,21 +99,29 @@ fn build_send_lua(notification: &Notification) -> String {
         ));
     }
 
-    if let Some(app_icon) = notification.app_icon() {
+    let load_content_image = if let Some(app_icon) = notification.app_icon() {
         parts.push(format!(
             "n:contentImage(hs.image.imageFromPath({}))",
             lua_quote(app_icon)
         ));
-    } else if let Some(content_image_url) = notification.content_image_url() {
-        parts.push(format!(
-            "local content_image = hs.image.imageFromURL({}); if content_image then n:contentImage(content_image) end",
-            lua_quote(content_image_url)
-        ));
-    }
+        None
+    } else {
+        notification.content_image_url().map(|content_image_url| {
+            format!(
+            "hs.image.imageFromURL({}, function(content_image) if content_image and n:delivered() then n:contentImage(content_image); n:send() end end)",
+            lua_quote(content_image_url),
+            )
+        })
+    };
 
     // Disable auto-withdraw so the notification stays until clicked or explicitly removed
     parts.push("n:withdrawAfter(0)".to_string());
     parts.push("n:send()".to_string());
+
+    // Send before fetching so a slow network cannot delay review notification delivery.
+    if let Some(load_content_image) = load_content_image {
+        parts.push(load_content_image);
+    }
 
     parts.join("; ")
 }
@@ -151,13 +159,13 @@ mod tests {
     use crate::infra::notification::Notification;
 
     #[test]
-    fn skips_content_image_when_url_fetch_returns_nil() {
+    fn sends_before_async_content_image_fetch() {
         let notification = Notification::new("Review", "sample message")
             .with_content_image_url("https://images.example.test/mark.png");
 
         assert_eq!(
             build_send_lua(&notification),
-            "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); local content_image = hs.image.imageFromURL(\"https://images.example.test/mark.png\"); if content_image then n:contentImage(content_image) end; n:withdrawAfter(0); n:send()",
+            "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); n:withdrawAfter(0); n:send(); hs.image.imageFromURL(\"https://images.example.test/mark.png\", function(content_image) if content_image and n:delivered() then n:contentImage(content_image); n:send() end end)",
         );
     }
 }

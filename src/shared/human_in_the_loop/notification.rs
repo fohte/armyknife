@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::commands::agent::{display_label, repo_name, store};
 use crate::infra::notification::{Notification, NotificationAction};
-use crate::shared::config::{self, EditorConfig};
-use crate::shared::env_var::EnvVars;
-use crate::shared::notification_policy;
+use crate::shared::config::EditorConfig;
 
 const REVIEW_NOTIFICATION_TITLE: &str = "■ HITL review requested";
 const NEOVIM_LOGO_URL: &str = "https://neovim.io/logos/neovim-mark-flat.png";
@@ -17,13 +15,6 @@ pub(super) fn send_review_requested(
     window_title: &str,
     editor_config: &EditorConfig,
 ) {
-    let config = config::load_config_or_default();
-    let env_vars = EnvVars::load();
-    if !notification_policy::is_enabled(config.notification.enabled, env_vars.cc_notify.as_deref())
-    {
-        return;
-    }
-
     let session = match store::load_session(session_id) {
         Ok(session) => session,
         Err(error) => {

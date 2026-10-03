@@ -86,6 +86,7 @@ pub fn start_review<S, H>(
     window_title: &str,
     handler: &H,
     editor_config: &EditorConfig,
+    notifications_enabled: bool,
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
@@ -112,6 +113,7 @@ where
             window_title,
             handler,
             editor_config,
+            notifications_enabled,
         )
     })
 }

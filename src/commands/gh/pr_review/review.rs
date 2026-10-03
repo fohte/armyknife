@@ -135,6 +135,7 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
             &window_title,
             &handler,
             &config.editor,
+            config.notification.enabled,
         ))?;
 
     if document.is_none() {

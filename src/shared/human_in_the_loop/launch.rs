@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use crate::shared::config::EditorConfig;
+use crate::shared::env_var::EnvVars;
+use crate::shared::notification_policy;
 
 use super::{
     FifoCleanupGuard, HumanInTheLoopError, LaunchOptions, Result, ReviewHandler,
@@ -15,6 +17,7 @@ pub(super) fn launch_review<S, H>(
     window_title: &str,
     handler: &H,
     editor_config: &EditorConfig,
+    notifications_enabled: bool,
 ) -> Result<()>
 where
     S: super::DocumentSchema,
@@ -25,38 +28,60 @@ where
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 
-    if let Some(parent_pane_id) = tmux_pane_id {
-        let session_id = crate::shared::env_var::EnvVars::load().own_session_id();
-        launch_tmux_review(
-            || {
-                super::tmux::open_review_pane(
-                    parent_pane_id,
-                    window_title,
-                    exe_path.as_os_str(),
-                    &review_args,
-                    done_fifo_path,
-                )
-            },
-            session_id.as_deref(),
-            |session_id| {
-                super::notification::send_review_requested(
-                    session_id,
-                    document_path,
-                    window_title,
-                    editor_config,
-                )
-            },
-        )?;
-        return Ok(());
-    }
-
-    launch_in_terminal(
-        &exe_path,
-        &review_args,
-        document_path,
-        window_title,
-        editor_config,
+    launch_review_surface(
+        tmux_pane_id,
+        |parent_pane_id| {
+            let env_vars = EnvVars::load();
+            let session_id = if notification_policy::is_enabled(
+                notifications_enabled,
+                env_vars.cc_notify.as_deref(),
+            ) {
+                env_vars.own_session_id()
+            } else {
+                None
+            };
+            launch_tmux_review(
+                || {
+                    super::tmux::open_review_pane(
+                        parent_pane_id,
+                        window_title,
+                        exe_path.as_os_str(),
+                        &review_args,
+                        done_fifo_path,
+                    )
+                },
+                session_id.as_deref(),
+                |session_id| {
+                    super::notification::send_review_requested(
+                        session_id,
+                        document_path,
+                        window_title,
+                        editor_config,
+                    )
+                },
+            )
+        },
+        || {
+            launch_in_terminal(
+                &exe_path,
+                &review_args,
+                document_path,
+                window_title,
+                editor_config,
+            )
+        },
     )
+}
+
+fn launch_review_surface(
+    tmux_pane_id: Option<&str>,
+    launch_tmux: impl FnOnce(&str) -> Result<()>,
+    launch_terminal: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    match tmux_pane_id {
+        Some(parent_pane_id) => launch_tmux(parent_pane_id),
+        None => launch_terminal(),
+    }
 }
 
 fn launch_tmux_review(
@@ -173,6 +198,30 @@ mod tests {
         assert_eq!(
             (events.into_inner(), result),
             (expected_events, expected_result),
+        );
+    }
+
+    #[test]
+    fn launches_terminal_without_notification_when_not_in_tmux() {
+        let events = RefCell::new(Vec::new());
+        let result = launch_review_surface(
+            None,
+            |_| {
+                events
+                    .borrow_mut()
+                    .push("tmux launch and notification".to_string());
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("terminal launch".to_string());
+                Ok(())
+            },
+        );
+        let result = result.map_err(|error| error.to_string());
+
+        assert_eq!(
+            (events.into_inner(), result),
+            (vec!["terminal launch".to_string()], Ok(())),
         );
     }
 }
