@@ -28,69 +28,54 @@ where
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 
-    launch_review_surface(
-        tmux_pane_id,
-        |parent_pane_id| {
-            let env_vars = EnvVars::load();
-            let session_id = if notification_policy::is_enabled(
-                notifications_enabled,
-                env_vars.cc_notify.as_deref(),
-            ) {
-                env_vars.own_session_id()
-            } else {
-                None
-            };
-            launch_tmux_review(
-                || {
-                    super::tmux::open_review_pane(
-                        parent_pane_id,
-                        window_title,
-                        exe_path.as_os_str(),
-                        &review_args,
-                        done_fifo_path,
-                    )
-                },
-                session_id.as_deref(),
-                |session_id| {
-                    super::notification::send_review_requested(
-                        session_id,
-                        document_path,
-                        window_title,
-                        editor_config,
-                    )
-                },
-            )
-        },
-        || {
-            launch_in_terminal(
-                &exe_path,
-                &review_args,
-                document_path,
-                window_title,
-                editor_config,
-            )
-        },
-    )
-}
-
-fn launch_review_surface(
-    tmux_pane_id: Option<&str>,
-    launch_tmux: impl FnOnce(&str) -> Result<()>,
-    launch_terminal: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    match tmux_pane_id {
-        Some(parent_pane_id) => launch_tmux(parent_pane_id),
-        None => launch_terminal(),
+    if let Some(parent_pane_id) = tmux_pane_id {
+        let env_vars = EnvVars::load();
+        let session_id = env_vars.own_session_id();
+        launch_tmux_review(
+            || {
+                super::tmux::open_review_pane(
+                    parent_pane_id,
+                    window_title,
+                    exe_path.as_os_str(),
+                    &review_args,
+                    done_fifo_path,
+                )
+            },
+            session_id.as_deref(),
+            notifications_enabled,
+            env_vars.cc_notify.as_deref(),
+            |session_id| {
+                super::notification::send_review_requested(
+                    session_id,
+                    document_path,
+                    window_title,
+                    editor_config,
+                )
+            },
+        )?;
+        return Ok(());
     }
+
+    launch_in_terminal(
+        &exe_path,
+        &review_args,
+        document_path,
+        window_title,
+        editor_config,
+    )
 }
 
 fn launch_tmux_review(
     open_pane: impl FnOnce() -> Result<()>,
     session_id: Option<&str>,
+    notifications_enabled: bool,
+    cc_notify: Option<&str>,
     notify: impl FnOnce(&str),
 ) -> Result<()> {
     open_pane()?;
-    if let Some(session_id) = session_id {
+    if notification_policy::is_enabled(notifications_enabled, cc_notify)
+        && let Some(session_id) = session_id
+    {
         notify(session_id);
     }
     Ok(())
@@ -155,10 +140,30 @@ mod tests {
     #[case::agent_review_notifies_after_open(
         true,
         Some("session-id"),
+        true,
+        None,
         vec!["pane opened".to_string(), "notified: session-id".to_string()],
         Ok(()),
     )]
+    #[case::notifications_disabled_keeps_agent_session(
+        true,
+        Some("session-id"),
+        false,
+        None,
+        vec!["pane opened".to_string()],
+        Ok(()),
+    )]
+    #[case::environment_override_disables_notification(
+        true,
+        Some("session-id"),
+        true,
+        Some("0"),
+        vec!["pane opened".to_string()],
+        Ok(()),
+    )]
     #[case::without_agent_session_only_opens_pane(
+        true,
+        None,
         true,
         None,
         vec!["pane opened".to_string()],
@@ -167,12 +172,16 @@ mod tests {
     #[case::failed_open_does_not_notify(
         false,
         Some("session-id"),
+        true,
+        None,
         vec!["pane opened".to_string()],
         Err("Command failed: pane unavailable".to_string()),
     )]
     fn notifies_only_after_successful_pane_open(
         #[case] open_succeeds: bool,
         #[case] session_id: Option<&str>,
+        #[case] notifications_enabled: bool,
+        #[case] cc_notify: Option<&str>,
         #[case] expected_events: Vec<String>,
         #[case] expected_result: std::result::Result<(), String>,
     ) {
@@ -189,6 +198,8 @@ mod tests {
                 }
             },
             session_id,
+            notifications_enabled,
+            cc_notify,
             |session_id| {
                 events.borrow_mut().push(format!("notified: {session_id}"));
             },
@@ -198,30 +209,6 @@ mod tests {
         assert_eq!(
             (events.into_inner(), result),
             (expected_events, expected_result),
-        );
-    }
-
-    #[test]
-    fn launches_terminal_without_notification_when_not_in_tmux() {
-        let events = RefCell::new(Vec::new());
-        let result = launch_review_surface(
-            None,
-            |_| {
-                events
-                    .borrow_mut()
-                    .push("tmux launch and notification".to_string());
-                Ok(())
-            },
-            || {
-                events.borrow_mut().push("terminal launch".to_string());
-                Ok(())
-            },
-        );
-        let result = result.map_err(|error| error.to_string());
-
-        assert_eq!(
-            (events.into_inner(), result),
-            (vec!["terminal launch".to_string()], Ok(())),
         );
     }
 }
