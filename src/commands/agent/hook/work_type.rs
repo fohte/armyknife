@@ -2,32 +2,7 @@ use super::super::types::{Engine, HookEvent, HookInput, Session};
 use crate::shared::config::AgentConfig;
 
 pub(super) fn may_contain_work_type(event: HookEvent, input: &HookInput) -> bool {
-    match (input.engine, event) {
-        (Engine::Claude, HookEvent::UserPromptSubmit) => input
-            .prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.trim_start().starts_with('/')),
-        (Engine::Codex, HookEvent::UserPromptSubmit) => input
-            .prompt
-            .as_deref()
-            .is_some_and(|prompt| prompt.contains('$')),
-        (Engine::Claude, HookEvent::PostToolUse) => {
-            input.tool_name.as_deref() == Some("Skill")
-                && input
-                    .tool_input
-                    .as_ref()
-                    .is_some_and(|tool_input| tool_input.skill.is_some())
-        }
-        (Engine::Codex, HookEvent::PostToolUse) => {
-            input.tool_name.as_deref() == Some("Bash")
-                && input
-                    .tool_input
-                    .as_ref()
-                    .and_then(|tool_input| tool_input.command.as_deref())
-                    .is_some_and(|command| command.contains("SKILL.md"))
-        }
-        _ => false,
-    }
+    work_type_candidate(event, input).is_some()
 }
 
 pub(super) fn update_session_work_type(
@@ -36,37 +11,64 @@ pub(super) fn update_session_work_type(
     input: &HookInput,
     agent_config: &AgentConfig,
 ) {
-    let skill_name = match (input.engine, event) {
-        (Engine::Claude, HookEvent::UserPromptSubmit) => input
-            .prompt
-            .as_deref()
-            .and_then(claude_prompt_skill)
+    let skill_name = match work_type_candidate(event, input) {
+        Some(WorkTypeCandidate::ClaudePrompt(prompt)) => claude_prompt_skill(prompt)
             .filter(|skill_name| agent_config.work_type(skill_name).is_some())
             .map(str::to_owned),
-        (Engine::Claude, HookEvent::PostToolUse) if input.tool_name.as_deref() == Some("Skill") => {
-            input
-                .tool_input
-                .as_ref()
-                .and_then(|tool_input| tool_input.skill.as_deref())
-                .filter(|skill_name| agent_config.work_type(skill_name).is_some())
-                .map(str::to_owned)
+        Some(WorkTypeCandidate::ClaudeSkill(skill_name)) => agent_config
+            .work_type(skill_name)
+            .map(|_| skill_name.to_owned()),
+        Some(WorkTypeCandidate::CodexPrompt(prompt)) => codex_prompt_skill(prompt, agent_config),
+        Some(WorkTypeCandidate::CodexCommand(command)) => {
+            codex_command_skill(command, agent_config)
         }
-        (Engine::Codex, HookEvent::UserPromptSubmit) => input
-            .prompt
-            .as_deref()
-            .and_then(|prompt| codex_prompt_skill(prompt, agent_config)),
-        (Engine::Codex, HookEvent::PostToolUse) if input.tool_name.as_deref() == Some("Bash") => {
-            input
-                .tool_input
-                .as_ref()
-                .and_then(|tool_input| tool_input.command.as_deref())
-                .and_then(|command| codex_command_skill(command, agent_config))
-        }
-        _ => None,
+        None => None,
     };
 
     if let Some(skill_name) = skill_name {
         session.work_type = Some(skill_name);
+    }
+}
+
+enum WorkTypeCandidate<'a> {
+    ClaudePrompt(&'a str),
+    ClaudeSkill(&'a str),
+    CodexPrompt(&'a str),
+    CodexCommand(&'a str),
+}
+
+// Subagent hooks share the parent session ID, so their skill calls update the same
+// session work type.
+fn work_type_candidate(event: HookEvent, input: &HookInput) -> Option<WorkTypeCandidate<'_>> {
+    match (input.engine, event) {
+        (Engine::Claude, HookEvent::UserPromptSubmit) => input
+            .prompt
+            .as_deref()
+            .filter(|prompt| prompt.trim_start().starts_with('/'))
+            .map(WorkTypeCandidate::ClaudePrompt),
+        (Engine::Claude, HookEvent::PostToolUse) if input.tool_name.as_deref() == Some("Skill") => {
+            input
+                .tool_input
+                .as_ref()?
+                .skill
+                .as_deref()
+                .map(WorkTypeCandidate::ClaudeSkill)
+        }
+        (Engine::Codex, HookEvent::UserPromptSubmit) => input
+            .prompt
+            .as_deref()
+            .filter(|prompt| prompt.contains('$'))
+            .map(WorkTypeCandidate::CodexPrompt),
+        (Engine::Codex, HookEvent::PostToolUse) if input.tool_name.as_deref() == Some("Bash") => {
+            input
+                .tool_input
+                .as_ref()?
+                .command
+                .as_deref()
+                .filter(|command| command.contains("SKILL.md"))
+                .map(WorkTypeCandidate::CodexCommand)
+        }
+        _ => None,
     }
 }
 
@@ -215,6 +217,17 @@ mod tests {
         Some("flow-one"),
         Some("flow-two"),
     )]
+    #[case::claude_subagent_skill_tool(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "claude",
+            "agent_id": "agent-helper",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "flow-two", "args": "continue"},
+        }),
+        Some("flow-one"),
+        Some("flow-two"),
+    )]
     #[case::codex_prompt_mention(
         HookEvent::UserPromptSubmit,
         json!({"engine": "codex", "prompt": "Please use $flow-two for this task."}),
@@ -248,6 +261,62 @@ mod tests {
         update_session_work_type(&mut session, event, &input, &agent_config);
 
         assert_eq!(session.work_type, expected.map(str::to_owned));
+    }
+
+    #[rstest]
+    #[case::claude_slash_prompt(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "claude", "prompt": "/flow-one continue"}),
+        true,
+    )]
+    #[case::claude_skill_tool(
+        HookEvent::PostToolUse,
+        json!({"engine": "claude", "tool_name": "Skill", "tool_input": {"skill": "flow-one"}}),
+        true,
+    )]
+    #[case::codex_prompt_mention(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "codex", "prompt": "Please use $flow-one"}),
+        true,
+    )]
+    #[case::codex_shell_skill_read(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "codex",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat /skills/flow-one/SKILL.md"},
+        }),
+        true,
+    )]
+    #[case::claude_regular_prompt(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "claude", "prompt": "Continue the task"}),
+        false,
+    )]
+    #[case::codex_regular_prompt(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "codex", "prompt": "Continue the task"}),
+        false,
+    )]
+    #[case::unrelated_event(
+        HookEvent::Stop,
+        json!({"engine": "codex", "prompt": "$flow-one"}),
+        false,
+    )]
+    #[case::unrelated_tool(
+        HookEvent::PostToolUse,
+        json!({"engine": "codex", "tool_name": "Read", "tool_input": {"command": "SKILL.md"}}),
+        false,
+    )]
+    fn identifies_work_type_candidates(
+        hook_input_factory: HookInputFactory,
+        #[case] event: HookEvent,
+        #[case] extra: Value,
+        #[case] expected: bool,
+    ) {
+        let input = hook_input_factory(extra);
+
+        assert_eq!(may_contain_work_type(event, &input), expected);
     }
 
     #[rstest]
