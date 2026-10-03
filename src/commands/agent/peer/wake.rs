@@ -363,6 +363,7 @@ mod tests {
             session_id: SESSION_ID.to_string(),
             work_type: None,
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,

@@ -7,6 +7,7 @@ const SKIP_HOOKS: &str = "ARMYKNIFE_SKIP_HOOKS";
 const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
+const SESSION_WORK_TYPE: &str = "ARMYKNIFE_SESSION_WORK_TYPE";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
 const CODEX_MANAGED_LAUNCH: &str = "ARMYKNIFE_CODEX_MANAGED_LAUNCH";
 const CC_HOOK_LOG: &str = "ARMYKNIFE_CC_HOOK_LOG";
@@ -40,6 +41,9 @@ pub struct EnvVars {
     /// Session label set by `a agent new --label` or auto-generated.
     pub session_label: Option<String>,
 
+    /// Initial session work type set by `a agent new --kind`.
+    pub session_work_type: Option<String>,
+
     /// Comma-separated ancestor session IDs from root to immediate parent.
     pub ancestor_session_ids: Option<String>,
 
@@ -71,6 +75,7 @@ impl EnvVars {
             session_id: non_empty_var(SESSION_ID),
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
             session_label: non_empty_var(SESSION_LABEL),
+            session_work_type: non_empty_var(SESSION_WORK_TYPE),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
@@ -95,6 +100,11 @@ impl EnvVars {
     /// Returns the env var name for SESSION_LABEL (used as key in env var pairs).
     pub fn session_label_name() -> &'static str {
         SESSION_LABEL
+    }
+
+    /// Returns the env var name for SESSION_WORK_TYPE (used as a key in env var pairs).
+    pub fn session_work_type_name() -> &'static str {
+        SESSION_WORK_TYPE
     }
 
     /// Returns the env var name for ANCESTOR_SESSION_IDS (used as key in env var pairs).

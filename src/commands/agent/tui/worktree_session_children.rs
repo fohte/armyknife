@@ -155,6 +155,7 @@ mod tests {
             session_id: id.to_string(),
             work_type: None,
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: cwd.to_path_buf(),
             transcript_path: None,
             tty: None,

@@ -115,6 +115,11 @@ pub struct Session {
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
+    /// IDs of Human-in-the-Loop reviews currently waiting for the user.
+    /// A process killed before cleanup can leave a marker; display status
+    /// considers it only while some background task is still pending.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pending_human_review_ids: BTreeSet<String>,
     pub cwd: PathBuf,
     pub transcript_path: Option<PathBuf>,
     /// TTY device path (legacy field, not used for session lifecycle detection).
@@ -241,7 +246,7 @@ pub enum StatusColor {
 }
 
 /// Presentation-only status derived from session status, unread state,
-/// pending background tasks, and linked crit reviews. See
+/// pending background tasks, and review state. See
 /// `Session::display_status`.
 ///
 /// Deliberately not `Serialize`/`Deserialize`: this is a derived, presentation-only
@@ -257,7 +262,7 @@ pub enum DisplayStatus {
     Paused,
     Ended,
     /// The main loop is stopped with a pending background task and no linked
-    /// crit review. See `Session::has_pending_bg_tasks`.
+    /// crit or Human-in-the-Loop review. See `Session::has_pending_bg_tasks`.
     Background,
 }
 
@@ -274,7 +279,8 @@ impl Session {
     /// treat such a session as still mid-task despite an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
     /// `display_status` (report `Background` instead of `Stopped`, or
-    /// `WaitingInput` for a stopped session with a linked crit review).
+    /// `WaitingInput` for a stopped session with a linked crit review or
+    /// pending Human-in-the-Loop review).
     pub fn has_pending_bg_tasks(&self) -> bool {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
@@ -287,17 +293,16 @@ impl Session {
     }
 
     /// Presentation status for this session. A stopped main loop with pending
-    /// background work is `WaitingInput` when `crit_urls` is non-empty and
-    /// `Background` otherwise. Pending work is classified this way while
-    /// a crit daemon keeps its URL linked. Notification, `auto_pause`,
-    /// `auto_compact`, and `sweep` read persisted status or
-    /// `has_pending_bg_tasks` directly and must not switch to this.
+    /// background work is `WaitingInput` when a crit review is linked or a
+    /// Human-in-the-Loop review is pending, and `Background` otherwise.
+    /// Notifications, `auto_pause`, `auto_compact`, and `sweep` read persisted
+    /// status or `has_pending_bg_tasks` directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
         if self.status == SessionStatus::Stopped && self.has_pending_bg_tasks() {
-            return if self.crit_urls.is_empty() {
-                DisplayStatus::Background
-            } else {
+            return if !self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty() {
                 DisplayStatus::WaitingInput
+            } else {
+                DisplayStatus::Background
             };
         }
         if self.is_unread_stopped() {
@@ -385,6 +390,10 @@ pub struct HookInput {
     /// Used to skip "startup" events on `claude -c` which create unwanted empty sessions.
     #[serde(default)]
     pub source: Option<String>,
+
+    // UserPromptSubmit event fields
+    #[serde(default)]
+    pub prompt: Option<String>,
 
     // Notification event fields
     #[serde(default)]
@@ -476,6 +485,8 @@ pub struct BackgroundTask {
 pub struct ToolInput {
     /// Command for Bash tool
     pub command: Option<String>,
+    /// Skill name for Claude Code's Skill tool
+    pub skill: Option<String>,
     /// File path for Read/Write/Edit tools
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
@@ -490,6 +501,7 @@ impl<'de> Deserialize<'de> for ToolInput {
         let field = |key: &str| value.get(key)?.as_str().map(str::to_string);
         Ok(Self {
             command: field("command"),
+            skill: field("skill"),
             file_path: field("file_path"),
             pattern: field("pattern"),
         })
@@ -574,6 +586,7 @@ mod tests {
             session_id: "s".to_string(),
             work_type: None,
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,
@@ -632,6 +645,26 @@ mod tests {
         assert_eq!(s.display_symbol(), expected);
     }
 
+    #[rstest]
+    #[case::stopped_with_pending_bg_task(SessionStatus::Stopped, true, DisplayStatus::WaitingInput)]
+    #[case::stopped_without_pending_bg_task(SessionStatus::Stopped, false, DisplayStatus::Stopped)]
+    #[case::running_with_pending_bg_task(SessionStatus::Running, true, DisplayStatus::Running)]
+    fn human_review_wait_only_changes_pending_background_status(
+        #[case] status: SessionStatus,
+        #[case] has_pending_bg_task: bool,
+        #[case] expected: DisplayStatus,
+    ) {
+        let mut session = session(status, Some(Utc::now()));
+        if has_pending_bg_task {
+            session.pending_bg_task_ids.insert("task-1".to_string());
+        }
+        session
+            .pending_human_review_ids
+            .insert("review-id".to_string());
+
+        assert_eq!(session.display_status(), expected);
+    }
+
     #[test]
     fn optional_fields_default_when_missing_from_json() {
         // Existing on-disk sessions predate these fields and must still load.
@@ -647,7 +680,14 @@ mod tests {
         });
         let session: Session =
             serde_json::from_value(json).expect("legacy session should deserialize");
-        assert_eq!((session.read_at, session.work_type), (None, None));
+        assert_eq!(
+            (
+                session.read_at,
+                session.work_type,
+                session.pending_human_review_ids
+            ),
+            (None, None, BTreeSet::new())
+        );
     }
 
     #[test]
@@ -714,6 +754,7 @@ mod tests {
     ) -> ToolInput {
         ToolInput {
             command: command.map(str::to_string),
+            skill: None,
             file_path: file_path.map(str::to_string),
             pattern: pattern.map(str::to_string),
         }

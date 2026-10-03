@@ -321,6 +321,18 @@ mod tests {
     }
 
     #[test]
+    fn test_count_statuses_human_review_wait_counts_as_waiting() {
+        let mut review = create_test_session("review");
+        review.status = SessionStatus::Stopped;
+        review.pending_bg_task_ids.insert("task-1".to_string());
+        review
+            .pending_human_review_ids
+            .insert("review-id".to_string());
+
+        assert_eq!(count_statuses(&[review]), (0, 1, 0, 0));
+    }
+
+    #[test]
     fn test_count_statuses_with_paused() {
         let sessions = vec![
             {
