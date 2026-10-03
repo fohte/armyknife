@@ -178,7 +178,6 @@ mod tests {
         Session {
             session_id: "session-test".to_owned(),
             crit_urls: Vec::new(),
-            pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
             tty: None,
