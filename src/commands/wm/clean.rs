@@ -511,13 +511,7 @@ async fn delete_worktrees_single_repo(
     repo: &GitRepo,
     worktrees: &[CleanWorktreeInfo],
 ) -> Result<()> {
-    if worktrees.iter().any(|info| info.status.is_merged()) {
-        let exclude_paths = worktrees
-            .iter()
-            .map(|info| info.wt.path.clone())
-            .collect::<Vec<_>>();
-        spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
-    }
+    spawn_base_conflict_check(repo, worktrees.iter());
 
     let mut deleted_count = 0;
 
@@ -571,13 +565,7 @@ async fn delete_worktrees_all_repos(
             }
         };
 
-        if infos.iter().any(|info| info.status.is_merged()) {
-            let exclude_paths = infos
-                .iter()
-                .map(|info| info.wt.path.clone())
-                .collect::<Vec<_>>();
-            spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
-        }
+        spawn_base_conflict_check(&repo, infos.iter().copied());
 
         for info in infos {
             // Must run before cleanup_worktree_by_name below: notification
@@ -605,6 +593,22 @@ async fn delete_worktrees_all_repos(
     println!("Done. Deleted {deleted_count} worktree(s).");
 
     Ok(())
+}
+
+fn spawn_base_conflict_check<'a>(
+    repo: &GitRepo,
+    infos: impl IntoIterator<Item = &'a CleanWorktreeInfo>,
+) {
+    let infos: Vec<_> = infos.into_iter().collect();
+    if !infos.iter().any(|info| info.status.is_merged()) {
+        return;
+    }
+
+    let exclude_paths = infos
+        .iter()
+        .map(|info| info.wt.path.clone())
+        .collect::<Vec<_>>();
+    spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
 }
 
 /// Collect all worktrees and categorize them by merge status

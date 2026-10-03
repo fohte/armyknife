@@ -21,4 +21,5 @@ pub mod update;
 pub mod worktree;
 pub mod worktree_delete;
 pub mod worktree_error;
+pub mod worktree_merge;
 pub mod yaml_frontmatter;
