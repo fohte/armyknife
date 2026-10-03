@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.355](https://github.com/fohte/armyknife/compare/v0.1.354...v0.1.355) (2026-10-03)
+
+
+### Features
+
+* **agent:** allow specifying work kind when starting a session ([#1037](https://github.com/fohte/armyknife/issues/1037)) ([304776d](https://github.com/fohte/armyknife/commit/304776d756ebf47c1af91f65dcc8300edd531c94))
+
 ## [0.1.354](https://github.com/fohte/armyknife/compare/v0.1.353...v0.1.354) (2026-10-03)
 
 
