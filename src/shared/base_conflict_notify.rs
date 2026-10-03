@@ -479,6 +479,7 @@ mod tests {
             pending_permission_agent_ids: Default::default(),
             pending_permission_request_ids: Default::default(),
             read_at: None,
+            work_type: None,
             sweep_signaled: false,
             engine: Engine::Claude,
         }
