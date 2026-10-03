@@ -47,7 +47,7 @@ For editor autocompletion, add the following to the top of your config file:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
 
 agent:
-  work_types: # skill names recognized as session work types
+  work_types: # per-skill icon and color metadata
     example-workflow:
       icon: '◇'
       color: cyan
@@ -91,7 +91,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
 ```
 
-`agent.work_types` maps exact skill names to an icon string and color. Only listed skills are recognized as session work types. Colors accept named ratatui colors, RGB triplets (`[r, g, b]`), and 256-color indices (`0` to `255`).
+`agent.work_types` associates exact skill names with icon and color metadata. This mapping does not trigger skill detection or add icons to the session list. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
 ### Splitting public and private config
 
