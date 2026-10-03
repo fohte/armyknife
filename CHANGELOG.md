@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.347](https://github.com/fohte/armyknife/compare/v0.1.346...v0.1.347) (2026-10-03)
+
+
+### Features
+
+* **agent:** allow cleaning up sessions and linked worktrees with close ([#1017](https://github.com/fohte/armyknife/issues/1017)) ([656901c](https://github.com/fohte/armyknife/commit/656901c5c89ca4e6a10bdaed52ec0059fa6dfbfc))
+
+## [0.1.346](https://github.com/fohte/armyknife/compare/v0.1.345...v0.1.346) (2026-10-03)
+
+
+### Features
+
+* **config:** relocate configuration keys under agent ([#1016](https://github.com/fohte/armyknife/issues/1016)) ([6b1b585](https://github.com/fohte/armyknife/commit/6b1b585868311f91903160c861b893745bfabedd))
+
 ## [0.1.345](https://github.com/fohte/armyknife/compare/v0.1.344...v0.1.345) (2026-10-03)
 
 

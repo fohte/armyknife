@@ -1,5 +1,4 @@
 mod clean;
-mod delete;
 mod list;
 
 use clap::Subcommand;
@@ -10,10 +9,6 @@ pub enum WmCommands {
     #[command(visible_alias = "ls")]
     List(list::ListArgs),
 
-    /// Delete a Git worktree and its branch
-    #[command(visible_aliases = ["d", "rm"])]
-    Delete(delete::DeleteArgs),
-
     /// Delete all merged worktrees
     #[command(visible_alias = "c")]
     Clean(clean::CleanArgs),
@@ -23,7 +18,6 @@ impl WmCommands {
     pub async fn run(&self) -> anyhow::Result<()> {
         match self {
             Self::List(args) => list::run(args),
-            Self::Delete(args) => delete::run(args).await,
             Self::Clean(args) => clean::run(args).await,
         }
     }

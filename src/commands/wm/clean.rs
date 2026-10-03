@@ -118,10 +118,10 @@ struct RepoWorktreeData {
 /// 3. Determine merge status from PR info (branches without PR are kept)
 async fn run_all(args: &CleanArgs) -> Result<()> {
     let config = load_config()?;
-    let repos_root = resolve_repos_root(config.wm.repos_root.as_deref())
+    let repos_root = resolve_repos_root(config.agent.worktree.repos_root.as_deref())
         .context("Failed to resolve repos root")?;
 
-    let repo_paths = discover_repos_with_worktrees(&repos_root, &config.wm.worktrees_dir);
+    let repo_paths = discover_repos_with_worktrees(&repos_root, &config.agent.worktree.dir);
     if repo_paths.is_empty() {
         println!(
             "No repositories with worktrees found under {}",
@@ -305,7 +305,7 @@ fn apply_active_session_protection(
 
     let timeout = load_config()
         .ok()
-        .and_then(|c| parse_duration(&c.cc.auto_pause.timeout).ok())
+        .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
     // wm clean may be invoked from a non-tmux context (cron, plain shell);

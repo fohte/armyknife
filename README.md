@@ -51,18 +51,17 @@ agent:
   codex: # defaults for `a agent new --engine codex` only; the `codex` you run yourself is unaffected
     model: gpt-5.6-luna # used when `--model` is omitted
     reasoning_effort: max # low | medium | high | xhigh | max; applied when `--reasoning-effort` is omitted
-
-wm:
-  worktrees_dir: .worktrees # worktree directory name (default: ".worktrees")
-  branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
-  repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
-  layout: # tmux pane layout for `a agent new --worktree`
-    direction: horizontal
-    first:
-      command: nvim
-      focus: true
-    second:
-      command: claude
+  worktree:
+    dir: .worktrees # worktree directory name (default: ".worktrees")
+    branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
+    repos_root: ~/ghq # root directory for repo discovery in `a wm clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
+    layout: # tmux pane layout for `a agent new --worktree`
+      direction: horizontal
+      first:
+        command: nvim
+        focus: true
+      second:
+        command: claude
 
 editor:
   terminal: ghostty # terminal emulator: "wezterm" (default) or "ghostty"
@@ -103,10 +102,12 @@ ln -s ~/work/dotfiles-private/armyknife.yaml ~/.config/armyknife/work.yaml
 Any scalar config value (string, bool, number) can also be set via an `ARMYKNIFE_*` environment variable, which takes priority over every YAML file. Strip the `ARMYKNIFE_` prefix, lowercase what remains, and join the config key path with `__` (double underscore, since key names themselves contain `_`). For example:
 
 ```sh
-ARMYKNIFE_CC__AUTO_COMPACT__ENABLED=false
+ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED=false
 ```
 
-maps to `cc.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
+maps to `agent.auto_compact.enabled`. Values are parsed as YAML scalars, so `false` becomes a bool and `3` a number. List- or map-typed fields (e.g. `reviewers`) can't be overridden this way, since env values are always scalars.
+
+Legacy `wm.*` settings map to `agent.worktree.*`; `wm.worktrees_dir` maps to `agent.worktree.dir`. `cc.auto_pause` and `cc.auto_compact` map to `agent.auto_pause` and `agent.auto_compact`. The legacy sections and `ARMYKNIFE_WM__*` / `ARMYKNIFE_CC__*` environment variables remain supported during migration. Within one YAML file, an `agent:` value takes precedence over its legacy alias; across files, the later file wins. For environment variables, `ARMYKNIFE_AGENT__*` takes precedence over its legacy alias.
 
 Variables whose path has no `__` are ignored rather than treated as a config key — every config field lives under a top-level section, so a bare `ARMYKNIFE_<NAME>` can never resolve to a real value. This also keeps unrelated `ARMYKNIFE_*` variables (session tracking, hook context, etc.) from being misread as config overrides. `repos.*` entries aren't reachable this way, since repo keys contain `/`, which can't appear in an environment variable name. `orgs.*` entries aren't reachable either, since org logins are matched case-sensitively but the overlay lowercases every path segment.
 
@@ -343,7 +344,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`          |         | Start a Claude Code session, optionally in a new worktree                 |
 | `codex [<args>...]`                              |         | Start Codex and bind its thread ID to the current tmux pane               |
-| `close [session_id] [--force]`                   | `c`     | Close an idle agent session and its tmux pane                             |
+| `close [target] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                            |
 | `hook <event>`                                   |         | Record session events (called from Claude Code hooks)                     |
 | `list`                                           | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id>`                             |         | Focus on a session's tmux pane                                            |
@@ -405,9 +406,9 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [session_id] [--force]` (alias: `a ag c`) closes the session in the current pane when no ID is given. It refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked; `--force` overrides these checks. It also refuses when it cannot find the agent process for a session that has not ended or paused, or when the pane is no longer bound to that session. An already-removed pane is treated as closed.
+`a agent close [target] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch. A worktree target with multiple tracked sessions is ambiguous; pass a session ID to select one.
 
-The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Linked-worktree sessions are not supported by this command.
+The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked. It also refuses when it cannot find the agent process for a session that has not ended or paused, or when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` hook. An already-removed pane is treated as closed.
 
 `new` options:
 
@@ -444,7 +445,7 @@ With `--prompt`, Claude messaging requires exactly one Claude pane. A layout wit
 
 The daemon route marks its Codex pane as armyknife-managed, so an environment where `codex` is aliased to `a agent codex` does not perform pane binding twice. A hand-run `a agent codex` keeps its normal pane binding behavior.
 
-With `--worktree`, the session runs in `config.wm.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. With `--prompt`, the layout must contain exactly one Codex pane because `thread/started` does not identify its originating pane.
+With `--worktree`, the session runs in `config.agent.worktree.layout`, whose pane commands are yours to write. Every pane running `claude` (e.g. `command: claude`) is replaced by plain `codex`, dropping its arguments because they are Claude Code flags. The layout is left as written when it already has a `codex` pane, and panes running anything else are never touched. With `--prompt`, the layout must contain exactly one Codex pane because `thread/started` does not identify its originating pane.
 
 A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
@@ -578,7 +579,7 @@ myproject-7e
 
 For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If the app-server is unavailable, the thread belongs to an embedded app-server, or the server rejects the request, `notify` falls back to `codex queue --thread <session_id>` and prints the direct-delivery failure. The fallback requires `codex` in `PATH` with the target's `$CODEX_HOME`. A queued message is not delivered yet: the running `codex` polls about every 10 seconds and can start it only after the current turn finishes and the thread is idle. If both direct delivery and queueing fail, the command returns both errors. A `Paused` Codex target is resumed before delivery is attempted; if its thread is not registered yet, the resumed `codex` picks up the queued message when it loads the thread.
 
-`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a wm delete` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
+`notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a agent close` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
 
 ```console
 $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
@@ -624,7 +625,7 @@ The `install`, `uninstall`, and `status` subcommands require macOS. The launchd 
 Configure via `~/.config/armyknife/config.yaml`:
 
 ```yaml
-cc:
+agent:
   auto_pause:
     enabled: true # default: true
     timeout: 30m # default: "30m" (accepts "30s", "10m", "1h30m", etc.)
@@ -650,7 +651,7 @@ Each new Stop hook cancels the previously-armed worker for the same pane via the
 Configure via `~/.config/armyknife/config.yaml`:
 
 ```yaml
-cc:
+agent:
   auto_compact:
     enabled: true # default: true
     idle_timeout: 4m30s # default: "4m30s" (slightly under the 5m prompt cache TTL)
@@ -709,24 +710,24 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 Git worktree management with tmux integration.
 
-| Action              | Aliases  | Description                            |
-| ------------------- | -------- | -------------------------------------- |
-| `list`              | `ls`     | List all worktrees                     |
-| `delete [worktree]` | `d`,`rm` | Delete a worktree and its branch       |
-| `clean`             | `c`      | Bulk delete merged or closed worktrees |
+| Action  | Aliases | Description                            |
+| ------- | ------- | -------------------------------------- |
+| `list`  | `ls`    | List all worktrees                     |
+| `clean` | `c`     | Bulk delete merged or closed worktrees |
 
 Use `a agent new --worktree=<branch>` to create a new worktree and open a tmux window.
+Use `a agent close <worktree>` to close its associated agent session and remove the worktree and branch.
 
-When `delete`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the deletion itself.
+When `a agent close`, `clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
-Deletion also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
+Worktree cleanup also sends SIGTERM to any process group still rooted in the worktree (e.g. a dev server left running by a detached background job), so it doesn't linger holding a port after the directory is gone. The calling process and its ancestors (the shell that invoked the command, etc.) are never targeted. Best-effort: requires `lsof` and `ps`; if either is unavailable, or a process ignores SIGTERM, an orphaned process may be left running.
 
 `clean` options:
 
 | Option          | Description                                                                       |
 | --------------- | --------------------------------------------------------------------------------- |
 | `-n, --dry-run` | Show what would be deleted without actually deleting                              |
-| `--all`         | Clean worktrees across all repositories under `repos_root`                        |
+| `--all`         | Clean worktrees across all repositories under `agent.worktree.repos_root`         |
 | `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
 
 Worktrees with an active agent session (not paused or ended, with pending
@@ -768,12 +769,12 @@ Configuration management.
 
 #### `a config get <key>`
 
-Get a configuration value by dot-separated key. Supports any config field (e.g., `wm.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
+Get a configuration value by dot-separated key. Supports any config field (e.g., `agent.worktree.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
 ```sh
-$ a config get wm.branch_prefix
+$ a config get agent.worktree.branch_prefix
 fohte/
 
 $ a config get notification.sound

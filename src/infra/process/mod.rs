@@ -334,7 +334,7 @@ impl ProcessSnapshot {
     ///
     /// Used to protect the calling process and the shell/tmux chain that
     /// invoked it from being killed when cleaning up processes still rooted
-    /// in a worktree being deleted (e.g. `a wm delete` run from inside it).
+    /// in a worktree being deleted (e.g. `a agent close` run from inside it).
     pub fn ancestors(&self, pid: u32) -> HashSet<u32> {
         let mut result = HashSet::new();
         result.insert(pid);
@@ -464,7 +464,7 @@ fn get_pgid(pid: u32) -> Option<libc::pid_t> {
 
 /// Finds the process-group ids (pgid) of processes rooted in `path`,
 /// excluding any pgid the calling process or one of its ancestors belongs
-/// to -- the shell/tmux chain that may have invoked `a wm delete` from
+/// to -- the shell/tmux chain that may have invoked `a agent close` from
 /// inside the worktree being deleted.
 ///
 /// A pid's cwd is used only to *locate* a candidate group: once one member
