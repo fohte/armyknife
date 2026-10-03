@@ -192,7 +192,6 @@ mod tests {
             work_type: work_type.map(str::to_owned),
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
-            pending_human_review_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
             pending_permission_agent_ids: BTreeSet::new(),
             pending_permission_request_ids: BTreeMap::new(),
