@@ -199,6 +199,15 @@ pub(crate) fn resolve_worktree_path(
     worktrees_dir: &str,
     branch_prefix: &str,
 ) -> Result<String> {
+    resolve_worktree_path_with_repo_root(arg, worktrees_dir, branch_prefix, get_repo_root)
+}
+
+fn resolve_worktree_path_with_repo_root(
+    arg: &str,
+    worktrees_dir: &str,
+    branch_prefix: &str,
+    repo_root: impl FnOnce() -> Result<String>,
+) -> Result<String> {
     // First, try to treat the argument as an existing path
     if let Ok(path) = std::fs::canonicalize(arg) {
         return Ok(path.to_string_lossy().to_string());
@@ -209,7 +218,7 @@ pub(crate) fn resolve_worktree_path(
     }
 
     // Fall back to resolving the value as a branch/worktree name
-    let repo_root = get_repo_root()?;
+    let repo_root = repo_root()?;
     let worktree_name = branch_to_worktree_name(arg, branch_prefix);
     let candidate_path = format!("{repo_root}/{worktrees_dir}/{worktree_name}");
 
@@ -268,11 +277,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_worktree_path_with_nonexistent_returns_error() {
-        let result = resolve_worktree_path("/nonexistent/path/to/worktree", ".worktrees", "fohte/");
+    fn resolve_worktree_path_with_missing_absolute_path_skips_repo_root_lookup() {
+        let result = resolve_worktree_path_with_repo_root(
+            "/nonexistent/path/to/worktree",
+            ".worktrees",
+            "fohte/",
+            || Err(anyhow::anyhow!("repo root lookup was attempted")),
+        );
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Worktree not found: /nonexistent/path/to/worktree"
+            result.map_err(|error| error.to_string()),
+            Err("Worktree not found: /nonexistent/path/to/worktree".to_string()),
         );
     }
 }
