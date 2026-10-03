@@ -32,6 +32,7 @@ use crate::shared::log::short_run_id;
 
 mod pane_binding;
 pub(super) mod permission_notification;
+mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
 const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -390,6 +391,8 @@ fn process_hook_event_impl(
     });
 
     let mut status = determine_status(event, &input);
+    let work_type_config =
+        work_type::may_contain_work_type(event, &input).then(config::load_config_or_default);
 
     // Load existing session or create new one. The lock is held across the
     // load-mutate-save round trip below (see `store::SessionLock`) so a
@@ -561,6 +564,10 @@ fn process_hook_event_impl(
         HookEvent::PostToolUse | HookEvent::Stop => None,
         _ => session.current_tool,
     };
+
+    if let Some(config) = &work_type_config {
+        work_type::update_session_work_type(&mut session, event, &input, &config.agent);
+    }
 
     // Save the session, then release the lock before the two slow steps
     // below (transcript read, tmux sync). Both can block for up to 500ms,
