@@ -21,6 +21,7 @@ use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{
     DraftProbe, NoDraftProbe, TmuxDraftProbe, contains_active_session,
 };
+use crate::shared::base_conflict_notify::spawn_for_merged_deletion;
 use crate::shared::config::load_config;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -510,6 +511,14 @@ async fn delete_worktrees_single_repo(
     repo: &GitRepo,
     worktrees: &[CleanWorktreeInfo],
 ) -> Result<()> {
+    if worktrees.iter().any(|info| info.status.is_merged()) {
+        let exclude_paths = worktrees
+            .iter()
+            .map(|info| info.wt.path.clone())
+            .collect::<Vec<_>>();
+        spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
+    }
+
     let mut deleted_count = 0;
 
     for info in worktrees {
@@ -561,6 +570,14 @@ async fn delete_worktrees_all_repos(
                 continue;
             }
         };
+
+        if infos.iter().any(|info| info.status.is_merged()) {
+            let exclude_paths = infos
+                .iter()
+                .map(|info| info.wt.path.clone())
+                .collect::<Vec<_>>();
+            spawn_for_merged_deletion(repo.workdir(), &exclude_paths);
+        }
 
         for info in infos {
             // Must run before cleanup_worktree_by_name below: notification

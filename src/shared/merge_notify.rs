@@ -8,7 +8,7 @@
 //! merged worktree.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::commands::agent::peer::notify::notify as notify_peer_session;
 use crate::commands::agent::store;
@@ -69,43 +69,38 @@ pub async fn notify_delegator_of_merge(main_repo: &GitRepo, branch: &str, worktr
 /// only have a filesystem path to work with and no merge status computed
 /// ahead of time (the TUI clean view's detached child) -- costs one extra PR
 /// lookup per path, the same trade-off [`notify_delegator_of_merge`] already
-/// makes to recover the PR URL.
+/// makes to recover the PR URL. Returns the main repository path when the
+/// branch is merged so the caller can check other worktrees after cleanup.
 ///
 /// Silently does nothing if `path` isn't inside a worktree or the branch
 /// can't be resolved, matching `cleanup_worktree_resources`'s treatment of
 /// the same conditions.
-pub async fn notify_delegator_if_merged_worktree_at(path: &Path) {
+pub async fn notify_delegator_if_merged_worktree_at(path: &Path) -> Option<PathBuf> {
     let Ok(repo) = GitRepo::open_at(path) else {
-        return;
+        return None;
     };
     if !repo.is_worktree() {
-        return;
+        return None;
     }
     let Ok(main_repo) = get_main_repo(&repo) else {
-        return;
+        return None;
     };
     let worktree_root = repo.workdir().to_path_buf();
     let Ok(worktree_name) = find_worktree_name(&main_repo, &worktree_root.to_string_lossy()) else {
-        return;
+        return None;
     };
-    let Some(branch) = get_worktree_branch(&main_repo, &worktree_name) else {
-        return;
-    };
+    let branch = get_worktree_branch(&main_repo, &worktree_name)?;
 
-    // Skip the network round trip entirely when there's no delegate to
-    // notify, mirroring notify_delegator_of_merge's own cheap-check-first
-    // ordering -- otherwise a batch clean of N worktrees with no delegates
-    // would cost N unnecessary GitHub API calls.
-    if find_delegate_sessions(&worktree_root).is_empty() {
-        return;
-    }
-
+    // The caller also needs the merge result when this worktree has no
+    // delegator session, so the base-conflict check can run after cleanup.
     if get_merge_status_for_repo(&main_repo, &branch)
         .await
         .is_merged()
     {
         notify_delegator_of_merge(&main_repo, &branch, &worktree_root).await;
+        return Some(main_repo.workdir().to_path_buf());
     }
+    None
 }
 
 /// Emits a warning both to stderr (visible for interactive `wm delete` / `wm
@@ -334,11 +329,12 @@ mod tests {
         // Should return without panicking and without attempting any network
         // call (a non-worktree path is rejected before merge status is
         // ever checked).
-        notify_delegator_if_merged_worktree_at(&test_repo.path()).await;
+        let _ = notify_delegator_if_merged_worktree_at(&test_repo.path()).await;
     }
 
     #[tokio::test]
     async fn notify_delegator_if_merged_worktree_at_on_nonexistent_path_returns_early() {
-        notify_delegator_if_merged_worktree_at(Path::new("/nonexistent/path/to/repo")).await;
+        let _ =
+            notify_delegator_if_merged_worktree_at(Path::new("/nonexistent/path/to/repo")).await;
     }
 }
