@@ -157,6 +157,9 @@ impl App {
                             session.display_status(),
                             DisplayStatus::Running | DisplayStatus::Background
                         ),
+                        SessionStatus::WaitingInput => {
+                            session.display_status() == DisplayStatus::WaitingInput
+                        }
                         SessionStatus::Stopped => matches!(
                             session.display_status(),
                             DisplayStatus::Stopped | DisplayStatus::UnreadStopped
@@ -324,6 +327,7 @@ mod tests {
             session_id: id.to_string(),
             work_type: None,
             crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
             tty: None,
@@ -540,17 +544,29 @@ mod tests {
     // The same session must NOT match the `Stopped` filter, even though its
     // raw `status` is `Stopped`.
     #[case::stopped_filter_excludes_background(SessionStatus::Stopped, vec!["stopped-1"])]
+    #[case::waiting_filter_matches_human_review(
+        SessionStatus::WaitingInput,
+        vec!["review-1"]
+    )]
     fn test_status_filter_matches_display_status_not_raw_status(
         #[case] status: SessionStatus,
         #[case] expected_ids: Vec<&str>,
     ) {
         let mut bg_session = create_session_with_status("bg-1", SessionStatus::Stopped);
         bg_session.pending_bg_task_ids.insert("task-1".to_string());
+        let mut review_session = create_session_with_status("review-1", SessionStatus::Stopped);
+        review_session
+            .pending_bg_task_ids
+            .insert("task-2".to_string());
+        review_session
+            .pending_human_review_ids
+            .insert("review-id".to_string());
 
         let mut app = create_test_app(vec![
             create_session_with_status("running-1", SessionStatus::Running),
             create_session_with_status("stopped-1", SessionStatus::Stopped),
             bg_session,
+            review_session,
         ]);
 
         app.toggle_status_filter(status);
