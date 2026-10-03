@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.356](https://github.com/fohte/armyknife/compare/v0.1.355...v0.1.356) (2026-10-03)
+
+
+### Features
+
+* **agent:** record workflow skill invocations as work type via hooks ([#1039](https://github.com/fohte/armyknife/issues/1039)) ([026005c](https://github.com/fohte/armyknife/commit/026005c012b5f88807b65dfb866e8ea0f44c8c22))
+
 ## [0.1.355](https://github.com/fohte/armyknife/compare/v0.1.354...v0.1.355) (2026-10-03)
 
 
