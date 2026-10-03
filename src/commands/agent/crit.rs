@@ -15,6 +15,7 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::process;
 use crate::infra::tmux;
+use crate::shared::caller_pane;
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
@@ -66,7 +67,7 @@ pub fn run(command: &CritCommands) -> Result<()> {
 
 fn add(args: &AddArgs) -> Result<()> {
     let Some(session_id) = EnvVars::load().own_session_id() else {
-        if let Some(pane_id) = tmux::current_pane_id_from_env() {
+        if let Some(pane_id) = caller_pane::resolve_caller_pane_id() {
             return add_without_agent_session(args, &pane_id);
         }
 
@@ -103,12 +104,12 @@ fn add(args: &AddArgs) -> Result<()> {
     lock.save(&session)?;
     tracing::info!(event = "agent.crit.add.registered");
 
-    if let Some(tmux_info) = &session.tmux_info
-        && let Err(error) = pane::set_crit_url(&tmux_info.pane_id, &args.url)
+    if let Some(pane_id) = caller_pane::pane_id_for_session(&session)
+        && let Err(error) = pane::set_crit_url(&pane_id, &args.url)
     {
         tracing::warn!(
             event = "agent.crit.add.pane_sync_failed",
-            pane = %tmux_info.pane_id,
+            pane = %pane_id,
             error = %error,
         );
         eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");

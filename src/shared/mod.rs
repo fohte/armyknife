@@ -1,5 +1,6 @@
 pub mod active_session;
 pub mod cache;
+pub(crate) mod caller_pane;
 pub mod cleanup;
 pub mod command;
 pub mod config;

@@ -96,7 +96,7 @@ where
         ));
     }
 
-    let tmux_pane_id = crate::infra::tmux::current_pane_id_from_env();
+    let tmux_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
     let document_path = if tmux_pane_id.is_some() {
         std::fs::canonicalize(document_path)?
     } else {
