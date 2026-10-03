@@ -106,7 +106,7 @@ fn build_send_lua(notification: &Notification) -> String {
         ));
     } else if let Some(content_image_url) = notification.content_image_url() {
         parts.push(format!(
-            "n:contentImage(hs.image.imageFromURL({}))",
+            "local content_image = hs.image.imageFromURL({}); if content_image then n:contentImage(content_image) end",
             lua_quote(content_image_url)
         ));
     }
@@ -143,4 +143,21 @@ fn lua_quote(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_send_lua;
+    use crate::infra::notification::Notification;
+
+    #[test]
+    fn skips_content_image_when_url_fetch_returns_nil() {
+        let notification = Notification::new("Review", "sample message")
+            .with_content_image_url("https://images.example.test/mark.png");
+
+        assert_eq!(
+            build_send_lua(&notification),
+            "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); local content_image = hs.image.imageFromURL(\"https://images.example.test/mark.png\"); if content_image then n:contentImage(content_image) end; n:withdrawAfter(0); n:send()",
+        );
+    }
 }

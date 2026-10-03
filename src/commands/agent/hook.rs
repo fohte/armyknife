@@ -1003,11 +1003,10 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
 
 /// Checks if notifications are enabled via environment variable.
 fn is_notification_enabled(config: &Config) -> bool {
-    // Environment variable takes precedence over config for backward compatibility
-    match EnvVars::load().cc_notify {
-        Some(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
-        None => config.notification.enabled,
-    }
+    crate::shared::notification_policy::is_enabled(
+        config.notification.enabled,
+        EnvVars::load().cc_notify.as_deref(),
+    )
 }
 
 /// Determines if a notification should be sent for the given event.

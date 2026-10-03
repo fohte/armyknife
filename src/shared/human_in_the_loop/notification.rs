@@ -2,26 +2,27 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::commands::agent::store;
-use crate::commands::agent::types::Session;
+use crate::commands::agent::{display_label, repo_name, store};
 use crate::infra::notification::{Notification, NotificationAction};
-use crate::shared::config::EditorConfig;
+use crate::shared::config::{self, EditorConfig};
+use crate::shared::env_var::EnvVars;
+use crate::shared::notification_policy;
 
 const REVIEW_NOTIFICATION_TITLE: &str = "■ HITL review requested";
+const NEOVIM_LOGO_URL: &str = "https://neovim.io/logos/neovim-mark-flat.png";
 
 pub(super) fn send_review_requested(
-    tmux_pane_id: Option<&str>,
-    session_id: Option<&str>,
+    session_id: &str,
     document_path: &Path,
     window_title: &str,
     editor_config: &EditorConfig,
 ) {
-    if !should_send_review_notification(tmux_pane_id, session_id) {
+    let config = config::load_config_or_default();
+    let env_vars = EnvVars::load();
+    if !notification_policy::is_enabled(config.notification.enabled, env_vars.cc_notify.as_deref())
+    {
         return;
     }
-    let Some(session_id) = session_id else {
-        return;
-    };
 
     let session = match store::load_session(session_id) {
         Ok(session) => session,
@@ -41,7 +42,7 @@ pub(super) fn send_review_requested(
         .or_else(|| document_path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
     let repo_name = repo_name(&cwd);
-    let display_label = session_display_label(session.as_ref(), session_id);
+    let display_label = display_label(session.as_ref(), session_id);
     let subtitle = session
         .as_ref()
         .and_then(|session| session.tmux_info.as_ref())
@@ -75,10 +76,6 @@ pub(super) fn send_review_requested(
     send_best_effort(&notification, crate::infra::notification::send);
 }
 
-fn should_send_review_notification(tmux_pane_id: Option<&str>, session_id: Option<&str>) -> bool {
-    tmux_pane_id.is_some() && session_id.is_some()
-}
-
 fn build_review_notification(
     window_title: &str,
     session_id: &str,
@@ -95,7 +92,8 @@ fn build_review_notification(
         format!("{window_title} ({repo_name})"),
     )
     .with_subtitle(subtitle)
-    .with_action(NotificationAction::new(action)))
+    .with_action(NotificationAction::new(action))
+    .with_content_image_url(NEOVIM_LOGO_URL))
 }
 
 fn send_best_effort(notification: &Notification, send: impl FnOnce(&Notification) -> Result<()>) {
@@ -108,47 +106,11 @@ fn send_best_effort(notification: &Notification, send: impl FnOnce(&Notification
     }
 }
 
-fn repo_name(cwd: &Path) -> String {
-    crate::infra::git::get_repo_root_in(cwd)
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf())
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-fn session_display_label(session: Option<&Session>, session_id: &str) -> String {
-    session
-        .and_then(|session| session.label.as_deref())
-        .filter(|label| !label.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| session_id.chars().take(8).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use rstest::rstest;
 
     use super::*;
-
-    #[rstest]
-    #[case::tmux_agent(Some("%pane"), Some("session-id"), true)]
-    #[case::tmux_without_agent(Some("%pane"), None, false)]
-    #[case::agent_without_tmux(None, Some("session-id"), false)]
-    #[case::neither(None, None, false)]
-    fn sends_only_for_tmux_agent_reviews(
-        #[case] tmux_pane_id: Option<&str>,
-        #[case] session_id: Option<&str>,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            should_send_review_notification(tmux_pane_id, session_id),
-            expected
-        );
-    }
 
     #[test]
     fn builds_notification_with_review_repo_session_and_focus_action() {
@@ -167,12 +129,16 @@ mod tests {
                 notification.message(),
                 notification.subtitle(),
                 notification.action().map(NotificationAction::command),
+                notification.content_image_url(),
+                notification.app_icon(),
             ),
             (
                 REVIEW_NOTIFICATION_TITLE,
                 "PR: sample/repo @ sample-branch (sample-repo)",
                 Some("work:agent | review-session"),
                 Some("a agent focus session-id; open -a WezTerm"),
+                Some(NEOVIM_LOGO_URL),
+                None,
             ),
         );
     }

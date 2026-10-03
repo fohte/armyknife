@@ -26,22 +26,27 @@ where
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 
     if let Some(parent_pane_id) = tmux_pane_id {
-        super::tmux::open_review_pane(
-            parent_pane_id,
-            window_title,
-            exe_path.as_os_str(),
-            &review_args,
-            done_fifo_path,
+        let session_id = crate::shared::env_var::EnvVars::load().own_session_id();
+        launch_tmux_review(
+            || {
+                super::tmux::open_review_pane(
+                    parent_pane_id,
+                    window_title,
+                    exe_path.as_os_str(),
+                    &review_args,
+                    done_fifo_path,
+                )
+            },
+            session_id.as_deref(),
+            |session_id| {
+                super::notification::send_review_requested(
+                    session_id,
+                    document_path,
+                    window_title,
+                    editor_config,
+                )
+            },
         )?;
-        super::notification::send_review_requested(
-            tmux_pane_id,
-            crate::shared::env_var::EnvVars::load()
-                .own_session_id()
-                .as_deref(),
-            document_path,
-            window_title,
-            editor_config,
-        );
         return Ok(());
     }
 
@@ -52,6 +57,18 @@ where
         window_title,
         editor_config,
     )
+}
+
+fn launch_tmux_review(
+    open_pane: impl FnOnce() -> Result<()>,
+    session_id: Option<&str>,
+    notify: impl FnOnce(&str),
+) -> Result<()> {
+    open_pane()?;
+    if let Some(session_id) = session_id {
+        notify(session_id);
+    }
+    Ok(())
 }
 
 fn launch_in_terminal(
@@ -99,4 +116,63 @@ fn launch_in_terminal(
     started_fifo_cleanup.disarm();
     let _ = std::fs::remove_file(&started_fifo_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::agent_review_notifies_after_open(
+        true,
+        Some("session-id"),
+        vec!["pane opened".to_string(), "notified: session-id".to_string()],
+        Ok(()),
+    )]
+    #[case::without_agent_session_only_opens_pane(
+        true,
+        None,
+        vec!["pane opened".to_string()],
+        Ok(()),
+    )]
+    #[case::failed_open_does_not_notify(
+        false,
+        Some("session-id"),
+        vec!["pane opened".to_string()],
+        Err("Command failed: pane unavailable".to_string()),
+    )]
+    fn notifies_only_after_successful_pane_open(
+        #[case] open_succeeds: bool,
+        #[case] session_id: Option<&str>,
+        #[case] expected_events: Vec<String>,
+        #[case] expected_result: std::result::Result<(), String>,
+    ) {
+        let events = RefCell::new(Vec::new());
+        let result = launch_tmux_review(
+            || {
+                events.borrow_mut().push("pane opened".to_string());
+                if open_succeeds {
+                    Ok(())
+                } else {
+                    Err(HumanInTheLoopError::CommandFailed(
+                        "pane unavailable".to_string(),
+                    ))
+                }
+            },
+            session_id,
+            |session_id| {
+                events.borrow_mut().push(format!("notified: {session_id}"));
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (events.into_inner(), result),
+            (expected_events, expected_result),
+        );
+    }
 }
