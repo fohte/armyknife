@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.345](https://github.com/fohte/armyknife/compare/v0.1.344...v0.1.345) (2026-10-03)
+
+
+### Features
+
+* **agent:** allow closing idle sessions via a dedicated command ([#1013](https://github.com/fohte/armyknife/issues/1013)) ([653d8e8](https://github.com/fohte/armyknife/commit/653d8e82b5a8ce9c51a0647f63022bc0e03af875))
+
 ## [0.1.344](https://github.com/fohte/armyknife/compare/v0.1.343...v0.1.344) (2026-09-30)
 
 
