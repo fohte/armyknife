@@ -119,6 +119,11 @@ pub struct AgentConfig {
     #[serde(default)]
     pub default_engine: Engine,
 
+    /// Message template sent to the delegator when a delegated branch's PR merges.
+    /// Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent.
+    #[serde(default)]
+    pub merge_notification: Option<String>,
+
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]
     pub codex: CodexConfig,
@@ -747,6 +752,7 @@ mod tests {
             Config {
                 agent: AgentConfig {
                     default_engine: Engine::Claude,
+                    merge_notification: None,
                     codex: CodexConfig {
                         model: None,
                         reasoning_effort: None,
@@ -848,6 +854,29 @@ mod tests {
                     model: Some("gpt-5.6-luna".to_string()),
                     reasoning_effort: Some(ReasoningEffort::Max),
                 },
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_agent_merge_notification_yaml() {
+        let yaml = indoc! {"
+            agent:
+              merge_notification: |
+                Branch {branch} merged: {pr_url}
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent,
+            AgentConfig {
+                merge_notification: Some(
+                    indoc! {"
+                    Branch {branch} merged: {pr_url}
+                "}
+                    .to_string()
+                ),
                 ..Default::default()
             }
         );
@@ -1704,6 +1733,17 @@ mod tests {
         assert_eq!(
             schema_value["properties"]["agent"]["description"],
             "`a agent` settings."
+        );
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_contains_merge_notification_description(schema_value: serde_json::Value) {
+        assert_eq!(
+            schema_value["$defs"]["AgentConfig"]["properties"]["merge_notification"]["description"],
+            indoc! {"
+                Message template sent to the delegator when a delegated branch's PR merges.
+                Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent."}
         );
     }
 

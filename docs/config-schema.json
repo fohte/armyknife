@@ -22,6 +22,7 @@
           "reasoning_effort": null
         },
         "default_engine": "claude",
+        "merge_notification": null,
         "work_types": {},
         "worktree": {
           "branch_prefix": "fohte/",
@@ -110,6 +111,14 @@
           "description": "Coding agent CLI `a agent new` launches when `--engine` is omitted\n(default: \"claude\"). Overridable for a single invocation via\n`ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
           "default": "claude"
+        },
+        "merge_notification": {
+          "description": "Message template sent to the delegator when a delegated branch's PR merges.\nSupports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "work_types": {
           "description": "Display configuration for agent work types, keyed by skill name.",
