@@ -119,7 +119,7 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Peer(PeerCommands),
 
-    /// Pause long-stopped sessions by requesting agent shutdown (run periodically)
+    /// Pause idle sessions and close those with merged pull requests
     Sweep(SweepArgs),
 
     /// Run a command in the background and notify this session when it finishes
@@ -176,7 +176,7 @@ impl AgentCommands {
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
-            Self::Sweep(args) => sweep::run(args)?,
+            Self::Sweep(args) => sweep::run(args).await?,
             Self::Bg(cmd) => bg::run(cmd)?,
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,

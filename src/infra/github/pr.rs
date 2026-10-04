@@ -28,9 +28,10 @@ pub enum PrState {
 }
 
 /// PR information from GitHub API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrInfo {
     pub number: u64,
+    pub title: String,
     pub state: PrState,
     pub url: String,
 }
@@ -74,6 +75,7 @@ pub trait PrClient: Send + Sync {
 #[derive(Debug, Deserialize)]
 struct PrResponse {
     number: u64,
+    title: Option<String>,
     state: Option<String>,
     html_url: Option<String>,
     merged_at: Option<String>,
@@ -149,6 +151,7 @@ impl PrClient for GitHubClient {
 
         Ok(Some(PrInfo {
             number: pr.number,
+            title: pr.title.unwrap_or_default(),
             state,
             url,
         }))
@@ -233,7 +236,7 @@ impl GitHubClient {
                 );
 
                 branch_parts.push(format!(
-                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number state url mergedAt }} }}"
+                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number title state url mergedAt }} }}"
                 ));
                 branch_alias_map
                     .insert(branch_alias, (owner.clone(), repo.clone(), branch.clone()));
@@ -298,6 +301,7 @@ impl GitHubClient {
 /// Parse a single PR node from the GraphQL response into PrInfo.
 fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
     let number = node.get("number")?.as_u64()?;
+    let title = node.get("title")?.as_str()?.to_string();
     let state_str = node.get("state")?.as_str()?;
     let url = node.get("url")?.as_str()?.to_string();
     let merged_at = node.get("mergedAt").and_then(|v| v.as_str());
@@ -313,5 +317,56 @@ fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
         }
     };
 
-    Some(PrInfo { number, state, url })
+    Some(PrInfo {
+        number,
+        title,
+        state,
+        url,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::{PrInfo, PrState, parse_pr_node};
+
+    #[rstest]
+    #[case::merged(
+        json!({
+            "number": 42,
+            "title": "A merged change",
+            "state": "MERGED",
+            "url": "https://github.com/owner/repo/pull/42",
+            "mergedAt": "2026-10-04T00:00:00Z",
+        }),
+        Some(PrInfo {
+            number: 42,
+            title: "A merged change".to_string(),
+            state: PrState::Merged,
+            url: "https://github.com/owner/repo/pull/42".to_string(),
+        }),
+    )]
+    #[case::closed_unmerged(
+        json!({
+            "number": 43,
+            "title": "A closed change",
+            "state": "CLOSED",
+            "url": "https://github.com/owner/repo/pull/43",
+            "mergedAt": null,
+        }),
+        Some(PrInfo {
+            number: 43,
+            title: "A closed change".to_string(),
+            state: PrState::Closed,
+            url: "https://github.com/owner/repo/pull/43".to_string(),
+        }),
+    )]
+    fn parses_pull_request_title_and_state(
+        #[case] input: serde_json::Value,
+        #[case] expected: Option<PrInfo>,
+    ) {
+        assert_eq!(parse_pr_node(&input), expected);
+    }
 }

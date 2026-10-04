@@ -1,5 +1,5 @@
 /// A notification to be displayed to the user.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
     title: String,
     subtitle: Option<String>,
@@ -104,7 +104,7 @@ impl Notification {
 }
 
 /// An action to execute when a notification is clicked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationAction {
     command: String,
 }
