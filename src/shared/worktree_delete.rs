@@ -2,9 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::infra::git::{
-    GitRepo, MergeStatus, get_merge_status, get_repo_root, local_branch_exists,
-};
+use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
 use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
@@ -32,7 +30,7 @@ pub(crate) async fn prepare(worktree_path: &Path, force: bool) -> Result<Worktre
     let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
     let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
-    let merge_status = check_merge_status(branch_name.as_deref(), force).await?;
+    let merge_status = check_merge_status(&main_repo, branch_name.as_deref(), force).await?;
 
     Ok(WorktreeDeletePlan {
         main_repo,
@@ -176,12 +174,40 @@ fn run_pre_delete_hook_with(
     true
 }
 
-async fn check_merge_status(branch_name: Option<&str>, force: bool) -> Result<Option<MergeStatus>> {
-    let Some(branch) = branch_name.filter(|b| local_branch_exists(b)) else {
+async fn check_merge_status(
+    repo: &GitRepo,
+    branch_name: Option<&str>,
+    force: bool,
+) -> Result<Option<MergeStatus>> {
+    let repo_for_status = repo.clone();
+    check_merge_status_with(
+        branch_name,
+        force,
+        |branch| repo.local_branch_exists(branch),
+        move |branch| {
+            let branch = branch.to_string();
+            async move { get_merge_status_for_repo(&repo_for_status, &branch).await }
+        },
+    )
+    .await
+}
+
+async fn check_merge_status_with<F, G, Fut>(
+    branch_name: Option<&str>,
+    force: bool,
+    branch_exists: F,
+    get_status: G,
+) -> Result<Option<MergeStatus>>
+where
+    F: FnOnce(&str) -> bool,
+    G: FnOnce(&str) -> Fut,
+    Fut: std::future::Future<Output = MergeStatus>,
+{
+    let Some(branch) = branch_name.filter(|branch| branch_exists(branch)) else {
         return Ok(None);
     };
 
-    let merge_status = get_merge_status(branch).await;
+    let merge_status = get_status(branch).await;
     if !merge_status.should_cleanup() && !force {
         eprintln!(
             "Warning: Branch '{}' is not merged ({})",
@@ -246,6 +272,37 @@ mod tests {
 
     use super::*;
     use crate::shared::testing::TestRepo;
+
+    #[tokio::test]
+    async fn check_merge_status_uses_the_selected_repository_branch() {
+        let mut looked_up_branch = None;
+        let result = check_merge_status_with(
+            Some("feature"),
+            false,
+            |branch| {
+                looked_up_branch = Some(branch.to_string());
+                true
+            },
+            |branch| {
+                assert_eq!(branch, "feature");
+                std::future::ready(MergeStatus::Merged {
+                    reason: "PR #42 merged".to_string(),
+                })
+            },
+        )
+        .await
+        .expect("merge status");
+
+        assert_eq!(
+            (looked_up_branch, result),
+            (
+                Some("feature".to_string()),
+                Some(MergeStatus::Merged {
+                    reason: "PR #42 merged".to_string(),
+                }),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::skip_hooks_true_never_invokes(true, true, false)]

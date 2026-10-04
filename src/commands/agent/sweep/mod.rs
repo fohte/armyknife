@@ -26,6 +26,7 @@
 //! Stopped or Paused sessions after their linked-worktree pull request merges.
 
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -108,7 +109,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         dry_run = args.dry_run,
         pause_enabled,
     );
-    let report = if pause_enabled {
+    let pause_pass = || -> Result<SweepReport> {
         let timeout = auto_pause::parse_duration(&timeout_str)
             .with_context(|| format!("invalid agent.auto_pause.timeout `{timeout_str}`"))?;
         let tasks_dir = super::bg_tasks::tasks_dir()?;
@@ -127,11 +128,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             &probe,
             &syncer,
             args.dry_run,
-        )?
-    } else {
-        SweepReport::default()
+        )
     };
-    let merged_closed = merged_close::close_merged_sessions(args.dry_run).await;
+    let (report, merged_closed) = run_sweep_passes(pause_enabled, pause_pass, || {
+        merged_close::close_merged_sessions(args.dry_run)
+    })
+    .await?;
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -165,6 +167,25 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_sweep_passes<P, M, Fut>(
+    pause_enabled: bool,
+    pause_pass: P,
+    merged_close_pass: M,
+) -> Result<(SweepReport, usize)>
+where
+    P: FnOnce() -> Result<SweepReport>,
+    M: FnOnce() -> Fut,
+    Fut: Future<Output = usize>,
+{
+    let report = if pause_enabled {
+        pause_pass()?
+    } else {
+        SweepReport::default()
+    };
+    let merged_closed = merged_close_pass().await;
+    Ok((report, merged_closed))
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
@@ -533,6 +554,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
@@ -643,6 +665,33 @@ mod tests {
             }),
             ..make_session(id, SessionStatus::Stopped, updated_at)
         }
+    }
+
+    #[tokio::test]
+    async fn disabling_auto_pause_still_runs_merged_close_pass() {
+        let pause_calls = Cell::new(0);
+        let close_calls = Cell::new(0);
+        let result = run_sweep_passes(
+            false,
+            || {
+                pause_calls.set(pause_calls.get() + 1);
+                Ok(SweepReport {
+                    scanned: 1,
+                    ..SweepReport::default()
+                })
+            },
+            || async {
+                close_calls.set(close_calls.get() + 1);
+                2
+            },
+        )
+        .await
+        .expect("sweep passes");
+
+        assert_eq!(
+            (result, pause_calls.get(), close_calls.get()),
+            ((SweepReport::default(), 2), 0, 1),
+        );
     }
 
     type SweepObservation = (

@@ -616,7 +616,7 @@ Sessions that stay in the `stopped` state for longer than the configured timeout
 
 `a agent sweep` scans every session file once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
-Each pass also checks `stopped` and `paused` sessions with linked worktrees. When the worktree branch has a merged pull request and no background task is pending, sweep closes the session through the regular `a agent close` path, which removes the worktree and notifies its delegator. Open pull requests, closed unmerged pull requests, and sessions without linked worktrees remain untouched. A successful automatic close sends the same desktop notification as the tmux PR merge command.
+Each pass also checks `stopped` and `paused` sessions with linked worktrees. When the worktree branch has a merged pull request and no background task is pending, sweep closes the session through the regular `a agent close` path, which removes the worktree and notifies its delegator. Open pull requests, closed unmerged pull requests, and sessions without linked worktrees remain untouched. A successful automatic close sends a desktop notification with the PR number and title. If `magick` (ImageMagick) is installed, the notification uses a git-merge icon downloaded from Octicons and cached under `~/.cache/armyknife`; download or conversion failures leave the notification without an icon.
 
 The `agent.auto_pause.enabled` setting controls only the pause pass; merged pull request cleanup still runs when auto-pause is disabled.
 
@@ -645,7 +645,7 @@ agent:
     timeout: 30m # default: "30m" (accepts "30s", "10m", "1h30m", etc.)
 ```
 
-Set `enabled: false` to disable auto-pausing entirely. The launchd agent stays installed but exits immediately when `enabled` is false, so toggling via config does not require `uninstall`.
+Set `enabled: false` to disable auto-pausing. Merged pull request cleanup continues, and the launchd agent stays installed, so toggling via config does not require `uninstall`.
 
 #### Auto-compact
 

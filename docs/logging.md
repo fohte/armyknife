@@ -110,20 +110,25 @@ Stop hook (parent process):
 
 ### `agent sweep`
 
-| event                                     | meaning                                                            |
-| ----------------------------------------- | ------------------------------------------------------------------ |
-| `agent.sweep.start`                       | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`) |
-| `agent.sweep.signaled`                    | Live pid resolved; shutdown requested, status may stay Stopped     |
-| `agent.sweep.dry_run_signal`              | Would have signaled if not in `--dry-run`                          |
-| `agent.sweep.paused`                      | Process exit confirmed; status changed to Paused                   |
-| `agent.sweep.dry_run_pause`               | Would have confirmed Paused if not in `--dry-run`                  |
-| `agent.sweep.dry_run_close_merged`        | Would have closed a session whose pull request is merged           |
-| `agent.sweep.merged_session_close_failed` | The existing close path refused or failed for a merged session     |
-| `agent.sweep.merge_notification_failed`   | The merged-session close notification could not be sent            |
-| `agent.sweep.ctrl_d_timeout`              | Codex remained alive after Ctrl+D; falling back to SIGTERM         |
-| `agent.sweep.ctrl_d_failed`               | Sending Ctrl+D through tmux failed; falling back to SIGTERM        |
-| `agent.sweep.sigterm_failed`              | SIGTERM to the resolved pid failed (non-ESRCH)                     |
-| `agent.sweep.summary`                     | End-of-pass counters (`scanned` / `paused` / `merged_closed` / …)  |
+| event                                     | meaning                                                                            |
+| ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `agent.sweep.start`                       | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`)                 |
+| `agent.sweep.sessions_read_failed`        | Session records could not be read; merged-session cleanup was skipped              |
+| `agent.bg_run.registry_read_failed`       | The background-task registry could not be read; the session was treated as pending |
+| `agent.sweep.github_client_unavailable`   | The GitHub client could not be initialized; merged-session cleanup was skipped     |
+| `agent.sweep.pull_requests_fetch_failed`  | The batched pull request lookup failed; merged-session cleanup was skipped         |
+| `agent.sweep.signaled`                    | Live pid resolved; shutdown requested, status may stay Stopped                     |
+| `agent.sweep.dry_run_signal`              | Would have signaled if not in `--dry-run`                                          |
+| `agent.sweep.paused`                      | Process exit confirmed; status changed to Paused                                   |
+| `agent.sweep.dry_run_pause`               | Would have confirmed Paused if not in `--dry-run`                                  |
+| `agent.sweep.dry_run_close_merged`        | Would have closed a session whose pull request is merged                           |
+| `agent.sweep.merged_session_close_failed` | The existing close path refused or failed for a merged session                     |
+| `agent.sweep.merge_notification_failed`   | The merged-session close notification could not be sent                            |
+| `notification.merge_icon_failed`          | The optional merge notification icon could not be downloaded or converted          |
+| `agent.sweep.ctrl_d_timeout`              | Codex remained alive after Ctrl+D; falling back to SIGTERM                         |
+| `agent.sweep.ctrl_d_failed`               | Sending Ctrl+D through tmux failed; falling back to SIGTERM                        |
+| `agent.sweep.sigterm_failed`              | SIGTERM to the resolved pid failed (non-ESRCH)                                     |
+| `agent.sweep.summary`                     | End-of-pass counters (`scanned` / `paused` / `merged_closed` / …)                  |
 
 ### `agent composer`
 

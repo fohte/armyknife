@@ -3,6 +3,7 @@ use std::future::Future;
 
 use anyhow::Result;
 
+use super::super::session_status::list_sessions_with_bg_run_status;
 use super::super::types::{Session, SessionStatus};
 use crate::infra::git::{GitRepo, github_owner_and_repo};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo, PrState};
@@ -16,57 +17,27 @@ pub(super) struct MergedSession {
 }
 
 pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
-    let sessions = match super::super::store::list_sessions() {
+    let sessions = match list_sessions_with_bg_run_status() {
         Ok(sessions) => sessions,
         Err(error) => {
             tracing::warn!(event = "agent.sweep.sessions_read_failed", error = %error);
             return 0;
         }
     };
-    let tasks_dir = match super::super::bg_tasks::tasks_dir() {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(event = "agent.sweep.bg_task_registry_unavailable", error = %error);
-            return 0;
-        }
-    };
 
-    let mut pending_bg_runs = HashSet::new();
     let mut queries_by_session = HashMap::new();
     let mut queries = Vec::new();
     let mut seen_queries = HashSet::new();
 
     for session in &sessions {
-        if !is_close_eligible(session, false) {
+        if !is_close_eligible(session) {
             continue;
-        }
-
-        match super::super::bg_tasks::has_pending_in(&tasks_dir, &session.session_id) {
-            Ok(true) => {
-                pending_bg_runs.insert(session.session_id.clone());
-                continue;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                tracing::warn!(
-                    event = "agent.sweep.bg_task_registry_read_failed",
-                    session = %session.session_id,
-                    error = %error,
-                );
-                pending_bg_runs.insert(session.session_id.clone());
-                continue;
-            }
         }
 
         let Some(query) = branch_query_for(session) else {
             continue;
         };
-        let query_key = (
-            query.owner.clone(),
-            query.repo.clone(),
-            query.branch.clone(),
-        );
-        if seen_queries.insert(query_key) {
+        if seen_queries.insert(query.key()) {
             queries.push(query.clone());
         }
         queries_by_session.insert(session.session_id.clone(), query);
@@ -93,7 +64,6 @@ pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
     let closed = close_merged_sessions_with(
         &sessions,
         &queries_by_session,
-        &pending_bg_runs,
         &prs,
         dry_run,
         |args| async move { super::super::close::run(&args).await },
@@ -121,35 +91,43 @@ pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
 
 fn branch_query_for(session: &Session) -> Option<BranchPrQuery> {
     let repo = GitRepo::open_at(&session.cwd).ok()?;
-    if !repo.is_worktree() {
+    branch_query_from_repository(
+        repo.is_worktree(),
+        || repo.current_branch().ok(),
+        || github_owner_and_repo(&repo).ok(),
+    )
+}
+
+fn branch_query_from_repository(
+    is_worktree: bool,
+    branch: impl FnOnce() -> Option<String>,
+    repository: impl FnOnce() -> Option<(String, String)>,
+) -> Option<BranchPrQuery> {
+    if !is_worktree {
         return None;
     }
-
-    let branch = repo.current_branch().ok()?;
+    let branch = branch()?;
     if branch == "HEAD" {
         return None;
     }
-
-    let (owner, repo_name) = github_owner_and_repo(&repo).ok()?;
+    let (owner, repo) = repository()?;
     Some(BranchPrQuery {
         owner,
-        repo: repo_name,
+        repo,
         branch,
     })
 }
 
-fn is_close_eligible(session: &Session, has_pending_bg_run: bool) -> bool {
+fn is_close_eligible(session: &Session) -> bool {
     matches!(
         session.status,
         SessionStatus::Stopped | SessionStatus::Paused
     ) && !session.has_pending_bg_tasks()
-        && !has_pending_bg_run
 }
 
 pub(super) async fn close_merged_sessions_with<F, Fut>(
     sessions: &[Session],
     queries_by_session: &HashMap<String, BranchPrQuery>,
-    pending_bg_runs: &HashSet<String>,
     prs: &HashMap<(String, String, String), Option<PrInfo>>,
     dry_run: bool,
     close: F,
@@ -161,16 +139,11 @@ where
     let candidates: Vec<_> = sessions
         .iter()
         .filter_map(|session| {
-            if !is_close_eligible(session, pending_bg_runs.contains(&session.session_id)) {
+            if !is_close_eligible(session) {
                 return None;
             }
             let query = queries_by_session.get(&session.session_id)?;
-            let key = (
-                query.owner.clone(),
-                query.repo.clone(),
-                query.branch.clone(),
-            );
-            let pr = prs.get(&key)?.as_ref()?;
+            let pr = prs.get(&query.key())?.as_ref()?;
             if pr.state != PrState::Merged {
                 return None;
             }
@@ -270,6 +243,7 @@ mod tests {
     use std::path::PathBuf;
 
     use chrono::{DateTime, Utc};
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -340,13 +314,15 @@ mod tests {
         sessions[5]
             .pending_bg_task_ids
             .insert("task-id".to_string());
+        sessions[6]
+            .pending_bg_task_ids
+            .insert(super::super::super::types::BG_RUN_PENDING_TASK_MARKER.to_string());
 
         let queries_by_session: HashMap<_, _> = sessions
             .iter()
             .filter(|session| session.session_id != "no-worktree")
             .map(|session| (session.session_id.clone(), make_query(&session.session_id)))
             .collect();
-        let pending_bg_runs = HashSet::from(["pending-bg-run".to_string()]);
         let prs: HashMap<_, _> = [
             ("stopped-merged", Some(make_pr(1, PrState::Merged))),
             ("paused-merged", Some(make_pr(2, PrState::Merged))),
@@ -362,14 +338,7 @@ mod tests {
         .into_iter()
         .map(|(session_id, pr)| {
             let query = &queries_by_session[session_id];
-            (
-                (
-                    query.owner.clone(),
-                    query.repo.clone(),
-                    query.branch.clone(),
-                ),
-                pr,
-            )
+            (query.key(), pr)
         })
         .collect();
 
@@ -377,7 +346,6 @@ mod tests {
             close_merged_sessions_with(
                 &sessions,
                 &queries_by_session,
-                &pending_bg_runs,
                 &prs,
                 false,
                 |_args| async move { Ok(()) },
@@ -415,25 +383,12 @@ mod tests {
         .into_iter()
         .map(|(session_id, pr)| {
             let query = &queries_by_session[session_id];
-            (
-                (
-                    query.owner.clone(),
-                    query.repo.clone(),
-                    query.branch.clone(),
-                ),
-                pr,
-            )
+            (query.key(), pr)
         })
         .collect();
-        let pending_bg_runs = HashSet::new();
         let calls = RefCell::new(Vec::new());
-        let closed = close_merged_sessions_with(
-            &sessions,
-            &queries_by_session,
-            &pending_bg_runs,
-            &prs,
-            false,
-            |args| {
+        let closed =
+            close_merged_sessions_with(&sessions, &queries_by_session, &prs, false, |args| {
                 let calls = &calls;
                 async move {
                     let session_id = args.target.clone().unwrap_or_default();
@@ -445,9 +400,8 @@ mod tests {
                     }
                     Ok(())
                 }
-            },
-        )
-        .await;
+            })
+            .await;
 
         assert_eq!(
             (calls.into_inner(), closed),
@@ -471,29 +425,16 @@ mod tests {
         let queries_by_session =
             HashMap::from([("merged-session".to_string(), make_query("merged-session"))]);
         let query = &queries_by_session["merged-session"];
-        let prs = HashMap::from([(
-            (
-                query.owner.clone(),
-                query.repo.clone(),
-                query.branch.clone(),
-            ),
-            Some(make_pr(14, PrState::Merged)),
-        )]);
+        let prs = HashMap::from([(query.key(), Some(make_pr(14, PrState::Merged)))]);
         let calls = RefCell::new(Vec::new());
-        let closed = close_merged_sessions_with(
-            &sessions,
-            &queries_by_session,
-            &HashSet::new(),
-            &prs,
-            true,
-            |args| {
+        let closed =
+            close_merged_sessions_with(&sessions, &queries_by_session, &prs, true, |args| {
                 calls
                     .borrow_mut()
                     .push((args.target, args.force, args.skip_hooks));
                 async { Ok(()) }
-            },
-        )
-        .await;
+            })
+            .await;
 
         assert_eq!((calls.into_inner(), closed), (vec![], vec![]));
     }
@@ -535,8 +476,40 @@ mod tests {
 
     #[rstest]
     #[case::single_line("A merged change", "A merged change")]
-    #[case::multiline("A merged\nchange\r", "A merged change ")]
+    #[case::multiline(
+        indoc! {"
+            A merged
+            change"},
+        "A merged change"
+    )]
     fn sanitizes_notification_title(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sanitize_title(input), expected);
+    }
+
+    #[rstest]
+    #[case::main_checkout(false, Some("feature"), None)]
+    #[case::linked_worktree(
+        true,
+        Some("feature"),
+        Some(BranchPrQuery {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            branch: "feature".to_string(),
+        })
+    )]
+    #[case::detached_worktree(true, Some("HEAD"), None)]
+    #[case::branch_unavailable(true, None, None)]
+    fn branch_query_requires_a_linked_worktree_branch(
+        #[case] is_worktree: bool,
+        #[case] branch: Option<&str>,
+        #[case] expected: Option<BranchPrQuery>,
+    ) {
+        let actual = branch_query_from_repository(
+            is_worktree,
+            || branch.map(str::to_string),
+            || Some(("owner".to_string(), "repo".to_string())),
+        );
+
+        assert_eq!(actual, expected);
     }
 }
