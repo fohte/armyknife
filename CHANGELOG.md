@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.371](https://github.com/fohte/armyknife/compare/v0.1.370...v0.1.371) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** archive finished sessions instead of deleting them in tq ([#1071](https://github.com/fohte/armyknife/issues/1071)) ([14d4fef](https://github.com/fohte/armyknife/commit/14d4fef33a888f5c6ae1afa671ac87a3286f3a7e))
+
 ## [0.1.370](https://github.com/fohte/armyknife/compare/v0.1.369...v0.1.370) (2026-10-04)
 
 
