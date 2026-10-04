@@ -51,9 +51,8 @@ For editor autocompletion, add the following to the top of your config file:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
 
 agent:
-  merge_notification:
-    | # sent to the delegator after a delegated PR merges; omitted means no notification
-    Branch {branch} merged: {pr_url}
+  # Sent to the delegator after a delegated PR merges; omitted means no notification.
+  merge_notification: 'Branch {branch} merged: {pr_url}'
   work_types: # per-skill icon and color metadata
     example-workflow:
       icon: '◇'
