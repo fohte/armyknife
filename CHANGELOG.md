@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.368](https://github.com/fohte/armyknife/compare/v0.1.367...v0.1.368) (2026-10-04)
+
+
+### Features
+
+* **agent:** allow configuring merge notification messages sent to delegators ([#1066](https://github.com/fohte/armyknife/issues/1066)) ([bab15f1](https://github.com/fohte/armyknife/commit/bab15f160d1118cd0f1caa67596aa5aca1b5c6b3))
+
 ## [0.1.367](https://github.com/fohte/armyknife/compare/v0.1.366...v0.1.367) (2026-10-04)
 
 
