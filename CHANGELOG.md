@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.370](https://github.com/fohte/armyknife/compare/v0.1.369...v0.1.370) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** archive Codex threads on session deletion ([#1070](https://github.com/fohte/armyknife/issues/1070)) ([ed4af82](https://github.com/fohte/armyknife/commit/ed4af82f819554f42d96ead021a127dfbf5010ba))
+
 ## [0.1.369](https://github.com/fohte/armyknife/compare/v0.1.368...v0.1.369) (2026-10-04)
 
 
