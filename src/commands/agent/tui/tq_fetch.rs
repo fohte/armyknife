@@ -107,26 +107,18 @@ fn build_all_tasks_by_session(
         .into_iter()
         .filter(|session| local_session_ids.contains(&session.session_id))
         .map(|session| {
-            let mut tasks = session
-                .tasks
+            let mut tasks = session.tasks;
+            tasks.sort_by_key(|task| std::cmp::Reverse(task.linked_at));
+            let tasks = tasks
                 .into_iter()
-                .map(|task| {
-                    (
-                        task.linked_at,
-                        SessionTask {
-                            task_id: task.id,
-                            task_number: task.number,
-                            task_title: normalize_title(&task.title),
-                            parent_task_id: task.parent_id,
-                            is_closed: task.status == TqTaskStatus::Completed,
-                        },
-                    )
+                .map(|task| SessionTask {
+                    task_id: task.id,
+                    task_number: task.number,
+                    task_title: normalize_title(&task.title),
+                    parent_task_id: task.parent_id,
+                    is_closed: task.status == TqTaskStatus::Completed,
                 })
-                .collect::<Vec<_>>();
-            tasks.sort_by(|(left_linked_at, _), (right_linked_at, _)| {
-                right_linked_at.cmp(left_linked_at)
-            });
-            let tasks = tasks.into_iter().map(|(_, task)| task).collect();
+                .collect();
             (session.session_id, tasks)
         })
         .collect()
