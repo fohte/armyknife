@@ -41,17 +41,30 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         return close_target(target, args).await;
     }
 
-    let pane_session_id = resume::resolve_session_id_from_pane();
-    let worktree_root = if pane_session_id.is_err() {
+    let pane_session = match resume::resolve_session_id_from_pane() {
+        Ok(session_id) => match super::store::load_session(&session_id)? {
+            Some(_) => PaneSessionResolution::Stored(session_id),
+            None => PaneSessionResolution::Stale(session_id),
+        },
+        Err(error) => PaneSessionResolution::Unavailable(error),
+    };
+    let worktree_root = if matches!(&pane_session, PaneSessionResolution::Stored(_)) {
+        None
+    } else {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
         linked_worktree_root(&cwd)
-    } else {
-        None
     };
-    match resolve_default_target(pane_session_id, worktree_root)? {
+    match resolve_default_target(pane_session, worktree_root)? {
         DefaultTarget::SessionId(session_id) => close_session_target(&session_id, args).await,
         DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args).await,
     }
+}
+
+#[derive(Debug)]
+enum PaneSessionResolution {
+    Stored(String),
+    Stale(String),
+    Unavailable(anyhow::Error),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,12 +74,15 @@ enum DefaultTarget {
 }
 
 fn resolve_default_target(
-    pane_session_id: Result<String>,
+    pane_session: PaneSessionResolution,
     current_worktree_root: Option<PathBuf>,
 ) -> Result<DefaultTarget> {
-    match pane_session_id {
-        Ok(session_id) => Ok(DefaultTarget::SessionId(session_id)),
-        Err(error) => current_worktree_root
+    match pane_session {
+        PaneSessionResolution::Stored(session_id) => Ok(DefaultTarget::SessionId(session_id)),
+        PaneSessionResolution::Stale(session_id) => current_worktree_root
+            .map(DefaultTarget::Worktree)
+            .ok_or_else(|| anyhow::anyhow!("Agent session `{session_id}` was not found")),
+        PaneSessionResolution::Unavailable(error) => current_worktree_root
             .map(DefaultTarget::Worktree)
             .ok_or(error),
     }
@@ -978,24 +994,39 @@ mod tests {
     }
 
     #[rstest]
-    #[case::pane_session_wins(Some("session-1"), Some("/tmp/worktrees/feature"), Ok(DefaultTarget::SessionId("session-1".to_string())))]
-    #[case::worktree_fallback(
-        None,
+    #[case::stored_pane_session_wins(
+        PaneSessionResolution::Stored("session-1".to_string()),
+        Some("/tmp/worktrees/feature"),
+        Ok(DefaultTarget::SessionId("session-1".to_string()))
+    )]
+    #[case::stale_pane_session_falls_back_to_worktree(
+        PaneSessionResolution::Stale("session-1".to_string()),
         Some("/tmp/worktrees/feature"),
         Ok(DefaultTarget::Worktree(PathBuf::from("/tmp/worktrees/feature")))
     )]
-    #[case::preserves_pane_error(None, None, Err("no agent session for pane".to_string()))]
+    #[case::stale_pane_session_preserves_not_found_without_worktree(
+        PaneSessionResolution::Stale("session-1".to_string()),
+        None,
+        Err("Agent session `session-1` was not found".to_string())
+    )]
+    #[case::unavailable_pane_session_falls_back_to_worktree(
+        PaneSessionResolution::Unavailable(anyhow::anyhow!("no agent session for pane")),
+        Some("/tmp/worktrees/feature"),
+        Ok(DefaultTarget::Worktree(PathBuf::from("/tmp/worktrees/feature")))
+    )]
+    #[case::preserves_pane_error_without_worktree(
+        PaneSessionResolution::Unavailable(anyhow::anyhow!("no agent session for pane")),
+        None,
+        Err("no agent session for pane".to_string())
+    )]
     fn resolves_default_target_from_pane_or_current_worktree(
-        #[case] pane_session_id: Option<&str>,
+        #[case] pane_session: PaneSessionResolution,
         #[case] worktree_root: Option<&str>,
         #[case] expected: std::result::Result<DefaultTarget, String>,
     ) {
-        let pane_session_id = pane_session_id
-            .map(|session_id| Ok(session_id.to_string()))
-            .unwrap_or_else(|| Err(anyhow::anyhow!("no agent session for pane")));
         let worktree_root = worktree_root.map(PathBuf::from);
-        let actual = resolve_default_target(pane_session_id, worktree_root)
-            .map_err(|error| error.to_string());
+        let actual =
+            resolve_default_target(pane_session, worktree_root).map_err(|error| error.to_string());
 
         assert_eq!(actual, expected);
     }
