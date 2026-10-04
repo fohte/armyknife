@@ -267,23 +267,12 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         ensure_session_is_idle(session)?;
     }
 
-    let agent_pid = runtime.resolve_agent_pid(pane_id, session.engine)?;
-    if !force && agent_pid.is_some() {
-        match runtime.has_draft(pane_id, session.engine) {
-            Some(false) => {}
-            Some(true) => bail!(
-                "Agent session `{}` has an unsent draft; pass --force to close it",
-                session.session_id
-            ),
-            None => bail!(
-                "Could not check for an unsent draft in agent session `{}`; pass --force to close it",
-                session.session_id
-            ),
-        }
-    }
-
-    match agent_pid {
+    match runtime.resolve_agent_pid(pane_id, session.engine)? {
         Some(pid) => {
+            if !force {
+                ensure_no_unsent_draft(runtime, pane_id, session)?;
+            }
+
             let exited = match runtime.request_graceful_quit(pane_id, pid) {
                 Ok(true) => true,
                 Ok(false) => {
@@ -371,6 +360,24 @@ fn ensure_session_is_idle(session: &Session) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn ensure_no_unsent_draft<R: CloseRuntime>(
+    runtime: &R,
+    pane_id: &str,
+    session: &Session,
+) -> Result<()> {
+    match runtime.has_draft(pane_id, session.engine) {
+        Some(false) => Ok(()),
+        Some(true) => bail!(
+            "Agent session `{}` has an unsent draft; pass --force to close it",
+            session.session_id
+        ),
+        None => bail!(
+            "Could not check for an unsent draft in agent session `{}`; pass --force to close it",
+            session.session_id
+        ),
+    }
 }
 
 #[cfg(test)]
