@@ -12,14 +12,12 @@ use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
-#[cfg(not(test))]
-use super::archive_tq_session_detached;
+use self::side_effects::SideEffects;
 use super::auto_compact;
 use super::claude_sessions;
 use super::error::CcError;
 use super::session_status;
 use super::store;
-use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{
     Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
     TMUX_SESSION_OPTION, TmuxInfo,
@@ -33,6 +31,7 @@ use crate::shared::log::short_run_id;
 
 mod pane_binding;
 pub(super) mod permission_notification;
+mod side_effects;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -114,119 +113,6 @@ enum ProcessResult {
     SessionEnded,
     /// Event was skipped (e.g., resume session-start)
     Skipped,
-}
-
-/// Controls which side effects `process_hook_event_impl` executes.
-/// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
-/// to avoid external commands and the shared background-task registry.
-struct SideEffects {
-    /// Call tmux commands (get_pane_info_by_pid, set_pane_option, refresh_status)
-    tmux: bool,
-    /// Send/remove notifications via hammerspoon
-    notifications: bool,
-    /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
-    /// Off in tests (would fork a real process and survive past the test).
-    auto_compact: bool,
-    /// Spawn the detached `a agent archive-tq-session-detached` worker on a
-    /// genuine Ended transition. Off in tests (would fork a real process).
-    tq_archive: bool,
-    /// Include `a agent bg run` state in Stop processing.
-    track_bg_run_tasks: bool,
-    /// Test-only sink that records the group ids passed to
-    /// `remove_notification_group`. Lets tests assert the call happened
-    /// without invoking hammerspoon.
-    #[cfg(test)]
-    removed_notification_groups: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records (pane_id, status, sessions_dir) tuples
-    /// passed to `sync_tmux`. Lets tests assert the call happened with the
-    /// expected status without invoking tmux.
-    #[cfg(test)]
-    tmux_sync_calls: Option<TmuxSyncCallSink>,
-    /// Test-only sink that records session ids passed to the detached tq
-    /// archive worker.
-    #[cfg(test)]
-    tq_archive_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-}
-
-#[cfg(test)]
-type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
-#[cfg(test)]
-type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
-
-impl SideEffects {
-    fn all() -> Self {
-        Self {
-            tmux: true,
-            notifications: true,
-            auto_compact: true,
-            tq_archive: true,
-            track_bg_run_tasks: true,
-            #[cfg(test)]
-            removed_notification_groups: None,
-            #[cfg(test)]
-            tmux_sync_calls: None,
-            #[cfg(test)]
-            tq_archive_calls: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn none() -> Self {
-        Self {
-            tmux: false,
-            notifications: false,
-            auto_compact: false,
-            tq_archive: false,
-            track_bg_run_tasks: false,
-            removed_notification_groups: None,
-            tmux_sync_calls: None,
-            tq_archive_calls: None,
-        }
-    }
-
-    /// Pushes the latest pane / window status into tmux. In tests, also
-    /// records the call into `tmux_sync_calls` so assertions don't require
-    /// real tmux.
-    fn sync_tmux(&self, pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
-        #[cfg(test)]
-        if let Some(rec) = &self.tmux_sync_calls {
-            rec.lock().expect("tmux_sync_calls mutex poisoned").push((
-                pane_id.map(str::to_string),
-                status,
-                sessions_dir.to_path_buf(),
-            ));
-        }
-        if self.tmux {
-            LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
-        }
-    }
-
-    fn remove_notification_group(&self, group: &str) {
-        if self.notifications {
-            let _ = crate::infra::notification::remove_group(group);
-        }
-        #[cfg(test)]
-        if let Some(rec) = &self.removed_notification_groups {
-            rec.lock()
-                .expect("removed_notification_groups mutex poisoned")
-                .push(group.to_string());
-        }
-    }
-
-    fn archive_tq_session(&self, session_id: &str) {
-        if !self.tq_archive {
-            return;
-        }
-        #[cfg(test)]
-        if let Some(calls) = &self.tq_archive_calls {
-            calls
-                .lock()
-                .expect("tq_archive_calls mutex poisoned")
-                .push(session_id.to_string());
-        }
-        #[cfg(not(test))]
-        archive_tq_session_detached::spawn_in_background(session_id);
-    }
 }
 
 /// Processes a hook event with the given input.
