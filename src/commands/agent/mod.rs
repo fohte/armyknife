@@ -14,6 +14,7 @@ mod codex_queue;
 pub(crate) mod codex_steer;
 mod crit;
 mod delete_tq_session_detached;
+mod display;
 mod error;
 mod focus;
 mod generate_title_detached;
@@ -37,6 +38,8 @@ mod watch;
 mod window_status;
 
 use clap::Subcommand;
+
+pub(crate) use display::{display_label, repo_name};
 
 pub use archive_detached::ArchiveDetachedArgs;
 pub(crate) use archive_detached::spawn_after_parent_exit;

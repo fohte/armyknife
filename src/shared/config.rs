@@ -7,6 +7,7 @@ use crate::commands::agent::types::Engine;
 use crate::commands::ai::review::reviewer::Reviewer;
 
 mod codex;
+mod editor_focus;
 mod env_overlay;
 #[cfg(feature = "schema-gen")]
 mod schema;

@@ -11,6 +11,10 @@ pub(super) fn update_session_work_type(
     input: &HookInput,
     agent_config: &AgentConfig,
 ) {
+    if session.work_type_pinned {
+        return;
+    }
+
     let skill_name = match work_type_candidate(event, input) {
         Some(WorkTypeCandidate::ClaudePrompt(prompt)) => claude_prompt_skill(prompt)
             .filter(|skill_name| agent_config.work_type(skill_name).is_some())
@@ -192,6 +196,7 @@ mod tests {
             current_tool: None,
             label: None,
             work_type: work_type.map(str::to_owned),
+            work_type_pinned: false,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_human_review_ids: BTreeSet::new(),
@@ -276,6 +281,56 @@ mod tests {
         update_session_work_type(&mut session, event, &input, &agent_config);
 
         assert_eq!(session.work_type, expected.map(str::to_owned));
+    }
+
+    #[rstest]
+    #[case::claude_skill_tool(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "claude",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "flow-two", "args": "continue"},
+        }),
+    )]
+    #[case::codex_shell_skill_read(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "codex",
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "cat \"$HOME/.codex/skills/flow-two/SKILL.md\"",
+            },
+        }),
+    )]
+    #[case::claude_slash_prompt(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "claude", "prompt": "/flow-two continue"}),
+    )]
+    #[case::codex_prompt_mention(
+        HookEvent::UserPromptSubmit,
+        json!({"engine": "codex", "prompt": "Please use $flow-two for this task."}),
+    )]
+    fn preserves_pinned_work_type(
+        agent_config: AgentConfig,
+        hook_input_factory: HookInputFactory,
+        session_factory: SessionFactory,
+        #[case] event: HookEvent,
+        #[case] extra: Value,
+    ) {
+        let mut session = session_factory(Some("flow-one"));
+        session.work_type_pinned = true;
+        let input = hook_input_factory(extra);
+        let normalize = |session: &Session| {
+            let mut value = serde_json::to_value(session).expect("session should serialize");
+            value["created_at"] = json!("<timestamp>");
+            value["updated_at"] = json!("<timestamp>");
+            value
+        };
+        let expected = normalize(&session);
+
+        update_session_work_type(&mut session, event, &input, &agent_config);
+
+        assert_eq!(normalize(&session), expected);
     }
 
     #[rstest]

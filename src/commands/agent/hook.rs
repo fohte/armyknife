@@ -26,7 +26,7 @@ use super::types::{
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
-use crate::shared::config::{self, Config, Terminal};
+use crate::shared::config::{self, Config};
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
 
@@ -405,7 +405,6 @@ fn process_hook_event_impl(
     let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| {
-        // Read initial session metadata from environment variables (set by `a agent new`)
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()
@@ -415,6 +414,17 @@ fn process_hook_event_impl(
         Session {
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
+            // A new ID in a pane that already tracked a session is a restart or
+            // `/clear`; it must not inherit that launch's kind pin.
+            work_type_pinned: env.session_work_type.is_some()
+                && input.source.as_deref() != Some("clear")
+                && tmux_info.as_ref().is_none_or(|info| {
+                    !pane_binding::has_other_session_on_pane(
+                        sessions_dir,
+                        &input.session_id,
+                        &info.pane_id,
+                    )
+                }),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: input.cwd.clone(),
@@ -1003,11 +1013,10 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
 
 /// Checks if notifications are enabled via environment variable.
 fn is_notification_enabled(config: &Config) -> bool {
-    // Environment variable takes precedence over config for backward compatibility
-    match EnvVars::load().cc_notify {
-        Some(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
-        None => config.notification.enabled,
-    }
+    crate::shared::notification_policy::is_enabled(
+        config.notification.enabled,
+        EnvVars::load().cc_notify.as_deref(),
+    )
 }
 
 /// Determines if a notification should be sent for the given event.
@@ -1136,36 +1145,12 @@ fn build_notification_with_message(
     if session.tmux_info.is_some() {
         let session_id = shlex::try_quote(&session.session_id)
             .unwrap_or_else(|_| session.session_id.clone().into());
-        let focus_cmd = build_focus_app_command(config);
+        let focus_cmd = config.editor.focus_app_command();
         let command = format!("a agent focus {session_id}; {focus_cmd}");
         notification = notification.with_action(NotificationAction::new(command));
     }
 
     notification
-}
-
-/// Ghostty's default window title. Used to identify the main terminal window
-/// when focusing via AppleScript, since Ghostty's AppleScript API does not
-/// expose tty information per window (https://github.com/ghostty-org/ghostty/issues/10756).
-const GHOSTTY_DEFAULT_TITLE: &str = "👻";
-
-/// Builds a shell command to focus the terminal application.
-/// For Ghostty on macOS, uses AppleScript to focus the main window by its default title.
-/// For other terminals, uses `open -a` which activates the most recent window.
-fn build_focus_app_command(config: &Config) -> String {
-    if cfg!(target_os = "macos")
-        && config.editor.terminal == Terminal::Ghostty
-        && config.editor.focus_app.is_none()
-    {
-        format!(
-            "osascript -e 'tell application \"Ghostty\"' -e 'activate (first window whose name is \"{GHOSTTY_DEFAULT_TITLE}\")' -e 'activate' -e 'end tell'"
-        )
-    } else {
-        let focus_app_str = config.editor.focus_app();
-        let focus_app =
-            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
-        format!("open -a {focus_app}")
-    }
 }
 
 /// Builds the subtitle for a notification.
@@ -1678,6 +1663,7 @@ mod tests {
         let session = Session {
             session_id: "paused-sess".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2050,6 +2036,7 @@ mod tests {
         let session = Session {
             session_id: "end-sess".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2603,6 +2590,7 @@ mod tests {
         Session {
             session_id: "test-123".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2910,11 +2898,61 @@ mod tests {
             let mut actual = serde_json::to_value(session).expect("session should serialize");
             actual["created_at"] = serde_json::json!("<timestamp>");
             actual["updated_at"] = serde_json::json!("<timestamp>");
+            let mut expected = serde_json::json!({
+                "session_id": "test-123",
+                "work_type": expected_work_type,
+                "cwd": "/tmp/test",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "ancestor_session_ids": [],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "claude"
+            });
+            if expected_work_type.is_some() {
+                expected["work_type_pinned"] = serde_json::json!(true);
+            }
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn session_start_clear_does_not_pin_initial_work_type() {
+            let temp_dir = create_temp_sessions_dir();
+
+            temp_env::with_vars(
+                [(EnvVars::session_work_type_name(), Some("sample-skill"))],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::SessionStart,
+                        create_test_input_with_source(None, Some("clear")),
+                        temp_dir.path(),
+                        &SideEffects::none(),
+                    )
+                    .expect("session-start clear should succeed");
+                },
+            );
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("load should succeed")
+                .expect("session should exist");
+            let mut actual = serde_json::to_value(session).expect("session should serialize");
+            actual["created_at"] = serde_json::json!("<timestamp>");
+            actual["updated_at"] = serde_json::json!("<timestamp>");
             assert_eq!(
                 actual,
                 serde_json::json!({
                     "session_id": "test-123",
-                    "work_type": expected_work_type,
+                    "work_type": "sample-skill",
                     "cwd": "/tmp/test",
                     "transcript_path": null,
                     "tty": null,
@@ -2932,8 +2970,29 @@ mod tests {
                     "read_at": null,
                     "sweep_signaled": false,
                     "engine": "claude"
-                })
+                }),
             );
+        }
+
+        #[test]
+        fn detects_previous_session_in_the_same_pane() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut previous = create_test_session(Some(TmuxInfo {
+                session_name: "main".to_string(),
+                window_name: "example".to_string(),
+                window_index: 0,
+                pane_id: "%1".to_string(),
+            }));
+            previous.session_id = "previous-session".to_string();
+            store::save_session_to(temp_dir.path(), &previous).expect("session should save");
+
+            let actual = [
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "new-session", "%1"),
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "previous-session", "%1"),
+                pane_binding::has_other_session_on_pane(temp_dir.path(), "new-session", "%2"),
+            ];
+
+            assert_eq!(actual, [true, false, false]);
         }
 
         #[test]
@@ -2998,6 +3057,7 @@ mod tests {
             Session {
                 session_id: session_id.to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),

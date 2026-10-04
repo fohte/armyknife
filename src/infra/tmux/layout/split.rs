@@ -2,7 +2,9 @@ use std::path::Path;
 
 use super::execution::{execute_commands, flatten_commands};
 use super::launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
-use super::prompt::{apply_prompt_if_agent, clear_managed_codex_launch_env};
+use super::prompt::{
+    apply_prompt_if_agent, clear_managed_codex_launch_env, scope_session_work_type,
+};
 use super::{
     AgentLaunchRoute, TmuxCommand, TmuxSessionSpec, launch_env_vars, set_environment_commands,
     unset_environment_commands, write_prompt_file,
@@ -85,6 +87,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         true,
     );
     let cmd = clear_managed_codex_launch_env(&cmd, engine, managed_codex_launch);
+    let cmd = scope_session_work_type(&cmd, engine, &launch_env_vars);
 
     let setup = build_split_pane_setup_commands(SplitPaneSetupSpec {
         session,

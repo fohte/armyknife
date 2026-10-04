@@ -83,6 +83,7 @@ fn record_in(
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
         work_type: None,
+        work_type_pinned: false,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
@@ -108,9 +109,10 @@ fn record_in(
     if let Some(label) = metadata.label {
         session.label = Some(label.to_string());
     }
-    // Preserve a work type already recognized by a hook.
-    if session.work_type.is_none() {
-        session.work_type = metadata.work_type.map(str::to_string);
+    // An explicit kind must win if a hook persisted a detected skill first.
+    if let Some(work_type) = metadata.work_type {
+        session.work_type = Some(work_type.to_string());
+        session.work_type_pinned = true;
     }
     if !metadata.ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = metadata.ancestor_session_ids;
@@ -141,6 +143,7 @@ mod tests {
         Session {
             session_id: "thread-a".to_string(),
             work_type: Some("detected-skill".to_string()),
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/original"),
@@ -172,12 +175,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::with_work_type(Some("sample-skill"), Some("sample-skill"))]
-    #[case::without_work_type(None, None)]
+    #[case::with_work_type(Some("sample-skill"), Some("sample-skill"), true)]
+    #[case::without_work_type(None, None, false)]
     fn creates_session_before_hook_runs(
         sessions_dir: TempDir,
         #[case] work_type: Option<&str>,
         #[case] expected_work_type: Option<&str>,
+        #[case] expected_work_type_pinned: bool,
     ) {
         record_in(
             sessions_dir.path(),
@@ -194,30 +198,31 @@ mod tests {
         let mut actual = session_json(sessions_dir.path());
         actual["created_at"] = json!("<timestamp>");
         actual["updated_at"] = json!("<timestamp>");
-        assert_eq!(
-            actual,
-            json!({
-                "session_id": "thread-a",
-                "cwd": "/workspace/delegate",
-                "transcript_path": null,
-                "tty": null,
-                "tmux_info": null,
-                "status": "running",
-                "created_at": "<timestamp>",
-                "updated_at": "<timestamp>",
-                "last_message": null,
-                "current_tool": null,
-                "label": "explicit label",
-                "work_type": expected_work_type,
-                "ancestor_session_ids": ["root", "parent"],
-                "pending_bg_task_ids": [],
-                "pending_agent_task_ids": [],
-                "pending_permission_agent_ids": [],
-                "read_at": null,
-                "sweep_signaled": false,
-                "engine": "codex"
-            })
-        );
+        let mut expected = json!({
+            "session_id": "thread-a",
+            "cwd": "/workspace/delegate",
+            "transcript_path": null,
+            "tty": null,
+            "tmux_info": null,
+            "status": "running",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "last_message": null,
+            "current_tool": null,
+            "label": "explicit label",
+            "work_type": expected_work_type,
+            "ancestor_session_ids": ["root", "parent"],
+            "pending_bg_task_ids": [],
+            "pending_agent_task_ids": [],
+            "pending_permission_agent_ids": [],
+            "read_at": null,
+            "sweep_signaled": false,
+            "engine": "codex"
+        });
+        if expected_work_type_pinned {
+            expected["work_type_pinned"] = json!(true);
+        }
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
@@ -249,6 +254,7 @@ mod tests {
                 "current_tool": null,
                 "label": null,
                 "work_type": "sample-skill",
+                "work_type_pinned": true,
                 "ancestor_session_ids": [],
                 "pending_bg_task_ids": [],
                 "pending_agent_task_ids": [],
@@ -261,12 +267,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_metadata(
+    #[case::explicit_metadata_overrides_detected_kind(
         Some("explicit label"),
         Some("sample-skill"),
         &["new-parent"],
         Some("explicit label"),
-        Some("detected-skill"),
+        Some("sample-skill"),
         &["new-parent"]
     )]
     #[case::omitted_metadata_preserves_existing(
@@ -277,15 +283,15 @@ mod tests {
         Some("detected-skill"),
         &["new-parent"]
     )]
-    #[case::empty_ancestors_preserve_existing(
+    #[case::empty_ancestors_preserve_ancestor_chain(
         Some("explicit label"),
         Some("sample-skill"),
         &[],
         Some("explicit label"),
-        Some("detected-skill"),
+        Some("sample-skill"),
         &["existing-parent"]
     )]
-    fn updates_only_non_empty_metadata_after_hook_runs(
+    fn updates_metadata_after_hook_runs(
         sessions_dir: TempDir,
         #[case] label: Option<&str>,
         #[case] work_type: Option<&str>,
@@ -317,6 +323,9 @@ mod tests {
         expected["label"] = json!(expected_label);
         expected["work_type"] = json!(expected_work_type);
         expected["ancestor_session_ids"] = json!(expected_ancestors);
+        if work_type.is_some() {
+            expected["work_type_pinned"] = json!(true);
+        }
         assert_eq!(session_json(sessions_dir.path()), expected);
     }
 
