@@ -478,6 +478,7 @@ mod tests {
             Session {
                 session_id: "resume-target".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),
@@ -690,6 +691,7 @@ mod tests {
             Session {
                 session_id: "guard-test".to_string(),
                 work_type: None,
+                work_type_pinned: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),

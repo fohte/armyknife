@@ -8,9 +8,12 @@
 //! started outside any pane's process tree. In that case, the session ID in
 //! the hook payload is matched against the option written by the launcher.
 
+use std::fs;
+use std::path::Path;
+
 use crate::commands::agent::pane::process::pane_has_live_agent_process;
 use crate::commands::agent::types::{
-    Engine, HookInput, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY,
+    Engine, HookInput, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY,
 };
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux::{self, PaneInfo, PaneInfoWithOption};
@@ -26,6 +29,35 @@ pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
     }
 
     find_by_session_option(&input.session_id)
+}
+
+/// Detects a reused pane so its inherited launch environment cannot pin a new session.
+pub(super) fn has_other_session_on_pane(
+    sessions_dir: &Path,
+    session_id: &str,
+    pane_id: &str,
+) -> bool {
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return false;
+    };
+
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            return false;
+        }
+
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<Session>(&content).ok())
+            .is_some_and(|session| {
+                session.session_id != session_id
+                    && session
+                        .tmux_info
+                        .as_ref()
+                        .is_some_and(|info| info.pane_id == pane_id)
+            })
+    })
 }
 
 fn find_by_session_option(session_id: &str) -> Option<PaneInfo> {

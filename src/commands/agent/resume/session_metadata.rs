@@ -24,6 +24,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
         work_type: None,
+        work_type_pinned: false,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
@@ -76,6 +77,7 @@ mod tests {
         Session {
             session_id: "resume-target".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/project"),

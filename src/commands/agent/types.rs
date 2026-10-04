@@ -109,6 +109,10 @@ pub const MAIN_THREAD_AGENT_KEY: &str = "__main__";
 /// pending-background-task behavior without persisting registry state.
 pub(crate) const BG_RUN_PENDING_TASK_MARKER: &str = "__armyknife_bg_run_pending__";
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
@@ -139,6 +143,9 @@ pub struct Session {
     /// Workflow skill name that identifies this session's work type.
     #[serde(default)]
     pub work_type: Option<String>,
+    /// When true, hook-detected skills cannot replace the `a agent new --kind` value.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub work_type_pinned: bool,
     /// Ancestor session IDs from root to immediate parent.
     /// Used to build tree view: if intermediate sessions are deleted,
     /// child sessions can still find their nearest living ancestor.
@@ -585,6 +592,7 @@ mod tests {
         Session {
             session_id: "s".to_string(),
             work_type: None,
+            work_type_pinned: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -684,9 +692,10 @@ mod tests {
             (
                 session.read_at,
                 session.work_type,
+                session.work_type_pinned,
                 session.pending_human_review_ids
             ),
-            (None, None, BTreeSet::new())
+            (None, None, false, BTreeSet::new())
         );
     }
 

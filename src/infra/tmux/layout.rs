@@ -19,7 +19,7 @@ use execution::{find_new_window_index, rewrite_pane_targets, with_window_id_capt
 use launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
 use prompt::{
     apply_prompt_if_agent, clear_managed_codex_launch_env, is_engine_command,
-    retarget_agent_command,
+    retarget_agent_command, scope_session_work_type,
 };
 pub use route::AgentLaunchRoute;
 #[cfg(test)]
@@ -244,6 +244,7 @@ fn build_layout_plan_with_managed_codex(
             cleanup,
         );
         let cmd = clear_managed_codex_launch_env(&cmd, engine, managed_codex_launch);
+        let cmd = scope_session_work_type(&cmd, engine, env_vars);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
@@ -1271,6 +1272,56 @@ mod tests {
         assert_eq!(
             commands[n - 1],
             cmd(&["set-environment", "-u", "-t", "sess", ancestors_key])
+        );
+    }
+
+    #[test]
+    fn work_type_env_is_scoped_to_the_claude_command() {
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "claude".to_string(),
+            focus: true,
+        });
+        let work_type_key = EnvVars::session_work_type_name();
+        let env_vars = [(work_type_key, "sample-skill")];
+        let plan = build_layout_plan(LayoutCommandsSpec {
+            session: "sess",
+            cwd: "/tmp",
+            window_name: "dev",
+            layout: &layout,
+            model: None,
+            reasoning_effort: None,
+            prompt_file: None,
+            engine: Engine::Claude,
+            env_vars: &env_vars,
+            background: false,
+            restore_automatic_rename: false,
+        });
+
+        assert_eq!(
+            (plan.commands, plan.agent_commands),
+            (
+                vec![
+                    cmd(&[
+                        "set-environment",
+                        "-t",
+                        "sess",
+                        work_type_key,
+                        "sample-skill"
+                    ]),
+                    cmd(&["new-window", "-t", "sess", "-c", "/tmp", "-n", "dev"]),
+                    cmd(&["select-pane", "-t", "1"]),
+                    cmd(&[
+                        "send-keys",
+                        "-l",
+                        "--",
+                        &format!("unset {work_type_key}; {work_type_key}=sample-skill claude"),
+                    ]),
+                    cmd(&["send-keys", "C-m"]),
+                    cmd(&["select-pane", "-t", "1"]),
+                    cmd(&["set-environment", "-u", "-t", "sess", work_type_key]),
+                ],
+                vec![(1, "claude".to_string())],
+            ),
         );
     }
 
