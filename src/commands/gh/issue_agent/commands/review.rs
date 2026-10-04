@@ -68,6 +68,8 @@ impl DocumentSchema for SubmitSchema {
 struct IssueReviewHandler;
 
 impl ReviewHandler<SubmitSchema> for IssueReviewHandler {
+    const NOTIFICATION_COMMAND_NAME: &'static str = "issue-agent";
+
     fn build_complete_args(
         &self,
         document_path: &Path,
@@ -76,7 +78,7 @@ impl ReviewHandler<SubmitSchema> for IssueReviewHandler {
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "gh".into(),
-            "issue-agent".into(),
+            Self::NOTIFICATION_COMMAND_NAME.into(),
             "review-complete".into(),
             document_path.as_os_str().to_os_string(),
         ];
@@ -292,7 +294,7 @@ mod tests {
             "--window-title", "Title",
         ],
     )]
-    fn build_review_args(
+    fn review_handler_command_and_build_review_args(
         #[case] tmux_target: Option<&str>,
         #[case] window_title: &str,
         #[case] expected: Vec<&str>,
@@ -305,7 +307,11 @@ mod tests {
             .iter()
             .map(|a| a.to_string_lossy().to_string())
             .collect();
-        assert_eq!(args_str, expected);
+        let expected: Vec<String> = expected.iter().map(|arg| arg.to_string()).collect();
+        assert_eq!(
+            (IssueReviewHandler::NOTIFICATION_COMMAND_NAME, args_str),
+            ("issue-agent", expected),
+        );
     }
 
     #[rstest]

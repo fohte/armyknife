@@ -45,6 +45,9 @@ const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Each use case (PR draft, issue comment, PR review reply, or simple file editing)
 /// implements this trait to define how to handle the document after the user finishes editing.
 pub trait ReviewHandler<S: DocumentSchema> {
+    /// Command label shown in review notification titles.
+    const NOTIFICATION_COMMAND_NAME: &'static str = "review";
+
     /// Build the command-line arguments for the review-complete subcommand.
     ///
     /// This is called when launching WezTerm to specify what command should run
@@ -105,12 +108,17 @@ where
         document_path.to_path_buf()
     };
 
+    let labels = launch::ReviewLabels {
+        window_title,
+        command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
+    };
+
     start_review_with_launcher::<S, _>(&document_path, |document_path, done_fifo_path| {
         launch::launch_review::<S, H>(
             tmux_pane_id.as_deref(),
             document_path,
             done_fifo_path,
-            window_title,
+            &labels,
             handler,
             editor_config,
             notifications_enabled,

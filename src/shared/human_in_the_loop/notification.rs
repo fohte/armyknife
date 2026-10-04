@@ -6,7 +6,6 @@ use crate::commands::agent::{display_label, repo_name, store};
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::shared::config::EditorConfig;
 
-const REVIEW_NOTIFICATION_TITLE: &str = "■ HITL review requested";
 const NEOVIM_LOGO_URL: &str = "https://neovim.io/logos/neovim-mark-flat.png";
 
 pub(super) fn send_review_requested(
@@ -14,6 +13,7 @@ pub(super) fn send_review_requested(
     review_pane_id: &str,
     document_path: &Path,
     window_title: &str,
+    command_name: &str,
     editor_config: &EditorConfig,
 ) {
     let session = match store::load_session(session_id) {
@@ -48,6 +48,7 @@ pub(super) fn send_review_requested(
 
     let notification = match build_review_notification(
         window_title,
+        command_name,
         session_id,
         review_pane_id,
         &repo_name,
@@ -71,6 +72,7 @@ pub(super) fn send_review_requested(
 
 fn build_review_notification(
     window_title: &str,
+    command_name: &str,
     session_id: &str,
     review_pane_id: &str,
     repo_name: &str,
@@ -89,7 +91,7 @@ fn build_review_notification(
     let action = format!("{focus_command}; {}", editor_config.focus_app_command());
 
     Ok(Notification::new(
-        REVIEW_NOTIFICATION_TITLE,
+        format!("■ {command_name} - Review requested"),
         format!("{window_title} ({repo_name})"),
     )
     .with_subtitle(subtitle)
@@ -110,13 +112,22 @@ fn send_best_effort(notification: &Notification, send: impl FnOnce(&Notification
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use rstest::rstest;
 
     use super::*;
 
-    #[test]
-    fn builds_notification_with_review_repo_session_and_focus_action() {
+    #[rstest]
+    #[case::pr_draft("pr-draft", "■ pr-draft - Review requested")]
+    #[case::draft("draft", "■ draft - Review requested")]
+    #[case::issue_agent("issue-agent", "■ issue-agent - Review requested")]
+    #[case::pr_review("pr-review", "■ pr-review - Review requested")]
+    fn builds_notification_with_command_specific_title(
+        #[case] command_name: &str,
+        #[case] expected_title: &str,
+    ) {
         let notification = build_review_notification(
             "PR: sample/repo @ sample-branch",
+            command_name,
             "session-id",
             "%42",
             "sample-repo",
@@ -135,7 +146,7 @@ mod tests {
                 notification.app_icon(),
             ),
             (
-                REVIEW_NOTIFICATION_TITLE,
+                expected_title,
                 "PR: sample/repo @ sample-branch (sample-repo)",
                 Some("work:agent | review-session"),
                 Some("a agent focus session-id --review-pane-id '%42'; open -a WezTerm"),
