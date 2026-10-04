@@ -265,21 +265,14 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
 
     if !force {
         ensure_session_is_idle(session)?;
-        match runtime.has_draft(pane_id, session.engine) {
-            Some(false) => {}
-            Some(true) => bail!(
-                "Agent session `{}` has an unsent draft; pass --force to close it",
-                session.session_id
-            ),
-            None => bail!(
-                "Could not check for an unsent draft in agent session `{}`; pass --force to close it",
-                session.session_id
-            ),
-        }
     }
 
     match runtime.resolve_agent_pid(pane_id, session.engine)? {
         Some(pid) => {
+            if !force {
+                ensure_no_unsent_draft(runtime, pane_id, session)?;
+            }
+
             let exited = match runtime.request_graceful_quit(pane_id, pid) {
                 Ok(true) => true,
                 Ok(false) => {
@@ -367,6 +360,24 @@ fn ensure_session_is_idle(session: &Session) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn ensure_no_unsent_draft<R: CloseRuntime>(
+    runtime: &R,
+    pane_id: &str,
+    session: &Session,
+) -> Result<()> {
+    match runtime.has_draft(pane_id, session.engine) {
+        Some(false) => Ok(()),
+        Some(true) => bail!(
+            "Agent session `{}` has an unsent draft; pass --force to close it",
+            session.session_id
+        ),
+        None => bail!(
+            "Could not check for an unsent draft in agent session `{}`; pass --force to close it",
+            session.session_id
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -559,19 +570,33 @@ mod tests {
     }
 
     #[rstest]
-    #[case::draft_present(
+    #[case::claude_draft_present(
+        Engine::Claude,
         Some(true),
         "Agent session `session-1` has an unsent draft; pass --force to close it"
     )]
-    #[case::draft_unknown(
+    #[case::codex_draft_present(
+        Engine::Codex,
+        Some(true),
+        "Agent session `session-1` has an unsent draft; pass --force to close it"
+    )]
+    #[case::claude_draft_unknown(
+        Engine::Claude,
+        None,
+        "Could not check for an unsent draft in agent session `session-1`; pass --force to close it"
+    )]
+    #[case::codex_draft_unknown(
+        Engine::Codex,
         None,
         "Could not check for an unsent draft in agent session `session-1`; pass --force to close it"
     )]
     fn close_rejects_unsent_or_uninspectable_drafts(
-        session: Session,
+        mut session: Session,
+        #[case] engine: Engine,
         #[case] draft: Option<bool>,
         #[case] expected_error: &str,
     ) {
+        session.engine = engine;
         let runtime = FakeRuntime {
             draft,
             ..FakeRuntime::default()
@@ -586,7 +611,8 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
+                    Call::ResolvePid("%42".to_string(), engine),
+                    Call::Draft("%42".to_string(), engine),
                 ],
             ),
         );
@@ -605,8 +631,8 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
@@ -665,8 +691,8 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
@@ -694,8 +720,8 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
@@ -775,8 +801,8 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
@@ -793,42 +819,41 @@ mod tests {
         #[case] force: bool,
     ) {
         let runtime = FakeRuntime {
+            draft: None,
             pid: None,
             ..FakeRuntime::default()
         };
 
         let result = close_session(&session, force, &runtime);
 
-        let expected_calls = if force {
-            vec![
-                Call::PaneExists("%42".to_string()),
-                Call::PaneSession("%42".to_string()),
-                Call::ResolvePid("%42".to_string(), Engine::Claude),
-            ]
-        } else {
-            vec![
-                Call::PaneExists("%42".to_string()),
-                Call::PaneSession("%42".to_string()),
-                Call::Draft("%42".to_string(), Engine::Claude),
-                Call::ResolvePid("%42".to_string(), Engine::Claude),
-            ]
-        };
-
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
                 "Could not find a running agent process for session `session-1`; its pane was left open"
                     .to_string(),
-                expected_calls,
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                ],
             ),
         );
     }
 
-    #[test]
-    fn close_removes_the_pane_when_the_session_already_ended() {
-        let mut session = session();
-        session.status = SessionStatus::Ended;
+    #[rstest]
+    #[case::claude_paused(Engine::Claude, SessionStatus::Paused)]
+    #[case::codex_paused(Engine::Codex, SessionStatus::Paused)]
+    #[case::claude_ended(Engine::Claude, SessionStatus::Ended)]
+    #[case::codex_ended(Engine::Codex, SessionStatus::Ended)]
+    fn close_removes_a_paused_or_ended_session_without_checking_for_a_draft(
+        mut session: Session,
+        #[case] engine: Engine,
+        #[case] status: SessionStatus,
+    ) {
+        session.engine = engine;
+        session.status = status;
         let runtime = FakeRuntime {
+            draft: None,
             pid: None,
             ..FakeRuntime::default()
         };
@@ -842,8 +867,7 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
-                    Call::Draft("%42".to_string(), Engine::Claude),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    Call::ResolvePid("%42".to_string(), engine),
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
