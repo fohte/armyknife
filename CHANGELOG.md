@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.362](https://github.com/fohte/armyknife/compare/v0.1.361...v0.1.362) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** extend initial prompt timeout when starting codex ([#1053](https://github.com/fohte/armyknife/issues/1053)) ([7c4e655](https://github.com/fohte/armyknife/commit/7c4e65521fa30c3952f2e47afc103e7a023e995c))
+
 ## [0.1.361](https://github.com/fohte/armyknife/compare/v0.1.360...v0.1.361) (2026-10-04)
 
 
