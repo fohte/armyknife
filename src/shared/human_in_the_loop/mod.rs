@@ -39,6 +39,7 @@ const DIFF_CONTEXT_LINES: usize = 3;
 /// asleep when Claude Code invokes the command, where Ghostty's AppleScript
 /// call succeeds but the terminal window never initializes.
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const REVIEW_PANE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Trait for types that handle the review completion callback.
@@ -127,7 +128,11 @@ where
                 notifications_enabled,
             )
         },
-        crate::infra::tmux::is_pane_alive,
+        |pane_id| {
+            crate::infra::tmux::list_all_pane_ids()
+                .map(|pane_ids| pane_ids.contains(pane_id))
+                .map_err(|error| HumanInTheLoopError::CommandFailed(error.to_string()))
+        },
     )
 }
 
@@ -139,7 +144,7 @@ fn start_review_with_launcher<S, L, P>(
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path) -> Result<Option<String>>,
-    P: FnMut(&str) -> bool,
+    P: FnMut(&str) -> Result<bool>,
 {
     let _lock_guard = match LockGuard::acquire(document_path) {
         Ok(guard) => guard,
@@ -358,34 +363,66 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
 /// Wait for the completion signal while periodically checking the review pane.
 #[cfg(unix)]
 fn wait_for_fifo_signal_or_pane_exit(
-    mut file: std::fs::File,
+    file: std::fs::File,
     pane_id: &str,
-    mut is_pane_alive: impl FnMut(&str) -> bool,
+    mut is_pane_alive: impl FnMut(&str) -> Result<bool>,
 ) -> Result<()> {
-    use std::io::{self, Read};
-    use std::thread::sleep;
     use std::time::Instant;
 
     let mut next_pane_check = Instant::now();
-    let mut buf = [0u8; 1];
-    loop {
-        match file.read(&mut buf) {
-            Ok(n) if n > 0 => return Ok(()),
-            Ok(_) => {}
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock
-                    || error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.into()),
-        }
-
+    poll_fifo_signal(file, |file| {
         if Instant::now() >= next_pane_check {
-            if !is_pane_alive(pane_id) {
-                return Err(HumanInTheLoopError::ReviewPaneClosed);
+            if !is_pane_alive(pane_id)? {
+                return Ok(if try_read_fifo_signal(file)? {
+                    FifoPollAction::Signaled
+                } else {
+                    FifoPollAction::Abort(HumanInTheLoopError::ReviewPaneClosed)
+                });
             }
             next_pane_check = Instant::now() + REVIEW_PANE_CHECK_INTERVAL;
         }
+        Ok(FifoPollAction::Continue)
+    })
+}
 
-        sleep(Duration::from_millis(100));
+enum FifoPollAction {
+    Continue,
+    Signaled,
+    Abort(HumanInTheLoopError),
+}
+
+fn poll_fifo_signal(
+    mut file: std::fs::File,
+    mut check: impl FnMut(&mut std::fs::File) -> Result<FifoPollAction>,
+) -> Result<()> {
+    use std::thread::sleep;
+
+    loop {
+        if try_read_fifo_signal(&mut file)? {
+            return Ok(());
+        }
+
+        match check(&mut file)? {
+            FifoPollAction::Continue => sleep(FIFO_POLL_INTERVAL),
+            FifoPollAction::Signaled => return Ok(()),
+            FifoPollAction::Abort(error) => return Err(error),
+        }
+    }
+}
+
+fn try_read_fifo_signal(file: &mut std::fs::File) -> Result<bool> {
+    use std::io::{self, Read};
+
+    let mut buf = [0u8; 1];
+    match file.read(&mut buf) {
+        Ok(n) => Ok(n > 0),
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || error.kind() == io::ErrorKind::Interrupted =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -402,32 +439,20 @@ fn wait_for_fifo_signal_with_timeout(
     _fifo_path: &Path,
     timeout: Duration,
 ) -> Result<()> {
-    use std::io::{self, Read};
-    use std::thread::sleep;
     use std::time::Instant;
 
     let deadline = Instant::now() + timeout;
-    let mut file = file;
-    let mut buf = [0u8; 1];
-    let poll_interval = Duration::from_millis(100);
-    loop {
-        match file.read(&mut buf) {
-            Ok(n) if n > 0 => return Ok(()),
-            Ok(_) => {
-                // Ok(0) = no writer yet (macOS) or EOF. Keep waiting.
-            }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e.into()),
-        }
+    poll_fifo_signal(file, |_| {
         if Instant::now() >= deadline {
-            return Err(HumanInTheLoopError::TerminalLaunchFailed {
-                timeout_secs: timeout.as_secs(),
-            });
+            Ok(FifoPollAction::Abort(
+                HumanInTheLoopError::TerminalLaunchFailed {
+                    timeout_secs: timeout.as_secs(),
+                },
+            ))
+        } else {
+            Ok(FifoPollAction::Continue)
         }
-        sleep(poll_interval);
-    }
+    })
 }
 
 /// RAII guard that removes the FIFO file on drop.
@@ -607,10 +632,56 @@ mod tests {
     ) {
         signal_fifo(&fifo_reader.fifo_path);
 
-        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| false)
-            .map_err(|error| error.to_string());
+        let result =
+            wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| Ok(false))
+                .map_err(|error| error.to_string());
 
         assert_eq!(result, Ok(()));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_reads_signal_written_before_pane_closes(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let writer_path = fifo_reader.fifo_path.clone();
+        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", move |_| {
+            signal_fifo(&writer_path);
+            Ok(false)
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_completes_while_pane_is_alive(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let writer_path = fifo_reader.fifo_path.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            signal_fifo(&writer_path);
+        });
+
+        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| Ok(true))
+            .map_err(|error| error.to_string());
+        writer.join().expect("writer thread");
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_propagates_pane_query_failure(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| {
+            Err(HumanInTheLoopError::CommandFailed(
+                "tmux is unavailable".into(),
+            ))
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, Err("Command failed: tmux is unavailable".into()));
     }
 
     #[rstest]
@@ -644,7 +715,7 @@ mod tests {
                 signal_fifo(done_fifo_path);
                 Ok(None)
             },
-            |_| true,
+            |_| Ok(true),
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -665,7 +736,7 @@ mod tests {
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
             |_, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
-            |_| true,
+            |_| Ok(true),
         )
         .map(|document| document.map(|document| document.path))
         .map_err(|error| error.to_string());
@@ -691,7 +762,7 @@ mod tests {
                 signal_fifo(done_fifo_path);
                 Ok(None)
             },
-            |_| true,
+            |_| Ok(true),
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -724,7 +795,7 @@ mod tests {
                 launch_called = true;
                 Ok(None)
             },
-            |_| true,
+            |_| Ok(true),
         )
         .expect("skip existing review")
         .map(|document| document.path);
@@ -749,7 +820,7 @@ mod tests {
                 done_fifo_path = Some(fifo_path.to_path_buf());
                 Ok(Some("%review".to_string()))
             },
-            |_| false,
+            |_| Ok(false),
         )
         .map(|document| document.is_some())
         .map_err(|error| error.to_string());
