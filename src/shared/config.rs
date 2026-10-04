@@ -1740,10 +1740,14 @@ mod tests {
     #[rstest]
     fn generate_schema_contains_merge_notification_description(schema_value: serde_json::Value) {
         assert_eq!(
-            schema_value["$defs"]["AgentConfig"]["properties"]["merge_notification"]["description"],
-            indoc! {"
-                Message template sent to the delegator when a delegated branch's PR merges.
-                Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent."}
+            schema_value["$defs"]["AgentConfig"]["properties"]["merge_notification"],
+            serde_json::json!({
+                "description": indoc! {"
+                    Message template sent to the delegator when a delegated branch's PR merges.
+                    Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent."},
+                "type": ["string", "null"],
+                "default": null,
+            })
         );
     }
 
