@@ -22,7 +22,7 @@ const INITIALIZE_REQUEST_ID: u64 = 1;
 const TURN_START_REQUEST_ID: u64 = 2;
 const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(120);
 const TURN_START_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod archive;
