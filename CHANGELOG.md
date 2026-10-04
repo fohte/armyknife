@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.369](https://github.com/fohte/armyknife/compare/v0.1.368...v0.1.369) (2026-10-04)
+
+
+### Features
+
+* **agent:** automatically close sessions for merged PRs in sweep ([#1068](https://github.com/fohte/armyknife/issues/1068)) ([91bb52f](https://github.com/fohte/armyknife/commit/91bb52fb6dd425ce6b17858f6dbd1e9eda380166))
+
 ## [0.1.368](https://github.com/fohte/armyknife/compare/v0.1.367...v0.1.368) (2026-10-04)
 
 
