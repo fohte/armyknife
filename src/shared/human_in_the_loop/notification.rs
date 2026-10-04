@@ -11,6 +11,7 @@ const NEOVIM_LOGO_URL: &str = "https://neovim.io/logos/neovim-mark-flat.png";
 
 pub(super) fn send_review_requested(
     session_id: &str,
+    review_pane_id: &str,
     document_path: &Path,
     window_title: &str,
     editor_config: &EditorConfig,
@@ -48,6 +49,7 @@ pub(super) fn send_review_requested(
     let notification = match build_review_notification(
         window_title,
         session_id,
+        review_pane_id,
         &repo_name,
         &subtitle,
         editor_config,
@@ -70,12 +72,20 @@ pub(super) fn send_review_requested(
 fn build_review_notification(
     window_title: &str,
     session_id: &str,
+    review_pane_id: &str,
     repo_name: &str,
     subtitle: &str,
     editor_config: &EditorConfig,
 ) -> Result<Notification> {
-    let focus_command = shlex::try_join(["a", "agent", "focus", session_id])
-        .context("failed to quote the HITL review notification command")?;
+    let focus_command = shlex::try_join([
+        "a",
+        "agent",
+        "focus",
+        session_id,
+        "--review-pane-id",
+        review_pane_id,
+    ])
+    .context("failed to quote the HITL review notification command")?;
     let action = format!("{focus_command}; {}", editor_config.focus_app_command());
 
     Ok(Notification::new(
@@ -108,6 +118,7 @@ mod tests {
         let notification = build_review_notification(
             "PR: sample/repo @ sample-branch",
             "session-id",
+            "%42",
             "sample-repo",
             "work:agent | review-session",
             &EditorConfig::default(),
@@ -127,7 +138,7 @@ mod tests {
                 REVIEW_NOTIFICATION_TITLE,
                 "PR: sample/repo @ sample-branch (sample-repo)",
                 Some("work:agent | review-session"),
-                Some("a agent focus session-id; open -a WezTerm"),
+                Some("a agent focus session-id --review-pane-id '%42'; open -a WezTerm"),
                 Some(NEOVIM_LOGO_URL),
                 None,
             ),
