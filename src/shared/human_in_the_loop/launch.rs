@@ -44,9 +44,10 @@ where
             session_id.as_deref(),
             notifications_enabled,
             env_vars.cc_notify.as_deref(),
-            |session_id| {
+            |session_id, review_pane_id| {
                 super::notification::send_review_requested(
                     session_id,
+                    review_pane_id,
                     document_path,
                     window_title,
                     editor_config,
@@ -66,17 +67,17 @@ where
 }
 
 fn launch_tmux_review(
-    open_pane: impl FnOnce() -> Result<()>,
+    open_pane: impl FnOnce() -> Result<String>,
     session_id: Option<&str>,
     notifications_enabled: bool,
     cc_notify: Option<&str>,
-    notify: impl FnOnce(&str),
+    notify: impl FnOnce(&str, &str),
 ) -> Result<()> {
-    open_pane()?;
+    let review_pane_id = open_pane()?;
     if notification_policy::is_enabled(notifications_enabled, cc_notify)
         && let Some(session_id) = session_id
     {
-        notify(session_id);
+        notify(session_id, &review_pane_id);
     }
     Ok(())
 }
@@ -142,7 +143,10 @@ mod tests {
         Some("session-id"),
         true,
         None,
-        vec!["pane opened".to_string(), "notified: session-id".to_string()],
+        vec![
+            "pane opened".to_string(),
+            "notified: session-id: %review".to_string(),
+        ],
         Ok(()),
     )]
     #[case::notifications_disabled_keeps_agent_session(
@@ -190,7 +194,7 @@ mod tests {
             || {
                 events.borrow_mut().push("pane opened".to_string());
                 if open_succeeds {
-                    Ok(())
+                    Ok("%review".to_string())
                 } else {
                     Err(HumanInTheLoopError::CommandFailed(
                         "pane unavailable".to_string(),
@@ -200,8 +204,10 @@ mod tests {
             session_id,
             notifications_enabled,
             cc_notify,
-            |session_id| {
-                events.borrow_mut().push(format!("notified: {session_id}"));
+            |session_id, review_pane_id| {
+                events
+                    .borrow_mut()
+                    .push(format!("notified: {session_id}: {review_pane_id}"));
             },
         )
         .map_err(|error| error.to_string());

@@ -20,7 +20,7 @@ pub(super) fn open_review_pane(
     executable: &OsStr,
     args: &[OsString],
     done_fifo_path: &Path,
-) -> super::Result<()> {
+) -> super::Result<String> {
     let environment = review_pane_environment();
     let command = review_pane_command(executable, args, done_fifo_path, &environment);
     crate::infra::tmux::open_floating_pane(crate::infra::tmux::FloatingPaneSpec {
@@ -28,7 +28,6 @@ pub(super) fn open_review_pane(
         title,
         command: &command,
     })
-    .map(|_| ())
     .map_err(|error| super::HumanInTheLoopError::CommandFailed(error.to_string()))
 }
 
