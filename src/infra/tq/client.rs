@@ -16,6 +16,7 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
 const SESSION_LIST_ARGS: &[&str] = &["session", "list"];
+const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
 /// Claude Code's provider identifier in tq's agent-session schema. Always
 /// this literal value for sessions armyknife manages.
@@ -185,14 +186,13 @@ impl TqClient {
         }
     }
 
-    /// Deletes tq's record of a Claude Code agent session by session_id.
-    /// Best-effort: the caller (see `agent::delete_tq_session_detached`) treats
-    /// any error here as non-fatal, since tq's own periodic cleanup of stale
-    /// sessions is the fallback if this never runs.
-    pub fn delete_session(&self, session_id: &str) -> Result<()> {
-        let args = ["session", "delete", CLAUDE_CODE_PROVIDER, session_id];
+    /// Archives tq's record of a Claude Code agent session by session_id.
+    /// Best-effort: the caller (see `agent::archive_tq_session_detached`)
+    /// treats any error here as non-fatal.
+    pub fn archive_session(&self, session_id: &str) -> Result<()> {
+        let args = build_session_archive_args(session_id);
         let mut command = ExternalTool::Tq.command();
-        command.args(args);
+        command.args(&args);
 
         let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
             .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
@@ -208,6 +208,13 @@ impl TqClient {
 
         Ok(())
     }
+}
+
+fn build_session_archive_args(session_id: &str) -> Vec<String> {
+    let mut args: Vec<String> = SESSION_ARCHIVE_ARGS.iter().map(|s| s.to_string()).collect();
+    args.push(CLAUDE_CODE_PROVIDER.to_string());
+    args.push(session_id.to_string());
+    args
 }
 
 /// Runs `tq session list --session-id <id> ...` (one flag per id in
@@ -568,5 +575,13 @@ mod tests {
     )]
     fn build_session_list_args_cases(#[case] session_ids: &[String], #[case] expected: Vec<&str>) {
         assert_eq!(build_session_list_args(session_ids), expected);
+    }
+
+    #[test]
+    fn build_session_archive_args_uses_claude_code_provider() {
+        assert_eq!(
+            build_session_archive_args("session-1"),
+            vec!["session", "archive", "claude_code", "session-1"],
+        );
     }
 }

@@ -1,4 +1,5 @@
 mod archive_detached;
+mod archive_tq_session_detached;
 mod auto_compact;
 pub(crate) mod auto_pause;
 mod bg;
@@ -13,7 +14,6 @@ mod codex;
 mod codex_queue;
 pub(crate) mod codex_steer;
 mod crit;
-mod delete_tq_session_detached;
 mod display;
 mod error;
 mod focus;
@@ -43,6 +43,7 @@ pub(crate) use display::{display_label, repo_name};
 
 pub use archive_detached::ArchiveDetachedArgs;
 pub(crate) use archive_detached::spawn_after_parent_exit;
+pub use archive_tq_session_detached::ArchiveTqSessionDetachedArgs;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
 pub use clean::CleanArgs;
@@ -50,7 +51,6 @@ pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
 pub use codex::CodexArgs;
 pub use crit::CritCommands;
-pub use delete_tq_session_detached::DeleteTqSessionDetachedArgs;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
@@ -151,12 +151,12 @@ pub enum AgentCommands {
     #[command(name = "archive-detached", hide = true)]
     ArchiveDetached(ArchiveDetachedArgs),
 
-    /// Internal: best-effort tq session deletion, spawned detached when a
+    /// Internal: best-effort tq session archiving, spawned detached when a
     /// session is confirmed Ended (a genuine SessionEnd, or eviction on
     /// tmux pane takeover) so a slow/unreachable tq never blocks Claude
     /// Code's exit.
-    #[command(name = "delete-tq-session-detached", hide = true)]
-    DeleteTqSessionDetached(DeleteTqSessionDetachedArgs),
+    #[command(name = "archive-tq-session-detached", hide = true)]
+    ArchiveTqSessionDetached(ArchiveTqSessionDetachedArgs),
 }
 
 impl AgentCommands {
@@ -184,7 +184,7 @@ impl AgentCommands {
             Self::CleanDetached(args) => clean_detached::run(args).await?,
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
             Self::ArchiveDetached(args) => archive_detached::run(args)?,
-            Self::DeleteTqSessionDetached(args) => delete_tq_session_detached::run(args)?,
+            Self::ArchiveTqSessionDetached(args) => archive_tq_session_detached::run(args)?,
         }
         Ok(())
     }

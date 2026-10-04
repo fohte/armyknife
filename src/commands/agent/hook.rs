@@ -12,13 +12,12 @@ use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
+use self::side_effects::SideEffects;
 use super::auto_compact;
 use super::claude_sessions;
-use super::delete_tq_session_detached;
 use super::error::CcError;
 use super::session_status;
 use super::store;
-use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{
     Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
     TMUX_SESSION_OPTION, TmuxInfo,
@@ -32,6 +31,7 @@ use crate::shared::log::short_run_id;
 
 mod pane_binding;
 pub(super) mod permission_notification;
+mod side_effects;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -115,97 +115,6 @@ enum ProcessResult {
     Skipped,
 }
 
-/// Controls which side effects `process_hook_event_impl` executes.
-/// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
-/// to avoid external commands and the shared background-task registry.
-struct SideEffects {
-    /// Call tmux commands (get_pane_info_by_pid, set_pane_option, refresh_status)
-    tmux: bool,
-    /// Send/remove notifications via hammerspoon
-    notifications: bool,
-    /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
-    /// Off in tests (would fork a real process and survive past the test).
-    auto_compact: bool,
-    /// Spawn the detached `a agent delete-tq-session-detached` worker on a
-    /// genuine Ended transition. Off in tests (would fork a real process).
-    tq_delete: bool,
-    /// Include `a agent bg run` state in Stop processing.
-    track_bg_run_tasks: bool,
-    /// Test-only sink that records the group ids passed to
-    /// `remove_notification_group`. Lets tests assert the call happened
-    /// without invoking hammerspoon.
-    #[cfg(test)]
-    removed_notification_groups: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records (pane_id, status, sessions_dir) tuples
-    /// passed to `sync_tmux`. Lets tests assert the call happened with the
-    /// expected status without invoking tmux.
-    #[cfg(test)]
-    tmux_sync_calls: Option<TmuxSyncCallSink>,
-}
-
-#[cfg(test)]
-type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
-#[cfg(test)]
-type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
-
-impl SideEffects {
-    fn all() -> Self {
-        Self {
-            tmux: true,
-            notifications: true,
-            auto_compact: true,
-            tq_delete: true,
-            track_bg_run_tasks: true,
-            #[cfg(test)]
-            removed_notification_groups: None,
-            #[cfg(test)]
-            tmux_sync_calls: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn none() -> Self {
-        Self {
-            tmux: false,
-            notifications: false,
-            auto_compact: false,
-            tq_delete: false,
-            track_bg_run_tasks: false,
-            removed_notification_groups: None,
-            tmux_sync_calls: None,
-        }
-    }
-
-    /// Pushes the latest pane / window status into tmux. In tests, also
-    /// records the call into `tmux_sync_calls` so assertions don't require
-    /// real tmux.
-    fn sync_tmux(&self, pane_id: Option<&str>, status: Option<SessionStatus>, sessions_dir: &Path) {
-        #[cfg(test)]
-        if let Some(rec) = &self.tmux_sync_calls {
-            rec.lock().expect("tmux_sync_calls mutex poisoned").push((
-                pane_id.map(str::to_string),
-                status,
-                sessions_dir.to_path_buf(),
-            ));
-        }
-        if self.tmux {
-            LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
-        }
-    }
-
-    fn remove_notification_group(&self, group: &str) {
-        if self.notifications {
-            let _ = crate::infra::notification::remove_group(group);
-        }
-        #[cfg(test)]
-        if let Some(rec) = &self.removed_notification_groups {
-            rec.lock()
-                .expect("removed_notification_groups mutex poisoned")
-                .push(group.to_string());
-        }
-    }
-}
-
 /// Processes a hook event with the given input.
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
@@ -219,7 +128,7 @@ fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
 /// `claude` (or `claude -c <other-id>`) starts on the same pane. Resuming the
 /// same paused session with `claude -c <same-id>` is unaffected because
 /// `session_id` matches and the entry is skipped. This eviction is a genuine
-/// Ended transition too, so it also triggers a best-effort tq deletion.
+/// Ended transition too, so it also triggers a best-effort tq archive.
 fn evict_paused_sessions_on_pane_takeover(
     sessions_dir: &Path,
     pane_id: &str,
@@ -254,9 +163,7 @@ fn evict_paused_sessions_on_pane_takeover(
         session.status = SessionStatus::Ended;
         session.updated_at = now;
         let _ = store::save_session_to(sessions_dir, &session);
-        if side_effects.tq_delete {
-            delete_tq_session_detached::spawn_in_background(&session.session_id);
-        }
+        side_effects.archive_tq_session(&session.session_id);
     }
 }
 
@@ -311,9 +218,7 @@ fn process_hook_event_impl(
                 // it here. Paused sessions keep their notification so the
                 // user still sees it after `a agent resume`.
                 side_effects.remove_notification_group(&input.session_id);
-                if side_effects.tq_delete {
-                    delete_tq_session_detached::spawn_in_background(&input.session_id);
-                }
+                side_effects.archive_tq_session(&input.session_id);
             }
             // Push the preserved status into the pane option so that sweep's
             // Paused isn't clobbered back to "" by this SessionEnd: Paused
@@ -1178,7 +1083,26 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+
+    struct TqArchiveContext {
+        temp_dir: tempfile::TempDir,
+        archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        side_effects: SideEffects,
+    }
+
+    #[fixture]
+    fn tq_archive_context() -> TqArchiveContext {
+        let archived_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.tq_archive = true;
+        side_effects.tq_archive_calls = Some(archived_calls.clone());
+        TqArchiveContext {
+            temp_dir: tempfile::TempDir::new().expect("temp dir"),
+            archived_calls,
+            side_effects,
+        }
+    }
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
         create_test_input_with_source(notification_type, None)
@@ -2022,15 +1946,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_ended_clears_notification(SessionStatus::Running, false, vec!["end-sess".to_string()])]
-    #[case::sweep_paused_keeps_notification(SessionStatus::Paused, false, Vec::<String>::new())]
-    #[case::sweep_signaled_stopped_keeps_notification(SessionStatus::Stopped, true, Vec::<String>::new())]
-    fn session_end_clears_notification_only_when_not_paused(
+    #[case::user_ended_clears_notification_and_archives(SessionStatus::Running, false, vec!["end-sess".to_string()])]
+    #[case::sweep_paused_keeps_notification_and_session(SessionStatus::Paused, false, Vec::<String>::new())]
+    #[case::sweep_signaled_stopped_keeps_notification_and_session(SessionStatus::Stopped, true, Vec::<String>::new())]
+    fn session_end_archives_and_clears_notification_only_when_ended(
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
         #[case] expected_removed: Vec<String>,
+        tq_archive_context: TqArchiveContext,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let TqArchiveContext {
+            temp_dir,
+            archived_calls,
+            mut side_effects,
+        } = tq_archive_context;
         let sessions_dir = temp_dir.path();
 
         let session = Session {
@@ -2061,15 +1990,7 @@ mod tests {
         store::save_session_to(sessions_dir, &session).expect("save");
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let side_effects = SideEffects {
-            tmux: false,
-            notifications: false,
-            auto_compact: false,
-            tq_delete: false,
-            track_bg_run_tasks: false,
-            removed_notification_groups: Some(removed.clone()),
-            tmux_sync_calls: None,
-        };
+        side_effects.removed_notification_groups = Some(removed.clone());
 
         let input: HookInput =
             serde_json::from_str(r#"{"session_id":"end-sess","cwd":"/tmp/test"}"#)
@@ -2078,8 +1999,11 @@ mod tests {
         process_hook_event_impl(HookEvent::SessionEnd, input, sessions_dir, &side_effects)
             .expect("hook should succeed");
 
-        let recorded = removed.lock().expect("lock").clone();
-        assert_eq!(recorded, expected_removed);
+        let recorded = (
+            removed.lock().expect("lock").clone(),
+            archived_calls.lock().expect("lock").clone(),
+        );
+        assert_eq!(recorded, (expected_removed.clone(), expected_removed));
     }
 
     #[rstest]
@@ -2120,10 +2044,11 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
+            tq_archive_calls: None,
         };
 
         let input: HookInput =
@@ -2511,10 +2436,11 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
+            tq_archive_calls: None,
         };
 
         let payload = format!(
@@ -3093,7 +3019,7 @@ mod tests {
             "%42",
             "%42",
             "new",
-            SessionStatus::Ended
+            (SessionStatus::Ended, vec!["old".to_string()])
         )]
         #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
@@ -3103,7 +3029,7 @@ mod tests {
             "%42",
             "%42",
             "same",
-            SessionStatus::Paused,
+            (SessionStatus::Paused, Vec::<String>::new()),
         )]
         #[case::keeps_when_pane_differs(
             SessionStatus::Paused,
@@ -3111,7 +3037,7 @@ mod tests {
             "%99",
             "%42",
             "new",
-            SessionStatus::Paused
+            (SessionStatus::Paused, Vec::<String>::new()),
         )]
         #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
@@ -3121,17 +3047,22 @@ mod tests {
             "%42",
             "%42",
             "new",
-            SessionStatus::Running,
+            (SessionStatus::Running, Vec::<String>::new()),
         )]
         fn evict_paused_sessions_on_pane_takeover_cases(
-            temp_dir: TempDir,
+            tq_archive_context: TqArchiveContext,
             #[case] initial_status: SessionStatus,
             #[case] session_id: &str,
             #[case] session_pane: &str,
             #[case] takeover_pane: &str,
             #[case] takeover_session_id: &str,
-            #[case] expected_status: SessionStatus,
+            #[case] expected: (SessionStatus, Vec<String>),
         ) {
+            let TqArchiveContext {
+                temp_dir,
+                archived_calls,
+                side_effects,
+            } = tq_archive_context;
             let mut session = make_paused_session(session_id, session_pane);
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
@@ -3140,13 +3071,17 @@ mod tests {
                 temp_dir.path(),
                 takeover_pane,
                 takeover_session_id,
-                &SideEffects::none(),
+                &side_effects,
             );
 
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.status, expected_status);
+            let recorded = (
+                reloaded.status,
+                archived_calls.lock().expect("lock").clone(),
+            );
+            assert_eq!(recorded, expected);
         }
 
         #[rstest]

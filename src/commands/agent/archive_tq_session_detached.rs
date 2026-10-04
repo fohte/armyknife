@@ -1,52 +1,53 @@
-//! `a agent delete-tq-session-detached` (hidden) subcommand.
+//! `a agent archive-tq-session-detached` (hidden) subcommand.
 //!
 //! Spawned once a session is confirmed `Ended` (never `Paused` — a paused
 //! session must stay resumable), either by a genuine `SessionEnd`, or by
 //! `evict_paused_sessions_on_pane_takeover` (see `agent::hook`) evicting a
 //! stale `Paused` session whose tmux pane was taken over by a different
 //! session. tq lives behind Cloudflare Access and can hang or answer
-//! slowly, so the hook never waits on it directly: deletion happens in this
-//! separate detached process instead. Best-effort — tq performs its own
-//! periodic cleanup of stale sessions regardless, so a failed or skipped
-//! deletion here is never the only cleanup path.
+//! slowly, so the hook never waits on it directly: archiving happens in this
+//! separate detached process instead. Best-effort: failures are logged and
+//! ignored so they do not block the hook.
 
 use anyhow::Result;
 use clap::Args;
 
+#[cfg(not(test))]
 use crate::infra::process;
 use crate::infra::tq::TqClient;
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct DeleteTqSessionDetachedArgs {
-    /// Claude Code session_id to delete from tq.
+pub struct ArchiveTqSessionDetachedArgs {
+    /// Claude Code session_id to archive in tq.
     #[arg(long)]
     pub session: String,
 }
 
-/// Spawns a detached `a agent delete-tq-session-detached --session <id>` so
+/// Spawns a detached `a agent archive-tq-session-detached --session <id>` so
 /// the hook can return immediately. Errors are logged, not surfaced —
-/// failing the hook over an opportunistic cleanup is the wrong trade.
+/// failing the hook over an opportunistic archive is the wrong trade.
+#[cfg(not(test))]
 pub fn spawn_in_background(session_id: &str) {
     process::spawn_self_detached(
-        "agent.tq_delete.spawn",
-        "agent.tq_delete.spawn_failed",
+        "agent.tq_archive.spawn",
+        "agent.tq_archive.spawn_failed",
         session_id,
         &[
             "agent",
-            "delete-tq-session-detached",
+            "archive-tq-session-detached",
             "--session",
             session_id,
         ],
     );
 }
 
-pub fn run(args: &DeleteTqSessionDetachedArgs) -> Result<()> {
+pub fn run(args: &ArchiveTqSessionDetachedArgs) -> Result<()> {
     let Some(client) = TqClient::detect() else {
         return Ok(());
     };
-    if let Err(e) = client.delete_session(&args.session) {
+    if let Err(e) = client.archive_session(&args.session) {
         tracing::warn!(
-            event = "agent.tq_delete.failed",
+            event = "agent.tq_archive.failed",
             session = %args.session,
             error = %e,
         );
