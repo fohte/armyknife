@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.363](https://github.com/fohte/armyknife/compare/v0.1.362...v0.1.363) (2026-10-04)
+
+
+### Bug Fixes
+
+* **hitl:** focus review floating pane on notification click ([#1055](https://github.com/fohte/armyknife/issues/1055)) ([5454b7b](https://github.com/fohte/armyknife/commit/5454b7bf866f2b639b79c4bfd05bfeb5bb19f46a))
+
 ## [0.1.362](https://github.com/fohte/armyknife/compare/v0.1.361...v0.1.362) (2026-10-04)
 
 
