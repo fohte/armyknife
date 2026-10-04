@@ -1083,7 +1083,26 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+
+    struct TqArchiveContext {
+        temp_dir: tempfile::TempDir,
+        archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        side_effects: SideEffects,
+    }
+
+    #[fixture]
+    fn tq_archive_context() -> TqArchiveContext {
+        let archived_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.tq_archive = true;
+        side_effects.tq_archive_calls = Some(archived_calls.clone());
+        TqArchiveContext {
+            temp_dir: tempfile::TempDir::new().expect("temp dir"),
+            archived_calls,
+            side_effects,
+        }
+    }
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
         create_test_input_with_source(notification_type, None)
@@ -1934,8 +1953,13 @@ mod tests {
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
         #[case] expected_removed: Vec<String>,
+        tq_archive_context: TqArchiveContext,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let TqArchiveContext {
+            temp_dir,
+            archived_calls,
+            mut side_effects,
+        } = tq_archive_context;
         let sessions_dir = temp_dir.path();
 
         let session = Session {
@@ -1966,17 +1990,7 @@ mod tests {
         store::save_session_to(sessions_dir, &session).expect("save");
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let archived = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let side_effects = SideEffects {
-            tmux: false,
-            notifications: false,
-            auto_compact: false,
-            tq_archive: true,
-            track_bg_run_tasks: false,
-            removed_notification_groups: Some(removed.clone()),
-            tmux_sync_calls: None,
-            tq_archive_calls: Some(archived.clone()),
-        };
+        side_effects.removed_notification_groups = Some(removed.clone());
 
         let input: HookInput =
             serde_json::from_str(r#"{"session_id":"end-sess","cwd":"/tmp/test"}"#)
@@ -1987,7 +2001,7 @@ mod tests {
 
         let recorded = (
             removed.lock().expect("lock").clone(),
-            archived.lock().expect("lock").clone(),
+            archived_calls.lock().expect("lock").clone(),
         );
         assert_eq!(recorded, (expected_removed.clone(), expected_removed));
     }
@@ -3036,7 +3050,7 @@ mod tests {
             (SessionStatus::Running, Vec::<String>::new()),
         )]
         fn evict_paused_sessions_on_pane_takeover_cases(
-            temp_dir: TempDir,
+            tq_archive_context: TqArchiveContext,
             #[case] initial_status: SessionStatus,
             #[case] session_id: &str,
             #[case] session_pane: &str,
@@ -3044,21 +3058,15 @@ mod tests {
             #[case] takeover_session_id: &str,
             #[case] expected: (SessionStatus, Vec<String>),
         ) {
+            let TqArchiveContext {
+                temp_dir,
+                archived_calls,
+                side_effects,
+            } = tq_archive_context;
             let mut session = make_paused_session(session_id, session_pane);
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
 
-            let archived = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-            let side_effects = SideEffects {
-                tmux: false,
-                notifications: false,
-                auto_compact: false,
-                tq_archive: true,
-                track_bg_run_tasks: false,
-                removed_notification_groups: None,
-                tmux_sync_calls: None,
-                tq_archive_calls: Some(archived.clone()),
-            };
             evict_paused_sessions_on_pane_takeover(
                 temp_dir.path(),
                 takeover_pane,
@@ -3069,7 +3077,10 @@ mod tests {
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
-            let recorded = (reloaded.status, archived.lock().expect("lock").clone());
+            let recorded = (
+                reloaded.status,
+                archived_calls.lock().expect("lock").clone(),
+            );
             assert_eq!(recorded, expected);
         }
 
