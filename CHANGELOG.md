@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.367](https://github.com/fohte/armyknife/compare/v0.1.366...v0.1.367) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** skip draft check for terminated sessions ([#1064](https://github.com/fohte/armyknife/issues/1064)) ([cc44279](https://github.com/fohte/armyknife/commit/cc4427976de24f278f7ba6968015d66b0a5ffc49))
+
 ## [0.1.366](https://github.com/fohte/armyknife/compare/v0.1.365...v0.1.366) (2026-10-04)
 
 
