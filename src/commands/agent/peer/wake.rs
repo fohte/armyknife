@@ -31,9 +31,11 @@ use thiserror::Error;
 
 use crate::commands::agent::claude_registry;
 use crate::commands::agent::error::CcError;
+use crate::commands::agent::pane::process::pane_has_live_agent_process;
 use crate::commands::agent::resume::{RespawnError, respawn_paused_session};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus, resolve_session_option};
+use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux;
 
 /// How often to poll Claude Code's session registry for the resumed
@@ -92,6 +94,9 @@ trait EnginePolicy {
     /// is already awake, if the engine has a way to tell.
     fn already_awake(&self, host: &dyn Host, session_id: &str) -> Option<String>;
 
+    /// Whether this pane command identifies an already-running session.
+    fn is_awake_pane_command(&self, host: &dyn Host, pane_id: &str, command: &str) -> bool;
+
     /// After the respawn, outside the lock: what to wait for, and what to
     /// hand back to the caller.
     fn await_awake(&self, host: &dyn Host, session_id: &str) -> Result<Option<String>>;
@@ -123,6 +128,10 @@ impl EnginePolicy for ClaudePolicy {
         host.registered_name(session_id)
     }
 
+    fn is_awake_pane_command(&self, _host: &dyn Host, _pane_id: &str, command: &str) -> bool {
+        command == Engine::Claude.process_name()
+    }
+
     /// An unrelated process that happens to be named `claude` in the pane
     /// (see `respawn_unless_awake`) makes this time out rather than
     /// silently succeed.
@@ -147,6 +156,13 @@ impl EnginePolicy for CodexPolicy {
     /// is only caught by the pane-level checks in `respawn_unless_awake`.
     fn already_awake(&self, _host: &dyn Host, _session_id: &str) -> Option<String> {
         None
+    }
+
+    /// `a` can remain the foreground command while Codex runs as its child,
+    /// so confirm the pane process tree before treating it as awake.
+    fn is_awake_pane_command(&self, host: &dyn Host, pane_id: &str, command: &str) -> bool {
+        command == Engine::Codex.process_name()
+            || (command == "a" && host.pane_has_agent_process(pane_id, Engine::Codex))
     }
 
     /// Nothing to wait for: there is no name to resolve, and the resumed
@@ -219,13 +235,9 @@ fn respawn_unless_awake(
                 &host.now_unix_secs().to_string(),
             );
         }
-        // The pane already moved past the shell prompt into the session's
-        // agent itself -- another wake (racing just outside this lock) or
-        // the user beat us to it. Codex runs as a child of `a agent resume`,
-        // so tmux reports `a` while Codex is active.
-        Err(RespawnError::PaneBusy(cmd))
-            if cmd == session.engine.process_name()
-                || (session.engine == Engine::Codex && cmd == "a") => {}
+        // Another wake or the user may have resumed the session while we
+        // waited for the lock. Let the engine decide whether the pane is live.
+        Err(RespawnError::PaneBusy(cmd)) if policy.is_awake_pane_command(host, pane_id, &cmd) => {}
         Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
     }
     Ok(None)
@@ -248,6 +260,7 @@ trait Host {
     fn pane_option(&self, pane_id: &str, option: &str) -> Option<String>;
     fn set_pane_option(&self, pane_id: &str, option: &str, value: &str) -> Result<()>;
     fn respawn(&self, session: &Session) -> Result<String, RespawnError>;
+    fn pane_has_agent_process(&self, pane_id: &str, engine: Engine) -> bool;
     fn registered_name(&self, session_id: &str) -> Option<String>;
     fn now_unix_secs(&self) -> i64;
 }
@@ -269,6 +282,16 @@ impl Host for System {
 
     fn respawn(&self, session: &Session) -> Result<String, RespawnError> {
         respawn_paused_session(session)
+    }
+
+    fn pane_has_agent_process(&self, pane_id: &str, engine: Engine) -> bool {
+        let Some(pane_pid) = tmux::get_pane_pid(pane_id) else {
+            return false;
+        };
+        let Some(snapshot) = ProcessSnapshot::capture() else {
+            return false;
+        };
+        pane_has_live_agent_process(pane_pid, engine, Some(&snapshot))
     }
 
     fn registered_name(&self, session_id: &str) -> Option<String> {
@@ -407,6 +430,7 @@ mod tests {
         registered: Mutex<Option<String>>,
         respawns: AtomicUsize,
         now: AtomicI64,
+        live_agent_in_pane: bool,
         /// Whether the agent is up as soon as the pane is respawned. A real
         /// respawn is not: the pane runs an interactive login shell (rc
         /// files and all) before `a agent resume` execs the agent, and
@@ -430,6 +454,7 @@ mod tests {
                 registered: Mutex::new(None),
                 respawns: AtomicUsize::new(0),
                 now: AtomicI64::new(1_000_000),
+                live_agent_in_pane: false,
             }
         }
 
@@ -440,6 +465,11 @@ mod tests {
 
         fn with_pane_cmd(self, cmd: &'static str) -> Self {
             *self.pane_cmd.lock().expect("pane lock") = cmd;
+            self
+        }
+
+        fn with_live_agent_in_pane(mut self) -> Self {
+            self.live_agent_in_pane = true;
             self
         }
 
@@ -481,6 +511,10 @@ mod tests {
                 *self.registered.lock().expect("registry lock") = Some(NAME.to_string());
             }
             Ok(PANE_ID.to_string())
+        }
+
+        fn pane_has_agent_process(&self, _pane_id: &str, _engine: Engine) -> bool {
+            self.live_agent_in_pane
         }
 
         fn registered_name(&self, _session_id: &str) -> Option<String> {
@@ -612,18 +646,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude_own_agent(Engine::Claude, "claude", Ok(None), 0)]
-    #[case::codex_own_agent(Engine::Codex, "codex", Ok(None), 0)]
-    #[case::codex_resume_launcher(Engine::Codex, "a", Ok(None), 0)]
+    #[case::claude_own_agent(Engine::Claude, "claude", false, Ok(None), 0)]
+    #[case::codex_own_agent(Engine::Codex, "codex", false, Ok(None), 0)]
+    #[case::codex_resume_launcher(Engine::Codex, "a", true, Ok(None), 0)]
+    #[case::codex_other_armyknife_command(
+        Engine::Codex,
+        "a",
+        false,
+        Err("failed to resume the session's tmux pane".to_string()),
+        0
+    )]
+    #[case::claude_other_armyknife_command(
+        Engine::Claude,
+        "a",
+        false,
+        Err("failed to resume the session's tmux pane".to_string()),
+        0
+    )]
     #[case::claude_other_program(
         Engine::Claude,
         "nvim",
+        false,
         Err("failed to resume the session's tmux pane".to_string()),
         0
     )]
     #[case::codex_other_program(
         Engine::Codex,
         "nvim",
+        false,
         Err("failed to resume the session's tmux pane".to_string()),
         0
     )]
@@ -631,16 +681,21 @@ mod tests {
     #[case::claude_pane_runs_codex(
         Engine::Claude,
         "codex",
+        false,
         Err("failed to resume the session's tmux pane".to_string()),
         0
     )]
     fn busy_pane_is_left_alone(
         #[case] engine: Engine,
         #[case] pane_cmd: &'static str,
+        #[case] live_agent_in_pane: bool,
         #[case] expected: std::result::Result<Option<String>, String>,
         #[case] expected_respawns: usize,
     ) {
-        let host = FakeHost::new(engine, SessionStatus::Paused).with_pane_cmd(pane_cmd);
+        let mut host = FakeHost::new(engine, SessionStatus::Paused).with_pane_cmd(pane_cmd);
+        if live_agent_in_pane {
+            host = host.with_live_agent_in_pane();
+        }
 
         assert_eq!(
             (respawn_once(&host, engine), host.respawns()),
