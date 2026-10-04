@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.366](https://github.com/fohte/armyknife/compare/v0.1.365...v0.1.366) (2026-10-04)
+
+
+### Features
+
+* **agent/watch:** display the most recently linked task ([#1061](https://github.com/fohte/armyknife/issues/1061)) ([4a4856a](https://github.com/fohte/armyknife/commit/4a4856a9d87f853be69e4941d746151d504b902d))
+
+
+### Bug Fixes
+
+* **agent:** prevent notification delivery failures to Codex immediately after manual resume ([#1062](https://github.com/fohte/armyknife/issues/1062)) ([6753c4f](https://github.com/fohte/armyknife/commit/6753c4f302e9e26d43bf088c34f9cadfe477beb1))
+
 ## [0.1.365](https://github.com/fohte/armyknife/compare/v0.1.364...v0.1.365) (2026-10-04)
 
 
