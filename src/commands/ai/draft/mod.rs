@@ -119,6 +119,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
         &window_title,
         &DraftHandler,
         &config.editor,
+        config.notification.enabled,
     ))?;
 
     Ok(())

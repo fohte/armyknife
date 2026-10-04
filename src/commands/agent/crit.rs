@@ -6,11 +6,11 @@ mod url;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use std::path::Path;
 use std::time::Duration;
 
 use super::store;
 use super::types::{Session, resolve_session_option};
+use super::{display_label, repo_name};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::process;
@@ -246,7 +246,7 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
     tracing::info!(event = "agent.crit.open.floating_pane_requested", port);
     let title = format!(
         " crit · {} · {} ",
-        display_label(&session),
+        display_label(Some(&session), &session.session_id),
         repo_name(&session.cwd)
     );
     tmux::open_crit_pane(tmux::CritPaneSpec {
@@ -285,8 +285,11 @@ fn send_notification(session: &Session, port: u16) -> Result<()> {
         .as_ref()
         .map(|info| format!("{}:{}", info.session_name, info.window_name));
     let subtitle = match tmux_location {
-        Some(location) => format!("{location} | {}", display_label(session)),
-        None => display_label(session),
+        Some(location) => format!(
+            "{location} | {}",
+            display_label(Some(session), &session.session_id)
+        ),
+        None => display_label(Some(session), &session.session_id),
     };
     notification = notification.with_subtitle(subtitle);
 
@@ -331,28 +334,4 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
     ];
     process::spawn_detached(&executable, args, None, &[])
         .context("failed to start the crit pane after agent watch")
-}
-
-fn repo_name(cwd: &Path) -> String {
-    crate::infra::git::get_repo_root_in(cwd)
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf())
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-fn display_label(session: &Session) -> String {
-    session
-        .label
-        .as_deref()
-        .filter(|label| !label.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| short_id(&session.session_id))
-}
-
-fn short_id(session_id: &str) -> String {
-    session_id.chars().take(8).collect()
 }

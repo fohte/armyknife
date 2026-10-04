@@ -26,7 +26,7 @@ use super::types::{
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
-use crate::shared::config::{self, Config, Terminal};
+use crate::shared::config::{self, Config};
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
 
@@ -1013,11 +1013,10 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
 
 /// Checks if notifications are enabled via environment variable.
 fn is_notification_enabled(config: &Config) -> bool {
-    // Environment variable takes precedence over config for backward compatibility
-    match EnvVars::load().cc_notify {
-        Some(val) => !matches!(val.to_lowercase().as_str(), "0" | "false"),
-        None => config.notification.enabled,
-    }
+    crate::shared::notification_policy::is_enabled(
+        config.notification.enabled,
+        EnvVars::load().cc_notify.as_deref(),
+    )
 }
 
 /// Determines if a notification should be sent for the given event.
@@ -1146,36 +1145,12 @@ fn build_notification_with_message(
     if session.tmux_info.is_some() {
         let session_id = shlex::try_quote(&session.session_id)
             .unwrap_or_else(|_| session.session_id.clone().into());
-        let focus_cmd = build_focus_app_command(config);
+        let focus_cmd = config.editor.focus_app_command();
         let command = format!("a agent focus {session_id}; {focus_cmd}");
         notification = notification.with_action(NotificationAction::new(command));
     }
 
     notification
-}
-
-/// Ghostty's default window title. Used to identify the main terminal window
-/// when focusing via AppleScript, since Ghostty's AppleScript API does not
-/// expose tty information per window (https://github.com/ghostty-org/ghostty/issues/10756).
-const GHOSTTY_DEFAULT_TITLE: &str = "👻";
-
-/// Builds a shell command to focus the terminal application.
-/// For Ghostty on macOS, uses AppleScript to focus the main window by its default title.
-/// For other terminals, uses `open -a` which activates the most recent window.
-fn build_focus_app_command(config: &Config) -> String {
-    if cfg!(target_os = "macos")
-        && config.editor.terminal == Terminal::Ghostty
-        && config.editor.focus_app.is_none()
-    {
-        format!(
-            "osascript -e 'tell application \"Ghostty\"' -e 'activate (first window whose name is \"{GHOSTTY_DEFAULT_TITLE}\")' -e 'activate' -e 'end tell'"
-        )
-    } else {
-        let focus_app_str = config.editor.focus_app();
-        let focus_app =
-            shlex::try_quote(focus_app_str).unwrap_or_else(|_| focus_app_str.to_string().into());
-        format!("open -a {focus_app}")
-    }
 }
 
 /// Builds the subtitle for a notification.

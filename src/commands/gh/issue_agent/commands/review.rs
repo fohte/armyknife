@@ -228,6 +228,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
         &window_title,
         &IssueReviewHandler,
         &config.editor,
+        config.notification.enabled,
     ))?;
 
     if document.is_none() {
