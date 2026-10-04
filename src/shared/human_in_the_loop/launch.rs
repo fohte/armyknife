@@ -23,7 +23,7 @@ pub(super) fn launch_review<S, H>(
     handler: &H,
     editor_config: &EditorConfig,
     notifications_enabled: bool,
-) -> Result<()>
+) -> Result<Option<String>>
 where
     S: super::DocumentSchema,
     H: ReviewHandler<S>,
@@ -37,7 +37,7 @@ where
     if let Some(parent_pane_id) = tmux_pane_id {
         let env_vars = EnvVars::load();
         let session_id = env_vars.own_session_id();
-        launch_tmux_review(
+        let review_pane_id = launch_tmux_review(
             || {
                 super::tmux::open_review_pane(
                     parent_pane_id,
@@ -61,7 +61,7 @@ where
                 )
             },
         )?;
-        return Ok(());
+        return Ok(Some(review_pane_id));
     }
 
     launch_in_terminal(
@@ -70,7 +70,8 @@ where
         document_path,
         labels.window_title,
         editor_config,
-    )
+    )?;
+    Ok(None)
 }
 
 fn launch_tmux_review(
@@ -79,14 +80,14 @@ fn launch_tmux_review(
     notifications_enabled: bool,
     cc_notify: Option<&str>,
     notify: impl FnOnce(&str, &str),
-) -> Result<()> {
+) -> Result<String> {
     let review_pane_id = open_pane()?;
     if notification_policy::is_enabled(notifications_enabled, cc_notify)
         && let Some(session_id) = session_id
     {
         notify(session_id, &review_pane_id);
     }
-    Ok(())
+    Ok(review_pane_id)
 }
 
 fn launch_in_terminal(
@@ -154,7 +155,7 @@ mod tests {
             "pane opened".to_string(),
             "notified: session-id: %review".to_string(),
         ],
-        Ok(()),
+        Ok("%review".to_string()),
     )]
     #[case::notifications_disabled_keeps_agent_session(
         true,
@@ -162,7 +163,7 @@ mod tests {
         false,
         None,
         vec!["pane opened".to_string()],
-        Ok(()),
+        Ok("%review".to_string()),
     )]
     #[case::environment_override_disables_notification(
         true,
@@ -170,7 +171,7 @@ mod tests {
         true,
         Some("0"),
         vec!["pane opened".to_string()],
-        Ok(()),
+        Ok("%review".to_string()),
     )]
     #[case::without_agent_session_only_opens_pane(
         true,
@@ -178,7 +179,7 @@ mod tests {
         true,
         None,
         vec!["pane opened".to_string()],
-        Ok(()),
+        Ok("%review".to_string()),
     )]
     #[case::failed_open_does_not_notify(
         false,
@@ -194,7 +195,7 @@ mod tests {
         #[case] notifications_enabled: bool,
         #[case] cc_notify: Option<&str>,
         #[case] expected_events: Vec<String>,
-        #[case] expected_result: std::result::Result<(), String>,
+        #[case] expected_result: std::result::Result<String, String>,
     ) {
         let events = RefCell::new(Vec::new());
         let result = launch_tmux_review(

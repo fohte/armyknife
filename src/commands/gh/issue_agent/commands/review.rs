@@ -225,7 +225,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document = exit_code::exit_on_terminal_launch_failure(start_review::<SubmitSchema, _>(
+    let document = exit_code::exit_on_review_failure(start_review::<SubmitSchema, _>(
         &path,
         &window_title,
         &IssueReviewHandler,

@@ -21,6 +21,9 @@ pub enum HumanInTheLoopError {
     )]
     TerminalLaunchFailed { timeout_secs: u64 },
 
+    #[error("Review pane disappeared before review completed")]
+    ReviewPaneClosed,
+
     #[error("Not approved. Run 'review' and set 'submit: true'")]
     NotApproved,
 

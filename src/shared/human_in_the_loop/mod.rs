@@ -39,6 +39,7 @@ const DIFF_CONTEXT_LINES: usize = 3;
 /// asleep when Claude Code invokes the command, where Ghostty's AppleScript
 /// call succeeds but the terminal window never initializes.
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const REVIEW_PANE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -113,26 +114,32 @@ where
         command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
     };
 
-    start_review_with_launcher::<S, _>(&document_path, |document_path, done_fifo_path| {
-        launch::launch_review::<S, H>(
-            tmux_pane_id.as_deref(),
-            document_path,
-            done_fifo_path,
-            &labels,
-            handler,
-            editor_config,
-            notifications_enabled,
-        )
-    })
+    start_review_with_launcher::<S, _, _>(
+        &document_path,
+        |document_path, done_fifo_path| {
+            launch::launch_review::<S, H>(
+                tmux_pane_id.as_deref(),
+                document_path,
+                done_fifo_path,
+                &labels,
+                handler,
+                editor_config,
+                notifications_enabled,
+            )
+        },
+        crate::infra::tmux::is_pane_alive,
+    )
 }
 
-fn start_review_with_launcher<S, L>(
+fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
     launch_review: L,
+    is_pane_alive: P,
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path) -> Result<()>,
+    L: FnOnce(&Path, &Path) -> Result<Option<String>>,
+    P: FnMut(&str) -> bool,
 {
     let _lock_guard = match LockGuard::acquire(document_path) {
         Ok(guard) => guard,
@@ -161,13 +168,16 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    launch_review(document_path, &done_fifo_path)?;
+    let review_pane_id = launch_review(document_path, &done_fifo_path)?;
 
     {
         let _pending_review = pending_review::PendingReviewGuard::for_current_session();
-        // Wait for the review-complete process to finish via FIFO.
-        // This blocks with no CPU usage until the other process writes to the FIFO.
-        wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+        if let Some(pane_id) = review_pane_id.as_deref() {
+            wait_for_fifo_signal_or_pane_exit(done_fifo_reader, pane_id, is_pane_alive)?;
+        } else {
+            // GUI terminal launches have no tmux pane to monitor.
+            wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+        }
     }
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
@@ -343,6 +353,40 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Wait for the completion signal while periodically checking the review pane.
+#[cfg(unix)]
+fn wait_for_fifo_signal_or_pane_exit(
+    mut file: std::fs::File,
+    pane_id: &str,
+    mut is_pane_alive: impl FnMut(&str) -> bool,
+) -> Result<()> {
+    use std::io::{self, Read};
+    use std::thread::sleep;
+    use std::time::Instant;
+
+    let mut next_pane_check = Instant::now();
+    let mut buf = [0u8; 1];
+    loop {
+        match file.read(&mut buf) {
+            Ok(n) if n > 0 => return Ok(()),
+            Ok(_) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        if Instant::now() >= next_pane_check {
+            if !is_pane_alive(pane_id) {
+                return Err(HumanInTheLoopError::ReviewPaneClosed);
+            }
+            next_pane_check = Instant::now() + REVIEW_PANE_CHECK_INTERVAL;
+        }
+
+        sleep(Duration::from_millis(100));
+    }
 }
 
 /// Like `wait_for_fifo_signal` but gives up after `timeout`, returning a
@@ -558,6 +602,18 @@ mod tests {
     }
 
     #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_prefers_a_completion_signal(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        signal_fifo(&fifo_reader.fifo_path);
+
+        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| false)
+            .map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[rstest]
     fn create_fifo_with_suffix_appends_suffix() {
         let temp = TempDir::new().expect("tempdir");
         let doc = temp.path().join("foo.md");
@@ -581,13 +637,14 @@ mod tests {
         let document_path = review_document.path;
         let mut lock_was_held_during_launch = false;
 
-        let result = start_review_with_launcher::<ReviewTestSchema, _>(
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
             |path, done_fifo_path| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
                 signal_fifo(done_fifo_path);
-                Ok(())
+                Ok(None)
             },
+            |_| true,
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -605,9 +662,11 @@ mod tests {
     #[rstest]
     fn start_review_releases_parent_lock_when_launch_fails(review_document: ReviewDocumentFixture) {
         let document_path = review_document.path;
-        let result = start_review_with_launcher::<ReviewTestSchema, _>(&document_path, |_, _| {
-            Err(HumanInTheLoopError::CommandFailed("launch failed".into()))
-        })
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+            &document_path,
+            |_, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
+            |_| true,
+        )
         .map(|document| document.map(|document| document.path))
         .map_err(|error| error.to_string());
 
@@ -623,15 +682,16 @@ mod tests {
         let mut lock_was_held_during_launch = false;
         let mut newer_review_lock = None;
 
-        let result = start_review_with_launcher::<ReviewTestSchema, _>(
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
             |path, done_fifo_path| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
                 drop(CleanupGuard::new(path, None));
                 newer_review_lock = Some(LockGuard::acquire(path).expect("new review lock"));
                 signal_fifo(done_fifo_path);
-                Ok(())
+                Ok(None)
             },
+            |_| true,
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -658,10 +718,14 @@ mod tests {
         std::fs::write(&lock_path, "another review").expect("write existing lock");
         let mut launch_called = false;
 
-        let result = start_review_with_launcher::<ReviewTestSchema, _>(&document_path, |_, _| {
-            launch_called = true;
-            Ok(())
-        })
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+            &document_path,
+            |_, _| {
+                launch_called = true;
+                Ok(None)
+            },
+            |_| true,
+        )
         .expect("skip existing review")
         .map(|document| document.path);
         let lock_contents = std::fs::read_to_string(lock_path).expect("read existing lock");
@@ -669,6 +733,41 @@ mod tests {
         assert_eq!(
             (result, launch_called, lock_contents),
             (None, false, "another review".into())
+        );
+    }
+
+    #[rstest]
+    fn start_review_cleans_lock_and_done_fifo_when_review_pane_disappears(
+        review_document: ReviewDocumentFixture,
+    ) {
+        let document_path = review_document.path;
+        let mut done_fifo_path = None;
+
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+            &document_path,
+            |_, fifo_path| {
+                done_fifo_path = Some(fifo_path.to_path_buf());
+                Ok(Some("%review".to_string()))
+            },
+            |_| false,
+        )
+        .map(|document| document.is_some())
+        .map_err(|error| error.to_string());
+        let done_fifo_path = done_fifo_path.expect("launcher receives done FIFO path");
+
+        assert_eq!(
+            (
+                result,
+                LockGuard::is_locked(&document_path),
+                done_fifo_path.exists(),
+                exit_code::REVIEW_PANE_CLOSED,
+            ),
+            (
+                Err("Review pane disappeared before review completed".into()),
+                false,
+                false,
+                4,
+            ),
         );
     }
 
