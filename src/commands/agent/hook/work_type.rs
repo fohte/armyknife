@@ -41,9 +41,12 @@ enum WorkTypeCandidate<'a> {
     CodexCommand(&'a str),
 }
 
-// Subagent hooks share the parent session ID, so their skill calls update the same
-// session work type.
 fn work_type_candidate(event: HookEvent, input: &HookInput) -> Option<WorkTypeCandidate<'_>> {
+    // Work type describes the main thread's workflow, while subagent hooks share its session.
+    if input.agent_id.is_some() {
+        return None;
+    }
+
     match (input.engine, event) {
         (Engine::Claude, HookEvent::UserPromptSubmit) => input
             .prompt
@@ -223,17 +226,6 @@ mod tests {
         Some("flow-one"),
         Some("flow-two"),
     )]
-    #[case::claude_subagent_skill_tool(
-        HookEvent::PostToolUse,
-        json!({
-            "engine": "claude",
-            "agent_id": "agent-helper",
-            "tool_name": "Skill",
-            "tool_input": {"skill": "flow-two", "args": "continue"},
-        }),
-        Some("flow-one"),
-        Some("flow-two"),
-    )]
     #[case::codex_prompt_mention(
         HookEvent::UserPromptSubmit,
         json!({"engine": "codex", "prompt": "Please use $flow-two for this task."}),
@@ -250,6 +242,28 @@ mod tests {
             },
         }),
         Some("flow-two"),
+        Some("flow-one"),
+    )]
+    #[case::claude_subagent_skill_tool(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "claude",
+            "agent_id": "agent-helper",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "flow-two", "args": "continue"},
+        }),
+        Some("flow-one"),
+        Some("flow-one"),
+    )]
+    #[case::codex_subagent_shell_skill_read(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "codex",
+            "agent_id": "agent-helper",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat /skills/flow-two/SKILL.md"},
+        }),
+        Some("flow-one"),
         Some("flow-one"),
     )]
     fn updates_work_type_for_configured_skills(
@@ -343,6 +357,26 @@ mod tests {
             "tool_input": {"command": "cat /skills/flow-one/SKILL.md"},
         }),
         true,
+    )]
+    #[case::claude_subagent_skill_tool(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "claude",
+            "agent_id": "agent-helper",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "flow-one"},
+        }),
+        false,
+    )]
+    #[case::codex_subagent_shell_skill_read(
+        HookEvent::PostToolUse,
+        json!({
+            "engine": "codex",
+            "agent_id": "agent-helper",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat /skills/flow-one/SKILL.md"},
+        }),
+        false,
     )]
     #[case::claude_regular_prompt(
         HookEvent::UserPromptSubmit,
