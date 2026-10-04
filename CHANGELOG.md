@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.361](https://github.com/fohte/armyknife/compare/v0.1.360...v0.1.361) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** ignore subagent skill invocations when updating work types ([#1050](https://github.com/fohte/armyknife/issues/1050)) ([a772589](https://github.com/fohte/armyknife/commit/a772589de7a5305e90ccad10bb0ad7f0287044cd))
+
 ## [0.1.360](https://github.com/fohte/armyknife/compare/v0.1.359...v0.1.360) (2026-10-04)
 
 
