@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.365](https://github.com/fohte/armyknife/compare/v0.1.364...v0.1.365) (2026-10-04)
+
+
+### Bug Fixes
+
+* **hitl:** abort waiting when review pane disappears ([#1059](https://github.com/fohte/armyknife/issues/1059)) ([6d80d56](https://github.com/fohte/armyknife/commit/6d80d56e5d80f6da9df018b4083332277360f352))
+
 ## [0.1.364](https://github.com/fohte/armyknife/compare/v0.1.363...v0.1.364) (2026-10-04)
 
 
