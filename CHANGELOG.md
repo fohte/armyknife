@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.360](https://github.com/fohte/armyknife/compare/v0.1.359...v0.1.360) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** preserve work type specified by `a agent new --kind` ([#1049](https://github.com/fohte/armyknife/issues/1049)) ([311a888](https://github.com/fohte/armyknife/commit/311a8888c31b4195be60c80cc37062034af885bb))
+
 ## [0.1.359](https://github.com/fohte/armyknife/compare/v0.1.358...v0.1.359) (2026-10-03)
 
 
