@@ -41,6 +41,8 @@ pub struct ReviewCompleteArgs {
 pub struct PrDraftReviewHandler;
 
 impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
+    const NOTIFICATION_COMMAND_NAME: &'static str = "pr-draft";
+
     fn build_complete_args(
         &self,
         document_path: &Path,
@@ -49,7 +51,7 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "ai".into(),
-            "pr-draft".into(),
+            Self::NOTIFICATION_COMMAND_NAME.into(),
             "review-complete".into(),
             document_path.as_os_str().to_os_string(),
         ];
@@ -147,7 +149,6 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
     let document = exit_code::exit_on_terminal_launch_failure(start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
-        "pr-draft",
         &PrDraftReviewHandler,
         &config.editor,
         config.notification.enabled,
@@ -199,7 +200,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn build_review_args_should_roundtrip_non_utf_paths() {
+    fn review_handler_uses_notification_command_and_preserves_non_utf_paths() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
 
@@ -211,12 +212,20 @@ mod tests {
             .join(std::path::PathBuf::from(filename));
 
         let handler = PrDraftReviewHandler;
-        let args = handler.build_complete_args(&draft_path, Some("sess:1.0"), "Test Title");
-        let restored = std::path::Path::new(&args[3]);
+        let args = handler.build_complete_args(&draft_path, None, "Draft review");
         assert_eq!(
-            restored.as_os_str(),
-            draft_path.as_os_str(),
-            "Path should survive argument building without loss"
+            (PrDraftReviewHandler::NOTIFICATION_COMMAND_NAME, args),
+            (
+                "pr-draft",
+                vec![
+                    "ai".into(),
+                    "pr-draft".into(),
+                    "review-complete".into(),
+                    draft_path.as_os_str().to_os_string(),
+                    "--window-title".into(),
+                    "Draft review".into(),
+                ],
+            ),
         );
     }
 

@@ -57,6 +57,8 @@ struct PrReviewReplyHandler {
 }
 
 impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
+    const NOTIFICATION_COMMAND_NAME: &'static str = "pr-review";
+
     fn build_complete_args(
         &self,
         document_path: &Path,
@@ -65,7 +67,7 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "gh".into(),
-            "pr-review".into(),
+            Self::NOTIFICATION_COMMAND_NAME.into(),
             "reply".into(),
             "review-complete".into(),
             document_path.as_os_str().to_os_string(),
@@ -133,7 +135,6 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         exit_code::exit_on_terminal_launch_failure(start_review::<ThreadsFrontmatter, _>(
             &threads_path,
             &window_title,
-            "pr-review",
             &handler,
             &config.editor,
             config.notification.enabled,
@@ -205,7 +206,7 @@ mod tests {
             "--window-title", "Title",
         ],
     )]
-    fn build_review_args(
+    fn review_handler_command_and_build_review_args(
         #[case] pr_number: u64,
         #[case] tmux_target: Option<&str>,
         #[case] window_title: &str,
@@ -223,6 +224,10 @@ mod tests {
             .iter()
             .map(|a| a.to_string_lossy().to_string())
             .collect();
-        assert_eq!(args_str, expected);
+        let expected: Vec<String> = expected.iter().map(|arg| arg.to_string()).collect();
+        assert_eq!(
+            (PrReviewReplyHandler::NOTIFICATION_COMMAND_NAME, args_str),
+            ("pr-review", expected),
+        );
     }
 }

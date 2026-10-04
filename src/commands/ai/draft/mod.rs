@@ -52,6 +52,8 @@ impl DocumentSchema for EmptySchema {
 pub struct DraftHandler;
 
 impl ReviewHandler<EmptySchema> for DraftHandler {
+    const NOTIFICATION_COMMAND_NAME: &'static str = "draft";
+
     fn build_complete_args(
         &self,
         document_path: &Path,
@@ -60,7 +62,7 @@ impl ReviewHandler<EmptySchema> for DraftHandler {
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "ai".into(),
-            "draft".into(),
+            Self::NOTIFICATION_COMMAND_NAME.into(),
             "--complete".into(),
             document_path.as_os_str().to_os_string(),
         ];
@@ -117,7 +119,6 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
     exit_code::exit_on_terminal_launch_failure(start_review::<EmptySchema, _>(
         &path,
         &window_title,
-        "draft",
         &DraftHandler,
         &config.editor,
         config.notification.enabled,
@@ -141,4 +142,34 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_handler_uses_notification_command_in_complete_args() {
+        let handler = DraftHandler;
+        let args = handler.build_complete_args(Path::new("/tmp/draft.md"), None, "Draft");
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (DraftHandler::NOTIFICATION_COMMAND_NAME, args),
+            (
+                "draft",
+                vec![
+                    "ai".to_string(),
+                    "draft".to_string(),
+                    "--complete".to_string(),
+                    "/tmp/draft.md".to_string(),
+                    "--title".to_string(),
+                    "Draft".to_string(),
+                ],
+            ),
+        );
+    }
 }
