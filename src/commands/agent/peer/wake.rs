@@ -221,9 +221,11 @@ fn respawn_unless_awake(
         }
         // The pane already moved past the shell prompt into the session's
         // agent itself -- another wake (racing just outside this lock) or
-        // the user beat us to it. Fall through instead of erroring;
-        // `EnginePolicy::await_awake` decides what that means per engine.
-        Err(RespawnError::PaneBusy(cmd)) if cmd == session.engine.process_name() => {}
+        // the user beat us to it. Codex runs as a child of `a agent resume`,
+        // so tmux reports `a` while Codex is active.
+        Err(RespawnError::PaneBusy(cmd))
+            if cmd == session.engine.process_name()
+                || (session.engine == Engine::Codex && cmd == "a") => {}
         Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
     }
     Ok(None)
@@ -612,6 +614,7 @@ mod tests {
     #[rstest]
     #[case::claude_own_agent(Engine::Claude, "claude", Ok(None), 0)]
     #[case::codex_own_agent(Engine::Codex, "codex", Ok(None), 0)]
+    #[case::codex_resume_launcher(Engine::Codex, "a", Ok(None), 0)]
     #[case::claude_other_program(
         Engine::Claude,
         "nvim",
