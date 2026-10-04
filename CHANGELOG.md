@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.372](https://github.com/fohte/armyknife/compare/v0.1.371...v0.1.372) (2026-10-04)
+
+
+### Bug Fixes
+
+* **agent:** close worktree from panes with deleted sessions ([#1074](https://github.com/fohte/armyknife/issues/1074)) ([f5ecbfd](https://github.com/fohte/armyknife/commit/f5ecbfd53a21701fc59a52acdb87250fc63c64dc))
+
 ## [0.1.371](https://github.com/fohte/armyknife/compare/v0.1.370...v0.1.371) (2026-10-04)
 
 
