@@ -204,7 +204,7 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
             own_codex_session_id: own_codex_session_id.as_deref(),
         },
         tmux::send_sigterm_to_pane,
-        store::delete_session,
+        store::delete_session_without_archive,
         crate::infra::notification::remove_group,
         crate::commands::agent::codex_steer::archive_thread,
     );
