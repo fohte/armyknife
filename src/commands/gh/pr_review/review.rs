@@ -131,14 +131,13 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document =
-        exit_code::exit_on_terminal_launch_failure(start_review::<ThreadsFrontmatter, _>(
-            &threads_path,
-            &window_title,
-            &handler,
-            &config.editor,
-            config.notification.enabled,
-        ))?;
+    let document = exit_code::exit_on_review_failure(start_review::<ThreadsFrontmatter, _>(
+        &threads_path,
+        &window_title,
+        &handler,
+        &config.editor,
+        config.notification.enabled,
+    ))?;
 
     if document.is_none() {
         std::process::exit(exit_code::ALREADY_OPEN);

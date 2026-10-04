@@ -116,7 +116,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    exit_code::exit_on_terminal_launch_failure(start_review::<EmptySchema, _>(
+    exit_code::exit_on_review_failure(start_review::<EmptySchema, _>(
         &path,
         &window_title,
         &DraftHandler,
