@@ -761,7 +761,7 @@ mod tests {
             .socket
             .get_ref()
             .read_timeout()?
-            .is_some_and(|timeout| timeout > RESPONSE_TIMEOUT);
+            .is_some_and(|timeout| timeout > Duration::from_secs(30));
 
         assert_eq!(
             (thread_id, timeout_exceeds_handshake),
