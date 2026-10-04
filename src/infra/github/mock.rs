@@ -418,6 +418,24 @@ impl GitHubMockServer {
         }
     }
 
+    /// Mock a one-branch GraphQL pull request query.
+    pub async fn graphql_batch_pull_request(&self, pull_request: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("number title state url mergedAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repo0": {
+                        "branch0": {
+                            "nodes": [pull_request]
+                        }
+                    }
+                }
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
     /// Mock GET /user for current user.
     pub async fn current_user(&self, login: &str) {
         Mock::given(method("GET"))

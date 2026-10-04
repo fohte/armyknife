@@ -1,5 +1,6 @@
 mod hammerspoon;
 pub mod icon;
+pub mod merge_icon;
 mod types;
 
 pub use types::{Notification, NotificationAction};

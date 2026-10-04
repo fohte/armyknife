@@ -22,12 +22,11 @@
 //! and confirm it as `Paused` there and then, rather than misreading the
 //! still-`Stopped` status as the user manually ending the session.
 //!
-//! Running sweep has no effect on sessions that are Running, WaitingInput,
-//! Paused, or Ended -- the pure decision function `auto_pause::decide_pause`
-//! owns the timeout policy; `PidResolver` owns the question of "which process
-//! is hosting this session right now".
+//! Auto-pause only considers Stopped sessions. A separate pass closes idle
+//! Stopped or Paused sessions after their linked-worktree pull request merges.
 
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -46,6 +45,7 @@ use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_update
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
+mod merged_close;
 mod service;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -59,8 +59,8 @@ pub struct SweepArgs {
     #[arg(long, global = true)]
     pub timeout: Option<String>,
 
-    /// Dry-run: log what would be paused without sending signals or updating
-    /// session files.
+    /// Dry-run: log what would be paused or closed without sending signals or
+    /// updating session files.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -81,59 +81,59 @@ pub enum SweepCommands {
 }
 
 /// Entry point for `a agent sweep`.
-pub fn run(args: &SweepArgs) -> Result<()> {
+pub async fn run(args: &SweepArgs) -> Result<()> {
     match args.command.clone().unwrap_or(SweepCommands::Run) {
-        SweepCommands::Run => run_sweep(args),
+        SweepCommands::Run => run_sweep(args).await,
         SweepCommands::Install => service::install(),
         SweepCommands::Uninstall => service::uninstall(),
         SweepCommands::Status => service::status(),
     }
 }
 
-fn run_sweep(args: &SweepArgs) -> Result<()> {
+async fn run_sweep(args: &SweepArgs) -> Result<()> {
     let run_id = short_run_id();
     let span = tracing::info_span!("agent.sweep", run_id = %run_id);
     let _entered = span.enter();
 
     let config = config::load_config_or_default();
 
-    // Respect the enabled flag unless a manual --timeout override was given.
-    // (A manual `--timeout 1s` run is an explicit opt-in; we should honor it
-    // even if the user set `enabled: false` in their config.)
-    if args.timeout.is_none() && !config.agent.auto_pause.enabled {
-        return Ok(());
-    }
-
+    let pause_enabled = args.timeout.is_some() || config.agent.auto_pause.enabled;
     let timeout_str = args
         .timeout
         .clone()
         .unwrap_or_else(|| config.agent.auto_pause.timeout.clone());
-    let timeout = auto_pause::parse_duration(&timeout_str)
-        .with_context(|| format!("invalid agent.auto_pause.timeout `{timeout_str}`"))?;
-
     let sessions_dir = store::sessions_dir()?;
-    let tasks_dir = super::bg_tasks::tasks_dir()?;
-    let sender = LibcSignalSender;
-    let snapshot = ProcessSnapshot::capture();
-    let probe = TmuxSessionProbe {
-        snapshot: snapshot.as_ref(),
-        drafts: TmuxDraftProbe,
-        tasks_dir,
-    };
     tracing::info!(
         event = "agent.sweep.start",
         timeout = %timeout_str,
         dry_run = args.dry_run,
+        pause_enabled,
     );
-    let syncer = LiveTmuxStatusSyncer;
-    let report = sweep_impl(
-        &sessions_dir,
-        timeout,
-        &sender,
-        &probe,
-        &syncer,
-        args.dry_run,
-    )?;
+    let pause_pass = || -> Result<SweepReport> {
+        let timeout = auto_pause::parse_duration(&timeout_str)
+            .with_context(|| format!("invalid agent.auto_pause.timeout `{timeout_str}`"))?;
+        let tasks_dir = super::bg_tasks::tasks_dir()?;
+        let sender = LibcSignalSender;
+        let snapshot = ProcessSnapshot::capture();
+        let probe = TmuxSessionProbe {
+            snapshot: snapshot.as_ref(),
+            drafts: TmuxDraftProbe,
+            tasks_dir,
+        };
+        let syncer = LiveTmuxStatusSyncer;
+        sweep_impl(
+            &sessions_dir,
+            timeout,
+            &sender,
+            &probe,
+            &syncer,
+            args.dry_run,
+        )
+    };
+    let (report, merged_closed) = run_sweep_passes(pause_enabled, pause_pass, || {
+        merged_close::close_merged_sessions(args.dry_run)
+    })
+    .await?;
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -141,22 +141,24 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
         signaled = report.signaled,
         waiting = report.waiting,
         active = report.active,
+        merged_closed,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
-    // Otherwise only speak up when a pause was actually confirmed. A session
-    // stuck in the signaled-but-not-Paused window (see module docs) gets
+    // Otherwise only speak up when a pause or merged-session close succeeded.
+    // A session stuck in the signaled-but-not-Paused window (see module docs) gets
     // re-signaled on every sweep pass with no retry limit, so gating on
     // `signaled` too would flood the log for exactly the stuck-process
     // scenario this module exists to handle; the structured `tracing::info!`
     // above already records every signal for anyone tailing the JSONL log.
-    if report.paused > 0 || args.dry_run {
+    if report.paused > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
+            merged_closed,
             report.signaled,
             report.waiting,
             report.active,
@@ -165,6 +167,25 @@ fn run_sweep(args: &SweepArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_sweep_passes<P, M, Fut>(
+    pause_enabled: bool,
+    pause_pass: P,
+    merged_close_pass: M,
+) -> Result<(SweepReport, usize)>
+where
+    P: FnOnce() -> Result<SweepReport>,
+    M: FnOnce() -> Fut,
+    Fut: Future<Output = usize>,
+{
+    let report = if pause_enabled {
+        pause_pass()?
+    } else {
+        SweepReport::default()
+    };
+    let merged_closed = merged_close_pass().await;
+    Ok((report, merged_closed))
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
@@ -533,6 +554,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
@@ -643,6 +665,33 @@ mod tests {
             }),
             ..make_session(id, SessionStatus::Stopped, updated_at)
         }
+    }
+
+    #[tokio::test]
+    async fn disabling_auto_pause_still_runs_merged_close_pass() {
+        let pause_calls = Cell::new(0);
+        let close_calls = Cell::new(0);
+        let result = run_sweep_passes(
+            false,
+            || {
+                pause_calls.set(pause_calls.get() + 1);
+                Ok(SweepReport {
+                    scanned: 1,
+                    ..SweepReport::default()
+                })
+            },
+            || async {
+                close_calls.set(close_calls.get() + 1);
+                2
+            },
+        )
+        .await
+        .expect("sweep passes");
+
+        assert_eq!(
+            (result, pause_calls.get(), close_calls.get()),
+            ((SweepReport::default(), 2), 0, 1),
+        );
     }
 
     type SweepObservation = (

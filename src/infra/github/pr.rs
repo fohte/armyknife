@@ -28,9 +28,10 @@ pub enum PrState {
 }
 
 /// PR information from GitHub API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrInfo {
     pub number: u64,
+    pub title: String,
     pub state: PrState,
     pub url: String,
 }
@@ -46,11 +47,18 @@ pub struct UpdatePrParams {
 }
 
 /// Query parameter for batch PR lookup across repos and branches.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchPrQuery {
     pub owner: String,
     pub repo: String,
     pub branch: String,
+}
+
+impl BranchPrQuery {
+    /// Returns the map key used for this query.
+    pub fn key(&self) -> (String, String, String) {
+        (self.owner.clone(), self.repo.clone(), self.branch.clone())
+    }
 }
 
 /// Trait for pull request operations.
@@ -74,6 +82,7 @@ pub trait PrClient: Send + Sync {
 #[derive(Debug, Deserialize)]
 struct PrResponse {
     number: u64,
+    title: Option<String>,
     state: Option<String>,
     html_url: Option<String>,
     merged_at: Option<String>,
@@ -149,6 +158,7 @@ impl PrClient for GitHubClient {
 
         Ok(Some(PrInfo {
             number: pr.number,
+            title: pr.title.unwrap_or_default(),
             state,
             url,
         }))
@@ -233,7 +243,7 @@ impl GitHubClient {
                 );
 
                 branch_parts.push(format!(
-                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number state url mergedAt }} }}"
+                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number title state url mergedAt }} }}"
                 ));
                 branch_alias_map
                     .insert(branch_alias, (owner.clone(), repo.clone(), branch.clone()));
@@ -253,20 +263,9 @@ impl GitHubClient {
         );
 
         // Execute and parse. Use serde_json::Value since response structure is dynamic.
-        let response: serde_json::Value = match self
+        let response: serde_json::Value = self
             .graphql::<serde_json::Value>(&query, serde_json::Value::Object(variables))
-            .await
-        {
-            Ok(data) => data,
-            Err(_) => {
-                // On total failure (e.g., one repo not found causes GraphQL errors),
-                // return all branches as None so callers can fall back to slower paths
-                return Ok(queries
-                    .iter()
-                    .map(|q| ((q.owner.clone(), q.repo.clone(), q.branch.clone()), None))
-                    .collect());
-            }
-        };
+            .await?;
 
         let mut results: HashMap<(String, String, String), Option<PrInfo>> = HashMap::new();
 
@@ -287,8 +286,7 @@ impl GitHubClient {
 
         // Ensure all queried branches have an entry (even if repo was missing from response)
         for q in queries {
-            let key = (q.owner.clone(), q.repo.clone(), q.branch.clone());
-            results.entry(key).or_insert(None);
+            results.entry(q.key()).or_insert(None);
         }
 
         Ok(results)
@@ -298,6 +296,7 @@ impl GitHubClient {
 /// Parse a single PR node from the GraphQL response into PrInfo.
 fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
     let number = node.get("number")?.as_u64()?;
+    let title = node.get("title")?.as_str()?.to_string();
     let state_str = node.get("state")?.as_str()?;
     let url = node.get("url")?.as_str()?.to_string();
     let merged_at = node.get("mergedAt").and_then(|v| v.as_str());
@@ -313,5 +312,95 @@ fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
         }
     };
 
-    Some(PrInfo { number, state, url })
+    Some(PrInfo {
+        number,
+        title,
+        state,
+        url,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::{BranchPrQuery, PrInfo, PrState, parse_pr_node};
+
+    #[tokio::test]
+    async fn batch_lookup_requests_and_returns_pull_request_title() {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.graphql_batch_pull_request(json!({
+            "number": 42,
+            "title": "A merged change",
+            "state": "MERGED",
+            "url": "https://github.com/owner/repo/pull/42",
+            "mergedAt": "2025-01-01T00:00:00Z",
+        }))
+        .await;
+
+        let client = mock.client();
+        let query = BranchPrQuery {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            branch: "feature".to_string(),
+        };
+        let actual = client
+            .get_prs_for_branches_batch(std::slice::from_ref(&query))
+            .await
+            .expect("batch lookup");
+
+        assert_eq!(
+            actual,
+            HashMap::from([(
+                query.key(),
+                Some(PrInfo {
+                    number: 42,
+                    title: "A merged change".to_string(),
+                    state: PrState::Merged,
+                    url: "https://github.com/owner/repo/pull/42".to_string(),
+                }),
+            )]),
+        );
+    }
+
+    #[rstest]
+    #[case::merged(
+        json!({
+            "number": 42,
+            "title": "A merged change",
+            "state": "MERGED",
+            "url": "https://github.com/owner/repo/pull/42",
+            "mergedAt": "2026-10-04T00:00:00Z",
+        }),
+        Some(PrInfo {
+            number: 42,
+            title: "A merged change".to_string(),
+            state: PrState::Merged,
+            url: "https://github.com/owner/repo/pull/42".to_string(),
+        }),
+    )]
+    #[case::closed_unmerged(
+        json!({
+            "number": 43,
+            "title": "A closed change",
+            "state": "CLOSED",
+            "url": "https://github.com/owner/repo/pull/43",
+            "mergedAt": null,
+        }),
+        Some(PrInfo {
+            number: 43,
+            title: "A closed change".to_string(),
+            state: PrState::Closed,
+            url: "https://github.com/owner/repo/pull/43".to_string(),
+        }),
+    )]
+    fn parses_pull_request_title_and_state(
+        #[case] input: serde_json::Value,
+        #[case] expected: Option<PrInfo>,
+    ) {
+        assert_eq!(parse_pr_node(&input), expected);
+    }
 }

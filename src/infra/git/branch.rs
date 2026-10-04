@@ -29,7 +29,7 @@ pub async fn find_base_branch<C: crate::infra::github::RepoClient>(
     "main".to_string()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeStatus {
     Merged { reason: String },
     Closed { reason: String },
