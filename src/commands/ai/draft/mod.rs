@@ -117,6 +117,7 @@ fn run_edit(args: &DraftArgs) -> anyhow::Result<()> {
     exit_code::exit_on_terminal_launch_failure(start_review::<EmptySchema, _>(
         &path,
         &window_title,
+        "draft",
         &DraftHandler,
         &config.editor,
         config.notification.enabled,

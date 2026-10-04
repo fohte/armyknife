@@ -10,11 +10,16 @@ use super::{
     wait_for_fifo_signal_with_timeout,
 };
 
+pub(super) struct ReviewLabels<'a> {
+    pub(super) window_title: &'a str,
+    pub(super) command_name: &'a str,
+}
+
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
     done_fifo_path: &Path,
-    window_title: &str,
+    labels: &ReviewLabels<'_>,
     handler: &H,
     editor_config: &EditorConfig,
     notifications_enabled: bool,
@@ -24,7 +29,8 @@ where
     H: ReviewHandler<S>,
 {
     let exe_path = std::env::current_exe()?;
-    let mut review_args = handler.build_complete_args(document_path, tmux_pane_id, window_title);
+    let mut review_args =
+        handler.build_complete_args(document_path, tmux_pane_id, labels.window_title);
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 
@@ -35,7 +41,7 @@ where
             || {
                 super::tmux::open_review_pane(
                     parent_pane_id,
-                    window_title,
+                    labels.window_title,
                     exe_path.as_os_str(),
                     &review_args,
                     done_fifo_path,
@@ -48,7 +54,8 @@ where
                 super::notification::send_review_requested(
                     session_id,
                     document_path,
-                    window_title,
+                    labels.window_title,
+                    labels.command_name,
                     editor_config,
                 )
             },
@@ -60,7 +67,7 @@ where
         &exe_path,
         &review_args,
         document_path,
-        window_title,
+        labels.window_title,
         editor_config,
     )
 }

@@ -147,6 +147,7 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
     let document = exit_code::exit_on_terminal_launch_failure(start_review::<Frontmatter, _>(
         &draft_path,
         &window_title,
+        "pr-draft",
         &PrDraftReviewHandler,
         &config.editor,
         config.notification.enabled,

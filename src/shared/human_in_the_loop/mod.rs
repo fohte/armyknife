@@ -84,6 +84,7 @@ pub trait ReviewHandler<S: DocumentSchema> {
 pub fn start_review<S, H>(
     document_path: &Path,
     window_title: &str,
+    command_name: &str,
     handler: &H,
     editor_config: &EditorConfig,
     notifications_enabled: bool,
@@ -105,12 +106,17 @@ where
         document_path.to_path_buf()
     };
 
+    let labels = launch::ReviewLabels {
+        window_title,
+        command_name,
+    };
+
     start_review_with_launcher::<S, _>(&document_path, |document_path, done_fifo_path| {
         launch::launch_review::<S, H>(
             tmux_pane_id.as_deref(),
             document_path,
             done_fifo_path,
-            window_title,
+            &labels,
             handler,
             editor_config,
             notifications_enabled,

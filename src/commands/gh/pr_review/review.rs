@@ -133,6 +133,7 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         exit_code::exit_on_terminal_launch_failure(start_review::<ThreadsFrontmatter, _>(
             &threads_path,
             &window_title,
+            "pr-review",
             &handler,
             &config.editor,
             config.notification.enabled,

@@ -226,6 +226,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let document = exit_code::exit_on_terminal_launch_failure(start_review::<SubmitSchema, _>(
         &path,
         &window_title,
+        "issue-agent",
         &IssueReviewHandler,
         &config.editor,
         config.notification.enabled,
