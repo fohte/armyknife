@@ -6,8 +6,8 @@
 //! stale `Paused` session whose tmux pane was taken over by a different
 //! session. tq lives behind Cloudflare Access and can hang or answer
 //! slowly, so the hook never waits on it directly: archiving happens in this
-//! separate detached process instead. Best-effort — tq prunes archived
-//! sessions after they have been inactive for 30 days.
+//! separate detached process instead. Best-effort: failures are logged and
+//! ignored so they do not block the hook.
 
 use anyhow::Result;
 use clap::Args;
