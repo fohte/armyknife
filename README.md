@@ -35,7 +35,9 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
-Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, and compaction settings under `agent.auto_compact`.
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, and merge notification text under `agent.merge_notification`.
+
+`agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -49,6 +51,8 @@ For editor autocompletion, add the following to the top of your config file:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/armyknife/master/docs/config-schema.json
 
 agent:
+  # Sent to the delegator after a delegated PR merges; omitted means no notification.
+  merge_notification: 'Branch {branch} merged: {pr_url}'
   work_types: # per-skill icon and color metadata
     example-workflow:
       icon: '◇'
@@ -720,7 +724,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 Delete merged or closed worktrees in the current repository. Pass `--all` to scan repositories under `agent.worktree.repos_root`.
 
-When `a agent close`, `a agent clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it also notifies the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
+When `a agent close`, `a agent clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it sends the configured `agent.merge_notification` template to the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. No notification is sent when the key is unset; see [Configuration](#configuration). Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
 After `a agent close`, `a agent clean`, or the TUI clean view removes a worktree successfully, armyknife starts the configured `post-worktree-delete` hook in a detached session. The hook receives the deleted worktree path, branch, repository root, and whether the branch was merged; see [Hooks](docs/hooks.md#post-worktree-delete).
 
