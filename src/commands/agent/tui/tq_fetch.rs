@@ -78,8 +78,9 @@ pub async fn fetch_sidebar_snapshot(
 }
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
-/// known session_id. A session linked to multiple tasks keeps only the
-/// first (tq's own ordering) -- the task-number column only has room for one.
+/// known session_id. A session linked to multiple tasks keeps the most
+/// recently linked task; equal timestamps and responses without timestamps
+/// retain tq's ordering.
 ///
 /// The `local_session_ids` filter here is also the fallback for a `tq`
 /// binary predating `--session-id`, which silently ignores the flag and
@@ -106,17 +107,26 @@ fn build_all_tasks_by_session(
         .into_iter()
         .filter(|session| local_session_ids.contains(&session.session_id))
         .map(|session| {
-            let tasks = session
+            let mut tasks = session
                 .tasks
                 .into_iter()
-                .map(|task| SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
+                .map(|task| {
+                    (
+                        task.linked_at,
+                        SessionTask {
+                            task_id: task.id,
+                            task_number: task.number,
+                            task_title: normalize_title(&task.title),
+                            parent_task_id: task.parent_id,
+                            is_closed: task.status == TqTaskStatus::Completed,
+                        },
+                    )
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            tasks.sort_by(|(left_linked_at, _), (right_linked_at, _)| {
+                right_linked_at.cmp(left_linked_at)
+            });
+            let tasks = tasks.into_iter().map(|(_, task)| task).collect();
             (session.session_id, tasks)
         })
         .collect()
@@ -138,8 +148,26 @@ mod tests {
             id: id.to_string(),
             number,
             title: title.to_string(),
+            linked_at: None,
             parent_id: parent_id.map(String::from),
             status: TqTaskStatus::Todo,
+        }
+    }
+
+    fn linked_task(
+        id: &str,
+        number: u32,
+        title: &str,
+        parent_id: Option<&str>,
+        linked_at: &str,
+    ) -> TqTask {
+        TqTask {
+            linked_at: Some(
+                chrono::DateTime::parse_from_rfc3339(linked_at)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+            ..task(id, number, title, parent_id)
         }
     }
 
@@ -206,7 +234,7 @@ mod tests {
             },
         )]),
     )]
-    #[case::session_linked_to_multiple_tasks_keeps_only_the_first(
+    #[case::missing_timestamps_preserve_tq_order(
         vec![session(
             "session-a",
             vec![
@@ -221,6 +249,46 @@ mod tests {
                 task_id: "task-1".to_string(),
                 task_number: 1,
                 task_title: "Task one".to_string(),
+                parent_task_id: None,
+                is_closed: false,
+            },
+        )]),
+    )]
+    #[case::newest_linked_task_is_first(
+        vec![session(
+            "session-a",
+            vec![
+                linked_task("task-1", 1, "Earlier task", None, "2026-01-02T00:00:00+09:00"),
+                linked_task("task-2", 2, "Later task", None, "2026-01-01T16:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-2".to_string(),
+                task_number: 2,
+                task_title: "Later task".to_string(),
+                parent_task_id: None,
+                is_closed: false,
+            },
+        )]),
+    )]
+    #[case::equal_timestamps_preserve_tq_order(
+        vec![session(
+            "session-a",
+            vec![
+                linked_task("task-1", 1, "First task", None, "2026-01-01T00:00:00Z"),
+                linked_task("task-2", 2, "Second task", None, "2026-01-01T00:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "First task".to_string(),
                 parent_task_id: None,
                 is_closed: false,
             },

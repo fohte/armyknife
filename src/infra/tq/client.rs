@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::error::{Result, TqError};
@@ -49,6 +50,9 @@ pub struct TqTask {
     pub id: String,
     pub number: u32,
     pub title: String,
+    /// When this task was linked to the session. Older `tq` binaries omit it.
+    #[serde(default)]
+    pub linked_at: Option<DateTime<Utc>>,
     /// The id of this task's direct parent, if any. Absent on older `tq`
     /// binaries that predate this field, so it must default to `None`
     /// rather than fail deserialization.
@@ -339,6 +343,7 @@ mod tests {
                     "id": "task-uuid-1",
                     "number": 42,
                     "title": "Fix the bug",
+                    "linkedAt": "2026-01-02T03:04:05.000Z",
                     "parentId": "task-uuid-parent"
                   },
                   { "id": "task-uuid-2", "number": 43, "title": "Parent task" }
@@ -363,6 +368,11 @@ mod tests {
                             id: "task-uuid-1".to_string(),
                             number: 42,
                             title: "Fix the bug".to_string(),
+                            linked_at: Some(
+                                DateTime::parse_from_rfc3339("2026-01-02T03:04:05.000Z")
+                                    .unwrap()
+                                    .with_timezone(&Utc),
+                            ),
                             parent_id: Some("task-uuid-parent".to_string()),
                             status: TqTaskStatus::Todo,
                         },
@@ -370,6 +380,7 @@ mod tests {
                             id: "task-uuid-2".to_string(),
                             number: 43,
                             title: "Parent task".to_string(),
+                            linked_at: None,
                             parent_id: None,
                             status: TqTaskStatus::Todo,
                         },
@@ -415,6 +426,7 @@ mod tests {
                     id: "task-uuid-1".to_string(),
                     number: 1,
                     title: "Task".to_string(),
+                    linked_at: None,
                     parent_id: None,
                     status: TqTaskStatus::Todo,
                 }],
@@ -449,6 +461,7 @@ mod tests {
                     id: "task-uuid-1".to_string(),
                     number: 1,
                     title: "Task".to_string(),
+                    linked_at: None,
                     parent_id: None,
                     status: expected,
                 }],
@@ -479,6 +492,7 @@ mod tests {
                     id: "task-uuid-1".to_string(),
                     number: 1,
                     title: "Task".to_string(),
+                    linked_at: None,
                     parent_id: None,
                     status: TqTaskStatus::Todo,
                 }],
@@ -488,9 +502,9 @@ mod tests {
 
     #[test]
     fn ignores_unknown_fields() {
-        // Mirrors the full shape of a real `tq session list` element: every
-        // field besides `sessionId`/`tasks` (and
-        // `tasks[].id/number/title/parentId/status`) is ignored.
+        // Session-level fields besides `sessionId`/`tasks` and task-level
+        // fields besides `id`/`number`/`title`/`linkedAt`/`parentId`/`status`
+        // are ignored.
         let json = indoc! {r#"
             [
               {
@@ -523,6 +537,7 @@ mod tests {
                     id: "task-uuid-1".to_string(),
                     number: 1,
                     title: "Task".to_string(),
+                    linked_at: None,
                     parent_id: None,
                     status: TqTaskStatus::Completed,
                 }],
