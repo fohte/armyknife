@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.364](https://github.com/fohte/armyknife/compare/v0.1.363...v0.1.364) (2026-10-04)
+
+
+### Bug Fixes
+
+* **hitl:** include command name in review notification title ([#1057](https://github.com/fohte/armyknife/issues/1057)) ([ed6d65b](https://github.com/fohte/armyknife/commit/ed6d65be8dd346405dba93695698ec1bc7e4956f))
+
 ## [0.1.363](https://github.com/fohte/armyknife/compare/v0.1.362...v0.1.363) (2026-10-04)
 
 
