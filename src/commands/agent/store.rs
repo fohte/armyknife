@@ -13,6 +13,10 @@ use super::types::{BG_RUN_PENDING_TASK_MARKER, Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
 
+mod archive;
+
+pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,
 /// preventing rapid reordering during concurrent agent execution.
@@ -502,9 +506,15 @@ pub(crate) fn update_session_tmux_pane_id_in(
     })
 }
 
-/// Deletes a session from disk.
-/// Returns Ok(()) even if the session file doesn't exist.
+/// Archives a Codex thread before deleting its session file.
+/// Returns Ok(()) even if the session file doesn't exist or archiving fails.
 pub fn delete_session(session_id: &str) -> Result<()> {
+    archive::delete_session_with_archive(session_id)
+}
+
+/// Deletes a session without archiving its Codex thread.
+/// Used when cleanup handles archive ordering separately.
+pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<()> {
     delete_session_from(&sessions_dir()?, session_id)
 }
 
@@ -628,6 +638,25 @@ where
     F: Fn(&str) -> bool,
     G: Fn(&Path) -> bool,
 {
+    cleanup_stale_sessions_in_with_archive(
+        dir,
+        is_pane_alive,
+        cwd_exists,
+        crate::commands::agent::codex_steer::archive_thread,
+    )
+}
+
+fn cleanup_stale_sessions_in_with_archive<F, G, A>(
+    dir: &Path,
+    is_pane_alive: F,
+    cwd_exists: G,
+    mut archive_codex_thread: A,
+) -> Result<bool>
+where
+    F: Fn(&str) -> bool,
+    G: Fn(&Path) -> bool,
+    A: FnMut(&str) -> anyhow::Result<()>,
+{
     if !dir.exists() {
         return Ok(false);
     }
@@ -676,6 +705,11 @@ where
             && now - session.updated_at > retention;
 
         if stale_pane || orphaned || expired_ended {
+            archive::archive_codex_thread_before_delete_with(
+                &session,
+                &mut archive_codex_thread,
+                ArchiveLogContext::Store,
+            );
             if fs::remove_file(&path).is_ok() {
                 removed_any = true;
             }
@@ -960,6 +994,36 @@ mod tests {
             .expect("cleanup should succeed");
 
             assert!(!path.exists(), "session with dead pane should be removed");
+        }
+
+        #[rstest]
+        fn archives_codex_thread_before_removing_stale_session(temp_session_dir: TempSessionDir) {
+            let session_id = "stale-codex-session";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+            let mut session = create_test_session(session_id);
+            session.engine = Engine::Codex;
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+            let archive_calls = std::cell::RefCell::new(Vec::new());
+
+            let removed = cleanup_stale_sessions_in_with_archive(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_alive,
+                mock_cwd_always_missing,
+                |thread_id| {
+                    archive_calls
+                        .borrow_mut()
+                        .push((thread_id.to_string(), path.exists()));
+                    Err(anyhow::anyhow!("fixture archive failure"))
+                },
+            )
+            .expect("cleanup should succeed after archive failure");
+
+            assert_eq!(
+                (removed, archive_calls.into_inner(), path.exists()),
+                (true, vec![("stale-codex-session".to_string(), true)], false,),
+            );
         }
 
         #[rstest]

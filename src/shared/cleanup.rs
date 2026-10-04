@@ -185,32 +185,92 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
     let sessions = store::list_all_sessions()?;
     let alive_panes = tmux::list_all_pane_ids().unwrap_or_default();
     let own_codex_session_id = crate::shared::env_var::EnvVars::load().codex_session_id;
-    let deferred_archive = own_codex_session_id
-        .as_deref()
-        .filter(|session_id| {
-            sessions.iter().any(|session| {
-                session.engine == Engine::Codex
-                    && session.session_id == *session_id
-                    && session.cwd.starts_with(worktree_path)
-            })
-        })
-        .map(str::to_string);
 
-    let cleaned = cleanup_sessions(
+    Ok(cleanup_sessions_with_deferred_archive(
         &sessions,
         SessionCleanupContext {
             worktree_path,
             alive_panes: &alive_panes,
             own_codex_session_id: own_codex_session_id.as_deref(),
         },
-        tmux::send_sigterm_to_pane,
-        store::delete_session,
-        crate::infra::notification::remove_group,
-        crate::commands::agent::codex_steer::archive_thread,
+        SessionCleanupOperations {
+            send_sigterm: tmux::send_sigterm_to_pane,
+            delete_session: store::delete_session_without_archive,
+            remove_notification_group: crate::infra::notification::remove_group,
+            archive_codex_thread: crate::commands::agent::codex_steer::archive_thread,
+            defer_archive: crate::commands::agent::spawn_after_parent_exit,
+        },
+    ))
+}
+
+struct SessionCleanupOperations<
+    SendSigterm,
+    DeleteSession,
+    RemoveNotification,
+    Archive,
+    DeferArchive,
+> {
+    send_sigterm: SendSigterm,
+    delete_session: DeleteSession,
+    remove_notification_group: RemoveNotification,
+    archive_codex_thread: Archive,
+    defer_archive: DeferArchive,
+}
+
+fn cleanup_sessions_with_deferred_archive<
+    SendSigterm,
+    DeleteSession,
+    RemoveNotification,
+    Archive,
+    DeferArchive,
+>(
+    sessions: &[Session],
+    context: SessionCleanupContext<'_>,
+    operations: SessionCleanupOperations<
+        SendSigterm,
+        DeleteSession,
+        RemoveNotification,
+        Archive,
+        DeferArchive,
+    >,
+) -> usize
+where
+    SendSigterm: FnMut(&str),
+    DeleteSession: FnMut(&str) -> anyhow::Result<()>,
+    RemoveNotification: FnMut(&str) -> anyhow::Result<()>,
+    Archive: FnMut(&str) -> anyhow::Result<()>,
+    DeferArchive: FnMut(&str) -> anyhow::Result<()>,
+{
+    let deferred_archive = context
+        .own_codex_session_id
+        .filter(|session_id| {
+            sessions.iter().any(|session| {
+                session.engine == Engine::Codex
+                    && session.session_id == *session_id
+                    && session.cwd.starts_with(context.worktree_path)
+            })
+        })
+        .map(str::to_string);
+
+    let SessionCleanupOperations {
+        send_sigterm,
+        delete_session,
+        remove_notification_group,
+        archive_codex_thread,
+        mut defer_archive,
+    } = operations;
+
+    let cleaned = cleanup_sessions(
+        sessions,
+        context,
+        send_sigterm,
+        delete_session,
+        remove_notification_group,
+        archive_codex_thread,
     );
 
     if let Some(session_id) = deferred_archive
-        && let Err(error) = crate::commands::agent::spawn_after_parent_exit(&session_id)
+        && let Err(error) = defer_archive(&session_id)
     {
         eprintln!(
             "Warning: Failed to defer Codex thread archive for session {session_id}: {error:#}"
@@ -223,7 +283,7 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
         );
     }
 
-    Ok(cleaned)
+    cleaned
 }
 
 struct SessionCleanupContext<'a> {
@@ -247,19 +307,11 @@ fn cleanup_sessions(
             let is_own_codex_session = session.engine == Engine::Codex
                 && context.own_codex_session_id == Some(session.session_id.as_str());
 
-            if session.engine == Engine::Codex
-                && !is_own_codex_session
-                && let Err(error) = archive_codex_thread(&session.session_id)
-            {
-                eprintln!(
-                    "Warning: Failed to archive Codex thread for session {}: {error:#}",
-                    session.session_id
-                );
-                tracing::warn!(
-                    target: "armyknife::shared::cleanup",
-                    event = "cleanup.codex_archive.err",
-                    session = %session.session_id,
-                    msg = format!("failed to archive Codex thread: {error:#}"),
+            if session.engine == Engine::Codex && !is_own_codex_session {
+                store::archive_codex_thread_before_delete_with(
+                    session,
+                    &mut archive_codex_thread,
+                    store::ArchiveLogContext::WorktreeCleanup,
                 );
             }
 
@@ -303,9 +355,96 @@ fn cleanup_sessions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::Engine;
     use crate::shared::testing::TestRepo;
+    use chrono::Utc;
     use rstest::rstest;
     use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    fn make_session(session_id: &str, cwd: &Path, engine: Engine) -> Session {
+        Session {
+            session_id: session_id.to_string(),
+            crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
+            cwd: cwd.to_path_buf(),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Stopped,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            work_type: None,
+            work_type_pinned: false,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: Default::default(),
+            pending_agent_task_ids: Default::default(),
+            pending_permission_agent_ids: Default::default(),
+            pending_permission_request_ids: Default::default(),
+            read_at: None,
+            sweep_signaled: false,
+            engine,
+        }
+    }
+
+    #[rstest]
+    fn defers_current_codex_archive_until_cleanup_finishes() {
+        let worktree_path = PathBuf::from("/tmp/example-worktree");
+        let sessions = vec![
+            make_session("current-session", &worktree_path, Engine::Codex),
+            make_session("other-session", &worktree_path, Engine::Codex),
+        ];
+        let alive_panes = HashSet::new();
+        let events = RefCell::new(Vec::new());
+
+        let cleaned = cleanup_sessions_with_deferred_archive(
+            &sessions,
+            SessionCleanupContext {
+                worktree_path: &worktree_path,
+                alive_panes: &alive_panes,
+                own_codex_session_id: Some("current-session"),
+            },
+            SessionCleanupOperations {
+                send_sigterm: |_pane_id: &str| {},
+                delete_session: |session_id: &str| {
+                    events.borrow_mut().push(format!("delete:{session_id}"));
+                    Ok(())
+                },
+                remove_notification_group: |session_id: &str| {
+                    events
+                        .borrow_mut()
+                        .push(format!("notification:{session_id}"));
+                    Ok(())
+                },
+                archive_codex_thread: |session_id: &str| {
+                    events.borrow_mut().push(format!("archive:{session_id}"));
+                    Ok(())
+                },
+                defer_archive: |session_id: &str| {
+                    events.borrow_mut().push(format!("defer:{session_id}"));
+                    Ok(())
+                },
+            },
+        );
+
+        assert_eq!(
+            (cleaned, events.into_inner()),
+            (
+                2,
+                vec![
+                    "delete:current-session".to_string(),
+                    "notification:current-session".to_string(),
+                    "archive:other-session".to_string(),
+                    "delete:other-session".to_string(),
+                    "notification:other-session".to_string(),
+                    "defer:current-session".to_string(),
+                ],
+            ),
+        );
+    }
 
     #[rstest]
     #[case::deleted(true, vec!["hook", "cleanup"])]
