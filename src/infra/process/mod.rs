@@ -233,7 +233,7 @@ where
 /// either resolving the current executable or the spawn itself fails.
 ///
 /// Shared by hook-triggered background workers (e.g. the auto-compact
-/// schedule worker, tq session deletion) that must let the hook return
+/// schedule worker, tq session archive worker) that must let the hook return
 /// immediately instead of waiting on a slow or optional side effect.
 /// `spawn_event`/`failed_event` are the two callers' own tracing event names,
 /// so each keeps its own log identity.

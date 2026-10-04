@@ -12,9 +12,10 @@ use clap::Args;
 use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
+#[cfg(not(test))]
+use super::archive_tq_session_detached;
 use super::auto_compact;
 use super::claude_sessions;
-use super::delete_tq_session_detached;
 use super::error::CcError;
 use super::session_status;
 use super::store;
@@ -126,9 +127,9 @@ struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     auto_compact: bool,
-    /// Spawn the detached `a agent delete-tq-session-detached` worker on a
+    /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
-    tq_delete: bool,
+    tq_archive: bool,
     /// Include `a agent bg run` state in Stop processing.
     track_bg_run_tasks: bool,
     /// Test-only sink that records the group ids passed to
@@ -141,6 +142,10 @@ struct SideEffects {
     /// expected status without invoking tmux.
     #[cfg(test)]
     tmux_sync_calls: Option<TmuxSyncCallSink>,
+    /// Test-only sink that records session ids passed to the detached tq
+    /// archive worker.
+    #[cfg(test)]
+    tq_archive_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 #[cfg(test)]
@@ -154,12 +159,14 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
-            tq_delete: true,
+            tq_archive: true,
             track_bg_run_tasks: true,
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
             tmux_sync_calls: None,
+            #[cfg(test)]
+            tq_archive_calls: None,
         }
     }
 
@@ -169,10 +176,11 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
             tmux_sync_calls: None,
+            tq_archive_calls: None,
         }
     }
 
@@ -204,6 +212,21 @@ impl SideEffects {
                 .push(group.to_string());
         }
     }
+
+    fn archive_tq_session(&self, session_id: &str) {
+        if !self.tq_archive {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(calls) = &self.tq_archive_calls {
+            calls
+                .lock()
+                .expect("tq_archive_calls mutex poisoned")
+                .push(session_id.to_string());
+        }
+        #[cfg(not(test))]
+        archive_tq_session_detached::spawn_in_background(session_id);
+    }
 }
 
 /// Processes a hook event with the given input.
@@ -219,7 +242,7 @@ fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
 /// `claude` (or `claude -c <other-id>`) starts on the same pane. Resuming the
 /// same paused session with `claude -c <same-id>` is unaffected because
 /// `session_id` matches and the entry is skipped. This eviction is a genuine
-/// Ended transition too, so it also triggers a best-effort tq deletion.
+/// Ended transition too, so it also triggers a best-effort tq archive.
 fn evict_paused_sessions_on_pane_takeover(
     sessions_dir: &Path,
     pane_id: &str,
@@ -254,9 +277,7 @@ fn evict_paused_sessions_on_pane_takeover(
         session.status = SessionStatus::Ended;
         session.updated_at = now;
         let _ = store::save_session_to(sessions_dir, &session);
-        if side_effects.tq_delete {
-            delete_tq_session_detached::spawn_in_background(&session.session_id);
-        }
+        side_effects.archive_tq_session(&session.session_id);
     }
 }
 
@@ -311,9 +332,7 @@ fn process_hook_event_impl(
                 // it here. Paused sessions keep their notification so the
                 // user still sees it after `a agent resume`.
                 side_effects.remove_notification_group(&input.session_id);
-                if side_effects.tq_delete {
-                    delete_tq_session_detached::spawn_in_background(&input.session_id);
-                }
+                side_effects.archive_tq_session(&input.session_id);
             }
             // Push the preserved status into the pane option so that sweep's
             // Paused isn't clobbered back to "" by this SessionEnd: Paused
@@ -2022,10 +2041,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_ended_clears_notification(SessionStatus::Running, false, vec!["end-sess".to_string()])]
-    #[case::sweep_paused_keeps_notification(SessionStatus::Paused, false, Vec::<String>::new())]
-    #[case::sweep_signaled_stopped_keeps_notification(SessionStatus::Stopped, true, Vec::<String>::new())]
-    fn session_end_clears_notification_only_when_not_paused(
+    #[case::user_ended_clears_notification_and_archives(SessionStatus::Running, false, vec!["end-sess".to_string()])]
+    #[case::sweep_paused_keeps_notification_and_session(SessionStatus::Paused, false, Vec::<String>::new())]
+    #[case::sweep_signaled_stopped_keeps_notification_and_session(SessionStatus::Stopped, true, Vec::<String>::new())]
+    fn session_end_archives_and_clears_notification_only_when_ended(
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
         #[case] expected_removed: Vec<String>,
@@ -2061,14 +2080,16 @@ mod tests {
         store::save_session_to(sessions_dir, &session).expect("save");
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let archived = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let side_effects = SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: true,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
+            tq_archive_calls: Some(archived.clone()),
         };
 
         let input: HookInput =
@@ -2078,8 +2099,11 @@ mod tests {
         process_hook_event_impl(HookEvent::SessionEnd, input, sessions_dir, &side_effects)
             .expect("hook should succeed");
 
-        let recorded = removed.lock().expect("lock").clone();
-        assert_eq!(recorded, expected_removed);
+        let recorded = (
+            removed.lock().expect("lock").clone(),
+            archived.lock().expect("lock").clone(),
+        );
+        assert_eq!(recorded, (expected_removed.clone(), expected_removed));
     }
 
     #[rstest]
@@ -2120,10 +2144,11 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
+            tq_archive_calls: None,
         };
 
         let input: HookInput =
@@ -2511,10 +2536,11 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            tq_delete: false,
+            tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
+            tq_archive_calls: None,
         };
 
         let payload = format!(
@@ -3093,7 +3119,7 @@ mod tests {
             "%42",
             "%42",
             "new",
-            SessionStatus::Ended
+            (SessionStatus::Ended, vec!["old".to_string()])
         )]
         #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
@@ -3103,7 +3129,7 @@ mod tests {
             "%42",
             "%42",
             "same",
-            SessionStatus::Paused,
+            (SessionStatus::Paused, Vec::<String>::new()),
         )]
         #[case::keeps_when_pane_differs(
             SessionStatus::Paused,
@@ -3111,7 +3137,7 @@ mod tests {
             "%99",
             "%42",
             "new",
-            SessionStatus::Paused
+            (SessionStatus::Paused, Vec::<String>::new()),
         )]
         #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
@@ -3121,7 +3147,7 @@ mod tests {
             "%42",
             "%42",
             "new",
-            SessionStatus::Running,
+            (SessionStatus::Running, Vec::<String>::new()),
         )]
         fn evict_paused_sessions_on_pane_takeover_cases(
             temp_dir: TempDir,
@@ -3130,23 +3156,35 @@ mod tests {
             #[case] session_pane: &str,
             #[case] takeover_pane: &str,
             #[case] takeover_session_id: &str,
-            #[case] expected_status: SessionStatus,
+            #[case] expected: (SessionStatus, Vec<String>),
         ) {
             let mut session = make_paused_session(session_id, session_pane);
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
 
+            let archived = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let side_effects = SideEffects {
+                tmux: false,
+                notifications: false,
+                auto_compact: false,
+                tq_archive: true,
+                track_bg_run_tasks: false,
+                removed_notification_groups: None,
+                tmux_sync_calls: None,
+                tq_archive_calls: Some(archived.clone()),
+            };
             evict_paused_sessions_on_pane_takeover(
                 temp_dir.path(),
                 takeover_pane,
                 takeover_session_id,
-                &SideEffects::none(),
+                &side_effects,
             );
 
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.status, expected_status);
+            let recorded = (reloaded.status, archived.lock().expect("lock").clone());
+            assert_eq!(recorded, expected);
         }
 
         #[rstest]
