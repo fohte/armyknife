@@ -92,7 +92,7 @@ fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> En
     explicit.or(stored).unwrap_or_default()
 }
 
-/// Runs Codex as a child so an unsuccessful resume can restore the ended
+/// Runs Codex as a child so an unsuccessful resume can restore the original
 /// status. The child keeps the invoking terminal attached for the interactive
 /// TUI, while Claude keeps the existing `exec_replace` path in [`run`].
 fn run_codex_resume(
@@ -119,6 +119,7 @@ fn run_codex_resume(
 /// unsuccessfully.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResumeStatusChange {
+    original_status: SessionStatus,
     original_read_at: Option<DateTime<Utc>>,
     original_updated_at: DateTime<Utc>,
     original_tmux_info: Option<TmuxInfo>,
@@ -169,7 +170,8 @@ fn current_tmux_info() -> Option<TmuxInfo> {
     })
 }
 
-/// Marks an ended Codex session as stopped before launching `codex resume`.
+/// Marks an ended or paused Codex session as stopped before launching
+/// `codex resume`.
 /// The lock keeps this transition from racing with a hook that updates the
 /// same session file.
 fn mark_codex_session_resumed_in(
@@ -179,12 +181,15 @@ fn mark_codex_session_resumed_in(
 ) -> Result<Option<ResumeStatusChange>> {
     let mut change = None;
     store::update_session_in(sessions_dir, session_id, |session| {
-        if session.engine != Engine::Codex || session.status != SessionStatus::Ended {
+        if session.engine != Engine::Codex
+            || !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
+        {
             return false;
         }
 
         let marked_at = Utc::now();
         change = Some(ResumeStatusChange {
+            original_status: session.status,
             original_read_at: session.read_at,
             original_updated_at: session.updated_at,
             original_tmux_info: session.tmux_info.clone(),
@@ -212,7 +217,7 @@ fn restore_failed_codex_resume_in(
             return false;
         }
 
-        session.status = SessionStatus::Ended;
+        session.status = change.original_status;
         session.read_at = change.original_read_at;
         session.updated_at = change.original_updated_at;
         session.tmux_info = change.original_tmux_info.clone();
@@ -505,9 +510,9 @@ mod tests {
         #[rstest]
         #[case::codex_ended(Engine::Codex, SessionStatus::Ended, true, SessionStatus::Stopped)]
         #[case::codex_stopped(Engine::Codex, SessionStatus::Stopped, false, SessionStatus::Stopped)]
-        #[case::codex_paused(Engine::Codex, SessionStatus::Paused, false, SessionStatus::Paused)]
+        #[case::codex_paused(Engine::Codex, SessionStatus::Paused, true, SessionStatus::Stopped)]
         #[case::claude_ended(Engine::Claude, SessionStatus::Ended, false, SessionStatus::Ended)]
-        fn marks_only_ended_codex_sessions(
+        fn marks_resumable_codex_sessions_as_stopped(
             temp_dir: TempDir,
             #[case] engine: Engine,
             #[case] status: SessionStatus,
@@ -539,8 +544,13 @@ mod tests {
         }
 
         #[rstest]
-        fn failed_resume_restores_codex_session(temp_dir: TempDir) {
-            let original = session(Engine::Codex, SessionStatus::Ended);
+        #[case::ended(SessionStatus::Ended)]
+        #[case::paused(SessionStatus::Paused)]
+        fn failed_resume_restores_codex_session(
+            temp_dir: TempDir,
+            #[case] original_status: SessionStatus,
+        ) {
+            let original = session(Engine::Codex, original_status);
             let expected = (
                 original.status,
                 original.read_at,
