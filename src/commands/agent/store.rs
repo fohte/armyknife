@@ -15,6 +15,8 @@ use crate::shared::cache;
 
 mod archive;
 
+pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,
 /// preventing rapid reordering during concurrent agent execution.
@@ -703,7 +705,11 @@ where
             && now - session.updated_at > retention;
 
         if stale_pane || orphaned || expired_ended {
-            archive::archive_codex_thread_before_delete_with(&session, &mut archive_codex_thread);
+            archive::archive_codex_thread_before_delete_with(
+                &session,
+                &mut archive_codex_thread,
+                ArchiveLogContext::Store,
+            );
             if fs::remove_file(&path).is_ok() {
                 removed_any = true;
             }

@@ -4,6 +4,12 @@ use anyhow::Result;
 
 use crate::commands::agent::types::{Engine, Session};
 
+#[derive(Clone, Copy)]
+pub(crate) enum ArchiveLogContext {
+    Store,
+    WorktreeCleanup,
+}
+
 pub(crate) fn delete_session_with_archive(session_id: &str) -> Result<()> {
     delete_session_with_archive_in(
         &super::sessions_dir()?,
@@ -18,31 +24,40 @@ fn delete_session_with_archive_in(
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> Result<()> {
     if let Some(session) = super::load_session_from(sessions_dir, session_id)? {
-        archive_codex_thread_before_delete_with(&session, &mut archive_codex_thread);
+        archive_codex_thread_before_delete_with(
+            &session,
+            &mut archive_codex_thread,
+            ArchiveLogContext::Store,
+        );
     }
 
     super::delete_session_from(sessions_dir, session_id)
 }
 
-pub(super) fn archive_codex_thread_before_delete_with(
+pub(crate) fn archive_codex_thread_before_delete_with(
     session: &Session,
     archive_codex_thread: &mut impl FnMut(&str) -> anyhow::Result<()>,
+    log_context: ArchiveLogContext,
 ) {
     if session.engine != Engine::Codex {
         return;
     }
 
     if let Err(error) = archive_codex_thread(&session.session_id) {
-        eprintln!(
-            "Warning: Failed to archive Codex thread for session {}: {error:#}",
-            session.session_id
-        );
-        tracing::warn!(
-            target: "armyknife::commands::agent::store",
-            event = "store.codex_archive.err",
-            session = %session.session_id,
-            msg = format!("failed to archive Codex thread: {error:#}"),
-        );
+        match log_context {
+            ArchiveLogContext::Store => tracing::warn!(
+                target: "armyknife::commands::agent::store",
+                event = "store.codex_archive.err",
+                session = %session.session_id,
+                msg = format!("failed to archive Codex thread: {error:#}"),
+            ),
+            ArchiveLogContext::WorktreeCleanup => tracing::warn!(
+                target: "armyknife::shared::cleanup",
+                event = "cleanup.codex_archive.err",
+                session = %session.session_id,
+                msg = format!("failed to archive Codex thread: {error:#}"),
+            ),
+        }
     }
 }
 
