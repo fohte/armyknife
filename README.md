@@ -455,7 +455,7 @@ With `--prompt`, Claude messaging requires exactly one Claude pane. A layout wit
 
 - Without `--prompt`, armyknife runs `codex [--model <model>] [-c model_reasoning_effort=<effort>]`.
 - With `--prompt`, exactly one Codex pane, and a running shared Codex app-server that exposes its control socket, armyknife connects before opening the pane. It launches `codex [--model <model>]` without config overrides, then sends the prompt and reasoning effort in the first `turn/start` request. If the app-server is unavailable or the layout does not have exactly one Codex pane, the command exits with an error before opening the window or pane.
-- If the app-server rejects the initial `turn/start` request, or armyknife cannot confirm that the thread started, the command exits with an error that identifies the pane; the pane remains open without the initial prompt. If `turn/start` was sent but its response could not be read, armyknife binds the pane to the created thread, reports a warning, and does not retry the prompt through argv.
+- If the app-server rejects the initial `turn/start` request, or the turn ends before the prompt is recorded, the command exits with an error that identifies the pane; the pane remains open without the prompt. If `turn/start` was sent but its response or the prompt's recording could not be confirmed, armyknife binds the pane to the created thread, reports a warning, and does not retry the prompt through argv.
 
 The daemon route marks its Codex pane as armyknife-managed, so an environment where `codex` is aliased to `a agent codex` does not perform pane binding twice. A hand-run `a agent codex` keeps its normal pane binding behavior.
 

@@ -19,13 +19,14 @@ use tungstenite::{Message, WebSocket, client};
 use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
-const TURN_START_REQUEST_ID: u64 = 2;
+const TURN_START_REQUEST_ID: u64 = 3;
 const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(120);
 const TURN_START_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod archive;
+mod delivery;
 
 pub(crate) use archive::archive_thread;
 
@@ -33,10 +34,10 @@ pub type Result<T> = std::result::Result<T, DeliveryError>;
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {
-    /// The app-server did not accept `turn/start`, so queue fallback is safe.
+    /// The request was rejected or the target turn ended without a matching history item.
     #[error("{0:#}")]
     NotDelivered(anyhow::Error),
-    /// `turn/start` was written but no authoritative response arrived.
+    /// Delivery could not be confirmed, so queue fallback could create a duplicate.
     #[error("Codex app-server delivery is unconfirmed; not queueing to avoid a duplicate: {0:#}")]
     Unconfirmed(anyhow::Error),
 }
@@ -128,26 +129,24 @@ impl Client {
         }
     }
 
-    /// Starts the initial turn, applying `effort` to this and subsequent turns.
+    /// Starts the initial turn and waits for Codex to record its input.
+    ///
+    /// Applies `effort` to this and subsequent turns.
+    /// Delivery checks can wait while an active turn has not recorded the input.
     pub fn start_turn(
         &mut self,
         thread_id: &str,
         content: &str,
         effort: Option<ReasoningEffort>,
     ) -> Result<()> {
-        self.socket
-            .get_ref()
-            .set_read_timeout(Some(TURN_START_RESPONSE_TIMEOUT))
-            .context("failed to set Codex app-server `turn/start` response timeout")
-            .map_err(DeliveryError::NotDelivered)?;
-        send_request(
+        let client_user_message_id = uuid::Uuid::new_v4().to_string();
+        delivery::send_and_confirm(
             &mut self.socket,
-            &turn_start_request(thread_id, content, effort),
+            thread_id,
+            content,
+            effort,
+            &client_user_message_id,
         )
-        .map_err(|error| match error {
-            RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
-            RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
-        })
     }
 }
 
@@ -252,9 +251,11 @@ fn turn_start_request(
     thread_id: &str,
     content: &str,
     effort: Option<ReasoningEffort>,
+    client_user_message_id: &str,
 ) -> RpcRequest {
     let mut params = json!({
         "threadId": thread_id,
+        "clientUserMessageId": client_user_message_id,
         "input": [{
             "type": "text",
             "text": content,
@@ -334,6 +335,20 @@ fn send_request(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
 ) -> std::result::Result<(), RequestError> {
+    send_request_response(socket, request).map(|_| ())
+}
+
+fn send_request_response(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+) -> std::result::Result<Value, RequestError> {
+    send_request_and_collect_notifications(socket, request).map(|(response, _)| response)
+}
+
+fn send_request_and_collect_notifications(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+) -> std::result::Result<(Value, Vec<Value>), RequestError> {
     socket
         .send(Message::Text(request.payload.to_string().into()))
         .with_context(|| {
@@ -343,16 +358,25 @@ fn send_request(
             )
         })
         .map_err(RequestError::Transport)?;
-    wait_for_response(|| socket.read(), request.id, request.method).map(|_| ())
+    let mut notifications = Vec::new();
+    let response = wait_for_response_with_notifications(
+        || socket.read(),
+        request.id,
+        request.method,
+        |notification| notifications.push(notification),
+    )?;
+    Ok((response, notifications))
 }
 
-fn wait_for_response<R>(
+fn wait_for_response_with_notifications<R, F>(
     mut read: R,
     request_id: u64,
     method: &str,
+    mut on_notification: F,
 ) -> std::result::Result<Value, RequestError>
 where
     R: FnMut() -> tungstenite::Result<Message>,
+    F: FnMut(Value),
 {
     loop {
         let message = read()
@@ -365,6 +389,9 @@ where
                     .map_err(RequestError::Transport)?;
                 if let Some(result) = is_response_to(&response, request_id, method)? {
                     return Ok(result);
+                }
+                if response.get("method").and_then(Value::as_str).is_some() {
+                    on_notification(response);
                 }
             }
             Message::Close(frame) => {
@@ -473,10 +500,11 @@ mod tests {
     #[case::without_effort(
         None,
         json!({
-            "id": 2,
+            "id": TURN_START_REQUEST_ID,
             "method": "turn/start",
             "params": {
                 "threadId": "thread-a",
+                "clientUserMessageId": "message-a",
                 "input": [{
                     "type": "text",
                     "text": "hello there",
@@ -488,10 +516,11 @@ mod tests {
     #[case::with_effort(
         Some(ReasoningEffort::Max),
         json!({
-            "id": 2,
+            "id": TURN_START_REQUEST_ID,
             "method": "turn/start",
             "params": {
                 "threadId": "thread-a",
+                "clientUserMessageId": "message-a",
                 "input": [{
                     "type": "text",
                     "text": "hello there",
@@ -503,7 +532,7 @@ mod tests {
     )]
     fn builds_turn_start_request(#[case] effort: Option<ReasoningEffort>, #[case] expected: Value) {
         assert_eq!(
-            turn_start_request("thread-a", "hello there", effort).payload,
+            turn_start_request("thread-a", "hello there", effort, "message-a").payload,
             expected,
         );
     }
@@ -679,7 +708,8 @@ mod tests {
             )),
         ]
         .into_iter();
-        let actual = wait_for_response(
+        let mut notifications = Vec::new();
+        let actual = wait_for_response_with_notifications(
             || {
                 messages
                     .next()
@@ -687,27 +717,75 @@ mod tests {
             },
             2,
             "turn/start",
+            |notification| notifications.push(notification),
         );
-        assert_eq!(actual.map_err(|error| error.to_string()), Ok(json!({})));
+        assert_eq!(
+            (actual.map_err(|error| error.to_string()), notifications,),
+            (
+                Ok(json!({})),
+                vec![json!({"method": "turn/started", "params": {}})],
+            ),
+        );
     }
 
     #[test]
     fn start_turn_uses_a_fresh_response_timeout() -> anyhow::Result<()> {
         let (mut client, server_socket) = connected_client_and_server()?;
-        let server = std::thread::spawn(move || -> anyhow::Result<Value> {
+        let server = std::thread::spawn(move || -> anyhow::Result<(Value, Value, Value)> {
             let mut socket = server_socket;
             socket.send(thread_started_message())?;
             let Message::Text(request) = socket.read()? else {
                 return Err(anyhow!("Codex app-server received a non-text request"));
             };
-            let request = serde_json::from_str(&request)?;
+            let snapshot_request: Value = serde_json::from_str(&request)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": 2,
+                    "result": {"thread": {"turns": []}},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            let Message::Text(request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let request: Value = serde_json::from_str(&request)?;
+            let client_user_message_id = request
+                .pointer("/params/clientUserMessageId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("turn/start did not include a client user message ID"))?
+                .to_owned();
+            uuid::Uuid::parse_str(&client_user_message_id)
+                .context("turn/start client user message ID was not a UUID")?;
             std::thread::sleep(Duration::from_millis(350));
             socket.send(Message::Text(
-                json!({"id": TURN_START_REQUEST_ID, "result": {}})
-                    .to_string()
-                    .into(),
+                json!({
+                    "id": TURN_START_REQUEST_ID,
+                    "result": {"turn": {"id": "turn-a", "status": "inProgress"}},
+                })
+                .to_string()
+                .into(),
             ))?;
-            Ok(request)
+            let Message::Text(resume_request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let resume_request = serde_json::from_str(&resume_request)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": delivery::THREAD_RESUME_REQUEST_ID,
+                    "result": {"thread": {"turns": [{
+                        "id": "turn-a",
+                        "status": "inProgress",
+                        "items": [{
+                            "type": "userMessage",
+                            "clientId": client_user_message_id,
+                        }],
+                    }]}},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            Ok((snapshot_request, request, resume_request))
         });
         let thread_id = client.wait_for_thread_started_with_timeout(
             Path::new("/workspace/project-a"),
@@ -717,13 +795,17 @@ mod tests {
         let result = client
             .start_turn(&thread_id, "hello there", None)
             .map_err(|error| error.to_string());
-        let request = server
+        let (snapshot_request, request, resume_request) = server
             .join()
             .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let mut normalized_request = request;
+        normalized_request["params"]["clientUserMessageId"] = json!("message-a");
         let actual = (
             thread_id,
             result,
-            request,
+            snapshot_request,
+            normalized_request,
+            resume_request,
             client.socket.get_ref().read_timeout()?,
         );
 
@@ -733,16 +815,27 @@ mod tests {
                 "thread-a".to_string(),
                 Ok(()),
                 json!({
+                    "id": 2,
+                    "method": "thread/read",
+                    "params": {"threadId": "thread-a", "includeTurns": true},
+                }),
+                json!({
                     "id": TURN_START_REQUEST_ID,
                     "method": "turn/start",
                     "params": {
                         "threadId": "thread-a",
+                        "clientUserMessageId": "message-a",
                         "input": [{
                             "type": "text",
                             "text": "hello there",
                             "textElements": [],
                         }],
                     },
+                }),
+                json!({
+                    "id": delivery::THREAD_RESUME_REQUEST_ID,
+                    "method": "thread/resume",
+                    "params": {"threadId": "thread-a"},
                 }),
                 Some(TURN_START_RESPONSE_TIMEOUT),
             ),
