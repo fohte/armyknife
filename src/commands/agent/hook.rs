@@ -500,6 +500,18 @@ fn process_hook_event_impl(
     // no transcript read or retry is needed there; Codex's other events
     // carry no such field and leave last_message untouched.
     let last_message = match session.engine {
+        // Newer Claude Code versions put the final message in the `Stop`
+        // payload; reading the transcript instead can race with its write
+        // and yield the text before the last tool call.
+        Engine::Claude
+            if event == HookEvent::Stop
+                && input
+                    .last_assistant_message
+                    .as_deref()
+                    .is_some_and(|m| !m.is_empty()) =>
+        {
+            input.last_assistant_message.clone()
+        }
         Engine::Claude => {
             let max_retries = if event == HookEvent::Stop {
                 TRANSCRIPT_MAX_RETRIES
@@ -1646,6 +1658,24 @@ mod tests {
             .expect("session exists");
         assert_eq!(reloaded.last_message, Some("All done.".to_string()));
         assert_eq!(reloaded.engine, Engine::Codex);
+    }
+
+    #[test]
+    fn claude_stop_uses_last_assistant_message_without_transcript_read() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let payload = r#"{"session_id":"claude-stop","cwd":"/tmp/test","hook_event_name":"Stop","last_assistant_message":"All done."}"#;
+        let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
+
+        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "claude-stop")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.last_message, Some("All done.".to_string()));
+        assert_eq!(reloaded.engine, Engine::Claude);
     }
 
     /// A payload with the fields Codex puts on every hook event (see
