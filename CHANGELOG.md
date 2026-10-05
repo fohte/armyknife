@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.374](https://github.com/fohte/armyknife/compare/v0.1.373...v0.1.374) (2026-10-05)
+
+
+### Bug Fixes
+
+* **agent:** prevent dropped notifications when a Codex turn is interrupted ([#1079](https://github.com/fohte/armyknife/issues/1079)) ([d24c15b](https://github.com/fohte/armyknife/commit/d24c15b808032efabe18f3c922711d7eba7deda5))
+
 ## [0.1.373](https://github.com/fohte/armyknife/compare/v0.1.372...v0.1.373) (2026-10-05)
 
 
