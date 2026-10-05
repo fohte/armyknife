@@ -493,13 +493,21 @@ fn process_hook_event_impl(
     session_lock.save(&session)?;
     drop(session_lock);
 
-    // Update last_message. Claude Code requires re-reading the transcript
-    // file (see get_last_message_with_retry's retry loop, which works around
-    // a write race with Claude Code's own transcript write). Codex's `Stop`
-    // hook payload carries the turn's final assistant message directly, so
-    // no transcript read or retry is needed there; Codex's other events
-    // carry no such field and leave last_message untouched.
+    // Update last_message. The `Stop` payload's final assistant message is
+    // preferred when present: the transcript may not hold it yet when the
+    // hook fires. Claude Code without it falls back to re-reading the
+    // transcript (see get_last_message_with_retry's retry loop). Codex's
+    // other events carry no such field and leave last_message untouched.
     let last_message = match session.engine {
+        Engine::Claude
+            if event == HookEvent::Stop
+                && input
+                    .last_assistant_message
+                    .as_deref()
+                    .is_some_and(|m| !m.is_empty()) =>
+        {
+            input.last_assistant_message.clone()
+        }
         Engine::Claude => {
             let max_retries = if event == HookEvent::Stop {
                 TRANSCRIPT_MAX_RETRIES
@@ -1625,27 +1633,49 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codex_stop_uses_last_assistant_message_without_transcript_read() {
-        // Codex's `Stop` payload carries the turn's final assistant message
-        // directly. No transcript file exists at this test's `cwd`, so a
-        // Claude-engine session would leave `last_message` at `None` (its
-        // path re-reads the transcript instead -- see
-        // `get_last_message_with_retry`).
+    // No transcript file exists at the payloads' `cwd`, so a result of
+    // `Some(..)` proves the message came from the payload; the transcript
+    // fallback (see `get_last_message_with_retry`) would leave `None`.
+    #[rstest]
+    #[case::codex(
+        r#"{"session_id":"s","cwd":"/tmp/test","engine":"codex","last_assistant_message":"All done."}"#,
+        Engine::Codex,
+        Some("All done.")
+    )]
+    #[case::claude(
+        r#"{"session_id":"s","cwd":"/tmp/test","hook_event_name":"Stop","last_assistant_message":"All done."}"#,
+        Engine::Claude,
+        Some("All done.")
+    )]
+    #[case::claude_empty_falls_back_to_transcript(
+        r#"{"session_id":"s","cwd":"/tmp/test","hook_event_name":"Stop","last_assistant_message":""}"#,
+        Engine::Claude,
+        None
+    )]
+    #[case::claude_absent_falls_back_to_transcript(
+        r#"{"session_id":"s","cwd":"/tmp/test","hook_event_name":"Stop"}"#,
+        Engine::Claude,
+        None
+    )]
+    fn stop_last_assistant_message(
+        #[case] payload: &str,
+        #[case] expected_engine: Engine,
+        #[case] expected_message: Option<&str>,
+    ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
-
-        let payload = r#"{"session_id":"codex-stop","cwd":"/tmp/test","engine":"codex","last_assistant_message":"All done."}"#;
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
 
         process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
-        let reloaded = store::load_session_from(sessions_dir, "codex-stop")
+        let reloaded = store::load_session_from(sessions_dir, "s")
             .expect("load")
             .expect("session exists");
-        assert_eq!(reloaded.last_message, Some("All done.".to_string()));
-        assert_eq!(reloaded.engine, Engine::Codex);
+        assert_eq!(
+            (reloaded.last_message, reloaded.engine),
+            (expected_message.map(str::to_string), expected_engine)
+        );
     }
 
     /// A payload with the fields Codex puts on every hook event (see

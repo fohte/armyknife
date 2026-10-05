@@ -435,10 +435,10 @@ pub struct HookInput {
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTask>,
 
-    /// Codex's `Stop` hook payload carries the turn's final assistant
-    /// message directly (unlike Claude Code, which requires re-reading the
-    /// transcript file -- see `hook.rs`'s Codex branch of the `last_message`
-    /// update). Absent for Claude Code, which has no such field.
+    /// The `Stop` hook payload's final assistant message of the turn, which
+    /// avoids re-reading the transcript (see `hook.rs`'s `last_message`
+    /// update). Always present for Codex; absent for older Claude Code
+    /// versions, which fall back to the transcript.
     #[serde(default)]
     pub last_assistant_message: Option<String>,
 
