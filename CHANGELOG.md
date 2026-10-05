@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.373](https://github.com/fohte/armyknife/compare/v0.1.372...v0.1.373) (2026-10-05)
+
+
+### Bug Fixes
+
+* **agent:** show the last response in Claude Stop notifications ([#1077](https://github.com/fohte/armyknife/issues/1077)) ([54253f8](https://github.com/fohte/armyknife/commit/54253f8fa043997441c1ff371182d056ac3b3030))
+
 ## [0.1.372](https://github.com/fohte/armyknife/compare/v0.1.371...v0.1.372) (2026-10-04)
 
 
