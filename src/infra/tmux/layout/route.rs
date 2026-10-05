@@ -7,7 +7,7 @@ pub enum AgentLaunchRoute {
     ClaudeMessaging,
     /// Codex attached to the shared app-server and received its first turn by RPC.
     CodexDaemon { thread_id: String },
-    /// The initial Codex turn/start request was sent, but its response was not confirmed.
+    /// The initial Codex prompt was sent, but delivery could not be confirmed.
     CodexDaemonTurnUnconfirmed { thread_id: String, reason: String },
 }
 
@@ -26,7 +26,7 @@ impl AgentLaunchRoute {
             Self::ClaudeMessaging => " (Claude messaging)".to_string(),
             Self::CodexDaemon { .. } => " (Codex daemon)".to_string(),
             Self::CodexDaemonTurnUnconfirmed { reason, .. } => format!(
-                " (Codex daemon; warning: initial turn/start response was not confirmed: {reason})"
+                " (Codex daemon; warning: initial prompt delivery was not confirmed: {reason})"
             ),
         }
     }
@@ -51,7 +51,7 @@ mod tests {
             thread_id: "thread-example".to_string(),
             reason: "response unavailable".to_string(),
         },
-        " (Codex daemon; warning: initial turn/start response was not confirmed: response unavailable)"
+        " (Codex daemon; warning: initial prompt delivery was not confirmed: response unavailable)"
     )]
     fn display_suffix(#[case] route: AgentLaunchRoute, #[case] expected: &str) {
         assert_eq!(route.display_suffix(), expected);
