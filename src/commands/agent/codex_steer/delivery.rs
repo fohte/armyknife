@@ -55,21 +55,30 @@ fn send_and_confirm_with_read_timeout(
     client_user_message_id: &str,
     read_timeout: Duration,
 ) -> super::Result<()> {
-    let (snapshot_response, _) =
-        read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID, read_timeout).map_err(
-            |error| {
-                DeliveryError::NotDelivered(
-                    super::request_error_to_anyhow(error)
-                        .context("could not read Codex thread before starting the turn"),
-                )
-            },
-        )?;
-    let snapshot_thread = snapshot_response.get("thread").ok_or_else(|| {
-        DeliveryError::NotDelivered(anyhow!(
-            "Codex app-server thread/read response did not contain a thread before turn/start"
-        ))
-    })?;
-    let snapshot = matching_user_message_snapshot(snapshot_thread, content);
+    // A thread without a user message yet has no history to read, so the app-server
+    // rejects `includeTurns`; treat it as having no turns.
+    let snapshot_thread = match read_thread(
+        socket,
+        thread_id,
+        PRE_TURN_READ_REQUEST_ID,
+        read_timeout,
+    ) {
+        Ok((response, _)) => response.get("thread").cloned().ok_or_else(|| {
+            DeliveryError::NotDelivered(anyhow!(
+                "Codex app-server thread/read response did not contain a thread before turn/start"
+            ))
+        })?,
+        Err(RequestError::Rejected(error)) if is_thread_without_turns_error(&error) => {
+            json!({"turns": []})
+        }
+        Err(error) => {
+            return Err(DeliveryError::NotDelivered(
+                super::request_error_to_anyhow(error)
+                    .context("could not read Codex thread before starting the turn"),
+            ));
+        }
+    };
+    let snapshot = matching_user_message_snapshot(&snapshot_thread, content);
 
     socket
         .get_ref()
@@ -156,6 +165,13 @@ fn send_and_confirm_with_read_timeout(
         ))),
         None => wait_for_delivery(socket, &delivery, &mut next_read_request_id),
     }
+}
+
+fn is_thread_without_turns_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    // paginated history mode / legacy history mode
+    message.contains("list_turns is not supported yet")
+        || message.contains("is not materialized yet; includeTurns is unavailable")
 }
 
 fn wait_for_delivery(
@@ -553,6 +569,93 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::paginated(json!({"code": -32601, "message": "list_turns is not supported yet"}))]
+    #[case::legacy(json!({
+        "code": -32600,
+        "message": "thread thread-a is not materialized yet; includeTurns is unavailable before first user message",
+    }))]
+    fn proceeds_when_pre_turn_read_is_rejected_for_new_thread(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] error: Value,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                json!({"id": PRE_TURN_READ_REQUEST_ID, "error": error})
+                    .to_string()
+                    .into(),
+            ))?;
+            let turn_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let resume_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                thread_response("inProgress", None, Some("hello there")),
+            )?;
+            Ok(vec![snapshot_request, turn_request, resume_request])
+        });
+
+        let result = result_text(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+
+        assert_eq!((result, requests), (Ok(()), start_and_subscribe_requests()));
+        Ok(())
+    }
+
+    #[test]
+    fn reports_not_delivered_when_pre_turn_read_fails_for_other_reasons() -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets()?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": PRE_TURN_READ_REQUEST_ID,
+                    "error": {"code": -32600, "message": "thread not found"},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            Ok(vec![snapshot_request])
+        });
+
+        let result = result_text(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+
+        assert_eq!(
+            (result, requests),
+            (
+                Err("could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
+                vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
+            ),
+        );
         Ok(())
     }
 
