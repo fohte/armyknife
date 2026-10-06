@@ -1,10 +1,17 @@
+use std::io;
+use std::process::{Command, Output};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
 use crate::infra::external_tool::ExternalTool;
+use crate::infra::process;
 
 use super::types::Notification;
+
+/// Bounds the hs process itself because its `-t` option only limits IPC with Hammerspoon.
+const HAMMERSPOON_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Sends a notification using Hammerspoon's `hs` CLI.
 /// Click actions are handled via a pre-registered callback ("armyknife_notification")
@@ -29,12 +36,23 @@ fn run_hs(lua: &str, fail_label: &str) -> Result<()> {
     if !ExternalTool::Hammerspoon.is_available() {
         bail!("hs command not found");
     }
-    let output = ExternalTool::Hammerspoon
-        .command()
-        .arg("-c")
-        .arg(lua)
-        .output()
-        .context("failed to execute hs command")?;
+    run_hs_with(
+        ExternalTool::Hammerspoon.command(),
+        lua,
+        fail_label,
+        process::run_with_timeout,
+    )
+}
+
+fn run_hs_with(
+    mut command: Command,
+    lua: &str,
+    fail_label: &str,
+    run: impl FnOnce(Command, Duration) -> io::Result<Output>,
+) -> Result<()> {
+    command.arg("-c").arg(lua);
+    let output =
+        run(command, HAMMERSPOON_COMMAND_TIMEOUT).context("failed to execute hs command")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -156,7 +174,11 @@ fn lua_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::build_send_lua;
+    use std::io;
+    use std::process::Command;
+    use std::time::Duration;
+
+    use super::{build_send_lua, run_hs_with};
     use crate::infra::notification::Notification;
 
     #[test]
@@ -167,6 +189,46 @@ mod tests {
         assert_eq!(
             build_send_lua(&notification),
             "_G._armyknife = _G._armyknife or {}; _G._armyknife.groups = _G._armyknife.groups or {}; local n = hs.notify.new(); n:title(\"Review\"); n:informativeText(\"sample message\"); n:withdrawAfter(0); local sent = false; local send_notification = function(content_image) if not sent then sent = true; if content_image then pcall(function() n:contentImage(content_image) end) end; n:send() end end; local image_timeout = hs.timer.doAfter(1, function() send_notification(nil) end); hs.image.imageFromURL(\"https://images.example.test/mark.png\", function(content_image) if not sent then image_timeout:stop(); send_notification(content_image) end end)",
+        );
+    }
+
+    #[test]
+    fn hs_command_timeout_is_reported_as_an_execution_error() {
+        let mut observed = (None, Vec::new());
+        let result = run_hs_with(
+            Command::new("hs"),
+            "return 1",
+            "hs remove_group failed",
+            |command, timeout| {
+                observed = (
+                    Some(timeout),
+                    command
+                        .get_args()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect(),
+                );
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "command timed out after 5s",
+                ))
+            },
+        );
+
+        assert_eq!(
+            (
+                observed,
+                format!(
+                    "{:#}",
+                    result.expect_err("timeout should be returned as an error")
+                ),
+            ),
+            (
+                (
+                    Some(Duration::from_secs(5)),
+                    vec!["-c".to_string(), "return 1".to_string()],
+                ),
+                "failed to execute hs command: command timed out after 5s".to_string(),
+            ),
         );
     }
 }
