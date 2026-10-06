@@ -621,6 +621,44 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn reports_not_delivered_when_pre_turn_read_fails_for_other_reasons() -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets()?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": PRE_TURN_READ_REQUEST_ID,
+                    "error": {"code": -32600, "message": "thread not found"},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            Ok(vec![snapshot_request])
+        });
+
+        let result = result_text(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+
+        assert_eq!(
+            (result, requests),
+            (
+                Err("could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
+                vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
+            ),
+        );
+        Ok(())
+    }
+
     #[rstest]
     #[case::interrupted("interrupted")]
     #[case::completed("completed")]
