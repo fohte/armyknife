@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.376](https://github.com/fohte/armyknife/compare/v0.1.375...v0.1.376) (2026-10-06)
+
+
+### Bug Fixes
+
+* **agent:** handle uninitialized thread rejection on initial message send to Codex ([#1083](https://github.com/fohte/armyknife/issues/1083)) ([a4f65da](https://github.com/fohte/armyknife/commit/a4f65da5a5465bed7cdd5356f52fea64b266654d))
+
 ## [0.1.375](https://github.com/fohte/armyknife/compare/v0.1.374...v0.1.375) (2026-10-06)
 
 
