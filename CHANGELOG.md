@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.375](https://github.com/fohte/armyknife/compare/v0.1.374...v0.1.375) (2026-10-06)
+
+
+### Bug Fixes
+
+* **notification:** add timeout to Hammerspoon CLI execution ([#1080](https://github.com/fohte/armyknife/issues/1080)) ([280b904](https://github.com/fohte/armyknife/commit/280b904305951dd9377d27342b0a887d17348fd4))
+
 ## [0.1.374](https://github.com/fohte/armyknife/compare/v0.1.373...v0.1.374) (2026-10-05)
 
 
