@@ -73,6 +73,10 @@ pub struct TqTask {
 #[serde(rename_all = "camelCase")]
 pub struct SessionTasks {
     pub session_id: String,
+    /// The parent session whose task links were copied when this session was
+    /// created. Older `tq` responses omit this field.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
     pub tasks: Vec<TqTask>,
 }
 
@@ -345,6 +349,7 @@ mod tests {
             [
               {
                 "sessionId": "session-1",
+                "parentSessionId": "session-parent",
                 "tasks": [
                   {
                     "id": "task-uuid-1",
@@ -370,6 +375,7 @@ mod tests {
             vec![
                 SessionTasks {
                     session_id: "session-1".to_string(),
+                    parent_session_id: Some("session-parent".to_string()),
                     tasks: vec![
                         TqTask {
                             id: "task-uuid-1".to_string(),
@@ -395,6 +401,7 @@ mod tests {
                 },
                 SessionTasks {
                     session_id: "session-2".to_string(),
+                    parent_session_id: None,
                     tasks: vec![],
                 },
             ]
@@ -406,6 +413,7 @@ mod tests {
         [
           {
             "sessionId": "session-1",
+            "parentSessionId": null,
             "tasks": [
               { "id": "task-uuid-1", "number": 1, "title": "Task", "parentId": null }
             ]
@@ -422,13 +430,14 @@ mod tests {
           }
         ]
     "#})]
-    fn parent_id_defaults_to_none(#[case] json: &str) {
+    fn parent_ids_default_to_none(#[case] json: &str) {
         let result = parse_session_list(json).unwrap();
 
         assert_eq!(
             result,
             vec![SessionTasks {
                 session_id: "session-1".to_string(),
+                parent_session_id: None,
                 tasks: vec![TqTask {
                     id: "task-uuid-1".to_string(),
                     number: 1,
@@ -464,6 +473,7 @@ mod tests {
             result,
             vec![SessionTasks {
                 session_id: "session-1".to_string(),
+                parent_session_id: None,
                 tasks: vec![TqTask {
                     id: "task-uuid-1".to_string(),
                     number: 1,
@@ -495,6 +505,7 @@ mod tests {
             result,
             vec![SessionTasks {
                 session_id: "session-1".to_string(),
+                parent_session_id: None,
                 tasks: vec![TqTask {
                     id: "task-uuid-1".to_string(),
                     number: 1,
@@ -508,17 +519,17 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_fields() {
-        // Session-level fields besides `sessionId`/`tasks` and task-level
-        // fields besides `id`/`number`/`title`/`linkedAt`/`parentId`/`status`
-        // are ignored.
+    fn parses_parent_session_id_and_ignores_unknown_fields() {
+        // Session-level fields besides `sessionId`/`parentSessionId`/`tasks`
+        // and task-level fields besides `id`/`number`/`title`/`linkedAt`/
+        // `parentId`/`status` are ignored.
         let json = indoc! {r#"
             [
               {
                 "id": "agent-session-uuid",
                 "provider": "claude_code",
                 "sessionId": "session-1",
-                "parentSessionId": null,
+                "parentSessionId": "session-parent",
                 "context": "work",
                 "cwd": "/path/to/project",
                 "label": "Example label",
@@ -540,6 +551,7 @@ mod tests {
             result,
             vec![SessionTasks {
                 session_id: "session-1".to_string(),
+                parent_session_id: Some("session-parent".to_string()),
                 tasks: vec![TqTask {
                     id: "task-uuid-1".to_string(),
                     number: 1,
