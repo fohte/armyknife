@@ -698,6 +698,16 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc
 
 `a agent window-status <window_id>` prints the same status symbols on demand, for manual inspection or a polling-based `window-status-format`. The output contains no tmux style markup so the symbols inherit the surrounding `window-status-*` style (avoids `reverse` painting the icon cell as a colored block).
 
+#### Pane border metadata
+
+`a agent hook` writes the session status to the pane-scoped `@armyknife-cc-pane-status` option and the configured work type icon and foreground color to `@armyknife-cc-pane-work-type`. The status option is unset when the session ends; the work type option is unset when no configured work type applies. `a agent watch` also writes a linked tq task to `@armyknife-tq-task` as `##1234 Example task` (the doubled `#` is required by tmux format parsing), and sets `@armyknife-tq-closed` to `1` only for completed tasks. These tq options refresh when `a agent watch` fetches task data.
+
+Reference the options from tmux's `pane-border-format` to display them in the pane border:
+
+```tmux
+set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-cc-pane-work-type} #{@armyknife-tq-task}'
+```
+
 #### Pane has-paused flag
 
 `a agent hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a agent pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.

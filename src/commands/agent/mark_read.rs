@@ -35,7 +35,7 @@ pub fn run(args: &MarkReadArgs) -> Result<()> {
     // so the window option holds the stale `✱` until something resyncs it.
     // Without this push the indicator would only flip to `○` on the next
     // hook event for the window — defeating the point of `pane-focus-in`.
-    LiveTmuxStatusSyncer.sync(args.pane_id.as_deref(), None, &sessions_dir);
+    LiveTmuxStatusSyncer.sync(args.pane_id.as_deref(), None, None, None, &sessions_dir);
 
     Ok(())
 }

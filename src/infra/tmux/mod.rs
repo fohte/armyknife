@@ -15,6 +15,7 @@ use std::time::Duration;
 use indoc::writedoc;
 use thiserror::Error;
 
+pub(crate) use batch::pane_option_command;
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 pub(crate) use crit_pane::{
     CritPaneSpec, close_crit_pane, find_crit_pane_for_parent, find_crit_panes_for_port,

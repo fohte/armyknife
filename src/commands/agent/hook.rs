@@ -223,7 +223,17 @@ fn process_hook_event_impl(
             // Push the preserved status into the pane option so that sweep's
             // Paused isn't clobbered back to "" by this SessionEnd: Paused
             // for sweep auto-pauses, Ended otherwise.
-            side_effects.sync_tmux(pane_id.as_deref(), Some(session.status), sessions_dir);
+            let work_type_config = session
+                .work_type
+                .as_ref()
+                .map(|_| config::load_config_or_default());
+            side_effects.sync_tmux(
+                pane_id.as_deref(),
+                Some(session.status),
+                Some(&session),
+                work_type_config.as_ref().map(|config| &config.agent),
+                sessions_dir,
+            );
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -296,8 +306,7 @@ fn process_hook_event_impl(
     });
 
     let mut status = determine_status(event, &input);
-    let work_type_config =
-        work_type::may_contain_work_type(event, &input).then(config::load_config_or_default);
+    let may_contain_work_type = work_type::may_contain_work_type(event, &input);
 
     // Load existing session or create new one. The lock is held across the
     // load-mutate-save round trip below (see `store::SessionLock`) so a
@@ -352,6 +361,9 @@ fn process_hook_event_impl(
             engine: input.engine,
         }
     });
+
+    let work_type_config =
+        (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
 
     // Update session fields
     session.cwd.clone_from(&input.cwd);
@@ -546,6 +558,8 @@ fn process_hook_event_impl(
     side_effects.sync_tmux(
         session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
         Some(session.status),
+        Some(&session),
+        work_type_config.as_ref().map(|config| &config.agent),
         sessions_dir,
     );
 
@@ -2094,6 +2108,7 @@ mod tests {
             vec![(
                 Some("%42".to_string()),
                 Some(expected_synced),
+                Some("pane-sess".to_string()),
                 sessions_dir.to_path_buf(),
             )],
         );

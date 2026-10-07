@@ -10,8 +10,21 @@ const TMUX_TQ_CLOSED_OPTION: &str = "@armyknife-tq-closed";
 
 pub(super) fn sync(snapshot: &TqSnapshot) {
     let panes = tmux::list_all_panes_with_option(TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY);
-    let commands = tmux_option_commands(&panes, &snapshot.session_tasks);
-    let _ = tmux::run_batch(&commands);
+    sync_with_panes(snapshot, &panes, tmux::run_batch);
+}
+
+fn sync_with_panes(
+    snapshot: &TqSnapshot,
+    panes: &[PaneInfoWithOption],
+    run_batch: impl FnOnce(&[Vec<String>]) -> tmux::Result<()>,
+) {
+    let commands = tmux_option_commands(panes, &snapshot.session_tasks);
+    if commands.is_empty() {
+        return;
+    }
+    if let Err(error) = run_batch(&commands) {
+        tracing::warn!(event = "agent.tui.tq_pane_options.sync_failed", %error);
+    }
 }
 
 fn tmux_option_commands(
@@ -33,39 +46,18 @@ fn tmux_option_commands(
                 tmux::escape_format_value(&task.task_title)
             )
         });
-        commands.push(pane_option_command(
+        commands.push(tmux::pane_option_command(
             &pane.pane_id,
             TMUX_TQ_TASK_OPTION,
             task_value.as_deref(),
         ));
-        commands.push(pane_option_command(
+        commands.push(tmux::pane_option_command(
             &pane.pane_id,
             TMUX_TQ_CLOSED_OPTION,
             task.filter(|task| task.is_closed).map(|_| "1"),
         ));
     }
     commands
-}
-
-fn pane_option_command(pane_id: &str, option: &str, value: Option<&str>) -> Vec<String> {
-    match value {
-        Some(value) => vec![
-            "set-option".to_string(),
-            "-p".to_string(),
-            "-t".to_string(),
-            pane_id.to_string(),
-            option.to_string(),
-            value.to_string(),
-        ],
-        None => vec![
-            "set-option".to_string(),
-            "-p".to_string(),
-            "-u".to_string(),
-            "-t".to_string(),
-            pane_id.to_string(),
-            option.to_string(),
-        ],
-    }
 }
 
 #[cfg(test)]
@@ -118,8 +110,15 @@ mod tests {
             ),
         ]);
 
+        let snapshot = TqSnapshot::new(session_tasks, Vec::new(), Vec::new());
+        let mut applied_commands = Vec::new();
+        sync_with_panes(&snapshot, &panes, |commands| {
+            applied_commands.extend_from_slice(commands);
+            Ok(())
+        });
+
         assert_eq!(
-            tmux_option_commands(&panes, &session_tasks),
+            applied_commands,
             vec![
                 vec![
                     "set-option",
