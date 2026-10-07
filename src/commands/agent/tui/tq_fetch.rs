@@ -3,6 +3,7 @@
 //! Pure read-only against tq; never touches local session state.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use super::session_rows::SessionTask;
 use super::tq_snapshot::TqSnapshot;
@@ -56,32 +57,18 @@ pub async fn fetch_sidebar_snapshot(
         .await
         .map_err(|e| e.to_string())?;
 
-    let parent_session_ids = sessions
-        .iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .filter_map(|session| session.parent_session_id.clone())
-        .collect::<HashSet<_>>();
-    let returned_session_ids = sessions
-        .iter()
-        .map(|session| session.session_id.clone())
-        .collect::<HashSet<_>>();
-    let missing_parent_session_ids = parent_session_ids
-        .difference(&returned_session_ids)
-        .cloned()
-        .collect::<HashSet<_>>();
     let linked_task_ids = sessions
         .iter()
         .filter(|session| local_session_ids.contains(&session.session_id))
         .flat_map(|session| session.tasks.iter().map(|task| task.id.clone()))
         .collect::<HashSet<_>>();
 
-    let parent_sessions = async {
-        if missing_parent_session_ids.is_empty() {
-            Ok(Vec::new())
-        } else {
-            client.list_session_tasks(&missing_parent_session_ids).await
-        }
-    };
+    let client_ref = &client;
+    let parent_sessions = fetch_missing_parent_sessions(
+        &sessions,
+        &local_session_ids,
+        |parent_session_ids| async move { client_ref.list_session_tasks(&parent_session_ids).await },
+    );
     let (mut parent_sessions, tasks, projects) = if linked_task_ids.is_empty() {
         let (parent_sessions, projects) =
             tokio::try_join!(parent_sessions, client.list_projects()).map_err(|e| e.to_string())?;
@@ -95,12 +82,55 @@ pub async fn fetch_sidebar_snapshot(
         .map_err(|e| e.to_string())?
     };
 
-    parent_sessions.retain(|session| missing_parent_session_ids.contains(&session.session_id));
     let mut sessions = sessions;
     sessions.append(&mut parent_sessions);
     let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
 
     Ok(Some(TqSnapshot::new(session_tasks, tasks, projects)))
+}
+
+fn parent_session_ids(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+) -> HashSet<String> {
+    sessions
+        .iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .filter_map(|session| session.parent_session_id.clone())
+        .collect()
+}
+
+fn missing_parent_session_ids(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let returned_session_ids = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<HashSet<_>>();
+    parent_session_ids(sessions, local_session_ids)
+        .difference(&returned_session_ids)
+        .cloned()
+        .collect()
+}
+
+async fn fetch_missing_parent_sessions<F, Fut, E>(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+    fetch: F,
+) -> Result<Vec<SessionTasks>, E>
+where
+    F: FnOnce(HashSet<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<SessionTasks>, E>>,
+{
+    let missing_parent_session_ids = missing_parent_session_ids(sessions, local_session_ids);
+    if missing_parent_session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut parent_sessions = fetch(missing_parent_session_ids.clone()).await?;
+    parent_sessions.retain(|session| missing_parent_session_ids.contains(&session.session_id));
+    Ok(parent_sessions)
 }
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
@@ -129,14 +159,10 @@ fn build_all_tasks_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
 ) -> HashMap<String, Vec<SessionTask>> {
-    let parent_session_ids = sessions
-        .iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .filter_map(|session| session.parent_session_id.clone())
-        .collect::<HashSet<_>>();
+    let referenced_parent_session_ids = parent_session_ids(&sessions, local_session_ids);
     let task_ids_by_parent_session = sessions
         .iter()
-        .filter(|session| parent_session_ids.contains(&session.session_id))
+        .filter(|session| referenced_parent_session_ids.contains(&session.session_id))
         .map(|session| {
             (
                 session.session_id.clone(),
@@ -267,6 +293,58 @@ mod tests {
             parent_session_id: Some(parent_session_id.to_string()),
             ..session(session_id, tasks)
         }
+    }
+
+    #[rstest]
+    #[case::fetches_missing_parent_and_filters_unrequested_sessions(
+        vec![
+            child_session("session-a", "parent-session", vec![]),
+            child_session("remote-session", "remote-parent", vec![]),
+        ],
+        &["session-a"],
+        vec![
+            session("parent-session", vec![]),
+            session("remote-parent", vec![]),
+        ],
+        Some(ids(&["parent-session"])),
+        vec![session("parent-session", vec![])],
+    )]
+    #[case::skips_query_when_parent_is_already_present(
+        vec![
+            child_session("session-a", "parent-session", vec![]),
+            session("parent-session", vec![]),
+        ],
+        &["session-a"],
+        vec![],
+        None,
+        vec![],
+    )]
+    #[tokio::test]
+    async fn fetch_missing_parent_sessions_cases(
+        #[case] sessions: Vec<SessionTasks>,
+        #[case] local_session_ids: &[&str],
+        #[case] response: Vec<SessionTasks>,
+        #[case] expected_requested_parent_session_ids: Option<HashSet<String>>,
+        #[case] expected_parent_sessions: Vec<SessionTasks>,
+    ) {
+        let mut requested_parent_session_ids = None;
+        let parent_sessions = fetch_missing_parent_sessions(
+            &sessions,
+            &ids(local_session_ids),
+            |parent_session_ids| {
+                requested_parent_session_ids = Some(parent_session_ids);
+                async move { Ok::<_, ()>(response) }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (requested_parent_session_ids, parent_sessions,),
+            (
+                expected_requested_parent_session_ids,
+                Ok(expected_parent_sessions),
+            ),
+        );
     }
 
     #[tokio::test]
