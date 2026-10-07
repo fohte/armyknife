@@ -11,6 +11,7 @@ mod title_edit;
 mod title_generate;
 mod tq_cache;
 mod tq_fetch;
+mod tq_pane_options;
 mod tq_sidebar;
 mod tq_snapshot;
 mod ui;
@@ -232,6 +233,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                         tracing::warn!("failed to store tq sidebar cache: {error}");
                     }
                     app.set_tq_snapshot(snapshot);
+                    if let Some(snapshot) = app.tq_snapshot.as_ref() {
+                        tq_pane_options::sync(snapshot);
+                    }
                     app.tq_refresh_finished();
                 }
                 AppEvent::TqSidebarFetched(Ok(None)) => {

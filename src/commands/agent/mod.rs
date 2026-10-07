@@ -24,6 +24,7 @@ mod list;
 mod mark_read;
 pub(crate) mod new;
 pub(crate) mod pane;
+mod pane_options;
 pub(crate) mod peer;
 mod resume;
 mod resurrect;

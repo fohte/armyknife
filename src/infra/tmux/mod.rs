@@ -3,6 +3,7 @@
 mod batch;
 mod crit_pane;
 mod floating_pane;
+mod format;
 pub mod layout;
 mod pane_info;
 
@@ -20,6 +21,7 @@ pub(crate) use crit_pane::{
     is_crit_pane, open_crit_pane,
 };
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
+pub(crate) use format::escape_format_value;
 pub use pane_info::get_pane_info_by_pane_id;
 
 use crate::infra::external_tool::ExternalTool;
