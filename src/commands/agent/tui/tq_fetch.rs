@@ -3,6 +3,7 @@
 //! Pure read-only against tq; never touches local session state.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use super::session_rows::SessionTask;
 use super::tq_snapshot::TqSnapshot;
@@ -55,32 +56,87 @@ pub async fn fetch_sidebar_snapshot(
         .list_session_tasks(&local_session_ids)
         .await
         .map_err(|e| e.to_string())?;
-    let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
-    let linked_task_ids = session_tasks
-        .values()
-        .flat_map(|tasks| tasks.iter().map(|task| task.task_id.clone()))
+
+    let linked_task_ids = sessions
+        .iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .flat_map(|session| session.tasks.iter().map(|task| task.id.clone()))
         .collect::<HashSet<_>>();
 
-    let (tasks, projects) = if linked_task_ids.is_empty() {
-        (
-            Vec::new(),
-            client.list_projects().await.map_err(|e| e.to_string())?,
-        )
+    let client_ref = &client;
+    let parent_sessions = fetch_missing_parent_sessions(
+        &sessions,
+        &local_session_ids,
+        |parent_session_ids| async move { client_ref.list_session_tasks(&parent_session_ids).await },
+    );
+    let (mut parent_sessions, tasks, projects) = if linked_task_ids.is_empty() {
+        let (parent_sessions, projects) =
+            tokio::try_join!(parent_sessions, client.list_projects()).map_err(|e| e.to_string())?;
+        (parent_sessions, Vec::new(), projects)
     } else {
         tokio::try_join!(
+            parent_sessions,
             client.list_sidebar_tasks(&linked_task_ids),
             client.list_projects(),
         )
         .map_err(|e| e.to_string())?
     };
 
+    let mut sessions = sessions;
+    sessions.append(&mut parent_sessions);
+    let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
+
     Ok(Some(TqSnapshot::new(session_tasks, tasks, projects)))
 }
 
+fn parent_session_ids(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+) -> HashSet<String> {
+    sessions
+        .iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .filter_map(|session| session.parent_session_id.clone())
+        .collect()
+}
+
+fn missing_parent_session_ids(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let returned_session_ids = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<HashSet<_>>();
+    parent_session_ids(sessions, local_session_ids)
+        .difference(&returned_session_ids)
+        .cloned()
+        .collect()
+}
+
+async fn fetch_missing_parent_sessions<F, Fut, E>(
+    sessions: &[SessionTasks],
+    local_session_ids: &HashSet<String>,
+    fetch: F,
+) -> Result<Vec<SessionTasks>, E>
+where
+    F: FnOnce(HashSet<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<SessionTasks>, E>>,
+{
+    let missing_parent_session_ids = missing_parent_session_ids(sessions, local_session_ids);
+    if missing_parent_session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut parent_sessions = fetch(missing_parent_session_ids.clone()).await?;
+    parent_sessions.retain(|session| missing_parent_session_ids.contains(&session.session_id));
+    Ok(parent_sessions)
+}
+
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
-/// known session_id. A session linked to multiple tasks keeps the most
-/// recently linked task; equal timestamps and responses without timestamps
-/// retain tq's ordering.
+/// known session_id. It prefers tasks not linked to the parent session, then
+/// newer links, then open tasks at equal timestamps. Other ties and responses
+/// without timestamps retain tq's ordering.
 ///
 /// The `local_session_ids` filter here is also the fallback for a `tq`
 /// binary predating `--session-id`, which silently ignores the flag and
@@ -103,12 +159,49 @@ fn build_all_tasks_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
 ) -> HashMap<String, Vec<SessionTask>> {
+    let referenced_parent_session_ids = parent_session_ids(&sessions, local_session_ids);
+    let task_ids_by_parent_session = sessions
+        .iter()
+        .filter(|session| referenced_parent_session_ids.contains(&session.session_id))
+        .map(|session| {
+            (
+                session.session_id.clone(),
+                session
+                    .tasks
+                    .iter()
+                    .map(|task| task.id.clone())
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     sessions
         .into_iter()
         .filter(|session| local_session_ids.contains(&session.session_id))
         .map(|session| {
+            let inherited_task_ids = session
+                .parent_session_id
+                .as_ref()
+                .and_then(|parent_id| task_ids_by_parent_session.get(parent_id));
             let mut tasks = session.tasks;
-            tasks.sort_by_key(|task| std::cmp::Reverse(task.linked_at));
+            tasks.sort_by(|left, right| {
+                let inherited_order =
+                    inherited_task_ids.map_or(std::cmp::Ordering::Equal, |task_ids| {
+                        task_ids
+                            .contains(&left.id)
+                            .cmp(&task_ids.contains(&right.id))
+                    });
+                inherited_order
+                    .then_with(|| right.linked_at.cmp(&left.linked_at))
+                    .then_with(|| {
+                        if left.linked_at.is_some() {
+                            (left.status == TqTaskStatus::Completed)
+                                .cmp(&(right.status == TqTaskStatus::Completed))
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                    })
+            });
             let tasks = tasks
                 .into_iter()
                 .map(|task| SessionTask {
@@ -170,11 +263,88 @@ mod tests {
         }
     }
 
+    fn closed_linked_task(
+        id: &str,
+        number: u32,
+        title: &str,
+        parent_id: Option<&str>,
+        linked_at: &str,
+    ) -> TqTask {
+        TqTask {
+            status: TqTaskStatus::Completed,
+            ..linked_task(id, number, title, parent_id, linked_at)
+        }
+    }
+
     fn session(session_id: &str, tasks: Vec<TqTask>) -> SessionTasks {
         SessionTasks {
             session_id: session_id.to_string(),
+            parent_session_id: None,
             tasks,
         }
+    }
+
+    fn child_session(
+        session_id: &str,
+        parent_session_id: &str,
+        tasks: Vec<TqTask>,
+    ) -> SessionTasks {
+        SessionTasks {
+            parent_session_id: Some(parent_session_id.to_string()),
+            ..session(session_id, tasks)
+        }
+    }
+
+    #[rstest]
+    #[case::fetches_missing_parent_and_filters_unrequested_sessions(
+        vec![
+            child_session("session-a", "parent-session", vec![]),
+            child_session("remote-session", "remote-parent", vec![]),
+        ],
+        &["session-a"],
+        vec![
+            session("parent-session", vec![]),
+            session("remote-parent", vec![]),
+        ],
+        Some(ids(&["parent-session"])),
+        vec![session("parent-session", vec![])],
+    )]
+    #[case::skips_query_when_parent_is_already_present(
+        vec![
+            child_session("session-a", "parent-session", vec![]),
+            session("parent-session", vec![]),
+        ],
+        &["session-a"],
+        vec![],
+        None,
+        vec![],
+    )]
+    #[tokio::test]
+    async fn fetch_missing_parent_sessions_cases(
+        #[case] sessions: Vec<SessionTasks>,
+        #[case] local_session_ids: &[&str],
+        #[case] response: Vec<SessionTasks>,
+        #[case] expected_requested_parent_session_ids: Option<HashSet<String>>,
+        #[case] expected_parent_sessions: Vec<SessionTasks>,
+    ) {
+        let mut requested_parent_session_ids = None;
+        let parent_sessions = fetch_missing_parent_sessions(
+            &sessions,
+            &ids(local_session_ids),
+            |parent_session_ids| {
+                requested_parent_session_ids = Some(parent_session_ids);
+                async move { Ok::<_, ()>(response) }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (requested_parent_session_ids, parent_sessions,),
+            (
+                expected_requested_parent_session_ids,
+                Ok(expected_parent_sessions),
+            ),
+        );
     }
 
     #[tokio::test]
@@ -246,12 +416,32 @@ mod tests {
             },
         )]),
     )]
+    #[case::missing_timestamps_preserve_tq_order_across_statuses(
+        vec![session(
+            "session-a",
+            vec![
+                closed_task("task-1", 1, "Completed task", None),
+                task("task-2", 2, "Open task", None),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "Completed task".to_string(),
+                parent_task_id: None,
+                is_closed: true,
+            },
+        )]),
+    )]
     #[case::newest_linked_task_is_first(
         vec![session(
             "session-a",
             vec![
                 linked_task("task-1", 1, "Earlier task", None, "2026-01-02T00:00:00+09:00"),
-                linked_task("task-2", 2, "Later task", None, "2026-01-01T16:00:00Z"),
+                closed_linked_task("task-2", 2, "Later task", None, "2026-01-01T16:00:00Z"),
             ],
         )],
         &["session-a"],
@@ -262,7 +452,54 @@ mod tests {
                 task_number: 2,
                 task_title: "Later task".to_string(),
                 parent_task_id: None,
+                is_closed: true,
+            },
+        )]),
+    )]
+    #[case::equal_timestamps_prefer_open_task(
+        vec![session(
+            "session-a",
+            vec![
+                closed_linked_task("task-1", 1, "Completed task", None, "2026-01-01T00:00:00Z"),
+                linked_task("task-2", 2, "Open task", None, "2026-01-01T00:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-2".to_string(),
+                task_number: 2,
+                task_title: "Open task".to_string(),
+                parent_task_id: None,
                 is_closed: false,
+            },
+        )]),
+    )]
+    #[case::task_not_linked_to_parent_precedes_inherited_task(
+        vec![
+            child_session(
+                "session-a",
+                "parent-session",
+                vec![
+                    linked_task("task-1", 1, "Inherited task", None, "2026-01-02T00:00:00Z"),
+                    closed_linked_task("task-2", 2, "Session task", None, "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            session(
+                "parent-session",
+                vec![linked_task("task-1", 1, "Inherited task", None, "2026-01-02T00:00:00Z")],
+            ),
+        ],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-2".to_string(),
+                task_number: 2,
+                task_title: "Session task".to_string(),
+                parent_task_id: None,
+                is_closed: true,
             },
         )]),
     )]
@@ -283,6 +520,26 @@ mod tests {
                 task_title: "First task".to_string(),
                 parent_task_id: None,
                 is_closed: false,
+            },
+        )]),
+    )]
+    #[case::equal_completed_timestamps_preserve_tq_order(
+        vec![session(
+            "session-a",
+            vec![
+                closed_linked_task("task-1", 1, "First task", None, "2026-01-01T00:00:00Z"),
+                closed_linked_task("task-2", 2, "Second task", None, "2026-01-01T00:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "First task".to_string(),
+                parent_task_id: None,
+                is_closed: true,
             },
         )]),
     )]
