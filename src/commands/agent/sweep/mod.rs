@@ -546,6 +546,8 @@ fn confirm_paused<T: TmuxStatusSyncer>(
     syncer.sync(
         session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
         Some(session.status),
+        Some(&session),
+        None,
         sessions_dir,
     );
 
@@ -1381,6 +1383,7 @@ mod tests {
             vec![(
                 Some("%42".to_string()),
                 Some(SessionStatus::Paused),
+                Some("sess-tmux".to_string()),
                 test_dir.path.clone(),
             )],
         );
@@ -1450,7 +1453,12 @@ mod tests {
 
         assert_eq!(
             *syncer.calls.borrow(),
-            vec![(None, Some(SessionStatus::Paused), test_dir.path.clone())],
+            vec![(
+                None,
+                Some(SessionStatus::Paused),
+                Some("sess-no-tmux".to_string()),
+                test_dir.path.clone(),
+            )],
         );
     }
 

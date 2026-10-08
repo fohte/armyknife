@@ -8,6 +8,28 @@ use std::io::Write;
 
 use super::{Result, TmuxError, run_tmux, run_tmux_output};
 
+/// Builds the tmux command to set or unset a pane-scoped user option.
+pub(crate) fn pane_option_command(pane_id: &str, option: &str, value: Option<&str>) -> Vec<String> {
+    match value {
+        Some(value) => vec![
+            "set-option".to_string(),
+            "-p".to_string(),
+            "-t".to_string(),
+            pane_id.to_string(),
+            option.to_string(),
+            value.to_string(),
+        ],
+        None => vec![
+            "set-option".to_string(),
+            "-p".to_string(),
+            "-u".to_string(),
+            "-t".to_string(),
+            pane_id.to_string(),
+            option.to_string(),
+        ],
+    }
+}
+
 /// Runs multiple tmux commands in a single `tmux source-file` invocation.
 ///
 /// Each command line is evaluated independently, so a stale target in one

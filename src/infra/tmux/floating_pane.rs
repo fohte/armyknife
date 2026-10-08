@@ -48,18 +48,10 @@ fn pane_title_args(pane_id: &str, title: &str) -> Vec<String> {
     vec![
         "select-pane".to_string(),
         "-T".to_string(),
-        tmux_title(title),
+        super::escape_format_value(title),
         "-t".to_string(),
         pane_id.to_string(),
     ]
-}
-
-fn tmux_title(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .replace('#', "##")
 }
 
 #[cfg(test)]

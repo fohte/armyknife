@@ -3,7 +3,8 @@ use std::path::Path;
 #[cfg(not(test))]
 use super::super::archive_tq_session_detached;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
-use super::super::types::SessionStatus;
+use super::super::types::{Session, SessionStatus};
+use crate::shared::config::AgentConfig;
 
 /// Controls which side effects `process_hook_event_impl` executes.
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
@@ -26,7 +27,7 @@ pub(super) struct SideEffects {
     /// without invoking hammerspoon.
     #[cfg(test)]
     pub(super) removed_notification_groups: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records (pane_id, status, sessions_dir) tuples
+    /// Test-only sink that records (pane_id, status, session_id, sessions_dir) tuples
     /// passed to `sync_tmux`. Lets tests assert the call happened with the
     /// expected status without invoking tmux.
     #[cfg(test)]
@@ -38,7 +39,12 @@ pub(super) struct SideEffects {
 }
 
 #[cfg(test)]
-type TmuxSyncCall = (Option<String>, Option<SessionStatus>, std::path::PathBuf);
+type TmuxSyncCall = (
+    Option<String>,
+    Option<SessionStatus>,
+    Option<String>,
+    std::path::PathBuf,
+);
 #[cfg(test)]
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
 
@@ -80,6 +86,8 @@ impl SideEffects {
         &self,
         pane_id: Option<&str>,
         status: Option<SessionStatus>,
+        session: Option<&Session>,
+        agent_config: Option<&AgentConfig>,
         sessions_dir: &Path,
     ) {
         #[cfg(test)]
@@ -87,11 +95,12 @@ impl SideEffects {
             rec.lock().expect("tmux_sync_calls mutex poisoned").push((
                 pane_id.map(str::to_string),
                 status,
+                session.map(|session| session.session_id.clone()),
                 sessions_dir.to_path_buf(),
             ));
         }
         if self.tmux {
-            LiveTmuxStatusSyncer.sync(pane_id, status, sessions_dir);
+            LiveTmuxStatusSyncer.sync(pane_id, status, session, agent_config, sessions_dir);
         }
     }
 
