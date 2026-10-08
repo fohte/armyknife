@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.378](https://github.com/fohte/armyknife/compare/v0.1.377...v0.1.378) (2026-10-08)
+
+
+### Features
+
+* **agent:** sync agent and tq metadata to tmux pane options ([#1087](https://github.com/fohte/armyknife/issues/1087)) ([9ef2935](https://github.com/fohte/armyknife/commit/9ef293544254ce5524aca605fb78cffb6064c1cb))
+
 ## [0.1.377](https://github.com/fohte/armyknife/compare/v0.1.376...v0.1.377) (2026-10-08)
 
 
