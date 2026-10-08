@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.377](https://github.com/fohte/armyknife/compare/v0.1.376...v0.1.377) (2026-10-08)
+
+
+### Bug Fixes
+
+* **agent:** prioritize open tasks in session list ([#1085](https://github.com/fohte/armyknife/issues/1085)) ([ffbbe78](https://github.com/fohte/armyknife/commit/ffbbe786acd0a860062acea1a485a8585be5293d))
+
 ## [0.1.376](https://github.com/fohte/armyknife/compare/v0.1.375...v0.1.376) (2026-10-06)
 
 
