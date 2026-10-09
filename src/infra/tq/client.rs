@@ -15,7 +15,7 @@ use super::error::{Result, TqError};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
-const SESSION_LIST_ARGS: &[&str] = &["session", "list"];
+const SESSION_LIST_ARGS: &[&str] = &["session", "list", "--limit", "unlimited"];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
 /// Claude Code's provider identifier in tq's agent-session schema. Always
@@ -221,9 +221,9 @@ fn build_session_archive_args(session_id: &str) -> Vec<String> {
     args
 }
 
-/// Runs `tq session list --session-id <id> ...` (one flag per id in
-/// `session_ids`) to completion and parses its stdout. Blocking, so callers
-/// must run it via [`tokio::task::spawn_blocking`].
+/// Runs `tq session list --limit unlimited --session-id <id> ...` (one flag
+/// per id in `session_ids`) to completion and parses its stdout. Blocking, so
+/// callers must run it via [`tokio::task::spawn_blocking`].
 fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
     let args = build_session_list_args(session_ids);
 
@@ -572,15 +572,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_ids(&[], vec!["session", "list"])]
+    #[case::no_ids(&[], vec!["session", "list", "--limit", "unlimited"])]
     #[case::single_id(
         &["session-1".to_string()],
-        vec!["session", "list", "--session-id", "session-1"],
+        vec!["session", "list", "--limit", "unlimited", "--session-id", "session-1"],
     )]
     #[case::multiple_ids(
         &["session-1".to_string(), "session-2".to_string()],
         vec![
-            "session", "list",
+            "session", "list", "--limit", "unlimited",
             "--session-id", "session-1",
             "--session-id", "session-2",
         ],
