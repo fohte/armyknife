@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.379](https://github.com/fohte/armyknife/compare/v0.1.378...v0.1.379) (2026-10-09)
+
+
+### Bug Fixes
+
+* **agent:** refresh task bindings by lifting session list limit in tq ([#1089](https://github.com/fohte/armyknife/issues/1089)) ([cf10030](https://github.com/fohte/armyknife/commit/cf10030bdd0ebd9239e17f95b6df24e0d7794d9e))
+
 ## [0.1.378](https://github.com/fohte/armyknife/compare/v0.1.377...v0.1.378) (2026-10-08)
 
 
