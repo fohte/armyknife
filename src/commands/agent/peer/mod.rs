@@ -23,7 +23,7 @@ use super::claude_registry;
 use super::error::CcError;
 use super::resume;
 use super::store;
-use super::types::{Engine, Session};
+use super::types::{AgentStatus, Engine, Session};
 use crate::shared::env_var::EnvVars;
 
 pub(crate) mod notify;
@@ -80,6 +80,8 @@ struct Peer {
     cwd: String,
     label: Option<String>,
     status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_status: Option<AgentStatus>,
     /// The tmux pane hosting this session, `None` when it wasn't started
     /// inside tmux. Lets a human match a JSON row against the pane they're
     /// looking at, which `name`/`session_id`/`cwd` alone don't convey.
@@ -102,6 +104,7 @@ impl Peer {
             cwd: session.cwd.to_string_lossy().into_owned(),
             label: session.label.clone(),
             status: session.status.display_name(),
+            agent_status: session.agent_status.clone(),
             pane_id: session.tmux_info.as_ref().map(|t| t.pane_id.clone()),
             engine: session.engine,
         }
@@ -246,6 +249,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Claude,
         }
     }
@@ -293,9 +297,34 @@ mod tests {
                 cwd: "/repo/.worktrees/child".to_string(),
                 label: Some("my-label".to_string()),
                 status: "running",
+                agent_status: None,
                 pane_id: expected_pane_id,
                 engine,
             }
+        );
+    }
+
+    #[test]
+    fn peer_json_includes_agent_status_when_set() {
+        let mut session = session("status-session", "/repo", vec![]);
+        session.agent_status = Some(AgentStatus {
+            kind: crate::commands::agent::types::AgentStatusKind::Wait,
+            note: "waiting for CI".to_string(),
+        });
+
+        assert_eq!(
+            serde_json::to_value(Peer::from_session(&session, &HashMap::new()))
+                .expect("peer should serialize"),
+            serde_json::json!({
+                "name": null,
+                "session_id": "status-session",
+                "cwd": "/repo",
+                "label": "my-label",
+                "status": "running",
+                "agent_status": {"kind": "wait", "note": "waiting for CI"},
+                "pane_id": null,
+                "engine": "claude",
+            }),
         );
     }
 

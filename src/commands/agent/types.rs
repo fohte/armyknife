@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use super::error::CcError;
 
+mod agent_status;
 mod session;
+pub use agent_status::{AgentStatus, AgentStatusKind};
 pub use session::Session;
 
 /// Which coding agent CLI hosts a session. Determines the process name to

@@ -362,6 +362,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `list`                                            | `ls`    | List all Claude Code sessions with status                                 |
 | `focus <session_id> [--review-pane-id <pane_id>]` |         | Focus the review pane when available, then the session's tmux pane        |
 | `mark-read [-t <pane_id>]`                        |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
+| `status set <kind> <note>`                        |         | Set the calling session's reason for stopping                             |
 | `resume [session_id]`                             | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
 | `resurrect save`                                  |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
 | `resurrect restore`                               |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
@@ -378,6 +379,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`            |         | Detached worker spawned by the Stop hook (not for direct use)             |
 | `window-status <window_id>`                       |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
+
+`a agent status set` works in Claude Code and Codex sessions. Its kinds are `decide`, `read`, `do`, `idle`, `close`, `done`, and `wait`; the note is one line and is cleared when the next `UserPromptSubmit` hook arrives.
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 

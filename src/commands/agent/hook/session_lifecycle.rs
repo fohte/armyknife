@@ -223,6 +223,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
+            agent_status: None,
             engine,
         }
     }

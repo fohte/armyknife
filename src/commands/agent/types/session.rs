@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use super::{DisplayStatus, Engine, SessionStatus, TmuxInfo};
+use super::{AgentStatus, DisplayStatus, Engine, SessionStatus, TmuxInfo};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -27,6 +27,9 @@ pub struct Session {
     pub tty: Option<String>,
     pub tmux_info: Option<TmuxInfo>,
     pub status: SessionStatus,
+    /// The reason this agent stopped for its next step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_status: Option<AgentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
@@ -185,6 +188,7 @@ mod tests {
             tty: None,
             tmux_info: None,
             status,
+            agent_status: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
@@ -278,9 +282,10 @@ mod tests {
                 session.read_at,
                 session.work_type,
                 session.work_type_pinned,
-                session.pending_human_review_ids
+                session.pending_human_review_ids,
+                session.agent_status,
             ),
-            (None, None, false, BTreeSet::new())
+            (None, None, false, BTreeSet::new(), None)
         );
     }
 

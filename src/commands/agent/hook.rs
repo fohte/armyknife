@@ -384,6 +384,7 @@ fn process_hook_event_impl(
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: input.engine,
         }
     });
@@ -400,6 +401,10 @@ fn process_hook_event_impl(
     // is no longer relevant -- clear it so a later SessionEnd isn't
     // mistaken for the confirmation of that earlier signal.
     session.sweep_signaled = false;
+
+    if event == HookEvent::UserPromptSubmit {
+        session.agent_status = None;
+    }
 
     // Track per-agent permission-request waits. Each concurrently running
     // agent (main thread or subagent) gets its own key in
@@ -1131,6 +1136,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use rstest::{fixture, rstest};
 
     struct TqArchiveContext {
@@ -1655,6 +1661,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Claude,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
@@ -2096,6 +2103,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
+            agent_status: None,
             engine,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
@@ -2679,6 +2687,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Claude,
         }
     }
@@ -2943,6 +2952,38 @@ mod tests {
         }
 
         #[rstest]
+        #[case::claude(Engine::Claude)]
+        #[case::codex(Engine::Codex)]
+        fn user_prompt_submit_clears_agent_status(#[case] engine: Engine) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            });
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+            let mut input = create_test_input(None);
+            input.engine = engine;
+
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("user-prompt-submit should succeed");
+            });
+
+            let actual = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist")
+                .agent_status;
+
+            assert_eq!(actual, None);
+        }
+
+        #[rstest]
         #[case::provided(Some("sample-skill"), Some("sample-skill"))]
         #[case::omitted(None, None)]
         fn user_prompt_submit_uses_initial_work_type_from_env(
@@ -3151,6 +3192,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                agent_status: None,
                 engine: Engine::Claude,
             }
         }

@@ -521,6 +521,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: Some(now),
                 sweep_signaled: false,
+                agent_status: None,
                 engine,
             }
         }
@@ -779,6 +780,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                agent_status: None,
                 engine: Engine::Claude,
             }
         }

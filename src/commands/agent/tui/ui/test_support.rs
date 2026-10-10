@@ -34,6 +34,7 @@ pub(super) fn create_test_session(id: &str) -> Session {
         pending_permission_request_ids: Default::default(),
         read_at: None,
         sweep_signaled: false,
+        agent_status: None,
         engine: Engine::Claude,
     }
 }

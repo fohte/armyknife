@@ -255,6 +255,7 @@ mod tests {
             )]),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Codex,
         }
     }

@@ -44,6 +44,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
         pending_permission_request_ids: Default::default(),
         read_at: None,
         sweep_signaled: false,
+        agent_status: None,
         engine: Engine::Codex,
     });
 
@@ -97,6 +98,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Codex,
         }
     }
