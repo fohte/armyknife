@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.380](https://github.com/fohte/armyknife/compare/v0.1.379...v0.1.380) (2026-10-10)
+
+
+### Bug Fixes
+
+* **agent:** preserve Codex sessions across daemon restarts ([#1091](https://github.com/fohte/armyknife/issues/1091)) ([fe79db3](https://github.com/fohte/armyknife/commit/fe79db3018a8d20e40637d6cc6ec2db37c9aa05e))
+
 ## [0.1.379](https://github.com/fohte/armyknife/compare/v0.1.378...v0.1.379) (2026-10-09)
 
 
