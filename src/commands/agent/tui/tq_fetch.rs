@@ -135,8 +135,7 @@ where
 
 /// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
 /// known session_id. It prefers tasks not linked to the parent session, then
-/// newer links, then open tasks at equal timestamps. Other ties and responses
-/// without timestamps retain tq's ordering.
+/// open tasks, then newer links. Remaining ties retain tq's ordering.
 ///
 /// The `local_session_ids` filter here is also the fallback for a `tq`
 /// binary predating `--session-id`, which silently ignores the flag and
@@ -192,15 +191,11 @@ fn build_all_tasks_by_session(
                             .cmp(&task_ids.contains(&right.id))
                     });
                 inherited_order
-                    .then_with(|| right.linked_at.cmp(&left.linked_at))
                     .then_with(|| {
-                        if left.linked_at.is_some() {
-                            (left.status == TqTaskStatus::Completed)
-                                .cmp(&(right.status == TqTaskStatus::Completed))
-                        } else {
-                            std::cmp::Ordering::Equal
-                        }
+                        (left.status == TqTaskStatus::Completed)
+                            .cmp(&(right.status == TqTaskStatus::Completed))
                     })
+                    .then_with(|| right.linked_at.cmp(&left.linked_at))
             });
             let tasks = tasks
                 .into_iter()
@@ -416,7 +411,7 @@ mod tests {
             },
         )]),
     )]
-    #[case::missing_timestamps_preserve_tq_order_across_statuses(
+    #[case::missing_timestamps_prefer_open_task_across_statuses(
         vec![session(
             "session-a",
             vec![
@@ -428,20 +423,60 @@ mod tests {
         HashMap::from([(
             "session-a".to_string(),
             SessionTask {
-                task_id: "task-1".to_string(),
-                task_number: 1,
-                task_title: "Completed task".to_string(),
+                task_id: "task-2".to_string(),
+                task_number: 2,
+                task_title: "Open task".to_string(),
                 parent_task_id: None,
-                is_closed: true,
+                is_closed: false,
             },
         )]),
     )]
-    #[case::newest_linked_task_is_first(
+    #[case::open_task_precedes_later_completed_task(
         vec![session(
             "session-a",
             vec![
-                linked_task("task-1", 1, "Earlier task", None, "2026-01-02T00:00:00+09:00"),
-                closed_linked_task("task-2", 2, "Later task", None, "2026-01-01T16:00:00Z"),
+                linked_task("task-1", 1, "Open task", None, "2026-01-01T00:00:00Z"),
+                closed_linked_task("task-2", 2, "Completed task", None, "2026-01-02T00:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-1".to_string(),
+                task_number: 1,
+                task_title: "Open task".to_string(),
+                parent_task_id: None,
+                is_closed: false,
+            },
+        )]),
+    )]
+    #[case::newest_open_task_is_first(
+        vec![session(
+            "session-a",
+            vec![
+                linked_task("task-1", 1, "Earlier task", None, "2026-01-01T00:00:00Z"),
+                linked_task("task-2", 2, "Later task", None, "2026-01-02T00:00:00Z"),
+            ],
+        )],
+        &["session-a"],
+        HashMap::from([(
+            "session-a".to_string(),
+            SessionTask {
+                task_id: "task-2".to_string(),
+                task_number: 2,
+                task_title: "Later task".to_string(),
+                parent_task_id: None,
+                is_closed: false,
+            },
+        )]),
+    )]
+    #[case::newest_completed_task_is_first(
+        vec![session(
+            "session-a",
+            vec![
+                closed_linked_task("task-1", 1, "Earlier task", None, "2026-01-01T00:00:00Z"),
+                closed_linked_task("task-2", 2, "Later task", None, "2026-01-02T00:00:00Z"),
             ],
         )],
         &["session-a"],
