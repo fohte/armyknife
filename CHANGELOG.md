@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.381](https://github.com/fohte/armyknife/compare/v0.1.380...v0.1.381) (2026-10-10)
+
+
+### Bug Fixes
+
+* **agent:** prioritize open tq tasks for display ([#1093](https://github.com/fohte/armyknife/issues/1093)) ([36118b2](https://github.com/fohte/armyknife/commit/36118b27c24adcf13b2b62672c7c05d976bceb15))
+
 ## [0.1.380](https://github.com/fohte/armyknife/compare/v0.1.379...v0.1.380) (2026-10-10)
 
 
