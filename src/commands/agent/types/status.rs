@@ -1,4 +1,4 @@
-use super::{DisplayStatus, Session, SessionStatus, StatusColor};
+use super::{DisplayStatus, Engine, Session, SessionStatus, StatusColor};
 
 impl Session {
     /// A `Stopped` session is unread when it has never been focused since its
@@ -7,16 +7,21 @@ impl Session {
         self.status == SessionStatus::Stopped && self.read_at.is_none()
     }
 
-    /// True if this session has a pending background task or Task-tool
-    /// subagent. `pending_bg_task_ids` includes Claude Code task IDs and
-    /// `a agent bg run`'s runtime marker. Shared by every consumer that must
-    /// treat such a session as still mid-task despite an idle main loop:
+    /// True if this session has pending background work. Codex hooks do not
+    /// report background task IDs, so its active crit and review markers are
+    /// also used as the pending-work signal. `pending_bg_task_ids` includes
+    /// Claude Code task IDs and `a agent bg run`'s runtime marker. Shared by
+    /// every consumer that must treat such a session as still mid-task despite
+    /// an idle main loop:
     /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
     /// `display_status` (report `Background` instead of `Stopped`, or
     /// `WaitingInput` for a stopped session with a linked crit review or
     /// pending Human-in-the-Loop review).
     pub fn has_pending_bg_tasks(&self) -> bool {
-        !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
+        !self.pending_bg_task_ids.is_empty()
+            || !self.pending_agent_task_ids.is_empty()
+            || (self.engine == Engine::Codex
+                && (!self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty()))
     }
 
     /// True if any agent (main thread or subagent) in this session is
@@ -179,23 +184,106 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stopped_with_pending_bg_task(SessionStatus::Stopped, true, DisplayStatus::WaitingInput)]
-    #[case::stopped_without_pending_bg_task(SessionStatus::Stopped, false, DisplayStatus::Stopped)]
-    #[case::running_with_pending_bg_task(SessionStatus::Running, true, DisplayStatus::Running)]
-    fn human_review_wait_only_changes_pending_background_status(
+    #[case::claude_crit_requires_background_task(
+        Engine::Claude,
+        SessionStatus::Stopped,
+        false,
+        true,
+        false,
+        false,
+        DisplayStatus::Stopped
+    )]
+    #[case::claude_review_requires_background_task(
+        Engine::Claude,
+        SessionStatus::Stopped,
+        false,
+        false,
+        true,
+        false,
+        DisplayStatus::Stopped
+    )]
+    #[case::claude_crit_with_background_task(
+        Engine::Claude,
+        SessionStatus::Stopped,
+        true,
+        true,
+        false,
+        true,
+        DisplayStatus::WaitingInput
+    )]
+    #[case::codex_crit_wait(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        false,
+        true,
+        false,
+        true,
+        DisplayStatus::WaitingInput
+    )]
+    #[case::codex_pr_review_wait(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        false,
+        false,
+        true,
+        true,
+        DisplayStatus::WaitingInput
+    )]
+    #[case::codex_without_review(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        false,
+        false,
+        false,
+        false,
+        DisplayStatus::Stopped
+    )]
+    #[case::codex_other_background_task(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        true,
+        false,
+        false,
+        true,
+        DisplayStatus::Background
+    )]
+    #[case::running_codex_review(
+        Engine::Codex,
+        SessionStatus::Running,
+        false,
+        true,
+        false,
+        true,
+        DisplayStatus::Running
+    )]
+    fn codex_review_markers_count_as_pending_background_work(
+        #[case] engine: Engine,
         #[case] status: SessionStatus,
-        #[case] has_pending_bg_task: bool,
-        #[case] expected: DisplayStatus,
+        #[case] has_background_task: bool,
+        #[case] has_crit_link: bool,
+        #[case] has_human_review: bool,
+        #[case] expected_pending: bool,
+        #[case] expected_status: DisplayStatus,
     ) {
         let mut session = session(status, Some(Utc::now()));
-        if has_pending_bg_task {
+        session.engine = engine;
+        if has_background_task {
             session.pending_bg_task_ids.insert("task-1".to_string());
         }
-        session
-            .pending_human_review_ids
-            .insert("review-id".to_string());
-
-        assert_eq!(session.display_status(), expected);
+        if has_crit_link {
+            session
+                .crit_urls
+                .push("https://crit.example/review/1".to_string());
+        }
+        if has_human_review {
+            session
+                .pending_human_review_ids
+                .insert("review-id".to_string());
+        }
+        assert_eq!(
+            (session.has_pending_bg_tasks(), session.display_status()),
+            (expected_pending, expected_status)
+        );
     }
 
     #[rstest]

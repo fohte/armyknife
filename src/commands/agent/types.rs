@@ -122,8 +122,9 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
     /// IDs of Human-in-the-Loop reviews currently waiting for the user.
-    /// A process killed before cleanup can leave a marker; display status
-    /// considers it only while some background task is still pending.
+    /// A process killed before cleanup can leave a marker. Claude Code status
+    /// considers it only while a background task is pending; Codex uses it to
+    /// identify a review wait that its hooks do not report as a task.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub pending_human_review_ids: BTreeSet<String>,
     pub cwd: PathBuf,
