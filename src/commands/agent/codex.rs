@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::codex_steer;
-use super::types::TMUX_SESSION_OPTION;
+use super::types::{TMUX_SESSION_OPTION, resolve_session_option};
 use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
@@ -37,8 +37,11 @@ pub fn run(args: &CodexArgs) -> Result<()> {
         .ok()
         .filter(|pane_id| !pane_id.is_empty());
     let managed_launch = std::env::var_os(EnvVars::codex_managed_launch_name()).is_some();
+    let session_pane_id = pane_id.clone();
     let Some(pane_id) = pane_id_for_binding(pane_id, managed_launch) else {
-        return finish_child_status(command.status().context("Failed to start codex")?);
+        let status = command.status().context("Failed to start codex")?;
+        log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
+        return finish_child_status(status);
     };
 
     let cwd = std::env::current_dir().context("Failed to determine current directory")?;
@@ -53,7 +56,9 @@ pub fn run(args: &CodexArgs) -> Result<()> {
                 error = %error,
                 "Codex app-server is unavailable; starting Codex without pane binding"
             );
-            return finish_child_status(command.status().context("Failed to start codex")?);
+            let status = command.status().context("Failed to start codex")?;
+            log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
+            return finish_child_status(status);
         }
     };
     let (child_finished_tx, child_finished_rx) = mpsc::channel();
@@ -93,7 +98,40 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     let mut child = command.spawn().context("Failed to start codex")?;
     let status = child.wait().context("Failed to wait for codex")?;
     let _ = child_finished_tx.send(());
+    log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
     finish_child_status(status)
+}
+
+fn end_bound_codex_session(pane_id: Option<&str>) -> Result<()> {
+    end_bound_codex_session_with(
+        pane_id,
+        |pane_id| resolve_session_option(|option| tmux::get_pane_option(pane_id, option)),
+        super::hook::codex_process_exited,
+    )
+}
+
+fn end_bound_codex_session_with(
+    pane_id: Option<&str>,
+    resolve_session_id: impl FnOnce(&str) -> Option<String>,
+    end_session: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let Some(pane_id) = pane_id else {
+        return Ok(());
+    };
+    if let Some(session_id) = resolve_session_id(pane_id) {
+        end_session(&session_id)?;
+    }
+    Ok(())
+}
+
+fn log_session_end_error(result: Result<()>) {
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "agent.codex.session_end.err",
+            error = %error,
+            "failed to mark Codex session ended after CLI exit"
+        );
+    }
 }
 
 fn pane_id_for_binding(pane_id: Option<String>, managed_launch: bool) -> Option<String> {
@@ -114,7 +152,7 @@ fn finish_child_status(status: ExitStatus) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::pane_id_for_binding;
+    use super::{end_bound_codex_session_with, pane_id_for_binding};
     use rstest::rstest;
 
     #[rstest]
@@ -129,6 +167,25 @@ mod tests {
         assert_eq!(
             pane_id_for_binding(pane_id.map(str::to_owned), managed_launch),
             expected.map(str::to_owned),
+        );
+    }
+
+    #[test]
+    fn child_exit_ends_the_session_bound_to_its_pane() {
+        let mut ended = Vec::new();
+
+        let result = end_bound_codex_session_with(
+            Some("%pane-a"),
+            |_| Some("thread-one".to_string()),
+            |session_id| {
+                ended.push(session_id.to_string());
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (result.is_ok(), ended),
+            (true, vec!["thread-one".to_string()])
         );
     }
 }

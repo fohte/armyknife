@@ -232,9 +232,10 @@ pub enum SessionStatus {
     /// `auto_pause` timeout elapsed. The session file is preserved so that
     /// `agent resume` can restore the conversation.
     Paused,
-    /// Session has ended (Ctrl+D / /exit). Kept on disk so that `claude -c`
-    /// resume can restore label and ancestor chain. Garbage-collected after
-    /// a retention period by `cleanup_stale_sessions`.
+    /// Session has ended. Claude Code confirms this through SessionEnd;
+    /// Codex requires a confirmed CLI exit, close, or thread takeover. Kept
+    /// on disk for resume metadata and garbage-collected after a retention
+    /// period.
     Ended,
 }
 

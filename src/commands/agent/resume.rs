@@ -70,7 +70,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
             )?;
         }
         return run_codex_resume_with_status(&session_id, || {
-            run_codex_resume(&binary_path, resume_args, ancestor_session_ids)
+            run_codex_resume(&binary_path, &session_id, resume_args, ancestor_session_ids)
         });
     }
 
@@ -97,6 +97,7 @@ fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> En
 /// TUI, while Claude keeps the existing `exec_replace` path in [`run`].
 fn run_codex_resume(
     binary_path: &Path,
+    session_id: &str,
     resume_args: Vec<String>,
     ancestor_session_ids: Option<&str>,
 ) -> Result<()> {
@@ -108,6 +109,14 @@ fn run_codex_resume(
     let status = command
         .status()
         .map_err(|error| anyhow::anyhow!("Failed to start codex: {error}"))?;
+    if let Err(error) = super::hook::codex_process_exited(session_id) {
+        tracing::warn!(
+            event = "agent.resume.codex_session_end.err",
+            session = %session_id,
+            error = %error,
+            "failed to mark Codex session ended after CLI exit"
+        );
+    }
     if status.success() {
         Ok(())
     } else {

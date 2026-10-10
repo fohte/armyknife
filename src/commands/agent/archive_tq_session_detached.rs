@@ -1,13 +1,11 @@
 //! `a agent archive-tq-session-detached` (hidden) subcommand.
 //!
 //! Spawned once a session is confirmed `Ended` (never `Paused` — a paused
-//! session must stay resumable), either by a genuine `SessionEnd`, or by
-//! `evict_paused_sessions_on_pane_takeover` (see `agent::hook`) evicting a
-//! stale `Paused` session whose tmux pane was taken over by a different
-//! session. tq lives behind Cloudflare Access and can hang or answer
-//! slowly, so the hook never waits on it directly: archiving happens in this
+//! session must stay resumable), after a confirmed session end or when a
+//! different session takes over its tmux pane. tq can hang or answer slowly,
+//! so lifecycle handlers never wait on it directly: archiving happens in this
 //! separate detached process instead. Best-effort: failures are logged and
-//! ignored so they do not block the hook.
+//! ignored so they do not block session shutdown.
 
 use anyhow::Result;
 use clap::Args;

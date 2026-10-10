@@ -205,6 +205,7 @@ trait CloseRuntime {
     fn request_graceful_quit(&self, pane_id: &str, pid: u32) -> io::Result<bool>;
     fn send_sigterm(&self, pid: u32) -> io::Result<()>;
     fn wait_for_exit(&self, pid: u32) -> bool;
+    fn end_codex_session(&self, session_id: &str) -> Result<()>;
     fn kill_pane(&self, pane_id: &str) -> Result<()>;
 }
 
@@ -244,6 +245,10 @@ impl CloseRuntime for LiveCloseRuntime {
 
     fn wait_for_exit(&self, pid: u32) -> bool {
         process::wait_for_process_exit(pid, SIGTERM_GRACE_PERIOD)
+    }
+
+    fn end_codex_session(&self, session_id: &str) -> Result<()> {
+        super::hook::end_codex_session(session_id)
     }
 
     fn kill_pane(&self, pane_id: &str) -> Result<()> {
@@ -327,6 +332,9 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
 
     if runtime.pane_exists(pane_id)? {
         ensure_pane_session(runtime, pane_id, &session.session_id)?;
+        if session.engine == Engine::Codex && session.status != SessionStatus::Ended {
+            runtime.end_codex_session(&session.session_id)?;
+        }
         runtime.kill_pane(pane_id)?;
     }
     Ok(())
@@ -402,6 +410,7 @@ mod tests {
         GracefulQuit(String, u32),
         Sigterm(u32),
         WaitForExit(u32),
+        EndCodexSession(String),
         KillPane(String),
     }
 
@@ -484,6 +493,13 @@ mod tests {
         fn wait_for_exit(&self, pid: u32) -> bool {
             self.calls.borrow_mut().push(Call::WaitForExit(pid));
             self.wait_for_exit
+        }
+
+        fn end_codex_session(&self, session_id: &str) -> Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(Call::EndCodexSession(session_id.to_string()));
+            Ok(())
         }
 
         fn kill_pane(&self, pane_id: &str) -> Result<()> {
@@ -636,6 +652,32 @@ mod tests {
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
+                    Call::KillPane("%42".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_ends_codex_after_exit_and_before_killing_the_pane() {
+        let mut session = session();
+        session.engine = Engine::Codex;
+        let runtime = FakeRuntime::default();
+
+        let result = close_session(&session, true, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (
+                true,
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::ResolvePid("%42".to_string(), Engine::Codex),
+                    Call::GracefulQuit("%42".to_string(), 42),
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::EndCodexSession("session-1".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
             ),
@@ -859,20 +901,21 @@ mod tests {
         };
 
         let result = close_session(&session, false, &runtime);
+        let mut expected_calls = vec![
+            Call::PaneExists("%42".to_string()),
+            Call::PaneSession("%42".to_string()),
+            Call::ResolvePid("%42".to_string(), engine),
+            Call::PaneExists("%42".to_string()),
+            Call::PaneSession("%42".to_string()),
+        ];
+        if engine == Engine::Codex && status != SessionStatus::Ended {
+            expected_calls.push(Call::EndCodexSession("session-1".to_string()));
+        }
+        expected_calls.push(Call::KillPane("%42".to_string()));
 
         assert_eq!(
             (result.is_ok(), runtime.calls.into_inner()),
-            (
-                true,
-                vec![
-                    Call::PaneExists("%42".to_string()),
-                    Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), engine),
-                    Call::PaneExists("%42".to_string()),
-                    Call::PaneSession("%42".to_string()),
-                    Call::KillPane("%42".to_string()),
-                ],
-            ),
+            (true, expected_calls),
         );
     }
 
