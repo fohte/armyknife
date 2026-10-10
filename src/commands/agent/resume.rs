@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::ExitStatus;
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
@@ -109,14 +110,22 @@ fn run_codex_resume(
     let status = command
         .status()
         .map_err(|error| anyhow::anyhow!("Failed to start codex: {error}"))?;
-    if let Err(error) = super::hook::codex_process_exited(session_id) {
-        tracing::warn!(
-            event = "agent.resume.codex_session_end.err",
-            session = %session_id,
-            error = %error,
-            "failed to mark Codex session ended after CLI exit"
-        );
-    }
+    let pane_id = current_tmux_info().map(|info| info.pane_id);
+    finish_codex_resume(
+        status,
+        session_id,
+        pane_id.as_deref(),
+        super::codex::record_codex_cli_exit,
+    )
+}
+
+fn finish_codex_resume(
+    status: ExitStatus,
+    session_id: &str,
+    pane_id: Option<&str>,
+    record_exit: impl FnOnce(Option<&str>, Option<&str>),
+) -> Result<()> {
+    record_exit(pane_id, Some(session_id));
     if status.success() {
         Ok(())
     } else {
@@ -695,6 +704,46 @@ mod tests {
                     current_tmux_info,
                     vec!["root".to_string()],
                 )
+            );
+        }
+    }
+
+    mod codex_resume_exit_tests {
+        use std::os::unix::process::ExitStatusExt;
+
+        use rstest::rstest;
+
+        use super::*;
+
+        #[rstest]
+        #[case::successful_exit(0, Ok(()))]
+        #[case::unsuccessful_exit(0x100, Err("codex resume exited with status exit status: 1".to_string()))]
+        fn child_exit_records_the_current_pane_binding(
+            #[case] raw_status: i32,
+            #[case] expected_result: std::result::Result<(), String>,
+        ) {
+            let mut recorded = Vec::new();
+            let result = finish_codex_resume(
+                ExitStatus::from_raw(raw_status),
+                "thread-original",
+                Some("%pane-a"),
+                |pane_id, fallback_session_id| {
+                    recorded.push((
+                        pane_id.map(str::to_owned),
+                        fallback_session_id.map(str::to_owned),
+                    ));
+                },
+            );
+
+            assert_eq!(
+                (result.map_err(|error| error.to_string()), recorded,),
+                (
+                    expected_result,
+                    vec![(
+                        Some("%pane-a".to_string()),
+                        Some("thread-original".to_string())
+                    )],
+                ),
             );
         }
     }

@@ -28,6 +28,77 @@ pub(super) fn codex_process_exited_in(
     end_codex_session_with_policy(session_id, sessions_dir, side_effects, true)
 }
 
+pub(super) fn codex_session_end_hook_in(
+    session_id: &str,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+) -> Result<()> {
+    let mut session_for_sync = None;
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.engine != Engine::Codex {
+            return false;
+        }
+
+        if session.status == SessionStatus::Ended {
+            session_for_sync = Some(session.clone());
+            return false;
+        }
+
+        match preserve_sweep_pause(session) {
+            SweepPauseOutcome::AlreadyPaused => {
+                session_for_sync = Some(session.clone());
+                return false;
+            }
+            SweepPauseOutcome::Confirmed => {
+                session_for_sync = Some(session.clone());
+                return true;
+            }
+            SweepPauseOutcome::NotRequested => {}
+        }
+
+        session.status = SessionStatus::Stopped;
+        session.updated_at = Utc::now();
+        session_for_sync = Some(session.clone());
+        true
+    })?;
+
+    if let Some(session) = session_for_sync {
+        let work_type_config = session
+            .work_type
+            .as_ref()
+            .map(|_| config::load_config_or_default());
+        side_effects.sync_tmux(
+            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+            Some(session.status),
+            Some(&session),
+            work_type_config.as_ref().map(|config| &config.agent),
+            sessions_dir,
+        );
+    }
+
+    Ok(())
+}
+
+pub(super) enum SweepPauseOutcome {
+    AlreadyPaused,
+    Confirmed,
+    NotRequested,
+}
+
+pub(super) fn preserve_sweep_pause(
+    session: &mut super::super::types::Session,
+) -> SweepPauseOutcome {
+    if session.status == SessionStatus::Paused {
+        return SweepPauseOutcome::AlreadyPaused;
+    }
+    if !session.sweep_signaled {
+        return SweepPauseOutcome::NotRequested;
+    }
+    session.status = SessionStatus::Paused;
+    session.sweep_signaled = false;
+    SweepPauseOutcome::Confirmed
+}
+
 pub(super) fn end_codex_session_in(
     session_id: &str,
     sessions_dir: &Path,
@@ -84,7 +155,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use chrono::Utc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
     use super::*;
@@ -107,6 +178,19 @@ mod tests {
         removed: RecordedIds,
         archived: RecordedIds,
         synced: RecordedSyncs,
+    }
+
+    struct LifecycleTestContext {
+        temp_dir: TempDir,
+        sinks: RecordingSideEffects,
+    }
+
+    #[fixture]
+    fn lifecycle_test_context() -> LifecycleTestContext {
+        LifecycleTestContext {
+            temp_dir: TempDir::new().expect("temp dir"),
+            sinks: recording_side_effects(),
+        }
     }
 
     fn session(engine: Engine, status: SessionStatus, sweep_signaled: bool) -> Session {
@@ -166,6 +250,7 @@ mod tests {
     #[case::codex_sweep_signaled(Engine::Codex, SessionStatus::Stopped, true, SessionStatus::Stopped, Vec::<&str>::new(), Vec::<&str>::new())]
     #[case::claude(Engine::Claude, SessionStatus::Stopped, false, SessionStatus::Stopped, Vec::<&str>::new(), Vec::<&str>::new())]
     fn process_exit_ends_only_confirmed_codex_sessions(
+        lifecycle_test_context: LifecycleTestContext,
         #[case] engine: Engine,
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
@@ -173,13 +258,12 @@ mod tests {
         #[case] expected_removed: Vec<&str>,
         #[case] expected_archived: Vec<&str>,
     ) {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(engine, initial_status, sweep_signaled),
         )
         .expect("save session");
-        let sinks = recording_side_effects();
 
         codex_process_exited_in("thread-one", temp_dir.path(), &sinks.side_effects)
             .expect("process exit should be recorded");
@@ -214,15 +298,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn explicit_close_ends_a_paused_codex_session() {
-        let temp_dir = TempDir::new().expect("temp dir");
+    #[rstest]
+    fn explicit_close_ends_a_paused_codex_session(lifecycle_test_context: LifecycleTestContext) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(Engine::Codex, SessionStatus::Paused, false),
         )
         .expect("save session");
-        let sinks = recording_side_effects();
 
         end_codex_session_in("thread-one", temp_dir.path(), &sinks.side_effects)
             .expect("explicit close should confirm the session end");

@@ -208,9 +208,8 @@ fn process_hook_event_impl(
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
-    // Handle session end: mark as ended instead of deleting so that
-    // `claude -c` resume can restore label and ancestor chain.
-    // Ended sessions are garbage-collected by cleanup_stale_sessions.
+    // Claude's SessionEnd confirms termination; Codex's hook does not because
+    // the app-server also fires it during daemon shutdown.
     //
     // Paused sessions are preserved: when `a agent sweep` SIGTERMs a stopped
     // Claude Code process, its shutdown fires SessionEnd, which would
@@ -226,47 +225,41 @@ fn process_hook_event_impl(
         // session_id and will be reconciled the next time that pane fires
         // a hook for the new session.
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
-            let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
-            if session.status == SessionStatus::Paused {
-                // No-op: already the sweep-preserved status handled below.
-            } else if session.engine == Engine::Codex && session.status == SessionStatus::Ended {
-                // A process exit may confirm the end before its hook arrives.
-            } else if session.engine == Engine::Codex {
-                if session.sweep_signaled {
-                    session.status = SessionStatus::Paused;
-                    session.sweep_signaled = false;
-                } else {
-                    session.status = SessionStatus::Stopped;
-                    session.updated_at = Utc::now();
-                }
-                store::save_session_to(sessions_dir, &session)?;
-            } else if session.sweep_signaled {
-                session.status = SessionStatus::Paused;
-                session.sweep_signaled = false;
-                store::save_session_to(sessions_dir, &session)?;
+            if session.engine == Engine::Codex {
+                session_lifecycle::codex_session_end_hook_in(
+                    &input.session_id,
+                    sessions_dir,
+                    side_effects,
+                )?;
             } else {
-                session.status = SessionStatus::Ended;
-                session.updated_at = Utc::now();
-                store::save_session_to(sessions_dir, &session)?;
-                // Claude's SessionEnd confirms termination unless sweep
-                // already preserved the session as Paused.
-                side_effects.remove_notification_group(&input.session_id);
-                side_effects.archive_tq_session(&input.session_id);
+                let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+                match session_lifecycle::preserve_sweep_pause(&mut session) {
+                    session_lifecycle::SweepPauseOutcome::AlreadyPaused => {}
+                    session_lifecycle::SweepPauseOutcome::Confirmed => {
+                        store::save_session_to(sessions_dir, &session)?;
+                    }
+                    session_lifecycle::SweepPauseOutcome::NotRequested => {
+                        session.status = SessionStatus::Ended;
+                        session.updated_at = Utc::now();
+                        store::save_session_to(sessions_dir, &session)?;
+                        side_effects.remove_notification_group(&input.session_id);
+                        side_effects.archive_tq_session(&input.session_id);
+                    }
+                }
+                // Push the preserved status into the pane option so sweep's
+                // Paused isn't clobbered back to "" by this SessionEnd.
+                let work_type_config = session
+                    .work_type
+                    .as_ref()
+                    .map(|_| config::load_config_or_default());
+                side_effects.sync_tmux(
+                    pane_id.as_deref(),
+                    Some(session.status),
+                    Some(&session),
+                    work_type_config.as_ref().map(|config| &config.agent),
+                    sessions_dir,
+                );
             }
-            // Push the preserved status into the pane option so that sweep's
-            // Paused isn't clobbered back to "" by this SessionEnd: Paused
-            // for sweep auto-pauses, Ended otherwise.
-            let work_type_config = session
-                .work_type
-                .as_ref()
-                .map(|_| config::load_config_or_default());
-            side_effects.sync_tmux(
-                pane_id.as_deref(),
-                Some(session.status),
-                Some(&session),
-                work_type_config.as_ref().map(|config| &config.agent),
-                sessions_dir,
-            );
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -2049,6 +2042,13 @@ mod tests {
         SessionStatus::Running,
         false,
         SessionStatus::Stopped,
+        Vec::<String>::new(),
+    )]
+    #[case::codex_already_ended_stays_ended_without_repeating_side_effects(
+        Engine::Codex,
+        SessionStatus::Ended,
+        false,
+        SessionStatus::Ended,
         Vec::<String>::new(),
     )]
     #[case::codex_sweep_signaled_confirms_pause(

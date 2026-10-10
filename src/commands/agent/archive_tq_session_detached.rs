@@ -16,13 +16,13 @@ use crate::infra::tq::TqClient;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ArchiveTqSessionDetachedArgs {
-    /// Claude Code session_id to archive in tq.
+    /// Agent session or thread ID to archive in tq.
     #[arg(long)]
     pub session: String,
 }
 
 /// Spawns a detached `a agent archive-tq-session-detached --session <id>` so
-/// the hook can return immediately. Errors are logged, not surfaced —
+/// lifecycle handlers can return immediately. Errors are logged, not surfaced —
 /// failing the hook over an opportunistic archive is the wrong trade.
 #[cfg(not(test))]
 pub fn spawn_in_background(session_id: &str) {

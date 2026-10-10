@@ -40,8 +40,7 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     let session_pane_id = pane_id.clone();
     let Some(pane_id) = pane_id_for_binding(pane_id, managed_launch) else {
         let status = command.status().context("Failed to start codex")?;
-        log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
-        return finish_child_status(status);
+        return finish_codex_exit(status, session_pane_id.as_deref());
     };
 
     let cwd = std::env::current_dir().context("Failed to determine current directory")?;
@@ -57,8 +56,7 @@ pub fn run(args: &CodexArgs) -> Result<()> {
                 "Codex app-server is unavailable; starting Codex without pane binding"
             );
             let status = command.status().context("Failed to start codex")?;
-            log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
-            return finish_child_status(status);
+            return finish_codex_exit(status, session_pane_id.as_deref());
         }
     };
     let (child_finished_tx, child_finished_rx) = mpsc::channel();
@@ -98,36 +96,42 @@ pub fn run(args: &CodexArgs) -> Result<()> {
     let mut child = command.spawn().context("Failed to start codex")?;
     let status = child.wait().context("Failed to wait for codex")?;
     let _ = child_finished_tx.send(());
-    log_session_end_error(end_bound_codex_session(session_pane_id.as_deref()));
+    finish_codex_exit(status, session_pane_id.as_deref())
+}
+
+fn finish_codex_exit(status: ExitStatus, pane_id: Option<&str>) -> Result<()> {
+    record_codex_cli_exit(pane_id, None);
     finish_child_status(status)
 }
 
-fn end_bound_codex_session(pane_id: Option<&str>) -> Result<()> {
-    end_bound_codex_session_with(
+pub(super) fn record_codex_cli_exit(pane_id: Option<&str>, fallback_session_id: Option<&str>) {
+    record_codex_cli_exit_with(
         pane_id,
+        fallback_session_id,
         |pane_id| resolve_session_option(|option| tmux::get_pane_option(pane_id, option)),
         super::hook::codex_process_exited,
     )
 }
 
-fn end_bound_codex_session_with(
+fn record_codex_cli_exit_with(
     pane_id: Option<&str>,
+    fallback_session_id: Option<&str>,
     resolve_session_id: impl FnOnce(&str) -> Option<String>,
     end_session: impl FnOnce(&str) -> Result<()>,
-) -> Result<()> {
-    let Some(pane_id) = pane_id else {
-        return Ok(());
-    };
-    if let Some(session_id) = resolve_session_id(pane_id) {
-        end_session(&session_id)?;
-    }
-    Ok(())
+) {
+    let session_id = pane_id
+        .and_then(resolve_session_id)
+        .or_else(|| fallback_session_id.map(str::to_owned));
+    let result = session_id.as_deref().map_or(Ok(()), end_session);
+    log_session_end_error(result, pane_id, session_id.as_deref());
 }
 
-fn log_session_end_error(result: Result<()>) {
+fn log_session_end_error(result: Result<()>, pane_id: Option<&str>, session_id: Option<&str>) {
     if let Err(error) = result {
         tracing::warn!(
             event = "agent.codex.session_end.err",
+            pane_id = pane_id.unwrap_or("unknown"),
+            session = session_id.unwrap_or("unknown"),
             error = %error,
             "failed to mark Codex session ended after CLI exit"
         );
@@ -152,7 +156,7 @@ fn finish_child_status(status: ExitStatus) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{end_bound_codex_session_with, pane_id_for_binding};
+    use super::{pane_id_for_binding, record_codex_cli_exit_with};
     use rstest::rstest;
 
     #[rstest]
@@ -170,13 +174,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn child_exit_ends_the_session_bound_to_its_pane() {
+    #[rstest]
+    #[case::pane_thread_wins(Some("%pane-a"), Some("thread-new"), Some("thread-new"))]
+    #[case::fallback_when_pane_is_unbound(Some("%pane-a"), None, Some("thread-original"))]
+    #[case::fallback_outside_tmux(None, None, Some("thread-original"))]
+    fn child_exit_ends_bound_thread_or_falls_back(
+        #[case] pane_id: Option<&str>,
+        #[case] pane_thread_id: Option<&str>,
+        #[case] expected_session_id: Option<&str>,
+    ) {
         let mut ended = Vec::new();
 
-        let result = end_bound_codex_session_with(
-            Some("%pane-a"),
-            |_| Some("thread-one".to_string()),
+        record_codex_cli_exit_with(
+            pane_id,
+            Some("thread-original"),
+            |_| pane_thread_id.map(str::to_owned),
             |session_id| {
                 ended.push(session_id.to_string());
                 Ok(())
@@ -184,8 +196,11 @@ mod tests {
         );
 
         assert_eq!(
-            (result.is_ok(), ended),
-            (true, vec!["thread-one".to_string()])
+            ended,
+            expected_session_id
+                .map(str::to_owned)
+                .into_iter()
+                .collect::<Vec<_>>()
         );
     }
 }
