@@ -31,6 +31,7 @@ use crate::shared::log::short_run_id;
 
 mod pane_binding;
 pub(super) mod permission_notification;
+mod session_lifecycle;
 mod side_effects;
 mod work_type;
 
@@ -109,7 +110,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
 enum ProcessResult {
     /// Session was created or updated
     SessionSaved,
-    /// Session was marked as ended (session-end event)
+    /// A session-end event was processed.
     SessionEnded,
     /// Event was skipped (e.g., resume session-start)
     Skipped,
@@ -122,14 +123,20 @@ fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
     process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
 }
 
-/// Ends any Paused sessions that were attached to `pane_id` but belong to a
-/// different `session_id` than the one now taking the pane. Without this, a
-/// session auto-paused by `a agent sweep` lingers in `a agent watch` after another
-/// `claude` (or `claude -c <other-id>`) starts on the same pane. Resuming the
-/// same paused session with `claude -c <same-id>` is unaffected because
-/// `session_id` matches and the entry is skipped. This eviction is a genuine
-/// Ended transition too, so it also triggers a best-effort tq archive.
-fn evict_paused_sessions_on_pane_takeover(
+/// Marks a Codex session ended after its CLI process exits.
+pub fn codex_process_exited(session_id: &str) -> Result<()> {
+    session_lifecycle::codex_process_exited(session_id)
+}
+
+/// Marks a Codex session ended after an explicit close or thread takeover.
+pub fn end_codex_session(session_id: &str) -> Result<()> {
+    session_lifecycle::end_codex_session(session_id)
+}
+
+/// Ends prior sessions attached to `pane_id` when another session takes it.
+/// Claude sessions are evicted only when Paused; a new Codex thread confirms
+/// that the previous Codex thread no longer owns the pane.
+fn end_sessions_on_pane_takeover(
     sessions_dir: &Path,
     pane_id: &str,
     current_session_id: &str,
@@ -154,12 +161,31 @@ fn evict_paused_sessions_on_pane_takeover(
             .tmux_info
             .as_ref()
             .is_some_and(|info| info.pane_id == pane_id);
-        if session.status != SessionStatus::Paused
-            || session.session_id == current_session_id
-            || !matches_pane
-        {
+        if session.session_id == current_session_id || !matches_pane {
             continue;
         }
+
+        if session.engine == Engine::Codex {
+            if session.status != SessionStatus::Ended
+                && let Err(error) = session_lifecycle::end_codex_session_in(
+                    &session.session_id,
+                    sessions_dir,
+                    side_effects,
+                )
+            {
+                tracing::warn!(
+                    event = "agent.hook.codex_takeover_end_failed",
+                    session = %session.session_id,
+                    error = %error,
+                );
+            }
+            continue;
+        }
+
+        if session.status != SessionStatus::Paused {
+            continue;
+        }
+
         session.status = SessionStatus::Ended;
         session.updated_at = now;
         let _ = store::save_session_to(sessions_dir, &session);
@@ -182,9 +208,8 @@ fn process_hook_event_impl(
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
-    // Handle session end: mark as ended instead of deleting so that
-    // `claude -c` resume can restore label and ancestor chain.
-    // Ended sessions are garbage-collected by cleanup_stale_sessions.
+    // Claude's SessionEnd confirms termination; Codex's hook does not because
+    // the app-server also fires it during daemon shutdown.
     //
     // Paused sessions are preserved: when `a agent sweep` SIGTERMs a stopped
     // Claude Code process, its shutdown fires SessionEnd, which would
@@ -200,40 +225,41 @@ fn process_hook_event_impl(
         // session_id and will be reconciled the next time that pane fires
         // a hook for the new session.
         if let Some(mut session) = store::load_session_from(sessions_dir, &input.session_id)? {
-            let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
-            if session.status == SessionStatus::Paused {
-                // No-op: already the sweep-preserved status handled below.
-            } else if session.sweep_signaled {
-                session.status = SessionStatus::Paused;
-                session.sweep_signaled = false;
-                store::save_session_to(sessions_dir, &session)?;
+            if session.engine == Engine::Codex {
+                session_lifecycle::codex_session_end_hook_in(
+                    &input.session_id,
+                    sessions_dir,
+                    side_effects,
+                )?;
             } else {
-                session.status = SessionStatus::Ended;
-                session.updated_at = Utc::now();
-                store::save_session_to(sessions_dir, &session)?;
-                // The user terminated this session (neither already Paused
-                // nor awaiting sweep's pause confirmation, so this is a
-                // Ctrl-C / `/exit` / crash, not a sweep). No further events
-                // will arrive to auto-clear lingering notifications, so do
-                // it here. Paused sessions keep their notification so the
-                // user still sees it after `a agent resume`.
-                side_effects.remove_notification_group(&input.session_id);
-                side_effects.archive_tq_session(&input.session_id);
+                let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+                match session_lifecycle::preserve_sweep_pause(&mut session) {
+                    session_lifecycle::SweepPauseOutcome::AlreadyPaused => {}
+                    session_lifecycle::SweepPauseOutcome::Confirmed => {
+                        store::save_session_to(sessions_dir, &session)?;
+                    }
+                    session_lifecycle::SweepPauseOutcome::NotRequested => {
+                        session.status = SessionStatus::Ended;
+                        session.updated_at = Utc::now();
+                        store::save_session_to(sessions_dir, &session)?;
+                        side_effects.remove_notification_group(&input.session_id);
+                        side_effects.archive_tq_session(&input.session_id);
+                    }
+                }
+                // Push the preserved status into the pane option so sweep's
+                // Paused isn't clobbered back to "" by this SessionEnd.
+                let work_type_config = session
+                    .work_type
+                    .as_ref()
+                    .map(|_| config::load_config_or_default());
+                side_effects.sync_tmux(
+                    pane_id.as_deref(),
+                    Some(session.status),
+                    Some(&session),
+                    work_type_config.as_ref().map(|config| &config.agent),
+                    sessions_dir,
+                );
             }
-            // Push the preserved status into the pane option so that sweep's
-            // Paused isn't clobbered back to "" by this SessionEnd: Paused
-            // for sweep auto-pauses, Ended otherwise.
-            let work_type_config = session
-                .work_type
-                .as_ref()
-                .map(|_| config::load_config_or_default());
-            side_effects.sync_tmux(
-                pane_id.as_deref(),
-                Some(session.status),
-                Some(&session),
-                work_type_config.as_ref().map(|config| &config.agent),
-                sessions_dir,
-            );
         }
         return Ok(ProcessResult::SessionEnded);
     }
@@ -269,7 +295,7 @@ fn process_hook_event_impl(
             // Ignore errors; pane option is nice-to-have, not critical
             let _ =
                 tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-            evict_paused_sessions_on_pane_takeover(
+            end_sessions_on_pane_takeover(
                 sessions_dir,
                 &pane_info.pane_id,
                 &input.session_id,
@@ -290,7 +316,7 @@ fn process_hook_event_impl(
         && let Some(pane_info) = pane_info.as_ref()
     {
         let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-        evict_paused_sessions_on_pane_takeover(
+        end_sessions_on_pane_takeover(
             sessions_dir,
             &pane_info.pane_id,
             &input.session_id,
@@ -1990,12 +2016,53 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_ended_clears_notification_and_archives(SessionStatus::Running, false, vec!["end-sess".to_string()])]
-    #[case::sweep_paused_keeps_notification_and_session(SessionStatus::Paused, false, Vec::<String>::new())]
-    #[case::sweep_signaled_stopped_keeps_notification_and_session(SessionStatus::Stopped, true, Vec::<String>::new())]
-    fn session_end_archives_and_clears_notification_only_when_ended(
+    #[case::claude_user_ended_clears_notification_and_archives(
+        Engine::Claude,
+        SessionStatus::Running,
+        false,
+        SessionStatus::Ended,
+        vec!["end-sess".to_string()],
+    )]
+    #[case::claude_sweep_paused_keeps_notification_and_session(
+        Engine::Claude,
+        SessionStatus::Paused,
+        false,
+        SessionStatus::Paused,
+        Vec::<String>::new(),
+    )]
+    #[case::claude_sweep_signaled_stopped_keeps_notification_and_session(
+        Engine::Claude,
+        SessionStatus::Stopped,
+        true,
+        SessionStatus::Paused,
+        Vec::<String>::new(),
+    )]
+    #[case::codex_session_end_stops_without_finalizing(
+        Engine::Codex,
+        SessionStatus::Running,
+        false,
+        SessionStatus::Stopped,
+        Vec::<String>::new(),
+    )]
+    #[case::codex_already_ended_stays_ended_without_repeating_side_effects(
+        Engine::Codex,
+        SessionStatus::Ended,
+        false,
+        SessionStatus::Ended,
+        Vec::<String>::new(),
+    )]
+    #[case::codex_sweep_signaled_confirms_pause(
+        Engine::Codex,
+        SessionStatus::Stopped,
+        true,
+        SessionStatus::Paused,
+        Vec::<String>::new(),
+    )]
+    fn session_end_applies_engine_specific_lifecycle(
+        #[case] engine: Engine,
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
+        #[case] expected_status: SessionStatus,
         #[case] expected_removed: Vec<String>,
         tq_archive_context: TqArchiveContext,
     ) {
@@ -2029,7 +2096,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
-            engine: Engine::Claude,
+            engine,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -2043,23 +2110,53 @@ mod tests {
         process_hook_event_impl(HookEvent::SessionEnd, input, sessions_dir, &side_effects)
             .expect("hook should succeed");
 
+        let reloaded = store::load_session_from(sessions_dir, "end-sess")
+            .expect("load")
+            .expect("session exists");
         let recorded = (
+            reloaded.status,
             removed.lock().expect("lock").clone(),
             archived_calls.lock().expect("lock").clone(),
         );
-        assert_eq!(recorded, (expected_removed.clone(), expected_removed));
+        assert_eq!(
+            recorded,
+            (expected_status, expected_removed.clone(), expected_removed),
+        );
     }
 
     #[rstest]
-    #[case::sweep_paused_keeps_one(SessionStatus::Paused, false, SessionStatus::Paused)]
-    #[case::user_ended_clears(SessionStatus::Running, false, SessionStatus::Ended)]
-    #[case::user_ctrlc_from_stopped_clears(SessionStatus::Stopped, false, SessionStatus::Ended)]
+    #[case::claude_sweep_paused_keeps_one(
+        Engine::Claude,
+        SessionStatus::Paused,
+        false,
+        SessionStatus::Paused
+    )]
+    #[case::claude_user_ended_clears(
+        Engine::Claude,
+        SessionStatus::Running,
+        false,
+        SessionStatus::Ended
+    )]
+    #[case::claude_user_ctrlc_from_stopped_clears(
+        Engine::Claude,
+        SessionStatus::Stopped,
+        false,
+        SessionStatus::Ended
+    )]
+    #[case::codex_shutdown_stops(
+        Engine::Codex,
+        SessionStatus::Running,
+        false,
+        SessionStatus::Stopped
+    )]
     #[case::sweep_signaled_stopped_confirms_paused(
+        Engine::Claude,
         SessionStatus::Stopped,
         true,
         SessionStatus::Paused
     )]
     fn session_end_syncs_pane_status_preserving_paused(
+        #[case] engine: Engine,
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
         #[case] expected_synced: SessionStatus,
@@ -2079,6 +2176,7 @@ mod tests {
             pane_id: "%42".to_string(),
         }));
         session.session_id = "pane-sess".to_string();
+        session.engine = engine;
         session.status = initial_status;
         session.sweep_signaled = sweep_signaled;
         store::save_session_to(sessions_dir, &session).expect("save");
@@ -3012,7 +3110,7 @@ mod tests {
         }
     }
 
-    mod evict_paused_on_pane_takeover_tests {
+    mod end_sessions_on_pane_takeover_tests {
         use super::*;
         use chrono::Utc;
         use rstest::{fixture, rstest};
@@ -3023,7 +3121,7 @@ mod tests {
             TempDir::new().expect("temp dir creation should succeed")
         }
 
-        fn make_paused_session(session_id: &str, pane_id: &str) -> Session {
+        fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
                 session_id: session_id.to_string(),
@@ -3059,60 +3157,104 @@ mod tests {
 
         #[rstest]
         #[case::ends_on_pane_takeover(
-            SessionStatus::Paused,
+            (Engine::Claude, SessionStatus::Paused),
             "old",
             "%42",
             "%42",
             "new",
-            (SessionStatus::Ended, vec!["old".to_string()])
+            (
+                SessionStatus::Ended,
+                vec!["old".to_string()],
+                Vec::<String>::new(),
+            ),
         )]
         #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
             // as Paused so the running hook later transitions it back.
-            SessionStatus::Paused,
+            (Engine::Claude, SessionStatus::Paused),
             "same",
             "%42",
             "%42",
             "same",
-            (SessionStatus::Paused, Vec::<String>::new()),
+            (
+                SessionStatus::Paused,
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+            ),
         )]
         #[case::keeps_when_pane_differs(
-            SessionStatus::Paused,
+            (Engine::Claude, SessionStatus::Paused),
             "other",
             "%99",
             "%42",
             "new",
-            (SessionStatus::Paused, Vec::<String>::new()),
+            (
+                SessionStatus::Paused,
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+            ),
         )]
         #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
             // but guards against accidental termination of active sessions).
-            SessionStatus::Running,
+            (Engine::Claude, SessionStatus::Running),
             "active",
             "%42",
             "%42",
             "new",
-            (SessionStatus::Running, Vec::<String>::new()),
+            (
+                SessionStatus::Running,
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+            ),
         )]
-        fn evict_paused_sessions_on_pane_takeover_cases(
+        #[case::ends_codex_after_daemon_restart(
+            (Engine::Codex, SessionStatus::Stopped),
+            "old-codex",
+            "%42",
+            "%42",
+            "new-codex",
+            (
+                SessionStatus::Ended,
+                vec!["old-codex".to_string()],
+                vec!["old-codex".to_string()],
+            ),
+        )]
+        #[case::ends_running_codex_on_thread_switch(
+            (Engine::Codex, SessionStatus::Running),
+            "active-codex",
+            "%42",
+            "%42",
+            "new-codex",
+            (
+                SessionStatus::Ended,
+                vec!["active-codex".to_string()],
+                vec!["active-codex".to_string()],
+            ),
+        )]
+        fn end_sessions_on_pane_takeover_cases(
             tq_archive_context: TqArchiveContext,
-            #[case] initial_status: SessionStatus,
+            #[case] engine_status: (Engine, SessionStatus),
             #[case] session_id: &str,
             #[case] session_pane: &str,
             #[case] takeover_pane: &str,
             #[case] takeover_session_id: &str,
-            #[case] expected: (SessionStatus, Vec<String>),
+            #[case] expected: (SessionStatus, Vec<String>, Vec<String>),
         ) {
+            let (engine, initial_status) = engine_status;
             let TqArchiveContext {
                 temp_dir,
                 archived_calls,
-                side_effects,
+                mut side_effects,
             } = tq_archive_context;
-            let mut session = make_paused_session(session_id, session_pane);
+            let mut session = make_session(session_id, session_pane);
+            session.engine = engine;
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
+            let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            side_effects.removed_notification_groups = Some(removed.clone());
 
-            evict_paused_sessions_on_pane_takeover(
+            end_sessions_on_pane_takeover(
                 temp_dir.path(),
                 takeover_pane,
                 takeover_session_id,
@@ -3125,6 +3267,7 @@ mod tests {
             let recorded = (
                 reloaded.status,
                 archived_calls.lock().expect("lock").clone(),
+                removed.lock().expect("lock").clone(),
             );
             assert_eq!(recorded, expected);
         }
@@ -3132,7 +3275,7 @@ mod tests {
         #[rstest]
         fn missing_sessions_dir_is_noop(temp_dir: TempDir) {
             let missing = temp_dir.path().join("does-not-exist");
-            evict_paused_sessions_on_pane_takeover(&missing, "%42", "new", &SideEffects::none());
+            end_sessions_on_pane_takeover(&missing, "%42", "new", &SideEffects::none());
         }
     }
 

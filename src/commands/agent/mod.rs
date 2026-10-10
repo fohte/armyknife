@@ -153,9 +153,8 @@ pub enum AgentCommands {
     ArchiveDetached(ArchiveDetachedArgs),
 
     /// Internal: best-effort tq session archiving, spawned detached when a
-    /// session is confirmed Ended (a genuine SessionEnd, or eviction on
-    /// tmux pane takeover) so a slow/unreachable tq never blocks Claude
-    /// Code's exit.
+    /// session is confirmed Ended so a slow/unreachable tq never blocks an
+    /// agent process exit.
     #[command(name = "archive-tq-session-detached", hide = true)]
     ArchiveTqSessionDetached(ArchiveTqSessionDetachedArgs),
 }
