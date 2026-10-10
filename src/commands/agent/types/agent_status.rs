@@ -1,7 +1,6 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatusKind {
@@ -14,7 +13,6 @@ pub enum AgentStatusKind {
     Wait,
 }
 
-#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStatus {
     pub kind: AgentStatusKind,

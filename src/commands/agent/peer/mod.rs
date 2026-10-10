@@ -328,6 +328,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn peer_json_omits_agent_status_when_unset() {
+        let session = session("status-session", "/repo", vec![]);
+
+        assert_eq!(
+            serde_json::to_value(Peer::from_session(&session, &HashMap::new()))
+                .expect("peer should serialize"),
+            serde_json::json!({
+                "name": null,
+                "session_id": "status-session",
+                "cwd": "/repo",
+                "label": "my-label",
+                "status": "running",
+                "pane_id": null,
+                "engine": "claude",
+            }),
+        );
+    }
+
     #[rstest]
     #[case::returns_the_matching_parent(
         vec!["root".to_string(), "parent-1".to_string()],

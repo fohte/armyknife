@@ -71,6 +71,7 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use chrono::Utc;
     use clap::Parser;
+    use indoc::indoc;
     use rstest::rstest;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -82,9 +83,9 @@ mod tests {
         command: super::super::AgentCommands,
     }
 
-    fn session() -> Session {
+    fn session(session_id: &str, engine: Engine) -> Session {
         Session {
-            session_id: "status-session".to_string(),
+            session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,
             crit_urls: Vec::new(),
@@ -107,7 +108,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
-            engine: Engine::Claude,
+            engine,
         }
     }
 
@@ -128,33 +129,58 @@ mod tests {
     #[rstest]
     #[case::single_line("waiting for CI", true)]
     #[case::empty("", true)]
-    #[case::line_feed("first\nsecond", false)]
+    #[case::line_feed(indoc! {"
+        first
+        second
+    "}, false)]
     #[case::carriage_return("first\rsecond", false)]
     fn status_note_is_one_line(#[case] note: &str, #[case] expected: bool) {
         assert_eq!(ensure_single_line(note).is_ok(), expected);
     }
 
     #[test]
-    fn set_status_persists_to_the_session() {
+    fn set_status_persists_to_the_calling_codex_session() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let existing_session = session();
-        store::save_session_to(temp_dir.path(), &existing_session).expect("session should save");
+        let xdg_cache_home = temp_dir
+            .path()
+            .to_str()
+            .expect("temp dir path should be valid UTF-8");
+        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
+        let codex_session = session("codex-session", Engine::Codex);
+        let other_session = session("other-session", Engine::Claude);
+        store::save_session_to(&sessions_dir, &codex_session).expect("session should save");
+        store::save_session_to(&sessions_dir, &other_session).expect("session should save");
         let expected = AgentStatus {
             kind: AgentStatusKind::Decide,
             note: "choose a schedule".to_string(),
         };
 
-        set_status_in(
-            temp_dir.path(),
-            &existing_session.session_id,
-            expected.clone(),
-        )
-        .expect("status should save");
-        let actual = store::load_session_from(temp_dir.path(), &existing_session.session_id)
-            .expect("session should load")
-            .expect("session should exist")
-            .agent_status;
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(xdg_cache_home)),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", Some("codex-session")),
+            ],
+            || {
+                run(&StatusCommands::Set(SetArgs {
+                    kind: expected.kind,
+                    note: expected.note.clone(),
+                }))
+                .expect("status should save");
+            },
+        );
 
-        assert_eq!(actual, Some(expected));
+        let actual = (
+            store::load_session_from(&sessions_dir, "codex-session")
+                .expect("Codex session should load")
+                .expect("Codex session should exist")
+                .agent_status,
+            store::load_session_from(&sessions_dir, "other-session")
+                .expect("other session should load")
+                .expect("other session should exist")
+                .agent_status,
+        );
+
+        assert_eq!(actual, (Some(expected), None));
     }
 }

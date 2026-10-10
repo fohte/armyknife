@@ -380,7 +380,21 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `window-status <window_id>`                       |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
-`a agent status set` works in Claude Code and Codex sessions. Its kinds are `decide`, `read`, `do`, `idle`, `close`, `done`, and `wait`; the note is one line and is cleared when the next `UserPromptSubmit` hook arrives.
+Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared when the next `UserPromptSubmit` hook arrives, and a set status appears as `agent_status` in `a agent peer` JSON output.
+
+Use one of these kinds:
+
+- `decide`: the user needs to choose an option or direction
+- `read`: the agent answered a question and finished
+- `do`: the user needs to perform a manual task
+- `idle`: the agent is waiting for instructions
+- `close`: only closing remains, and it is not urgent
+- `done`: report completion to the parent agent
+- `wait`: another session, CI job, or external event needs to finish
+
+```console
+$ a agent status set wait "waiting for job-42"
+```
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
@@ -564,11 +578,11 @@ Both engines delay permission notifications by about one second because another 
 
 Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a agent new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a agent peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a agent new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
-`a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, pane_id, engine}`; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+`a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, agent_status, pane_id, engine}`. `agent_status` is `{kind, note}` when set and omitted otherwise; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
 ```console
 $ a agent peer parent
-[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","pane_id":"%3","engine":"claude"}]
+[{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","agent_status":{"kind":"wait","note":"waiting for job-42"},"pane_id":"%3","engine":"claude"}]
 $ a agent peer parent | jq -r '.[0].name // empty'
 myproject-4f
 $ a agent peer list -R myproject

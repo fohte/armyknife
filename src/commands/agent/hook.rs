@@ -2984,6 +2984,39 @@ mod tests {
         }
 
         #[rstest]
+        #[case::claude(Engine::Claude)]
+        #[case::codex(Engine::Codex)]
+        fn stop_keeps_agent_status(#[case] engine: Engine) {
+            let temp_dir = create_temp_sessions_dir();
+            let expected = AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            };
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(expected.clone());
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+            let mut input = create_test_input(None);
+            input.engine = engine;
+
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_impl(
+                    HookEvent::Stop,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("stop hook should succeed");
+            });
+
+            let actual = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist")
+                .agent_status;
+
+            assert_eq!(actual, Some(expected));
+        }
+
+        #[rstest]
         #[case::provided(Some("sample-skill"), Some("sample-skill"))]
         #[case::omitted(None, None)]
         fn user_prompt_submit_uses_initial_work_type_from_env(
