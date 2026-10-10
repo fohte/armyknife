@@ -7,21 +7,11 @@ impl Session {
         self.status == SessionStatus::Stopped && self.read_at.is_none()
     }
 
-    /// True if this session has pending background work. Codex hooks do not
-    /// report background task IDs, so its active crit and review markers are
-    /// also used as the pending-work signal. `pending_bg_task_ids` includes
-    /// Claude Code task IDs and `a agent bg run`'s runtime marker. Shared by
-    /// every consumer that must treat such a session as still mid-task despite
-    /// an idle main loop:
-    /// `auto_pause` (skip pausing), `auto_compact` (skip compacting), and
-    /// `display_status` (report `Background` instead of `Stopped`, or
-    /// `WaitingInput` for a stopped session with a linked crit review or
-    /// pending Human-in-the-Loop review).
+    /// True if this session has pending background task or Task-tool subagent
+    /// IDs. `pending_bg_task_ids` includes Claude Code task IDs and
+    /// `a agent bg run`'s runtime marker.
     pub fn has_pending_bg_tasks(&self) -> bool {
-        !self.pending_bg_task_ids.is_empty()
-            || !self.pending_agent_task_ids.is_empty()
-            || (self.engine == Engine::Codex
-                && (!self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty()))
+        !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
 
     /// True if any agent (main thread or subagent) in this session is
@@ -33,12 +23,19 @@ impl Session {
 
     /// Presentation status for this session. A stopped main loop with pending
     /// background work is `WaitingInput` when a crit review is linked or a
-    /// Human-in-the-Loop review is pending, and `Background` otherwise.
+    /// Human-in-the-Loop review is pending, and `Background` otherwise. Codex
+    /// hooks do not report background task IDs, so its review markers also
+    /// qualify for this display state.
     /// Notifications, `auto_pause`, `auto_compact`, and `sweep` read persisted
     /// status or `has_pending_bg_tasks` directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
-        if self.status == SessionStatus::Stopped && self.has_pending_bg_tasks() {
-            return if !self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty() {
+        let has_pending_bg_tasks = self.has_pending_bg_tasks();
+        let has_review_wait_marker =
+            !self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty();
+        let codex_review_wait = self.engine == Engine::Codex && has_review_wait_marker;
+
+        if self.status == SessionStatus::Stopped && (has_pending_bg_tasks || codex_review_wait) {
+            return if has_review_wait_marker {
                 DisplayStatus::WaitingInput
             } else {
                 DisplayStatus::Background
@@ -217,7 +214,7 @@ mod tests {
         false,
         true,
         false,
-        true,
+        false,
         DisplayStatus::WaitingInput
     )]
     #[case::codex_pr_review_wait(
@@ -226,7 +223,7 @@ mod tests {
         false,
         false,
         true,
-        true,
+        false,
         DisplayStatus::WaitingInput
     )]
     #[case::codex_without_review(
@@ -253,10 +250,10 @@ mod tests {
         false,
         true,
         false,
-        true,
+        false,
         DisplayStatus::Running
     )]
-    fn codex_review_markers_count_as_pending_background_work(
+    fn review_markers_affect_display_status_without_changing_pending_background_work(
         #[case] engine: Engine,
         #[case] status: SessionStatus,
         #[case] has_background_task: bool,
