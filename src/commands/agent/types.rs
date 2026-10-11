@@ -8,6 +8,7 @@ use super::error::CcError;
 
 mod agent_status;
 mod session;
+mod status;
 pub use agent_status::{AgentStatus, AgentStatusKind};
 pub use session::Session;
 
@@ -171,52 +172,6 @@ pub enum DisplayStatus {
     /// The main loop is stopped with a pending background task and no linked
     /// crit or Human-in-the-Loop review. See `Session::has_pending_bg_tasks`.
     Background,
-}
-
-impl SessionStatus {
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::WaitingInput => "waiting",
-            Self::Stopped => "stopped",
-            Self::Paused => "paused",
-            Self::Ended => "ended",
-        }
-    }
-}
-
-impl DisplayStatus {
-    pub fn display_symbol(&self) -> &'static str {
-        match self {
-            Self::Running => "●",
-            Self::WaitingInput => "◐",
-            Self::Stopped | Self::Ended => "○",
-            Self::UnreadStopped => "✱",
-            Self::Paused => "⏸",
-            Self::Background => "◎",
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Background => "bg",
-            Self::WaitingInput => "waiting",
-            Self::Stopped | Self::UnreadStopped => "stopped",
-            Self::Paused => "paused",
-            Self::Ended => "ended",
-        }
-    }
-
-    pub fn color(&self) -> StatusColor {
-        match self {
-            Self::Running => StatusColor::Green,
-            Self::WaitingInput => StatusColor::Yellow,
-            Self::Background => StatusColor::Cyan,
-            Self::Paused => StatusColor::Dim,
-            Self::Stopped | Self::UnreadStopped | Self::Ended => StatusColor::Gray,
-        }
-    }
 }
 
 /// Common fields present in all hook events.
