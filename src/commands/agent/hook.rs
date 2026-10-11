@@ -33,6 +33,7 @@ mod pane_binding;
 pub(super) mod permission_notification;
 mod session_lifecycle;
 mod side_effects;
+mod stop;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -63,13 +64,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
-        return Ok(());
+        return stop::write_response(args.engine, &args.event, None);
     }
 
     // Headless runs inherit TMUX_PANE from their parent interactive session;
     // skip them to avoid overwriting the parent's registered session state.
     if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
-        return Ok(());
+        return stop::write_response(args.engine, &args.event, None);
     }
 
     let run_id = short_run_id();
@@ -102,7 +103,12 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
 
     input.engine = args.engine;
-    process_hook_event(event, input)
+    let result = process_hook_event(event, input)?;
+    let block_reason = match result {
+        ProcessResult::StopBlocked(reason) => Some(reason),
+        ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
+    };
+    stop::write_response(args.engine, &args.event, block_reason.as_deref())
 }
 
 /// Result of processing a hook event.
@@ -114,13 +120,15 @@ enum ProcessResult {
     SessionEnded,
     /// Event was skipped (e.g., resume session-start)
     Skipped,
+    /// 停止理由の報告が必要なため Stop を block した
+    StopBlocked(String),
 }
 
 /// Processes a hook event with the given input.
 /// This is the core logic separated from stdin handling for testability.
-fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
+fn process_hook_event(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all())
 }
 
 /// Marks a Codex session ended after its CLI process exits.
@@ -388,6 +396,8 @@ fn process_hook_event_impl(
             engine: input.engine,
         }
     });
+    let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
+    let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
 
     let work_type_config =
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
@@ -666,6 +676,13 @@ fn process_hook_event_impl(
                 );
             }
         }
+    }
+
+    if event == HookEvent::Stop
+        && let Some(reason) =
+            stop::block_reason_for_hook(&input, &session, was_waiting_for_input, was_asking_user)
+    {
+        return Ok(ProcessResult::StopBlocked(reason.to_string()));
     }
 
     Ok(ProcessResult::SessionSaved)
@@ -2697,6 +2714,87 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum StopReason {
+        Unknown,
+        StatusSet,
+        BackgroundTask,
+        SessionCron,
+        PermissionPrompt,
+        AskUserQuestion,
+        StopHookActive,
+        Paused,
+    }
+
+    #[rstest]
+    #[case::unknown(StopReason::Unknown, true)]
+    #[case::status_set(StopReason::StatusSet, false)]
+    #[case::background_task(StopReason::BackgroundTask, false)]
+    #[case::session_cron(StopReason::SessionCron, false)]
+    #[case::permission_prompt(StopReason::PermissionPrompt, false)]
+    #[case::ask_user_question(StopReason::AskUserQuestion, false)]
+    #[case::stop_hook_active(StopReason::StopHookActive, false)]
+    #[case::paused(StopReason::Paused, false)]
+    fn stop_requires_status_only_when_reason_is_unknown(
+        #[case] reason: StopReason,
+        #[case] blocked: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let mut input = create_test_input(None);
+        input.last_assistant_message = Some("Example response.".to_string());
+
+        save_test_session(sessions_dir, "test-123", |session| match reason {
+            StopReason::Unknown
+            | StopReason::BackgroundTask
+            | StopReason::SessionCron
+            | StopReason::StopHookActive => {}
+            StopReason::StatusSet => {
+                session.agent_status = Some(AgentStatus {
+                    kind: AgentStatusKind::Done,
+                    note: "Example completion.".to_string(),
+                });
+            }
+            StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
+            StopReason::AskUserQuestion => {
+                session.current_tool = Some("AskUserQuestion".to_string());
+            }
+            StopReason::Paused => session.status = SessionStatus::Paused,
+        });
+
+        match reason {
+            StopReason::BackgroundTask => {
+                input.background_tasks = serde_json::from_value(serde_json::json!([{
+                    "id": "example-task",
+                    "type": "shell",
+                }]))
+                .expect("background task should deserialize");
+            }
+            StopReason::SessionCron => {
+                input.session_crons = vec![serde_json::json!({
+                    "id": "example-cron",
+                })];
+            }
+            StopReason::StopHookActive => input.stop_hook_active = true,
+            _ => {}
+        }
+
+        let result =
+            process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+                .expect("stop hook should succeed");
+
+        let expected = if blocked {
+            ProcessResult::StopBlocked(
+                stop::block_reason(stop::StopConditions::default())
+                    .expect("unknown stop should require a status")
+                    .to_string(),
+            )
+        } else {
+            ProcessResult::SessionSaved
+        };
+        assert_eq!(result, expected);
     }
 
     #[rstest]
