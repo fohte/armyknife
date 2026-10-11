@@ -9,14 +9,32 @@ use clap_complete::aot::generate;
 #[tokio::main]
 async fn main() {
     shared::log::init();
-    if let Err(e) = run().await {
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
+    match run().await {
+        Ok(ExitMode::Immediate) => std::process::exit(0),
+        Ok(ExitMode::RuntimeShutdown) => {}
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            std::process::exit(1);
+        }
     }
 }
 
-async fn run() -> Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+enum ExitMode {
+    RuntimeShutdown,
+    Immediate,
+}
+
+fn exit_mode(command: &Commands) -> ExitMode {
+    match command {
+        Commands::Agent(AgentCommands::Watch(_)) => ExitMode::Immediate,
+        _ => ExitMode::RuntimeShutdown,
+    }
+}
+
+async fn run() -> Result<ExitMode> {
     let Cli { command } = Cli::parse();
+    let exit_mode = exit_mode(&command);
 
     if !matches!(
         &command,
@@ -46,5 +64,22 @@ async fn run() -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(exit_mode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Commands, ExitMode, exit_mode};
+    use armyknife::commands::agent::{AgentCommands, WatchArgs};
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::agent_watch(
+        Commands::Agent(AgentCommands::Watch(WatchArgs {})),
+        ExitMode::Immediate
+    )]
+    #[case::other_command(Commands::Update, ExitMode::RuntimeShutdown)]
+    fn test_exit_mode(#[case] command: Commands, #[case] expected: ExitMode) {
+        assert_eq!(exit_mode(&command), expected);
+    }
 }
