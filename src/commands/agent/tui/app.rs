@@ -154,18 +154,19 @@ impl App {
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let agent_config = crate::shared::config::load_config_or_default().agent;
-        let mut app = Self::with_sessions_and_agent_config(sessions, agent_config);
-        app.sidebar_visible = true;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
         let focus_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
             .ok()
             .filter(|s| !s.is_empty());
-        app.sidebar_focused = focus_session_id.is_none();
+        let sidebar_focused = focus_session_id.is_none();
         let initial_session_id =
             focus_session_id.or_else(|| store::load_last_selected_session().ok().flatten());
 
-        app.restore_initial_selection(initial_session_id.as_deref());
+        let mut app =
+            Self::with_initial_selection(sessions, agent_config, initial_session_id.as_deref());
+        app.sidebar_visible = true;
+        app.sidebar_focused = sidebar_focused;
 
         Ok(app)
     }
@@ -231,6 +232,16 @@ impl App {
         app.rebuild_row_order();
         app.list_state
             .select(app.selectable_positions().first().copied());
+        app
+    }
+
+    fn with_initial_selection(
+        sessions: Vec<Session>,
+        agent_config: AgentConfig,
+        fallback_session_id: Option<&str>,
+    ) -> Self {
+        let mut app = Self::with_sessions_and_agent_config(sessions, agent_config);
+        app.restore_initial_selection(fallback_session_id);
         app
     }
 
@@ -402,13 +413,33 @@ mod tests {
             .crit_urls
             .push("https://example.com/review".to_string());
 
-        let mut app = create_test_app(vec![running, turn, earlier_turn]);
-        app.restore_initial_selection(Some("running"));
+        let app = App::with_initial_selection(
+            vec![running, turn, earlier_turn],
+            AgentConfig::default(),
+            Some("running"),
+        );
 
         assert_eq!(
             app.selected_session()
                 .map(|session| session.session_id.as_str()),
             Some("earlier-turn")
+        );
+    }
+
+    #[test]
+    fn test_initial_selection_restores_fallback_without_user_turns() {
+        let first = create_test_session("first");
+        let fallback = create_test_session("fallback");
+        let app = App::with_initial_selection(
+            vec![first, fallback],
+            AgentConfig::default(),
+            Some("fallback"),
+        );
+
+        assert_eq!(
+            app.selected_session()
+                .map(|session| session.session_id.as_str()),
+            Some("fallback")
         );
     }
 

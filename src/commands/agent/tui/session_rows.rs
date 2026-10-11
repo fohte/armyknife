@@ -55,7 +55,8 @@ impl<'a> SessionRow<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
-    NeedsYou,
+    UserTurn,
+    Waiting,
     Running,
     Unread,
     Idle,
@@ -81,7 +82,7 @@ pub(super) struct SessionTask {
 
 fn section_of(session: &Session) -> Section {
     match session.display_status() {
-        DisplayStatus::WaitingInput => Section::NeedsYou,
+        DisplayStatus::WaitingInput => Section::Waiting,
         DisplayStatus::Running | DisplayStatus::Background => Section::Running,
         DisplayStatus::UnreadStopped => Section::Unread,
         _ => Section::Idle,
@@ -132,10 +133,10 @@ impl<'a> SessionLookup<'a> {
     }
 }
 
-/// Buckets `sessions` into YOUR TURN -> RUNNING -> UNREAD (unread stopped) ->
-/// PAUSED/STOPPED, omitting empty sections. YOUR TURN uses the shared
-/// priority order from `user_turns`; unclassified waiting sessions are
-/// omitted. Other sections preserve the input order.
+/// Buckets `sessions` into YOUR TURN -> WAITING -> RUNNING -> UNREAD (unread
+/// stopped) -> PAUSED/STOPPED, omitting empty sections. YOUR TURN uses the
+/// shared priority order from `user_turns`; unclassified waiting sessions
+/// remain visible under WAITING. Other sections preserve the input order.
 ///
 /// `task_by_session` attaches each row's linked tq task (see [`SessionTask`])
 /// for the task-number column; a session absent from it gets `task: None`
@@ -147,20 +148,8 @@ pub(super) fn build_session_rows<'a>(
     task_by_session: &HashMap<String, SessionTask>,
 ) -> Vec<SessionRow<'a>> {
     let turns = user_turns(sessions.iter().copied());
-    let user_turn_session_ids: HashSet<&str> = turns
-        .iter()
-        .map(|turn| turn.session.session_id.as_str())
-        .collect();
-    let displayed_sessions: Vec<&Session> = sessions
-        .iter()
-        .copied()
-        .filter(|session| {
-            section_of(session) != Section::NeedsYou
-                || user_turn_session_ids.contains(session.session_id.as_str())
-        })
-        .collect();
-    let lookup = SessionLookup::new(&displayed_sessions);
-    build_status_section_rows(&displayed_sessions, &lookup, task_by_session, turns)
+    let lookup = SessionLookup::new(sessions);
+    build_status_section_rows(sessions, &lookup, task_by_session, turns)
 }
 
 fn build_status_section_rows<'a>(
@@ -176,20 +165,29 @@ fn build_status_section_rows<'a>(
     let mut running = Vec::new();
     let mut unread = Vec::new();
     let mut idle = Vec::new();
+    let mut waiting = Vec::new();
     for &session in sessions {
         if user_turn_session_ids.contains(session.session_id.as_str()) {
             continue;
         }
         match section_of(session) {
-            Section::NeedsYou => {}
+            Section::UserTurn | Section::Waiting => waiting.push(session),
             Section::Running => running.push(session),
             Section::Unread => unread.push(session),
             Section::Idle => idle.push(session),
         }
     }
 
-    let mut rows = Vec::with_capacity(sessions.len() + 4);
+    let mut rows = Vec::with_capacity(sessions.len() + 6);
     push_user_turns(&mut rows, turns);
+    push_group(
+        &mut rows,
+        format!("WAITING ({})", waiting.len()),
+        Section::Waiting,
+        &waiting,
+        lookup,
+        task_by_session,
+    );
     push_group(
         &mut rows,
         format!("RUNNING ({})", running.len()),
@@ -227,7 +225,7 @@ fn push_user_turns<'a>(rows: &mut Vec<SessionRow<'a>>, turns: Vec<UserTurn<'a>>)
 
     rows.push(SessionRow::SectionHeader(SectionHeaderRow {
         label: "YOUR TURN".to_string(),
-        kind: Section::NeedsYou,
+        kind: Section::UserTurn,
     }));
     rows.extend(turns.into_iter().map(SessionRow::UserTurn));
 }
@@ -555,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_session_rows_sorts_user_turns_and_omits_unknown_waits() {
+    fn test_build_session_rows_sorts_user_turns_and_keeps_unknown_waits_visible() {
         let mut close = create_test_session("close", SessionStatus::Paused);
         close.agent_status = Some(AgentStatus {
             kind: AgentStatusKind::Close,
@@ -595,6 +593,14 @@ mod tests {
                     kind: "close".to_string(),
                     note: Some("close the PR".to_string()),
                 },
+                RowDescription::Header {
+                    label: "WAITING (1)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "unknown".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 0,
+                },
             ]
         );
     }
@@ -617,7 +623,7 @@ mod tests {
             .pending_human_review_ids
             .insert("review-id".to_string());
 
-        assert_eq!(section_of(&session), Section::NeedsYou);
+        assert_eq!(section_of(&session), Section::Waiting);
     }
 
     #[test]

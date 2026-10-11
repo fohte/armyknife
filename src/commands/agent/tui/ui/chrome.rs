@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -135,17 +137,15 @@ fn render_input_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Renders the single-line header: title on the left, a compact status
-/// summary right-aligned. `idle` folds together Stopped and Paused since
-/// neither needs the user's attention.
+/// summary right-aligned. `idle` combines stopped, ended, and paused sessions;
+/// user turns are excluded from this count.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let (running, _, stopped, paused) = count_statuses(&app.sessions);
-    let idle = stopped + paused;
-    let waiting = user_turns(app.filtered_sessions().iter().copied()).len();
+    let counts = header_counts(app);
 
     let title = " agent watch";
-    let needs_you = format!("{waiting} needs you");
-    let running_text = format!("{running} running");
-    let idle_text = format!("{idle} idle");
+    let needs_you = format!("{} needs you", counts.needs_you);
+    let running_text = format!("{} running", counts.running);
+    let idle_text = format!("{} idle", counts.idle);
     let summary = format!("{needs_you} · {running_text} · {idle_text}");
 
     let term_width = area.width as usize;
@@ -174,6 +174,34 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     ]);
 
     frame.render_widget(Paragraph::new(line), area);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HeaderCounts {
+    needs_you: usize,
+    running: usize,
+    idle: usize,
+}
+
+fn header_counts(app: &App) -> HeaderCounts {
+    let sessions = app.filtered_sessions();
+    let turns = user_turns(sessions.iter().copied());
+    let turn_session_ids: HashSet<&str> = turns
+        .iter()
+        .map(|turn| turn.session.session_id.as_str())
+        .collect();
+    let (running, stopped, paused) = count_statuses(
+        sessions
+            .iter()
+            .copied()
+            .filter(|session| !turn_session_ids.contains(session.session_id.as_str())),
+    );
+
+    HeaderCounts {
+        needs_you: turns.len(),
+        running,
+        idle: stopped + paused,
+    }
 }
 
 fn render_error(frame: &mut Frame, area: Rect, message: &str) {
@@ -258,7 +286,7 @@ mod tests {
     use crate::commands::agent::tui::ui::test_support::{
         create_test_session, render_to_string, render_to_string_with, wt_row,
     };
-    use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, Session, SessionStatus};
     use rstest::rstest;
 
     #[test]
@@ -284,6 +312,40 @@ mod tests {
         assert_eq!(
             header_line,
             " agent watch                                    1 needs you · 1 running · 2 idle"
+        );
+    }
+
+    #[test]
+    fn test_header_counts_use_filtered_sessions_and_exclude_user_turns_from_idle() {
+        let mut decide = create_test_session("decide");
+        decide.status = SessionStatus::Stopped;
+        decide.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: "choose an option".to_string(),
+        });
+        let mut running = create_test_session("running");
+        running.status = SessionStatus::Running;
+        let mut paused = create_test_session("paused");
+        paused.status = SessionStatus::Paused;
+        let mut app = App::with_sessions(vec![decide, running, paused]);
+
+        assert_eq!(
+            header_counts(&app),
+            HeaderCounts {
+                needs_you: 1,
+                running: 1,
+                idle: 1,
+            }
+        );
+
+        app.filtered_indices = vec![0, 2];
+        assert_eq!(
+            header_counts(&app),
+            HeaderCounts {
+                needs_you: 1,
+                running: 0,
+                idle: 1,
+            }
         );
     }
 

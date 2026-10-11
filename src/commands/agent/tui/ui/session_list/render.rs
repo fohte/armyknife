@@ -12,7 +12,7 @@ use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows};
 
 use super::super::helpers::DIM_FG;
 use super::items::{build_header_item, build_session_item, build_user_turn_item};
-/// Renders YOUR TURN first, followed by the fixed status sections
+/// Renders YOUR TURN first, followed by WAITING and the fixed status sections
 /// (RUNNING / UNREAD / PAUSED-STOPPED). YOUR TURN rows use the priority shared
 /// with tmux status; remaining sessions keep their status rows. A session
 /// linked to a tq task (`app.task_by_session`) gets a fixed-width task-number
@@ -525,7 +525,7 @@ mod tests {
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
-             agent watch                                    1 needs you · 0 running · 1 idle
+             agent watch                                    1 needs you · 0 running · 0 idle
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
             >◐  decide  choose an option session-name                                    48m
 

@@ -41,10 +41,11 @@ const USER_TURN_LABEL_WIDTH: usize = 6;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
-/// Prefix width before the work type column. Added to the configured work
-/// type column width to align questions with the title.
-pub(super) const WAITING_QUESTION_BASE_INDENT: usize =
+/// Prefix width before the work type column, shared by title and
+/// waiting-question alignment.
+const TITLE_COLUMN_BASE_INDENT: usize =
     MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH;
+pub(super) const WAITING_QUESTION_BASE_INDENT: usize = TITLE_COLUMN_BASE_INDENT;
 /// Below this age, the time column renders in the default (bright)
 /// foreground; at or above it, it dims to `DIM_FG`. Independent of status
 /// color, so a stale RUNNING session's time still reads as stale.
@@ -66,7 +67,7 @@ fn work_type_column_width(app: &App) -> usize {
 /// disappears on narrow terminals.
 fn title_column_width(term_width: usize, work_type_column_width: usize) -> usize {
     term_width
-        .saturating_sub(WAITING_QUESTION_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
+        .saturating_sub(TITLE_COLUMN_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
         .max(MIN_TITLE_WIDTH)
 }
 
@@ -170,13 +171,13 @@ fn user_turn_label_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Section header color: YOUR TURN and RUNNING echo their status color
-/// (red / green); UNREAD and the idle (Paused/Stopped) section keep the
-/// neutral header look.
+/// Section headers echo their status color for YOUR TURN, WAITING, and
+/// RUNNING; UNREAD and idle (Paused/Stopped) keep the neutral header look.
 fn header_style(kind: Section) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match kind {
-        Section::NeedsYou => base.fg(Color::Red),
+        Section::UserTurn => base.fg(Color::Red),
+        Section::Waiting => base.fg(Color::Yellow),
         Section::Running => base.fg(Color::Green),
         Section::Unread | Section::Idle => base.fg(DIM_FG),
     }
@@ -495,9 +496,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::needs_you(
-        Section::NeedsYou,
+    #[case::user_turn(
+        Section::UserTurn,
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    )]
+    #[case::waiting(
+        Section::Waiting,
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     )]
     #[case::running(
         Section::Running,
