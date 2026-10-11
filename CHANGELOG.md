@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.383](https://github.com/fohte/armyknife/compare/v0.1.382...v0.1.383) (2026-10-11)
+
+
+### Features
+
+* **agent:** record session stop reasons ([#1096](https://github.com/fohte/armyknife/issues/1096)) ([37eeeb0](https://github.com/fohte/armyknife/commit/37eeeb0f8b9417f006eda049c980f694fafda59e))
+
 ## [0.1.382](https://github.com/fohte/armyknife/compare/v0.1.381...v0.1.382) (2026-10-11)
 
 
