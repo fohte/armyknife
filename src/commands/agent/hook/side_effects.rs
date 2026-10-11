@@ -3,6 +3,8 @@ use std::path::Path;
 #[cfg(not(test))]
 use super::super::archive_tq_session_detached;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
+#[cfg(test)]
+use super::super::types::HookEvent;
 use super::super::types::{Session, SessionStatus};
 use crate::shared::config::AgentConfig;
 
@@ -36,6 +38,12 @@ pub(super) struct SideEffects {
     /// archive worker.
     #[cfg(test)]
     pub(super) tq_archive_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records notification events without invoking an external service.
+    #[cfg(test)]
+    pub(super) notification_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<HookEvent>>>>,
+    /// Test-only sink that records sessions passed to the auto-compact worker.
+    #[cfg(test)]
+    pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 #[cfg(test)]
@@ -62,6 +70,10 @@ impl SideEffects {
             tmux_sync_calls: None,
             #[cfg(test)]
             tq_archive_calls: None,
+            #[cfg(test)]
+            notification_calls: None,
+            #[cfg(test)]
+            auto_compact_calls: None,
         }
     }
 
@@ -76,7 +88,31 @@ impl SideEffects {
             removed_notification_groups: None,
             tmux_sync_calls: None,
             tq_archive_calls: None,
+            notification_calls: None,
+            auto_compact_calls: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn send_notification(&self, event: HookEvent) {
+        if let Some(calls) = &self.notification_calls {
+            calls
+                .lock()
+                .expect("notification_calls mutex poisoned")
+                .push(event);
+        }
+    }
+
+    pub(super) fn schedule_auto_compact(&self, session_id: &str) {
+        #[cfg(test)]
+        if let Some(calls) = &self.auto_compact_calls {
+            calls
+                .lock()
+                .expect("auto_compact_calls mutex poisoned")
+                .push(session_id.to_string());
+        }
+        #[cfg(not(test))]
+        super::super::auto_compact::spawn_in_background(session_id);
     }
 
     /// Pushes the latest pane / window status into tmux. In tests, also
@@ -105,6 +141,7 @@ impl SideEffects {
     }
 
     pub(super) fn remove_notification_group(&self, group: &str) {
+        #[cfg(not(test))]
         if self.notifications {
             let _ = crate::infra::notification::remove_group(group);
         }

@@ -13,7 +13,6 @@ use indoc::formatdoc;
 use lazy_regex::regex_replace_all;
 
 use self::side_effects::SideEffects;
-use super::auto_compact;
 use super::claude_sessions;
 use super::error::CcError;
 use super::session_status;
@@ -33,6 +32,7 @@ mod pane_binding;
 pub(super) mod permission_notification;
 mod session_lifecycle;
 mod side_effects;
+mod stop;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -60,16 +60,18 @@ const HEADLESS_ENTRYPOINT_PREFIX: &str = "sdk-";
 /// Runs the hook command.
 /// Reads JSON input from stdin and updates the session state.
 pub fn run(args: &HookArgs) -> Result<()> {
+    let event = HookEvent::from_str(&args.event)?;
+
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
-        return Ok(());
+        return write_stop_response(args.engine, event, None);
     }
 
     // Headless runs inherit TMUX_PANE from their parent interactive session;
     // skip them to avoid overwriting the parent's registered session state.
     if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
-        return Ok(());
+        return write_stop_response(args.engine, event, None);
     }
 
     let run_id = short_run_id();
@@ -78,9 +80,6 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Read raw stdin first for debug logging
     let raw_stdin = read_raw_stdin()?;
-
-    // Parse event type
-    let event = HookEvent::from_str(&args.event)?;
 
     // Parse JSON from raw stdin
     let log_level = get_log_level();
@@ -102,7 +101,17 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
 
     input.engine = args.engine;
-    process_hook_event(event, input)
+    let result = process_hook_event(event, input)?;
+    let block_reason = match result {
+        ProcessResult::StopBlocked(reason) => Some(reason),
+        ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
+    };
+    write_stop_response(args.engine, event, block_reason.as_deref())
+}
+
+fn write_stop_response(engine: Engine, event: HookEvent, block_reason: Option<&str>) -> Result<()> {
+    let stdout = io::stdout();
+    stop::write_response(engine, event, block_reason, &mut stdout.lock())
 }
 
 /// Result of processing a hook event.
@@ -114,13 +123,15 @@ enum ProcessResult {
     SessionEnded,
     /// Event was skipped (e.g., resume session-start)
     Skipped,
+    /// Stop was blocked because the agent must report its reason for stopping.
+    StopBlocked(String),
 }
 
 /// Processes a hook event with the given input.
 /// This is the core logic separated from stdin handling for testability.
-fn process_hook_event(event: HookEvent, input: HookInput) -> Result<()> {
+fn process_hook_event(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all()).map(|_| ())
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all())
 }
 
 /// Marks a Codex session ended after its CLI process exits.
@@ -388,6 +399,8 @@ fn process_hook_event_impl(
             engine: input.engine,
         }
     });
+    let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
+    let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
 
     let work_type_config =
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
@@ -488,6 +501,15 @@ fn process_hook_event_impl(
     // event (e.g. another subagent's `PreToolUse`) can't paper over it.
     if session.has_pending_permission_requests() {
         status = SessionStatus::WaitingInput;
+    }
+
+    let stop_block_reason = (event == HookEvent::Stop)
+        .then(|| {
+            stop::block_reason_for_hook(&input, &session, was_waiting_for_input, was_asking_user)
+        })
+        .flatten();
+    if stop_block_reason.is_some() {
+        status = SessionStatus::Running;
     }
 
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
@@ -601,14 +623,20 @@ fn process_hook_event_impl(
     // SessionEnd never reaches here (early return above). Also skipped
     // while any agent still has a pending permission wait, so a sibling
     // agent's event doesn't erase a still-relevant permission notification.
-    if !matches!(event, HookEvent::Notification) && !session.has_pending_permission_requests() {
+    if stop_block_reason.is_none()
+        && !matches!(event, HookEvent::Notification)
+        && !session.has_pending_permission_requests()
+    {
         side_effects.remove_notification_group(&input.session_id);
     }
 
     // Send notification if applicable (errors are logged but don't fail the hook).
-    if side_effects.notifications {
+    if stop_block_reason.is_none() && side_effects.notifications {
         let config = config::load_config_or_default();
         if should_notify(event, session.has_pending_bg_tasks(), &config) {
+            #[cfg(test)]
+            side_effects.send_notification(event);
+            #[cfg(not(test))]
             if event == HookEvent::PermissionRequest {
                 let message = permission_notification_message(&input);
                 permission_notification::spawn(&session, &permission_agent_key, &message);
@@ -640,7 +668,7 @@ fn process_hook_event_impl(
     // main loop went idle (the post-launch Stop is synthetic). Claude Code
     // task IDs are refreshed from `background_tasks`; armyknife's task marker
     // is read from its separate registry for this Stop event.
-    if side_effects.auto_compact && event == HookEvent::Stop {
+    if stop_block_reason.is_none() && side_effects.auto_compact && event == HookEvent::Stop {
         if session.engine != Engine::Claude {
             tracing::info!(
                 event = "agent.auto_compact.skipped",
@@ -657,7 +685,7 @@ fn process_hook_event_impl(
         } else {
             let config = config::load_config_or_default();
             if config.agent.auto_compact.enabled {
-                auto_compact::spawn_in_background(&session.session_id);
+                side_effects.schedule_auto_compact(&session.session_id);
             } else {
                 tracing::info!(
                     event = "agent.auto_compact.skipped",
@@ -666,6 +694,10 @@ fn process_hook_event_impl(
                 );
             }
         }
+    }
+
+    if let Some(reason) = stop_block_reason {
+        return Ok(ProcessResult::StopBlocked(reason.to_string()));
     }
 
     Ok(ProcessResult::SessionSaved)
@@ -1009,6 +1041,7 @@ fn is_notifiable_event(event: HookEvent, has_pending_bg_tasks: bool) -> bool {
 
 /// Sends a notification for the given event.
 /// Errors are printed to stderr but don't fail the hook.
+#[cfg(not(test))]
 fn send_notification(event: HookEvent, input: &HookInput, session: &Session, config: &Config) {
     let notification = build_notification(event, input, session, config);
 
@@ -2199,6 +2232,8 @@ mod tests {
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
             tq_archive_calls: None,
+            notification_calls: None,
+            auto_compact_calls: None,
         };
 
         let input: HookInput =
@@ -2244,18 +2279,18 @@ mod tests {
     )]
     // Stop overwrites both sets wholesale from the registry's current view --
     // an id no longer present in background_tasks is dropped, not merged
-    // with whatever was pending before, and the now-empty sets let the
-    // session transition to Stopped.
+    // with whatever was pending before. With no remaining reason to stop,
+    // the session stays Running until the agent reports its status.
     #[case::stale_ids_are_dropped(
         &["stale-bg"], &["stale-agent"],
         r#","background_tasks":[]"#,
-        &[], &[], SessionStatus::Stopped,
+        &[], &[], SessionStatus::Running,
     )]
     // Claude Code older than v2.1.145 omits the field entirely; it
     // deserializes to an empty vec and both sets fall back to "nothing
     // pending".
     #[case::missing_field_falls_back_to_empty(
-        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Stopped,
+        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Running,
     )]
     fn stop_refreshes_pending_task_ids_from_background_tasks(
         #[case] initial_bg: &[&str],
@@ -2510,9 +2545,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_background_tasks_field("", &[], SessionStatus::Stopped)]
+    #[case::no_background_tasks_field("", &[], SessionStatus::Running)]
     // `background_tasks` present but agent-x's subagent already finished.
-    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
+    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Running)]
     // A different subagent (agent-y) is still live; agent-x's stale key is
     // still dropped. The session still transitions to Stopped: `status`
     // reflects the main loop going idle, not agent-y's still-pending task
@@ -2592,6 +2627,8 @@ mod tests {
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
             tq_archive_calls: None,
+            notification_calls: None,
+            auto_compact_calls: None,
         };
 
         let payload = format!(
@@ -2642,6 +2679,12 @@ mod tests {
         existing.session_id = "read-sess".to_string();
         existing.status = initial_status;
         existing.read_at = initial_read_at;
+        if event == HookEvent::Stop {
+            existing.agent_status = Some(super::super::types::AgentStatus {
+                kind: super::super::types::AgentStatusKind::Done,
+                note: "task complete".to_string(),
+            });
+        }
         store::save_session_to(sessions_dir, &existing).expect("save");
 
         let payload = if let Some(nt) = notification_type {
@@ -2697,6 +2740,176 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum StopReason {
+        Unknown,
+        StatusSet,
+        BackgroundTask,
+        SessionCron,
+        PermissionPrompt,
+        AskUserQuestion,
+        StopHookActive,
+        Paused,
+    }
+
+    #[rstest]
+    #[case::unknown(StopReason::Unknown, true)]
+    #[case::status_set(StopReason::StatusSet, false)]
+    #[case::background_task(StopReason::BackgroundTask, false)]
+    #[case::session_cron(StopReason::SessionCron, false)]
+    #[case::permission_prompt(StopReason::PermissionPrompt, false)]
+    #[case::ask_user_question(StopReason::AskUserQuestion, false)]
+    #[case::stop_hook_active(StopReason::StopHookActive, false)]
+    #[case::paused(StopReason::Paused, false)]
+    fn stop_requires_status_only_when_reason_is_unknown(
+        #[case] reason: StopReason,
+        #[case] blocked: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let payload = match reason {
+            StopReason::BackgroundTask => serde_json::json!({
+                "session_id": "test-123",
+                "cwd": "/tmp/test",
+                "background_tasks": [{"id": "example-task", "type": "shell"}],
+                "last_assistant_message": "Example response.",
+            }),
+            StopReason::SessionCron => serde_json::json!({
+                "session_id": "test-123",
+                "cwd": "/tmp/test",
+                "session_crons": [{"id": "example-cron"}],
+                "last_assistant_message": "Example response.",
+            }),
+            StopReason::StopHookActive => serde_json::json!({
+                "session_id": "test-123",
+                "cwd": "/tmp/test",
+                "stop_hook_active": true,
+                "last_assistant_message": "Example response.",
+            }),
+            _ => serde_json::json!({
+                "session_id": "test-123",
+                "cwd": "/tmp/test",
+                "last_assistant_message": "Example response.",
+            }),
+        };
+        let input: HookInput =
+            serde_json::from_value(payload).expect("stop payload should deserialize");
+
+        save_test_session(sessions_dir, "test-123", |session| match reason {
+            StopReason::Unknown
+            | StopReason::BackgroundTask
+            | StopReason::SessionCron
+            | StopReason::StopHookActive => {}
+            StopReason::StatusSet => {
+                session.agent_status = Some(AgentStatus {
+                    kind: AgentStatusKind::Done,
+                    note: "Example completion.".to_string(),
+                });
+            }
+            StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
+            StopReason::AskUserQuestion => {
+                session.current_tool = Some("AskUserQuestion".to_string());
+            }
+            StopReason::Paused => session.status = SessionStatus::Paused,
+        });
+
+        let result =
+            process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
+                .expect("stop hook should succeed");
+
+        let expected = if blocked {
+            ProcessResult::StopBlocked(
+                stop::block_reason(stop::StopConditions::default())
+                    .expect("unknown stop should require a status")
+                    .to_string(),
+            )
+        } else {
+            ProcessResult::SessionSaved
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn blocked_stop_keeps_session_running_and_skips_side_effects() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let tmux_sync_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let notification_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let auto_compact_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let removed_notification_groups = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            tmux: false,
+            notifications: true,
+            auto_compact: true,
+            tq_archive: false,
+            track_bg_run_tasks: false,
+            removed_notification_groups: Some(removed_notification_groups.clone()),
+            tmux_sync_calls: Some(tmux_sync_calls.clone()),
+            tq_archive_calls: None,
+            notification_calls: Some(notification_calls.clone()),
+            auto_compact_calls: Some(auto_compact_calls.clone()),
+        };
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "last_assistant_message": "Example response.",
+        }))
+        .expect("stop payload should deserialize");
+
+        let result = temp_env::with_vars(
+            [
+                ("ARMYKNIFE_NOTIFICATION__ENABLED", Some("true")),
+                ("ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED", Some("true")),
+            ],
+            || process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &side_effects),
+        )
+        .expect("stop hook should succeed");
+        let saved_session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = (
+            result,
+            saved_session.status,
+            tmux_sync_calls
+                .lock()
+                .expect("tmux sink should lock")
+                .clone(),
+            removed_notification_groups
+                .lock()
+                .expect("notification removal sink should lock")
+                .clone(),
+            notification_calls
+                .lock()
+                .expect("notification sink should lock")
+                .clone(),
+            auto_compact_calls
+                .lock()
+                .expect("auto-compact sink should lock")
+                .clone(),
+        );
+
+        assert_eq!(
+            recorded,
+            (
+                ProcessResult::StopBlocked(
+                    stop::block_reason(stop::StopConditions::default())
+                        .expect("unknown stop should require a status")
+                        .to_string(),
+                ),
+                SessionStatus::Running,
+                vec![(
+                    None,
+                    Some(SessionStatus::Running),
+                    Some("test-123".to_string()),
+                    sessions_dir.to_path_buf(),
+                )],
+                Vec::<String>::new(),
+                Vec::<HookEvent>::new(),
+                Vec::<String>::new(),
+            ),
+        );
     }
 
     #[rstest]

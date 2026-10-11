@@ -9,6 +9,7 @@ use clap::Args;
 use super::{build_notification_with_message, config, is_notification_enabled, store};
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::notification;
+#[cfg(not(test))]
 use crate::infra::process;
 use crate::shared::dirs;
 
@@ -47,6 +48,7 @@ pub struct DelayedPermissionNotificationArgs {
 
 /// Starts a detached worker so the synchronous hook is not held open
 /// while waiting for a possible follow-up event.
+#[cfg(not(test))]
 pub(super) fn spawn(session: &Session, agent_key: &str, message: &str) {
     let request_id = session
         .pending_permission_request_ids

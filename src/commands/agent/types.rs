@@ -232,6 +232,14 @@ pub struct HookInput {
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTask>,
 
+    /// Session-scoped scheduled runs reported in Claude Code Stop input.
+    #[serde(default)]
+    pub session_crons: Vec<serde_json::Value>,
+
+    /// Whether a previous Stop hook kept the current turn running.
+    #[serde(default)]
+    pub stop_hook_active: bool,
+
     /// The `Stop` hook payload's final assistant message of the turn, which
     /// avoids re-reading the transcript (see `hook.rs`'s `last_message`
     /// update). Always present for Codex; absent for older Claude Code
