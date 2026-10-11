@@ -205,6 +205,7 @@ mod tests {
             pending_permission_request_ids: BTreeMap::new(),
             read_at: None,
             sweep_signaled: false,
+            agent_status: None,
             engine: Engine::Claude,
         }
     }

@@ -30,6 +30,7 @@ mod resume;
 mod resurrect;
 pub(crate) mod session_status;
 mod signal;
+mod status;
 pub(crate) mod store;
 mod sweep;
 pub(crate) mod tmux_sync;
@@ -63,6 +64,7 @@ pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
+pub use status::StatusCommands;
 pub use sweep::SweepArgs;
 pub use watch::WatchArgs;
 pub use window_status::WindowStatusArgs;
@@ -107,6 +109,10 @@ pub enum AgentCommands {
     /// Mark the pane's Claude Code session as read (wire from tmux pane-focus-in)
     #[command(name = "mark-read")]
     MarkRead(MarkReadArgs),
+
+    /// Set the calling session's reason for stopping
+    #[command(subcommand)]
+    Status(StatusCommands),
 
     /// Resume a Claude Code session from tmux pane's user option
     #[command(visible_alias = "r")]
@@ -173,6 +179,7 @@ impl AgentCommands {
             Self::Watch(args) => watch::run(args)?,
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
+            Self::Status(command) => status::run(command)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
