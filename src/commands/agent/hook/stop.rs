@@ -1,9 +1,9 @@
-use std::io::{self, Write};
+use std::io::Write;
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::super::types::{Engine, HookInput, Session, SessionStatus};
+use super::super::types::{Engine, HookEvent, HookInput, Session, SessionStatus};
 
 const STATUS_INSTRUCTION: &str = indoc::indoc! {"
     Set your status with `a agent status set <kind> <note>` before stopping.
@@ -62,10 +62,11 @@ pub(super) fn block_reason_for_hook(
 
 pub(super) fn write_response(
     engine: Engine,
-    event_name: &str,
+    event: HookEvent,
     block_reason: Option<&str>,
+    mut writer: impl Write,
 ) -> Result<()> {
-    if event_name != "stop" {
+    if event != HookEvent::Stop {
         return Ok(());
     }
 
@@ -73,10 +74,9 @@ pub(super) fn write_response(
         return Ok(());
     };
 
-    let mut stdout = io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &response)?;
-    writeln!(stdout)?;
-    stdout.flush()?;
+    serde_json::to_writer(&mut writer, &response)?;
+    writeln!(writer)?;
+    writer.flush()?;
     Ok(())
 }
 
@@ -148,21 +148,39 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude_block(Engine::Claude, Some(STATUS_INSTRUCTION), Some(json!({
-        "decision": "block",
-        "reason": STATUS_INSTRUCTION,
-    })))]
-    #[case::codex_block(Engine::Codex, Some(STATUS_INSTRUCTION), Some(json!({
-        "decision": "block",
-        "reason": STATUS_INSTRUCTION,
-    })))]
-    #[case::claude_continue(Engine::Claude, None, None)]
-    #[case::codex_continue(Engine::Codex, None, Some(json!({})))]
-    fn response_format_matches_engine(
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn stop_block_writes_the_complete_response(#[case] engine: Engine) {
+        let mut output = Vec::new();
+        write_response(
+            engine,
+            HookEvent::Stop,
+            Some(STATUS_INSTRUCTION),
+            &mut output,
+        )
+        .expect("response should write");
+
+        let mut expected = serde_json::to_vec(&json!({
+            "decision": "block",
+            "reason": STATUS_INSTRUCTION,
+        }))
+        .expect("expected response should serialize");
+        expected.push(b'\n');
+        assert_eq!(output, expected);
+    }
+
+    #[rstest]
+    #[case::claude_stop(Engine::Claude, HookEvent::Stop, b"")]
+    #[case::codex_stop(Engine::Codex, HookEvent::Stop, b"{}\n")]
+    #[case::codex_other_event(Engine::Codex, HookEvent::PostToolUse, b"")]
+    fn allowed_or_other_events_write_expected_output(
         #[case] engine: Engine,
-        #[case] block_reason: Option<&str>,
-        #[case] expected: Option<Value>,
+        #[case] event: HookEvent,
+        #[case] expected: &[u8],
     ) {
-        assert_eq!(response_value(engine, block_reason), expected);
+        let mut output = Vec::new();
+        write_response(engine, event, None, &mut output).expect("response should write");
+
+        assert_eq!(output, expected);
     }
 }

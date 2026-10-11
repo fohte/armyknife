@@ -232,11 +232,11 @@ pub struct HookInput {
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTask>,
 
-    /// Claude Code の Stop 入力に含まれるセッション単位の予約実行
+    /// Session-scoped scheduled runs reported in Claude Code Stop input.
     #[serde(default)]
     pub session_crons: Vec<serde_json::Value>,
 
-    /// Stop hook により現在のターンが続行中か
+    /// Whether a previous Stop hook kept the current turn running.
     #[serde(default)]
     pub stop_hook_active: bool,
 

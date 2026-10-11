@@ -16,6 +16,7 @@ mod schedule;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+#[cfg(not(test))]
 pub use schedule::spawn_in_background;
 
 #[derive(Args, Clone, PartialEq, Eq)]

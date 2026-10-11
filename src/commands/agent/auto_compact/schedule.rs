@@ -69,6 +69,7 @@ pub struct ScheduleArgs {
 /// Stop hook can return immediately. Errors are swallowed (logged to
 /// stderr) — failing the hook for an opportunistic optimization is the
 /// wrong trade.
+#[cfg(not(test))]
 pub fn spawn_in_background(session_id: &str) {
     process::spawn_self_detached(
         "agent.auto_compact.spawn",
