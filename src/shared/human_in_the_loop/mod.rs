@@ -34,6 +34,9 @@ use crate::shared::diff::write_unified_diff;
 
 const DIFF_CONTEXT_LINES: usize = 3;
 
+/// Distinguishes PR draft reviews from other Human-in-the-Loop reviews.
+pub(crate) const PR_DRAFT_REVIEW_MARKER: &str = "pr-draft-review:";
+
 /// How long to wait for the terminal to signal it has started running the
 /// review-complete command before giving up. Covers cases like macOS being
 /// asleep when Claude Code invokes the command, where Ghostty's AppleScript
@@ -49,6 +52,8 @@ const REVIEW_PANE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 pub trait ReviewHandler<S: DocumentSchema> {
     /// Command label shown in review notification titles.
     const NOTIFICATION_COMMAND_NAME: &'static str = "review";
+    /// Marker recorded on the parent agent session while this review is open.
+    const PENDING_REVIEW_MARKER: Option<&'static str> = None;
 
     /// Build the command-line arguments for the review-complete subcommand.
     ///
@@ -115,8 +120,9 @@ where
         command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
     };
 
-    start_review_with_launcher::<S, _, _>(
+    start_review_with_marker::<S, _, _>(
         &document_path,
+        <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
         |document_path, done_fifo_path| {
             launch::launch_review::<S, H>(
                 tmux_pane_id.as_deref(),
@@ -136,8 +142,23 @@ where
     )
 }
 
+#[cfg(test)]
 fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
+    launch_review: L,
+    is_pane_alive: P,
+) -> Result<Option<Document<S>>>
+where
+    S: DocumentSchema,
+    L: FnOnce(&Path, &Path) -> Result<Option<String>>,
+    P: FnMut(&str) -> Result<bool>,
+{
+    start_review_with_marker(document_path, None, launch_review, is_pane_alive)
+}
+
+fn start_review_with_marker<S, L, P>(
+    document_path: &Path,
+    pending_review_marker: Option<&str>,
     launch_review: L,
     is_pane_alive: P,
 ) -> Result<Option<Document<S>>>
@@ -176,7 +197,8 @@ where
     let review_pane_id = launch_review(document_path, &done_fifo_path)?;
 
     {
-        let _pending_review = pending_review::PendingReviewGuard::for_current_session();
+        let _pending_review =
+            pending_review::PendingReviewGuard::for_current_session(pending_review_marker);
         if let Some(pane_id) = review_pane_id.as_deref() {
             wait_for_fifo_signal_or_pane_exit(done_fifo_reader, pane_id, is_pane_alive)?;
         } else {

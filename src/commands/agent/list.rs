@@ -10,6 +10,8 @@ use super::store;
 #[cfg(test)]
 use super::types::Engine;
 use super::types::{DisplayStatus, Session, StatusColor};
+use super::user_turn::next_user_turn;
+use crate::infra::tmux::escape_format_value;
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -70,33 +72,32 @@ fn calculate_title_width(term_width: usize) -> usize {
     }
 }
 
-/// Renders a short status string for tmux status bar.
-///
-/// - If any session is WaitingInput: `#[fg=yellow]◐ N` (N = count of non-running sessions)
-/// - If only Stopped sessions exist: `○ N`
-/// - If all Running or no sessions: empty string (no output)
+/// Renders the highest-priority user action for the tmux status bar.
 fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
-    let (waiting_count, stopped_count) =
-        sessions
-            .iter()
-            .fold((0, 0), |(waiting, stopped), s| match s.display_status() {
-                DisplayStatus::WaitingInput => (waiting + 1, stopped),
-                DisplayStatus::Stopped | DisplayStatus::UnreadStopped => (waiting, stopped + 1),
-                _ => (waiting, stopped),
-            });
-
-    let pending_count = waiting_count + stopped_count;
-    if pending_count == 0 {
+    let Some(turn) = next_user_turn(sessions) else {
         return Ok(());
-    }
+    };
 
-    if waiting_count > 0 {
-        write!(writer, "#[fg=yellow]\u{25d0} {pending_count}#[default]")?;
-    } else {
-        write!(writer, "\u{25cb} {pending_count}")?;
+    write!(
+        writer,
+        "{} #[fg=colour15,bg=colour1]{}#[default]",
+        turn.kind.symbol(),
+        turn.kind.label()
+    )?;
+    if let Some(note) = turn.note {
+        write!(writer, " {}", escape_tmux_status_text(note))?;
     }
+    write!(
+        writer,
+        " ({})",
+        escape_tmux_status_text(&get_session_display_name(turn.session))
+    )?;
 
     Ok(())
+}
+
+fn escape_tmux_status_text(value: &str) -> String {
+    escape_format_value(&value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// Renders sessions to the given writer.
@@ -240,7 +241,7 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{SessionStatus, TmuxInfo};
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, SessionStatus, TmuxInfo};
     use chrono::Duration;
     use indoc::indoc;
     use rstest::rstest;
@@ -589,123 +590,105 @@ mod tests {
         assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
     }
 
-    #[test]
-    fn test_render_tmux_status_all_running() {
-        let sessions = vec![
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-        ];
+    fn render_tmux_status_to_string(sessions: &[Session]) -> String {
         let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
-        assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
+        render_tmux_status(&mut output, sessions).expect("render should succeed");
+        String::from_utf8(output).expect("valid utf8")
     }
 
     #[test]
-    fn test_render_tmux_status_waiting_input() {
-        let sessions = vec![
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::WaitingInput,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::WaitingInput,
-                ..create_test_session()
-            },
-        ];
-        let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
+    fn test_render_tmux_status_empty_when_no_action_is_available() {
+        let mut waiting_without_reason = create_test_session();
+        waiting_without_reason.status = SessionStatus::WaitingInput;
+        let mut waiting_for_other_work = create_test_session();
+        waiting_for_other_work.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Wait,
+            note: "waiting for CI".to_string(),
+        });
+        let mut done = create_test_session();
+        done.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Done,
+            note: "reported to parent".to_string(),
+        });
+
         assert_eq!(
-            String::from_utf8(output).expect("valid utf8"),
-            "#[fg=yellow]\u{25d0} 2#[default]"
+            render_tmux_status_to_string(&[
+                Session {
+                    status: SessionStatus::Running,
+                    ..create_test_session()
+                },
+                waiting_without_reason,
+                waiting_for_other_work,
+                done,
+                create_test_session(),
+            ]),
+            ""
         );
     }
 
     #[test]
-    fn test_render_tmux_status_stopped_only() {
-        let sessions = vec![
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::Stopped,
-                ..create_test_session()
-            },
-        ];
-        let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
-        assert_eq!(String::from_utf8(output).expect("valid utf8"), "\u{25cb} 1");
-    }
+    fn test_render_tmux_status_shows_agent_note_and_escapes_tmux_markup() {
+        let mut session = create_test_session();
+        session.status = SessionStatus::Stopped;
+        session.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: indoc! {"
+                #[fg=red]
+                choose a direction"
+            }
+            .to_string(),
+        });
 
-    #[test]
-    fn test_render_tmux_status_excludes_background_sessions() {
-        // A Stopped session with a pending bg task and no crit link displays
-        // as `Background`, not `Stopped`, so it must not inflate the tmux
-        // status bar's stopped count.
-        let sessions = vec![
-            Session {
-                status: SessionStatus::Stopped,
-                pending_bg_task_ids: std::collections::BTreeSet::from(["bg-1".to_string()]),
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-        ];
-        let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
-        assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
-    }
-
-    #[test]
-    fn test_render_tmux_status_counts_human_review_as_waiting() {
-        let sessions = vec![Session {
-            status: SessionStatus::Stopped,
-            pending_bg_task_ids: std::collections::BTreeSet::from(["task-1".to_string()]),
-            pending_human_review_ids: std::collections::BTreeSet::from(["review-id".to_string()]),
-            ..create_test_session()
-        }];
-        let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
         assert_eq!(
-            String::from_utf8(output).expect("valid utf8"),
-            "#[fg=yellow]\u{25d0} 1#[default]"
+            render_tmux_status_to_string(&[session]),
+            "◐ #[fg=colour15,bg=colour1]decide#[default] ##[fg=red] choose a direction (myproject)"
         );
     }
 
     #[test]
-    fn test_render_tmux_status_mixed_waiting_and_stopped() {
-        let sessions = vec![
-            Session {
-                status: SessionStatus::WaitingInput,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::Stopped,
-                ..create_test_session()
-            },
-            Session {
-                status: SessionStatus::Running,
-                ..create_test_session()
-            },
-        ];
-        let mut output = Vec::new();
-        render_tmux_status(&mut output, &sessions).expect("render should succeed");
-        // WaitingInput takes priority for the symbol, count includes both
+    fn test_render_tmux_status_labels_automatic_waits() {
+        let mut body = create_test_session();
+        body.status = SessionStatus::Stopped;
+        body.pending_bg_task_ids.insert("review-task".to_string());
+        body.pending_human_review_ids.insert(format!(
+            "{}review-marker",
+            crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER
+        ));
+        let mut permission = create_test_session();
+        permission.status = SessionStatus::WaitingInput;
+        permission
+            .pending_permission_agent_ids
+            .insert("agent".to_string());
+        permission.current_tool = Some("Bash(run review)".to_string());
+        let mut ask = create_test_session();
+        ask.status = SessionStatus::Running;
+        ask.current_tool = Some("AskUserQuestion".to_string());
+
         assert_eq!(
-            String::from_utf8(output).expect("valid utf8"),
-            "#[fg=yellow]\u{25d0} 2#[default]"
+            [body, permission, ask]
+                .iter()
+                .map(|session| render_tmux_status_to_string(std::slice::from_ref(session)))
+                .collect::<Vec<_>>(),
+            vec![
+                "◐ #[fg=colour15,bg=colour1]body#[default] (myproject)",
+                "◐ #[fg=colour15,bg=colour1]allow#[default] Bash(run review) (myproject)",
+                "◐ #[fg=colour15,bg=colour1]ask#[default] (myproject)",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_tmux_status_shows_close_when_it_is_the_only_action() {
+        let mut close = create_test_session();
+        close.status = SessionStatus::Stopped;
+        close.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Close,
+            note: "close the worktree".to_string(),
+        });
+
+        assert_eq!(
+            render_tmux_status_to_string(&[close]),
+            "◌ #[fg=colour15,bg=colour1]close#[default] close the worktree (myproject)"
         );
     }
 
