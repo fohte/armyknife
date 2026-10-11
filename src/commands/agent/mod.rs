@@ -36,6 +36,7 @@ mod sweep;
 pub(crate) mod tmux_sync;
 mod tui;
 pub(crate) mod types;
+pub(crate) mod user_turn;
 mod watch;
 mod window_status;
 

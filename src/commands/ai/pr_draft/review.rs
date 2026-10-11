@@ -42,6 +42,8 @@ pub struct PrDraftReviewHandler;
 
 impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
     const NOTIFICATION_COMMAND_NAME: &'static str = "pr-draft";
+    const PENDING_REVIEW_MARKER: Option<&'static str> =
+        Some(crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER);
 
     fn build_complete_args(
         &self,

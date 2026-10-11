@@ -10,7 +10,7 @@ pub(super) struct PendingReviewGuard {
 }
 
 impl PendingReviewGuard {
-    pub(super) fn for_current_session() -> Option<Self> {
+    pub(super) fn for_current_session(marker: Option<&str>) -> Option<Self> {
         let session_id = EnvVars::load().own_session_id()?;
         let sessions_dir = match store::sessions_dir() {
             Ok(path) => path,
@@ -23,7 +23,7 @@ impl PendingReviewGuard {
             }
         };
 
-        match Self::for_session(&sessions_dir, &session_id) {
+        match Self::for_session(&sessions_dir, &session_id, marker) {
             Ok(guard) => Some(guard),
             Err(error) => {
                 tracing::warn!(
@@ -35,8 +35,16 @@ impl PendingReviewGuard {
         }
     }
 
-    pub(super) fn for_session(sessions_dir: &Path, session_id: &str) -> anyhow::Result<Self> {
-        let review_id = uuid::Uuid::new_v4().to_string();
+    pub(super) fn for_session(
+        sessions_dir: &Path,
+        session_id: &str,
+        marker: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let review_id = match marker {
+            Some(marker) => format!("{marker}{id}"),
+            None => id,
+        };
         store::update_session_in(sessions_dir, session_id, |session| {
             session.pending_human_review_ids.insert(review_id.clone());
             true
@@ -116,10 +124,14 @@ mod tests {
             .expect("session should be saved");
 
         let ((remaining_after_first_finishes, remaining_after_all_finish), second_id) = {
-            let first = PendingReviewGuard::for_session(&sessions_dir, "session-a")
+            let first = PendingReviewGuard::for_session(&sessions_dir, "session-a", None)
                 .expect("first marker should be added");
-            let second = PendingReviewGuard::for_session(&sessions_dir, "session-a")
-                .expect("second marker should be added");
+            let second = PendingReviewGuard::for_session(
+                &sessions_dir,
+                "session-a",
+                Some(crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER),
+            )
+            .expect("second marker should be added");
             let second_id = second.review_id.clone();
 
             drop(first);
