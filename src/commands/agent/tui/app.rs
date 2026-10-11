@@ -2,6 +2,7 @@ use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::user_turn::next_user_turn;
 use crate::shared::config::AgentConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -145,11 +146,11 @@ pub struct App {
 
 impl App {
     /// Creates a new App instance with initial session data.
-    /// Restores the last selected session if available.
+    /// Selects the highest-priority user turn, or restores the previous
+    /// selection when there is no user turn.
     ///
-    /// If `ARMYKNIFE_FOCUS_SESSION` is set, that session is selected instead of
-    /// the persisted last-selected session. This allows tmux bindings to pass
-    /// the currently focused pane's session ID via an environment variable.
+    /// `ARMYKNIFE_FOCUS_SESSION` takes precedence over the persisted selection
+    /// when both are used as a fallback.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let agent_config = crate::shared::config::load_config_or_default().agent;
@@ -164,10 +165,7 @@ impl App {
         let initial_session_id =
             focus_session_id.or_else(|| store::load_last_selected_session().ok().flatten());
 
-        if let Some(session_id) = initial_session_id {
-            let old_pos = app.list_state.selected();
-            app.restore_selection(old_pos, Some(&session_id));
-        }
+        app.restore_initial_selection(initial_session_id.as_deref());
 
         Ok(app)
     }
@@ -245,6 +243,16 @@ impl App {
             .and_then(|idx| self.sessions.get(idx))
     }
 
+    fn restore_initial_selection(&mut self, fallback_session_id: Option<&str>) {
+        let first_user_turn_id =
+            next_user_turn(&self.sessions).map(|turn| turn.session.session_id.clone());
+        if let Some(session_id) = first_user_turn_id {
+            self.restore_selection(None, Some(&session_id));
+        } else if let Some(session_id) = fallback_session_id {
+            self.restore_selection(self.list_state.selected(), Some(session_id));
+        }
+    }
+
     /// Returns the filtered sessions for display.
     pub fn filtered_sessions(&self) -> Vec<&Session> {
         self.filtered_indices
@@ -309,6 +317,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use chrono::TimeDelta;
     use std::path::PathBuf;
 
@@ -374,6 +383,32 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("second")
+        );
+    }
+
+    #[test]
+    fn test_initial_selection_prefers_the_highest_priority_user_turn() {
+        let mut running = create_test_session("running");
+        running.status = SessionStatus::Running;
+        let mut turn = create_test_session("turn");
+        turn.status = SessionStatus::Stopped;
+        turn.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: "choose an option".to_string(),
+        });
+        let mut earlier_turn = create_test_session("earlier-turn");
+        earlier_turn.status = SessionStatus::WaitingInput;
+        earlier_turn
+            .crit_urls
+            .push("https://example.com/review".to_string());
+
+        let mut app = create_test_app(vec![running, turn, earlier_turn]);
+        app.restore_initial_selection(Some("running"));
+
+        assert_eq!(
+            app.selected_session()
+                .map(|session| session.session_id.as_str()),
+            Some("earlier-turn")
         );
     }
 

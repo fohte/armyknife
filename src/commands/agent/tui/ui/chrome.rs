@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::{App, AppMode, View};
 use crate::commands::agent::tui::tq_sidebar::SidebarSelection;
+use crate::commands::agent::user_turn::user_turns;
 
 use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
@@ -137,8 +138,9 @@ fn render_input_bar(frame: &mut Frame, area: Rect, app: &App) {
 /// summary right-aligned. `idle` folds together Stopped and Paused since
 /// neither needs the user's attention.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let (running, waiting, stopped, paused) = count_statuses(&app.sessions);
+    let (running, _, stopped, paused) = count_statuses(&app.sessions);
     let idle = stopped + paused;
+    let waiting = user_turns(app.filtered_sessions().iter().copied()).len();
 
     let title = " agent watch";
     let needs_you = format!("{waiting} needs you");
@@ -267,6 +269,9 @@ mod tests {
         running.status = SessionStatus::Running;
         let mut waiting = create_test_session("s2");
         waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
         let mut paused = create_test_session("s3");
         paused.status = SessionStatus::Paused;
         let mut stopped = create_test_session("s4");

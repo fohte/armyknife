@@ -11,6 +11,7 @@ use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
     Section, SectionHeaderRow, SessionRowEntry, is_idle_session, is_related_task, kin_relation,
 };
+use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
 
 use super::super::helpers::{
     DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
@@ -35,6 +36,8 @@ pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
+/// The longest visible user-turn label is `decide`.
+const USER_TURN_LABEL_WIDTH: usize = 6;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
@@ -109,14 +112,71 @@ fn format_compact_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format!("{}d", hours / 24)
 }
 
-/// Section header color: NEEDS YOU and RUNNING echo their status color
-/// (amber / green) since they demand attention; UNREAD and the idle
-/// (Paused/Stopped) section have no dedicated status color and keep the
+/// Renders a user-turn row with its label and note ahead of the session name.
+pub(super) fn build_user_turn_item(
+    turn: &UserTurn<'_>,
+    app: &App,
+    now: DateTime<Utc>,
+    term_width: usize,
+    is_linked: bool,
+) -> ListItem<'static> {
+    let title = app
+        .get_cached_title(&turn.session.session_id)
+        .map(String::from)
+        .unwrap_or_else(|| get_title_display_name_fallback(turn.session));
+    let note = turn
+        .note
+        .map(|note| note.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|note| !note.is_empty());
+    let description = match note {
+        Some(note) => format!("{note} {title}"),
+        None => title,
+    };
+    let time_text = format_compact_time(turn.session.updated_at, now);
+    let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
+    let label = format!(" {:<USER_TURN_LABEL_WIDTH$} ", turn.kind.label());
+    let line_width = term_width.saturating_sub(MARKER_WIDTH);
+    let fixed_width = 1 + 1 + label.width() + 1 + TIME_COLUMN_WIDTH;
+    let description_width = line_width.saturating_sub(fixed_width);
+    let description = truncate(&description, description_width);
+    let description_padding = " ".repeat(description_width.saturating_sub(description.width()));
+    let symbol_style = if turn.kind == UserTurnKind::Close {
+        Style::default().fg(DIM_FG)
+    } else {
+        Style::default().fg(Color::Red)
+    };
+    let label_style = user_turn_label_style();
+
+    let item = ListItem::new(Line::from(vec![
+        Span::styled(turn.kind.symbol(), symbol_style),
+        Span::raw(" "),
+        Span::styled(label, label_style),
+        Span::raw(" "),
+        Span::raw(description),
+        Span::raw(description_padding),
+        Span::raw(time_col),
+    ]));
+    if is_linked {
+        item.style(Style::default().bg(Color::Indexed(236)))
+    } else {
+        item
+    }
+}
+
+fn user_turn_label_style() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .bg(Color::Red)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Section header color: YOUR TURN and RUNNING echo their status color
+/// (red / green); UNREAD and the idle (Paused/Stopped) section keep the
 /// neutral header look.
 fn header_style(kind: Section) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match kind {
-        Section::NeedsYou => base.fg(Color::Yellow),
+        Section::NeedsYou => base.fg(Color::Red),
         Section::Running => base.fg(Color::Green),
         Section::Unread | Section::Idle => base.fg(DIM_FG),
     }
@@ -437,7 +497,7 @@ mod tests {
     #[rstest]
     #[case::needs_you(
         Section::NeedsYou,
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     )]
     #[case::running(
         Section::Running,
@@ -453,6 +513,17 @@ mod tests {
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
         assert_eq!(header_style(kind), expected);
+    }
+
+    #[test]
+    fn test_user_turn_label_has_a_red_background() {
+        assert_eq!(
+            user_turn_label_style(),
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD)
+        );
     }
 
     #[rstest]

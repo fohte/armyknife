@@ -59,8 +59,11 @@ pub(crate) struct UserTurn<'a> {
     pub(crate) note: Option<&'a str>,
 }
 
-pub(crate) fn user_turns(sessions: &[Session]) -> Vec<UserTurn<'_>> {
-    let mut turns = sessions.iter().filter_map(user_turn).collect::<Vec<_>>();
+pub(crate) fn user_turns<'a>(sessions: impl IntoIterator<Item = &'a Session>) -> Vec<UserTurn<'a>> {
+    let mut turns = sessions
+        .into_iter()
+        .filter_map(user_turn)
+        .collect::<Vec<_>>();
     sort_user_turns(&mut turns);
     turns
 }
