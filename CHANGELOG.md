@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.386](https://github.com/fohte/armyknife/compare/v0.1.385...v0.1.386) (2026-10-11)
+
+
+### Bug Fixes
+
+* **agent:** exit `watch` immediately without waiting for runtime shutdown ([#1103](https://github.com/fohte/armyknife/issues/1103)) ([2603133](https://github.com/fohte/armyknife/commit/2603133b1a3b29c2a57813b2fc67d77e7a3f77a6))
+
 ## [0.1.385](https://github.com/fohte/armyknife/compare/v0.1.384...v0.1.385) (2026-10-11)
 
 
