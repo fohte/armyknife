@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.382](https://github.com/fohte/armyknife/compare/v0.1.381...v0.1.382) (2026-10-11)
+
+
+### Bug Fixes
+
+* **agent:** show waiting for input status when Codex sessions await review ([#1095](https://github.com/fohte/armyknife/issues/1095)) ([17681b9](https://github.com/fohte/armyknife/commit/17681b977e366d23bc4bb8405d6322f87c39731d))
+
 ## [0.1.381](https://github.com/fohte/armyknife/compare/v0.1.380...v0.1.381) (2026-10-10)
 
 
