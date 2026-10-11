@@ -413,6 +413,8 @@ On wide terminals, `a agent watch` shows a tq task sidebar beside the session li
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active and the main loop is stopped, `a agent list`, `a agent watch`, and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
+`a agent list --tmux` prints one next user action for a tmux status line, with the label on a red background, any available note, and the session name at the end. Detected actions are ordered as `crit`, `body`, `decide`, `read`, `do`, `idle`, `allow`, and `ask`; the oldest session update wins within each label. A `close` action appears only when no other action is available, and no output is printed when no user action is pending.
+
 Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files are written under the system temporary directory and may be removed by the OS.
 
 ```console

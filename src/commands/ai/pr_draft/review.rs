@@ -231,6 +231,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn review_handler_marks_pr_draft_pending_reviews() {
+        assert_eq!(
+            <PrDraftReviewHandler as ReviewHandler<Frontmatter>>::PENDING_REVIEW_MARKER,
+            Some(crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER),
+        );
+    }
+
     /// Write a minimal draft file under [`DraftFile::draft_dir`] so `run_impl`
     /// can locate it via the `--filepath` argument.
     fn write_draft(owner: &str, repo: &str, branch: &str, body: &str) -> PathBuf {

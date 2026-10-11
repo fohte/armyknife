@@ -3,7 +3,8 @@ use std::cmp::Ordering;
 use super::types::{AgentStatusKind, DisplayStatus, Session, SessionStatus};
 use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Variant order is the shared next-action priority used by tmux status and watch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(
     not(test),
     expect(
@@ -47,22 +48,6 @@ impl UserTurnKind {
             Self::Failed => "✗",
             Self::Close => "◌",
             _ => "◐",
-        }
-    }
-
-    fn priority(self) -> u8 {
-        match self {
-            Self::Failed => 0,
-            Self::Crit => 1,
-            Self::Body => 2,
-            Self::Decide => 3,
-            Self::Read => 4,
-            Self::Do => 5,
-            Self::Idle => 6,
-            Self::Allow => 7,
-            Self::Ask => 8,
-            Self::Merge => 9,
-            Self::Close => 10,
         }
     }
 }
@@ -154,8 +139,7 @@ fn is_ask_user_question(session: &Session) -> bool {
 
 fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
     left.kind
-        .priority()
-        .cmp(&right.kind.priority())
+        .cmp(&right.kind)
         .then_with(|| left.session.updated_at.cmp(&right.session.updated_at))
         .then_with(|| left.session.session_id.cmp(&right.session.session_id))
 }

@@ -11,6 +11,7 @@ use super::store;
 use super::types::Engine;
 use super::types::{DisplayStatus, Session, StatusColor};
 use super::user_turn::next_user_turn;
+use crate::infra::tmux::escape_format_value;
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -96,23 +97,7 @@ fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<
 }
 
 fn escape_tmux_status_text(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    let mut needs_space = false;
-    for ch in value.chars() {
-        if ch.is_whitespace() {
-            needs_space = !escaped.is_empty();
-        } else {
-            if needs_space {
-                escaped.push(' ');
-                needs_space = false;
-            }
-            if ch == '#' {
-                escaped.push('#');
-            }
-            escaped.push(ch);
-        }
-    }
-    escaped
+    escape_format_value(&value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// Renders sessions to the given writer.
@@ -647,7 +632,11 @@ mod tests {
         session.status = SessionStatus::Stopped;
         session.agent_status = Some(AgentStatus {
             kind: AgentStatusKind::Decide,
-            note: "#[fg=red]\nchoose a direction".to_string(),
+            note: indoc! {"
+                #[fg=red]
+                choose a direction"
+            }
+            .to_string(),
         });
 
         assert_eq!(

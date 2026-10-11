@@ -123,16 +123,12 @@ mod tests {
         store::save_session_to(&sessions_dir, &session("session-a"))
             .expect("session should be saved");
 
-        let ((remaining_after_first_finishes, remaining_after_all_finish), second_id) = {
+        let marker = crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
+        let (remaining_after_first_finishes, remaining_after_all_finish) = {
             let first = PendingReviewGuard::for_session(&sessions_dir, "session-a", None)
                 .expect("first marker should be added");
-            let second = PendingReviewGuard::for_session(
-                &sessions_dir,
-                "session-a",
-                Some(crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER),
-            )
-            .expect("second marker should be added");
-            let second_id = second.review_id.clone();
+            let second = PendingReviewGuard::for_session(&sessions_dir, "session-a", Some(marker))
+                .expect("second marker should be added");
 
             drop(first);
             let remaining_after_first_finishes =
@@ -147,15 +143,30 @@ mod tests {
                 .expect("session should exist")
                 .pending_human_review_ids;
 
-            (
-                (remaining_after_first_finishes, remaining_after_all_finish),
-                second_id,
-            )
+            (remaining_after_first_finishes, remaining_after_all_finish)
+        };
+
+        let normalize_ids = |ids: BTreeSet<String>| {
+            ids.into_iter()
+                .map(|id| {
+                    if id.starts_with(marker) {
+                        format!("{marker}<generated>")
+                    } else {
+                        "<generated>".to_string()
+                    }
+                })
+                .collect::<BTreeSet<_>>()
         };
 
         assert_eq!(
-            (remaining_after_first_finishes, remaining_after_all_finish),
-            (BTreeSet::from([second_id]), BTreeSet::new())
+            (
+                normalize_ids(remaining_after_first_finishes),
+                normalize_ids(remaining_after_all_finish)
+            ),
+            (
+                BTreeSet::from([format!("{marker}<generated>")]),
+                BTreeSet::new()
+            )
         );
     }
 }
