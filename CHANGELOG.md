@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.385](https://github.com/fohte/armyknife/compare/v0.1.384...v0.1.385) (2026-10-11)
+
+
+### Features
+
+* **agent:** show next required action in tmux status line ([#1100](https://github.com/fohte/armyknife/issues/1100)) ([26841da](https://github.com/fohte/armyknife/commit/26841dad8809cc94e416fa204339ab62895c6503))
+
 ## [0.1.384](https://github.com/fohte/armyknife/compare/v0.1.383...v0.1.384) (2026-10-11)
 
 
