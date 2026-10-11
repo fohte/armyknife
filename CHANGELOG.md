@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.384](https://github.com/fohte/armyknife/compare/v0.1.383...v0.1.384) (2026-10-11)
+
+
+### Features
+
+* **agent:** block stopping sessions with an unknown stop reason ([#1099](https://github.com/fohte/armyknife/issues/1099)) ([2dc6dc7](https://github.com/fohte/armyknife/commit/2dc6dc7dbc5628c61f0e2f977582c8fca661ec90))
+
 ## [0.1.383](https://github.com/fohte/armyknife/compare/v0.1.382...v0.1.383) (2026-10-11)
 
 
