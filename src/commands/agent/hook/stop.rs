@@ -60,19 +60,17 @@ pub(super) fn block_reason_for_hook(
     })
 }
 
-/// Consumes the previous armyknife block marker and records whether this
-/// Stop is blocked again. Returns whether this Stop must preserve its message.
+/// A status-setting continuation may emit intermediate hooks before Stop, so
+/// keep the blocked turn's final message until that Stop arrives.
 pub(super) fn preserve_last_message_after_block(
     session: &mut Session,
     event: HookEvent,
     blocked_by_armyknife: bool,
 ) -> bool {
-    if event != HookEvent::Stop {
-        return false;
-    }
-
     let preserve = session.stop_blocked_by_armyknife;
-    session.stop_blocked_by_armyknife = blocked_by_armyknife;
+    if event == HookEvent::Stop {
+        session.stop_blocked_by_armyknife = blocked_by_armyknife;
+    }
     preserve
 }
 

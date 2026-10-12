@@ -418,6 +418,7 @@ fn process_hook_event_impl(
 
     if event == HookEvent::UserPromptSubmit {
         session.agent_status = None;
+        session.stop_blocked_by_armyknife = false;
     }
 
     // Track per-agent permission-request waits. Each concurrently running
@@ -2854,7 +2855,7 @@ mod tests {
     #[rstest]
     #[case::claude(Engine::Claude)]
     #[case::codex(Engine::Codex)]
-    fn armyknife_block_preserves_the_message_until_the_following_stop(#[case] engine: Engine) {
+    fn armyknife_block_preserves_the_message_across_continuation_hooks(#[case] engine: Engine) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
         let blocked_reason = stop::block_reason(stop::StopConditions::default())
@@ -2862,50 +2863,114 @@ mod tests {
             .to_string();
 
         let mut recorded = Vec::new();
-        for (message, setup_status) in [
-            ("The task is complete.", None),
-            ("Status set.", Some(AgentStatusKind::Done)),
-            ("The follow-up turn is complete.", None),
-        ] {
-            if let Some(kind) = setup_status {
-                store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
-                    session.agent_status = Some(AgentStatus {
-                        kind,
-                        note: "Example completion.".to_string(),
-                    });
-                    true
-                })
-                .expect("session status should update");
-            } else if !recorded.is_empty() {
-                store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
-                    session.agent_status = None;
-                    true
-                })
-                .expect("session status should clear");
-            }
+        let first_block = process_hook_event_impl(
+            HookEvent::Stop,
+            stop_input(engine, "The task is complete.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        recorded.push((
+            first_block,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ));
 
-            let result = process_hook_event_impl(
-                HookEvent::Stop,
-                stop_input(engine, message, false),
-                sessions_dir,
-                &SideEffects::none(),
-            )
-            .expect("stop hook should succeed");
-            let session = store::load_session_from(sessions_dir, "blocked-stop-session")
-                .expect("session should load")
-                .expect("session should exist");
-            recorded.push((
-                result,
-                session.last_message,
-                session.stop_blocked_by_armyknife,
-            ));
-        }
+        let continuation = process_hook_event_impl(
+            HookEvent::PostToolUse,
+            stop_input(engine, "Tool continuation message.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("post tool hook should succeed");
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        recorded.push((
+            continuation,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ));
+
+        let before_tool = process_hook_event_impl(
+            HookEvent::PreToolUse,
+            stop_input(engine, "Tool preflight message.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre tool hook should succeed");
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        recorded.push((
+            before_tool,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ));
+
+        store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
+            session.agent_status = Some(AgentStatus {
+                kind: AgentStatusKind::Done,
+                note: "Example completion.".to_string(),
+            });
+            true
+        })
+        .expect("session status should update");
+        let status_stop = process_hook_event_impl(
+            HookEvent::Stop,
+            stop_input(engine, "Status set.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        recorded.push((
+            status_stop,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ));
+
+        store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
+            session.agent_status = None;
+            true
+        })
+        .expect("session status should clear");
+        let later_stop = process_hook_event_impl(
+            HookEvent::Stop,
+            stop_input(engine, "The follow-up turn is complete.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        recorded.push((
+            later_stop,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ));
 
         assert_eq!(
             recorded,
             vec![
                 (
                     ProcessResult::StopBlocked(blocked_reason.clone()),
+                    Some("The task is complete.".to_string()),
+                    true
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    Some("The task is complete.".to_string()),
+                    true
+                ),
+                (
+                    ProcessResult::SessionSaved,
                     Some("The task is complete.".to_string()),
                     true
                 ),
@@ -2920,6 +2985,64 @@ mod tests {
                     true,
                 ),
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn user_prompt_submit_clears_the_previous_block_marker(#[case] engine: Engine) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let blocked_reason = stop::block_reason(stop::StopConditions::default())
+            .expect("unknown stop should require a status")
+            .to_string();
+
+        let first_block = process_hook_event_impl(
+            HookEvent::Stop,
+            stop_input(engine, "The previous turn is complete.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop hook should succeed");
+        let prompt_submit = process_hook_event_impl(
+            HookEvent::UserPromptSubmit,
+            stop_input(engine, "", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("user prompt hook should succeed");
+        let after_prompt = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let next_block = process_hook_event_impl(
+            HookEvent::Stop,
+            stop_input(engine, "The new turn is complete.", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop hook should succeed");
+        let after_next_stop = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                first_block,
+                prompt_submit,
+                after_prompt.stop_blocked_by_armyknife,
+                next_block,
+                after_next_stop.last_message,
+                after_next_stop.stop_blocked_by_armyknife,
+            ),
+            (
+                ProcessResult::StopBlocked(blocked_reason.clone()),
+                ProcessResult::SessionSaved,
+                false,
+                ProcessResult::StopBlocked(blocked_reason),
+                Some("The new turn is complete.".to_string()),
+                true,
+            )
         );
     }
 
