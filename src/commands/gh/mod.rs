@@ -1,4 +1,5 @@
 pub mod issue_agent;
+mod pr_merge;
 pub mod pr_review;
 
 use clap::Subcommand;
@@ -14,6 +15,9 @@ pub enum GhCommands {
         #[command(subcommand)]
         command: pr_review::PrReviewCommands,
     },
+
+    /// Safely squash-merge a pull request
+    PrMerge(pr_merge::PrMergeArgs),
 
     /// Manage GitHub Issues as local files
     IssueAgent {
@@ -33,6 +37,7 @@ impl GhCommands {
                 pr_review_cmd.run().await
             }
             Self::PrReview { command } => command.run().await,
+            Self::PrMerge(args) => pr_merge::run(args),
             Self::IssueAgent { command } => command.run().await,
         }
     }
