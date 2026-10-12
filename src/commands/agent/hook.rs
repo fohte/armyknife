@@ -416,11 +416,16 @@ fn process_hook_event_impl(
     // mistaken for the confirmation of that earlier signal.
     session.sweep_signaled = false;
 
-    // Notifications can update the session state without resuming agent work.
+    // Status belongs to the main thread. Notifications, subagent hooks, and
+    // SessionStart(resume) can update session state without resuming its work.
     if event == HookEvent::Stop {
         session.agent_status_clear_pending = session.agent_status.is_some();
-    } else if event == HookEvent::UserPromptSubmit
-        || (session.agent_status_clear_pending && event != HookEvent::Notification)
+    } else if input.agent_id.is_none()
+        && (event == HookEvent::UserPromptSubmit
+            || (session.agent_status_clear_pending
+                && event != HookEvent::Notification
+                && !(event == HookEvent::SessionStart
+                    && input.source.as_deref() == Some("resume"))))
     {
         session.agent_status = None;
         session.agent_status_clear_pending = false;
@@ -3253,16 +3258,29 @@ mod tests {
         }
 
         #[rstest]
-        #[case::repeated_stop(HookEvent::Stop, None, SessionStatus::Stopped)]
-        #[case::idle_prompt(HookEvent::Notification, Some("idle_prompt"), SessionStatus::Stopped)]
+        #[case::repeated_stop(HookEvent::Stop, None, None, SessionStatus::Stopped)]
+        #[case::idle_prompt(
+            HookEvent::Notification,
+            Some("idle_prompt"),
+            None,
+            SessionStatus::Stopped
+        )]
         #[case::permission_prompt(
             HookEvent::Notification,
             Some("permission_prompt"),
+            None,
             SessionStatus::WaitingInput
+        )]
+        #[case::session_start_resume(
+            HookEvent::SessionStart,
+            None,
+            Some("resume"),
+            SessionStatus::Stopped
         )]
         fn activity_clears_agent_status_after_non_activity_event(
             #[case] event: HookEvent,
             #[case] notification_type: Option<&str>,
+            #[case] source: Option<&str>,
             #[case] event_status: SessionStatus,
         ) {
             let temp_dir = create_temp_sessions_dir();
@@ -3285,7 +3303,7 @@ mod tests {
 
             process_hook_event_impl(
                 event,
-                create_test_input(notification_type),
+                create_test_input_with_source(notification_type, source),
                 temp_dir.path(),
                 &SideEffects::none(),
             )
@@ -3306,6 +3324,54 @@ mod tests {
                 [
                     (Some(expected_status.clone()), true, SessionStatus::Stopped),
                     (Some(expected_status), true, event_status),
+                    (None, false, SessionStatus::Running),
+                ]
+            );
+        }
+
+        #[test]
+        fn subagent_activity_does_not_clear_main_thread_agent_status() {
+            let temp_dir = create_temp_sessions_dir();
+            let expected_status = AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            };
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(expected_status.clone());
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+
+            process_hook_event_impl(
+                HookEvent::Stop,
+                create_test_input(None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("stop hook should succeed");
+
+            let mut subagent_input = create_test_input_with_tool("Bash", None);
+            subagent_input.agent_id = Some("subagent-1".to_string());
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                subagent_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("subagent post-tool-use hook should succeed");
+            let after_subagent_activity = load_agent_status_state(temp_dir.path());
+
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                create_test_input_with_tool("Bash", None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("main-thread post-tool-use hook should succeed");
+            let after_main_thread_activity = load_agent_status_state(temp_dir.path());
+
+            assert_eq!(
+                [after_subagent_activity, after_main_thread_activity],
+                [
+                    (Some(expected_status), true, SessionStatus::Running,),
                     (None, false, SessionStatus::Running),
                 ]
             );

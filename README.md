@@ -380,7 +380,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `window-status <window_id>`                       |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
-Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared when the next `UserPromptSubmit` hook arrives, and a set status appears as `agent_status` in `a agent peer` JSON output.
+Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
 When a `Stop` hook cannot infer why the agent stopped, it blocks the stop until the agent sets a status with `a agent status set <kind> <note>`. Background work, pending permission prompts, `AskUserQuestion`, an existing status, and `stop_hook_active` are recognized automatically and do not require a status. A blocked stop keeps the session running and skips stop notifications and auto-compaction.
 
