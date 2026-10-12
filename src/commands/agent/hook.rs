@@ -217,6 +217,25 @@ fn process_hook_event_impl(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
+    let stop_hook_instruction = (event == HookEvent::Stop)
+        .then(config::load_config_or_default)
+        .and_then(|config| config.agent.stop_hook_instruction);
+    process_hook_event_impl_with_instruction(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction.as_deref(),
+    )
+}
+
+fn process_hook_event_impl_with_instruction(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
     // Claude's SessionEnd confirms termination; Codex's hook does not because
@@ -505,7 +524,13 @@ fn process_hook_event_impl(
 
     let stop_block_reason = (event == HookEvent::Stop)
         .then(|| {
-            stop::block_reason_for_hook(&input, &session, was_waiting_for_input, was_asking_user)
+            stop::block_reason_for_hook(
+                &input,
+                &session,
+                was_waiting_for_input,
+                was_asking_user,
+                stop_hook_instruction,
+            )
         })
         .flatten();
     if stop_block_reason.is_some() {
@@ -1172,6 +1197,15 @@ mod tests {
     use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use rstest::{fixture, rstest};
 
+    fn process_hook_event_without_instruction(
+        event: HookEvent,
+        input: HookInput,
+        sessions_dir: &Path,
+        side_effects: &SideEffects,
+    ) -> Result<ProcessResult> {
+        process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
     struct TqArchiveContext {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -1701,7 +1735,7 @@ mod tests {
 
         let input = create_test_input_with_session_and_source("paused-sess", None, source);
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "paused-sess")
@@ -1746,8 +1780,13 @@ mod tests {
         let sessions_dir = temp_dir.path();
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "s")
             .expect("load")
@@ -1828,8 +1867,13 @@ mod tests {
             .map(|(event, payload)| {
                 let mut input = parse_stdin_json(&payload).expect("Codex payload should parse");
                 input.engine = Engine::Codex;
-                process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
-                    .expect("hook should succeed");
+                process_hook_event_without_instruction(
+                    event,
+                    input,
+                    sessions_dir,
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
                 store::load_session_from(sessions_dir, "codex-lifecycle")
                     .expect("load")
                     .expect("session exists")
@@ -1887,7 +1931,7 @@ mod tests {
         ))
         .expect("Codex permission payload should parse");
         permission_input.engine = Engine::Codex;
-        process_hook_event_impl(
+        process_hook_event_without_instruction(
             HookEvent::PermissionRequest,
             permission_input,
             sessions_dir,
@@ -1899,7 +1943,7 @@ mod tests {
             parse_stdin_json(&codex_payload(resolution_event_name, resolution_extra))
                 .expect("Codex resolution payload should parse");
         resolution_input.engine = Engine::Codex;
-        process_hook_event_impl(
+        process_hook_event_without_instruction(
             resolution_event,
             resolution_input,
             sessions_dir,
@@ -2014,8 +2058,13 @@ mod tests {
         let payload = r#"{"session_id":"paused-bg-sess","cwd":"/tmp/test","background_tasks":[{"id":"bg-1","type":"shell","status":"running"}]}"#;
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "paused-bg-sess")
             .expect("load")
@@ -2043,7 +2092,7 @@ mod tests {
 
         let input = create_test_input_with_session_and_source("signaled-sess", None, None);
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "signaled-sess")
@@ -2279,18 +2328,18 @@ mod tests {
     )]
     // Stop overwrites both sets wholesale from the registry's current view --
     // an id no longer present in background_tasks is dropped, not merged
-    // with whatever was pending before. With no remaining reason to stop,
-    // the session stays Running until the agent reports its status.
+    // with whatever was pending before. Without a configured instruction,
+    // the Stop hook lets the session transition to Stopped.
     #[case::stale_ids_are_dropped(
         &["stale-bg"], &["stale-agent"],
         r#","background_tasks":[]"#,
-        &[], &[], SessionStatus::Running,
+        &[], &[], SessionStatus::Stopped,
     )]
     // Claude Code older than v2.1.145 omits the field entirely; it
     // deserializes to an empty vec and both sets fall back to "nothing
     // pending".
     #[case::missing_field_falls_back_to_empty(
-        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Running,
+        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Stopped,
     )]
     fn stop_refreshes_pending_task_ids_from_background_tasks(
         #[case] initial_bg: &[&str],
@@ -2313,8 +2362,14 @@ mod tests {
             format!(r#"{{"session_id":"task-sess","cwd":"/tmp/test"{background_tasks_json}}}"#);
         let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            None,
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "task-sess")
             .expect("load")
@@ -2532,7 +2587,7 @@ mod tests {
         )
         .expect("valid JSON");
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "resolve-sess")
@@ -2545,9 +2600,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_background_tasks_field("", &[], SessionStatus::Running)]
+    #[case::no_background_tasks_field("", &[], SessionStatus::Stopped)]
     // `background_tasks` present but agent-x's subagent already finished.
-    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Running)]
+    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
     // A different subagent (agent-y) is still live; agent-x's stale key is
     // still dropped. The session still transitions to Stopped: `status`
     // reflects the main loop going idle, not agent-y's still-pending task
@@ -2574,8 +2629,14 @@ mod tests {
         );
         let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            None,
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "stale-perm-sess")
             .expect("load")
@@ -2754,17 +2815,21 @@ mod tests {
         Paused,
     }
 
+    const TEST_STOP_HOOK_INSTRUCTION: &str = "Please summarize the result before stopping.";
+
     #[rstest]
-    #[case::unknown(StopReason::Unknown, true)]
-    #[case::status_set(StopReason::StatusSet, false)]
-    #[case::background_task(StopReason::BackgroundTask, false)]
-    #[case::session_cron(StopReason::SessionCron, false)]
-    #[case::permission_prompt(StopReason::PermissionPrompt, false)]
-    #[case::ask_user_question(StopReason::AskUserQuestion, false)]
-    #[case::stop_hook_active(StopReason::StopHookActive, false)]
-    #[case::paused(StopReason::Paused, false)]
-    fn stop_requires_status_only_when_reason_is_unknown(
+    #[case::unknown_with_instruction(StopReason::Unknown, true, true)]
+    #[case::unknown_without_instruction(StopReason::Unknown, false, false)]
+    #[case::status_set(StopReason::StatusSet, false, false)]
+    #[case::background_task(StopReason::BackgroundTask, false, false)]
+    #[case::session_cron(StopReason::SessionCron, false, false)]
+    #[case::permission_prompt(StopReason::PermissionPrompt, false, false)]
+    #[case::ask_user_question(StopReason::AskUserQuestion, false, false)]
+    #[case::stop_hook_active(StopReason::StopHookActive, false, false)]
+    #[case::paused(StopReason::Paused, false, false)]
+    fn stop_blocking_requires_an_instruction_and_an_unknown_reason(
         #[case] reason: StopReason,
+        #[case] has_instruction: bool,
         #[case] blocked: bool,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
@@ -2815,20 +2880,70 @@ mod tests {
             StopReason::Paused => session.status = SessionStatus::Paused,
         });
 
-        let result =
-            process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-                .expect("stop hook should succeed");
+        let instruction = has_instruction.then_some(TEST_STOP_HOOK_INSTRUCTION);
+        let result = process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            instruction,
+        )
+        .expect("stop hook should succeed");
 
         let expected = if blocked {
-            ProcessResult::StopBlocked(
-                stop::block_reason(stop::StopConditions::default())
-                    .expect("unknown stop should require a status")
-                    .to_string(),
-            )
+            ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string())
         } else {
             ProcessResult::SessionSaved
         };
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::configured(true, ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()), SessionStatus::Running)]
+    #[case::missing(false, ProcessResult::SessionSaved, SessionStatus::Stopped)]
+    fn stop_hook_uses_instruction_from_config(
+        #[case] configured: bool,
+        #[case] expected_result: ProcessResult,
+        #[case] expected_status: SessionStatus,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let config_home = temp_dir.path().join("config");
+        let config_dir = config_home.join("armyknife");
+        if configured {
+            fs::create_dir_all(&config_dir).expect("config directory should be created");
+            fs::write(
+                config_dir.join("config.yaml"),
+                indoc::indoc! {"
+                    agent:
+                      stop_hook_instruction: Please summarize the result before stopping.
+                "},
+            )
+            .expect("config should be written");
+        }
+
+        let sessions_dir = temp_dir.path().join("sessions");
+        fs::create_dir(&sessions_dir).expect("sessions directory should be created");
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "last_assistant_message": "Example response.",
+        }))
+        .expect("stop payload should deserialize");
+
+        let xdg_config_home = config_home.to_str().expect("config path should be UTF-8");
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(xdg_config_home)),
+                ("ARMYKNIFE_AGENT__STOP_HOOK_INSTRUCTION", None::<&str>),
+            ],
+            || process_hook_event_impl(HookEvent::Stop, input, &sessions_dir, &SideEffects::none()),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(&sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!((result, session.status), (expected_result, expected_status));
     }
 
     #[test]
@@ -2863,7 +2978,15 @@ mod tests {
                 ("ARMYKNIFE_NOTIFICATION__ENABLED", Some("true")),
                 ("ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED", Some("true")),
             ],
-            || process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &side_effects),
+            || {
+                process_hook_event_impl_with_instruction(
+                    HookEvent::Stop,
+                    input,
+                    sessions_dir,
+                    &side_effects,
+                    Some(TEST_STOP_HOOK_INSTRUCTION),
+                )
+            },
         )
         .expect("stop hook should succeed");
         let saved_session = store::load_session_from(sessions_dir, "test-123")
@@ -2893,11 +3016,7 @@ mod tests {
         assert_eq!(
             recorded,
             (
-                ProcessResult::StopBlocked(
-                    stop::block_reason(stop::StopConditions::default())
-                        .expect("unknown stop should require a status")
-                        .to_string(),
-                ),
+                ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
                 SessionStatus::Running,
                 vec![(
                     None,
@@ -3212,7 +3331,7 @@ mod tests {
             input.engine = engine;
 
             temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
-                process_hook_event_impl(
+                process_hook_event_without_instruction(
                     HookEvent::Stop,
                     input,
                     temp_dir.path(),
