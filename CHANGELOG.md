@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.393](https://github.com/fohte/armyknife/compare/v0.1.392...v0.1.393) (2026-10-12)
+
+
+### Features
+
+* **gh:** support safe PR merging command ([#1119](https://github.com/fohte/armyknife/issues/1119)) ([6754bfc](https://github.com/fohte/armyknife/commit/6754bfca65736b18874fae28762724892eee8cc9))
+
 ## [0.1.392](https://github.com/fohte/armyknife/compare/v0.1.391...v0.1.392) (2026-10-12)
 
 
