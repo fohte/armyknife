@@ -172,6 +172,7 @@ mod tests {
             tmux_info: None,
             status: SessionStatus::Stopped,
             agent_status: None,
+            agent_status_clear_pending: false,
             created_at: updated_at,
             updated_at,
             last_message: None,
@@ -184,6 +185,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
         }
     }

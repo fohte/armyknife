@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.389](https://github.com/fohte/armyknife/compare/v0.1.388...v0.1.389) (2026-10-12)
+
+
+### Bug Fixes
+
+* **agent:** clear stop reason display on main thread resume ([#1110](https://github.com/fohte/armyknife/issues/1110)) ([3c3784b](https://github.com/fohte/armyknife/commit/3c3784b43fd8c2cbeacd3a36e10411f4ce5af183))
+
+## [0.1.388](https://github.com/fohte/armyknife/compare/v0.1.387...v0.1.388) (2026-10-12)
+
+
+### Features
+
+* **agent:** allow configuring stop hook instruction and make blocking opt-in ([#1107](https://github.com/fohte/armyknife/issues/1107)) ([953cc31](https://github.com/fohte/armyknife/commit/953cc317bf9777315576da25195ffcbb26279063))
+
 ## [0.1.387](https://github.com/fohte/armyknife/compare/v0.1.386...v0.1.387) (2026-10-12)
 
 

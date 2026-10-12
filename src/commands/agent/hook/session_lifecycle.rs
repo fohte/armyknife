@@ -224,7 +224,9 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine,
         }
     }
