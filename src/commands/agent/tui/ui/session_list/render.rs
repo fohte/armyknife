@@ -12,9 +12,8 @@ use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows};
 
 use super::super::helpers::DIM_FG;
 use super::items::{build_header_item, build_session_item, build_user_turn_item};
-/// Renders YOUR TURN first, followed by WAITING and the fixed status sections
-/// (RUNNING / UNREAD / PAUSED-STOPPED). YOUR TURN rows use the priority shared
-/// with tmux status; remaining sessions keep their status rows. A session
+/// Renders YOUR TURN first, followed by the TASKS session tree. YOUR TURN rows
+/// use the priority shared with tmux status. A session
 /// linked to a tq task (`app.task_by_session`) gets a fixed-width task-number
 /// column, dimmed unless its task is related to the cursor row's task (see
 /// [`crate::commands::agent::tui::session_rows::is_related_task`]).
@@ -161,7 +160,7 @@ mod tests {
         // other row test in this file relies on.
         let buffer = render_buffer(&sessions, Some(2), now, 80, 12);
 
-        // Row 0 is the chrome header, row 1 the "RUNNING (2)" section
+        // Row 0 is the chrome header, row 1 the "TASKS" section
         // header, rows 2/3 the two sessions. Column 79 (the last column)
         // always falls inside the right-aligned time span regardless of
         // the rendered text's length, since the whole padded field shares
@@ -224,7 +223,7 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
-             ── RUNNING (3) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
             >● project               \u{e0b1} Configured                                   just now
              ● project                 Unconfigured                                 just now
              ● project                 Unknown                                      just now
@@ -276,9 +275,9 @@ mod tests {
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
             >◐  crit    Wide                                                        just now
 
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ◐ project               界  Wide [crit]                                 just now
              ● project                  Blank                                       just now
-
 
 
 
@@ -335,7 +334,7 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
             >● project                 project                                      just now
 
 
@@ -362,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_task_number_appears_before_breadcrumb_and_title() {
+    fn test_render_task_number_and_task_title_replace_session_name() {
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
@@ -377,8 +376,8 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >● project         #42     project                                      just now
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+            >● project         #42     Fix the bug                                  just now
 
 
 
@@ -406,7 +405,7 @@ mod tests {
         other_task.status = SessionStatus::Running;
 
         let sessions = vec![cursor, same_task, other_task];
-        // Row y: chrome(y0), "RUNNING (3)" header(y1), cursor(y2),
+        // Row y: chrome(y0), "TASKS" header(y1), cursor(y2),
         // same_task(y3), other_task(y4). list_state index 1 (cursor) is
         // the first *selectable* row, i.e. the row right after the header.
         let buffer = render_buffer_with(&sessions, Some(1), now, 80, 12, |app| {
@@ -476,11 +475,10 @@ mod tests {
     }
 
     #[test]
-    fn test_render_background_session_shows_distinct_symbol_and_color() {
-        // Persisted `status` is `Stopped` (main loop idle), but `section_of`
-        // still groups a pending background task into RUNNING, so the
-        // glyph/color must distinguish "main loop idle, background task in
-        // flight" from a session actually running.
+    fn test_render_background_session_shows_waiting_mark() {
+        // Persisted `status` is `Stopped` (main loop idle) with a pending
+        // background task, so the session is waiting on that task rather
+        // than actually running.
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
@@ -493,8 +491,8 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 0 idle
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
-            >◎ project                 project                                      just now
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+            >◷ project                 project                                      just now
 
 
 
@@ -505,7 +503,7 @@ mod tests {
         assert_eq!(output, expected);
 
         let buffer = render_buffer(&sessions, Some(1), now, 80, 9);
-        assert_eq!(buffer[(1, 2)].fg, Color::Cyan);
+        assert_eq!(buffer[(1, 2)].fg, Color::Yellow);
     }
 
     #[fixture]
@@ -534,8 +532,8 @@ mod tests {
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
             >◐  decide  session-name choose an option                                    48m
 
-
-
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ◐ project                 session-name                                      48m
 
 
 
@@ -563,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_session_with_descendants_shows_count_badge_after_title() {
+    fn test_render_root_with_children_shows_branches_and_user_turn_badge() {
         let now = Utc::now();
 
         let mut root = create_test_session("root");
@@ -585,10 +583,10 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 3 running · 0 idle
-             ── RUNNING (3) ────────────────────────────────────────────────────────────────
-            >● project                 project ▸2                                   just now
-             ● project                 project › project                            just now
-             ● project                 project › project                            just now
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+            >● project                 project ◐ 0/2                                just now
+             ● project               ├─   project                                   just now
+             ● project               └─   project                                   just now
 
 
 
@@ -599,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_child_in_different_section_from_parent_shows_breadcrumb() {
+    fn test_render_child_with_different_status_stays_under_parent() {
         let now = Utc::now();
 
         let mut parent = create_test_session("parent");
@@ -612,15 +610,15 @@ mod tests {
         child.status = SessionStatus::Paused;
 
         let sessions = vec![parent, child];
-        let output = render_to_string(&sessions, Some(3), now, 80, 12);
+        let output = render_to_string(&sessions, Some(2), now, 80, 12);
 
         let expected = indoc! {"
              agent watch                                    0 needs you · 1 running · 1 idle
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
-             ● project                 project ▸1                                   just now
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ● project                 project ◐ 0/1                                just now
+            >⏸ project               └─   project                                         2m
 
-             ── PAUSED (1) ─────────────────────────────────────────────────────────────────
-            >⏸ project                 project › project                                  2m
+
 
 
 
@@ -657,7 +655,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_select_next_across_two_sections_lands_on_session_row(
+    fn test_select_next_skips_tasks_row_of_user_turn_session(
         waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
     ) {
         let (now, sessions) = waiting_and_running_sessions;
@@ -670,9 +668,9 @@ mod tests {
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
              ◐  crit    project                                                     just now
 
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ◐ project                 project [crit]                               just now
             >● project                 project                                      just now
-
 
 
 
@@ -683,7 +681,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_select_next_across_all_four_sections_lands_on_session_row(
+    fn test_select_next_through_every_tasks_row_lands_on_session_row(
         waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
     ) {
         let (now, mut sessions) = waiting_and_running_sessions;
@@ -699,9 +697,9 @@ mod tests {
 
         sessions.push(unread);
         sessions.push(paused);
-        // Start on "waiting" and step through RUNNING, UNREAD, all the way to
-        // the PAUSED section -- crossing every section boundary, so a
-        // cumulative off-by-N from repeated separators would show up here.
+        // Start on "waiting" and step to the last TASKS row, crossing the
+        // section boundary and the unselectable duplicate row, so a
+        // cumulative off-by-N from separators would show up here.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 16, |app| {
             app.select_next();
             app.select_next();
@@ -713,14 +711,14 @@ mod tests {
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
              ◐  crit    project                                                     just now
 
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ◐ project                 project [crit]                               just now
              ● project                 project                                      just now
-
-             ── UNREAD (1) ─────────────────────────────────────────────────────────────────
              ✱ project                 project                                      just now
-
-             ── PAUSED (1) ─────────────────────────────────────────────────────────────────
             >⏸ project                 project                                      just now
+
+
+
 
 
 
@@ -736,7 +734,7 @@ mod tests {
         let (now, sessions) = waiting_and_running_sessions;
         // Starting on the first selectable row ("waiting") and going
         // backward must wrap to the last selectable row ("running"), not to
-        // the RUNNING section header.
+        // the TASKS section header.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 12, |app| {
             app.select_previous();
         });
@@ -746,36 +744,9 @@ mod tests {
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
              ◐  crit    project                                                     just now
 
-             ── RUNNING (1) ────────────────────────────────────────────────────────────────
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+             ◐ project                 project [crit]                               just now
             >● project                 project                                      just now
-
-
-
-
-
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
-
-        assert_eq!(output, expected);
-    }
-
-    #[test]
-    fn test_render_paused_section_shows_individual_session_rows() {
-        let now = Utc::now();
-
-        let mut paused1 = create_test_session("paused1");
-        paused1.status = SessionStatus::Paused;
-        let mut paused2 = create_test_session("paused2");
-        paused2.status = SessionStatus::Paused;
-
-        let sessions = vec![paused1, paused2];
-        let output = render_to_string(&sessions, None, now, 80, 10);
-
-        let expected = indoc! {"
-             agent watch                                    0 needs you · 0 running · 2 idle
-            ── PAUSED (2) ─────────────────────────────────────────────────────────────────
-            ⏸ project                 project                                      just now
-            ⏸ project                 project                                      just now
-
 
 
 
@@ -801,7 +772,7 @@ mod tests {
     #[case::cursor_row_e(6, true, Color::Reset)]
     fn test_render_kin_highlight_ancestor_ramp_and_cap(
         #[case] row_y: u16,
-        #[case] has_breadcrumb: bool,
+        #[case] is_child: bool,
         #[case] expected_fg: Color,
     ) {
         let now = Utc::now();
@@ -828,12 +799,8 @@ mod tests {
         let sessions = vec![a, b, c, d, e];
         // list_state index: header=0, a=1, b=2, c=3, d=4, e=5 -- select "e".
         let buffer = render_buffer(&sessions, Some(5), now, 80, 12);
-        let breadcrumb_width = if has_breadcrumb {
-            "project › ".width()
-        } else {
-            0
-        };
-        let title_column = WAITING_QUESTION_INDENT + breadcrumb_width;
+        let branch_width = if is_child { "├─ ".width() } else { 0 };
+        let title_column = WAITING_QUESTION_INDENT + branch_width;
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
@@ -897,7 +864,7 @@ mod tests {
         // list_state index: header=0, root=1, gp_a=2, gp_b=3, parent_a=4,
         // parent_a2=5, selected=6, sibling=7, cousin=8 -- select "selected".
         let buffer = render_buffer(&sessions, Some(6), now, 80, 20);
-        let title_column = WAITING_QUESTION_INDENT + "project › ".width();
+        let title_column = WAITING_QUESTION_INDENT + "├─ ".width();
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
@@ -920,10 +887,10 @@ mod tests {
             app.confirmed_query = "project".to_string();
         });
 
-        // The child's own title starts after its breadcrumb in row 4. The
+        // The child's own title starts after its tree branch in row 4. The
         // child is a direct descendant of the cursor, but the query "project"
         // matches it too, and search hits must win over kin coloring.
-        let title_column = WAITING_QUESTION_INDENT + "project › ".width();
+        let title_column = WAITING_QUESTION_INDENT + "├─ ".width();
         assert_eq!(buffer[(title_column as u16, 4)].fg, Color::Yellow);
     }
 }

@@ -1,4 +1,4 @@
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Session, SessionStatus};
 use chrono::{DateTime, Utc};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
-    Section, SectionHeaderRow, SessionRowEntry, is_idle_session, is_related_task, kin_relation,
+    Section, SectionHeaderRow, SessionRowEntry, TaskMark, is_related_task, kin_relation,
 };
 use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
 
@@ -174,20 +174,31 @@ fn user_turn_label_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Section headers echo their status color for YOUR TURN, WAITING, and
-/// RUNNING; UNREAD and idle (Paused/Stopped) keep the neutral header look.
 fn header_style(kind: Section) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
     match kind {
         Section::UserTurn => base.fg(Color::Red),
-        Section::Waiting => base.fg(Color::Yellow),
-        Section::Running => base.fg(Color::Green),
-        Section::Unread | Section::Idle => base.fg(DIM_FG),
+        Section::Tasks => base.fg(DIM_FG),
     }
 }
 
-/// Style for a session's own title text (not the breadcrumb prefix or
-/// badge, which stay `DIM_FG` regardless -- see `build_breadcrumb_title_spans`).
+/// `◐` shares YOUR TURN's red so the user's own turns stand out in the tree.
+fn mark_glyph(mark: TaskMark, session: &Session) -> (&'static str, Color) {
+    match mark {
+        TaskMark::Done => ("✓", DIM_FG),
+        TaskMark::UserTurn => ("◐", Color::Red),
+        TaskMark::Working => ("●", Color::Green),
+        TaskMark::Waiting => ("◷", Color::Yellow),
+        TaskMark::Close => ("◌", DIM_FG),
+        TaskMark::Unclassified => {
+            let status = session.display_status();
+            (status.display_symbol(), status_color(status))
+        }
+    }
+}
+
+/// Style for a session's own title text (not the tree branch or
+/// badge, which stay `DIM_FG` regardless -- see `build_title_spans`).
 ///
 /// Idleness is expressed only through bold/non-bold here, never through
 /// color: `kin_color` (when `Some`) owns the color axis to show the
@@ -208,7 +219,7 @@ fn own_title_style(is_idle: bool, kin_color: Option<Color>) -> Style {
 }
 
 /// Renders a section header as a horizontal rule with the label inline,
-/// e.g. `── RUNNING (3) ──...──`.
+/// e.g. `── TASKS ──...──`.
 ///
 /// `with_leading_blank` prepends a blank line as a visual separator from
 /// the previous section (every header but the very first one in the list).
@@ -234,10 +245,10 @@ pub(super) fn build_header_item(
     ListItem::new(lines)
 }
 
-/// Renders one session row: status glyph, fixed-width repo column,
-/// variable-width title column (with breadcrumb prefix when this session
-/// has a displayed ancestor), and a right-aligned fixed-width time column.
-/// `WaitingInput` sessions get a second line holding only the question.
+/// Renders one TASKS row: mark, fixed-width repo column, variable-width
+/// title column (with a tree branch on child rows), and a right-aligned
+/// fixed-width time column. `WaitingInput` sessions get a second line
+/// holding only the question.
 pub(super) fn build_session_item(
     entry: &SessionRowEntry,
     app: &App,
@@ -247,11 +258,12 @@ pub(super) fn build_session_item(
     is_linked: bool,
 ) -> ListItem<'static> {
     let session = entry.session;
-    let is_idle = is_idle_session(session);
-
-    let display_status = session.display_status();
-    let symbol = display_status.display_symbol();
-    let status_style = Style::default().fg(status_color(display_status));
+    let is_idle = matches!(
+        entry.mark,
+        TaskMark::Done | TaskMark::Close | TaskMark::Unclassified
+    );
+    let (symbol, symbol_color) = mark_glyph(entry.mark, session);
+    let status_style = Style::default().fg(symbol_color);
 
     let repo_name = app
         .get_cached_worktree_labels(&session.cwd)
@@ -259,10 +271,13 @@ pub(super) fn build_session_item(
     let repo_text = get_session_info(session, repo_name);
     let repo_col = pad_to_width(&truncate(&repo_text, REPO_COLUMN_WIDTH), REPO_COLUMN_WIDTH);
 
-    let own_title = app
-        .get_cached_title(&session.session_id)
-        .map(String::from)
-        .unwrap_or_else(|| get_title_display_name_fallback(session));
+    let own_title = match entry.task.as_ref() {
+        Some(task) => task.task_title.clone(),
+        None => app
+            .get_cached_title(&session.session_id)
+            .map(String::from)
+            .unwrap_or_else(|| get_title_display_name_fallback(session)),
+    };
 
     let title_kin_color = app
         .selected_session()
@@ -317,9 +332,12 @@ pub(super) fn build_session_item(
             },
         );
 
-    let title_width = title_column_width(term_width, work_type_column_width);
+    let branch = tree_branch_text(entry.depth, entry.is_last_sibling);
+    let branch_width = branch.width();
+    let title_width =
+        title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
     let title_style = own_title_style(is_idle, title_kin_color);
-    let title_spans = build_title_spans(entry, app, &own_title, title_width, query, title_style);
+    let title_spans = build_title_spans(entry, &own_title, title_width, query, title_style);
 
     let time_text = format_compact_time(session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
@@ -336,23 +354,23 @@ pub(super) fn build_session_item(
         Span::styled(repo_col, Style::default().fg(DIM_FG)),
     ];
     spans.extend(task_number_spans);
+    spans.push(Span::styled(branch, Style::default().fg(DIM_FG)));
     spans.extend(work_type_spans);
     spans.extend(title_spans);
     spans.push(Span::styled(time_col, time_style));
 
     let mut lines = vec![Line::from(spans)];
 
-    // The question line is unconditional for every waiting row, so an
-    // empty question still renders bare quotes rather than an inconsistent
-    // row shape.
-    if session.status == SessionStatus::WaitingInput {
+    // An empty question still renders bare quotes rather than an
+    // inconsistent row shape. Sessions already in YOUR TURN skip it there.
+    if session.status == SessionStatus::WaitingInput && entry.is_selectable {
         let question = session
             .current_tool
             .as_deref()
             .or(session.last_message.as_deref())
             .unwrap_or("");
         let quoted = format!("\u{201c}{question}\u{201d}");
-        let question_indent = WAITING_QUESTION_BASE_INDENT + work_type_column_width;
+        let question_indent = WAITING_QUESTION_BASE_INDENT + branch_width + work_type_column_width;
         let quoted_width = term_width.saturating_sub(question_indent);
         let truncated_quoted = truncate(&quoted, quoted_width);
         // ratatui reserves the marker column on every line of a multi-line
@@ -372,51 +390,56 @@ pub(super) fn build_session_item(
     }
 }
 
-fn descendant_badge_text(descendant_count: usize) -> String {
-    if descendant_count == 0 {
-        String::new()
-    } else {
-        format!(" \u{25b8}{descendant_count}")
+fn tree_branch_text(depth: usize, is_last_sibling: bool) -> &'static str {
+    match (depth, is_last_sibling) {
+        (0, _) => "",
+        (_, true) => "└─ ",
+        (_, false) => "├─ ",
     }
 }
 
-/// The badge's width is carved out of `title_width` up front so the
-/// breadcrumb+title portion truncates to leave room for it, and the badge is
-/// appended right after that (unpadded) content -- rather than after
-/// padding, which would push it flush against the time column instead of
-/// next to the title it describes.
+/// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
+fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String {
+    if child_count == 0 {
+        String::new()
+    } else {
+        format!(" \u{25d0} {}/{}", child_user_turn_count, child_count)
+    }
+}
+
+/// The badge's width is carved out of `title_width` up front so the title
+/// truncates to leave room for it, and the badge is appended right after
+/// that (unpadded) content -- rather than after padding, which would push it
+/// flush against the time column instead of next to the title it describes.
 fn build_title_spans(
     entry: &SessionRowEntry,
-    app: &App,
     own_title: &str,
     title_width: usize,
     query: &str,
     title_style: Style,
 ) -> Vec<Span<'static>> {
-    let dim_style = Style::default().fg(DIM_FG);
-    let descendant_badge = descendant_badge_text(entry.descendant_count);
+    let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let crit_badge = if entry.session.crit_urls.is_empty() {
         String::new()
     } else {
         " [crit]".to_string()
     };
-    let show_descendant_badge =
-        !descendant_badge.is_empty() && descendant_badge.width() + crit_badge.width() < title_width;
-    let descendant_badge = if show_descendant_badge {
-        descendant_badge
+    let show_child_badge =
+        !child_badge.is_empty() && child_badge.width() + crit_badge.width() < title_width;
+    let child_badge = if show_child_badge {
+        child_badge
     } else {
         String::new()
     };
-    let badge_width = descendant_badge.width() + crit_badge.width();
+    let badge_width = child_badge.width() + crit_badge.width();
     let content_width = title_width.saturating_sub(badge_width);
 
-    let (mut spans, content_width_used) =
-        build_breadcrumb_title_spans(entry, app, own_title, content_width, query, title_style);
-
-    let mut used_width = content_width_used;
-    if !descendant_badge.is_empty() {
-        used_width += descendant_badge.width();
-        spans.push(Span::styled(descendant_badge, dim_style));
+    let title = truncate(own_title, content_width);
+    let mut used_width = title.width();
+    let mut spans = highlight_matches(&title, query, title_style);
+    if !child_badge.is_empty() {
+        used_width += child_badge.width();
+        spans.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));
     }
     if !crit_badge.is_empty() {
         used_width += crit_badge.width();
@@ -430,57 +453,6 @@ fn build_title_spans(
     }
 
     spans
-}
-
-/// Returns the display width actually used (not padded) so the caller can
-/// append the descendant-count badge directly after this content and pad
-/// only once both are known.
-///
-/// Builds the session breadcrumb prefix and title as separate style regions.
-/// `truncate` only ever cuts from the end, so the breadcrumb survives intact
-/// whenever the cut lands in the title.
-fn build_breadcrumb_title_spans(
-    entry: &SessionRowEntry,
-    app: &App,
-    own_title: &str,
-    max_width: usize,
-    query: &str,
-    title_style: Style,
-) -> (Vec<Span<'static>>, usize) {
-    let dim_style = Style::default().fg(DIM_FG);
-    let breadcrumb_prefix = entry.breadcrumb_ancestor.map(|parent| {
-        let parent_title = app
-            .get_cached_title(&parent.session_id)
-            .map(String::from)
-            .unwrap_or_else(|| get_title_display_name_fallback(parent));
-        format!("{parent_title} \u{203a} ")
-    });
-
-    let combined = format!("{}{own_title}", breadcrumb_prefix.as_deref().unwrap_or(""));
-    let truncated = truncate(&combined, max_width);
-    let width = truncated.width();
-    let truncated_chars: Vec<char> = truncated.chars().collect();
-
-    let breadcrumb_boundary = breadcrumb_prefix
-        .as_deref()
-        .map_or(0, |p| p.chars().count());
-
-    let mut spans = Vec::new();
-    let mut cursor = 0usize;
-    let regions = [
-        (breadcrumb_boundary, dim_style),
-        (truncated_chars.len(), title_style),
-    ];
-    for (end, style) in regions {
-        let end = end.min(truncated_chars.len());
-        if end > cursor {
-            let text: String = truncated_chars[cursor..end].iter().collect();
-            spans.extend(highlight_matches(&text, query, style));
-            cursor = end;
-        }
-    }
-
-    (spans, width)
 }
 
 #[cfg(test)]
@@ -503,20 +475,8 @@ mod tests {
         Section::UserTurn,
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     )]
-    #[case::waiting(
-        Section::Waiting,
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    )]
-    #[case::running(
-        Section::Running,
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-    )]
-    #[case::unread(
-        Section::Unread,
-        Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
-    )]
-    #[case::idle(
-        Section::Idle,
+    #[case::tasks(
+        Section::Tasks,
         Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
     )]
     fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
@@ -554,11 +514,44 @@ mod tests {
     ) {
         assert_eq!(own_title_style(is_idle, kin_color), expected);
     }
+
     #[rstest]
-    #[case::zero_shows_no_badge(0, "")]
-    #[case::one(1, " \u{25b8}1")]
-    #[case::two_digits(42, " \u{25b8}42")]
-    fn test_descendant_badge_text(#[case] descendant_count: usize, #[case] expected: &str) {
-        assert_eq!(descendant_badge_text(descendant_count), expected);
+    #[case::done(TaskMark::Done, ("✓", DIM_FG))]
+    #[case::user_turn(TaskMark::UserTurn, ("◐", Color::Red))]
+    #[case::working(TaskMark::Working, ("●", Color::Green))]
+    #[case::waiting(TaskMark::Waiting, ("◷", Color::Yellow))]
+    #[case::close(TaskMark::Close, ("◌", DIM_FG))]
+    #[case::unclassified_uses_status_glyph(TaskMark::Unclassified, ("⏸", DIM_FG))]
+    fn test_mark_glyph(#[case] mark: TaskMark, #[case] expected: (&str, Color)) {
+        let mut session = crate::commands::agent::tui::ui::test_support::create_test_session("s");
+        session.status = SessionStatus::Paused;
+        assert_eq!(mark_glyph(mark, &session), expected);
+    }
+
+    #[rstest]
+    #[case::no_children_shows_no_badge(0, 0, "")]
+    #[case::children_without_user_turns(3, 0, " ◐ 0/3")]
+    #[case::children_with_user_turns(10, 3, " ◐ 3/10")]
+    fn test_child_badge_text(
+        #[case] child_count: usize,
+        #[case] child_user_turn_count: usize,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            child_badge_text(child_count, child_user_turn_count),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::root(0, true, "")]
+    #[case::middle_child(1, false, "├─ ")]
+    #[case::last_child(1, true, "└─ ")]
+    fn test_tree_branch_text(
+        #[case] depth: usize,
+        #[case] is_last_sibling: bool,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(tree_branch_text(depth, is_last_sibling), expected);
     }
 }

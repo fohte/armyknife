@@ -145,12 +145,9 @@ impl App {
                 }
 
                 // Status filter (AND with text search). Matches against
-                // `display_status()`, not the raw `status`, so this stays in
-                // sync with the RUNNING/STOPPED section grouping the list
-                // itself uses (see `session_rows::section_of`): a session
-                // whose main loop is idle but has a pending bg task is
-                // `Stopped` in `status` yet renders in the RUNNING section as
-                // `Background`.
+                // `display_status()`, not the raw `status`: a session whose
+                // main loop is idle but has a pending bg task is `Stopped` in
+                // `status` yet still mid-task as `Background`.
                 if let Some(status) = status_filter {
                     let matches = match status {
                         SessionStatus::Running => matches!(
@@ -327,6 +324,7 @@ mod tests {
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -541,9 +539,8 @@ mod tests {
 
     #[rstest]
     // A Stopped session with a pending bg task and no crit link renders as
-    // `Background`, which groups with `Running` in the section list (see
-    // `session_rows::section_of`) -- the `Running` filter must match it
-    // too, not just a raw-`Running` session.
+    // `Background`, which is still mid-task -- the `Running` filter must
+    // match it too, not just a raw-`Running` session.
     #[case::running_filter_matches_background(SessionStatus::Running, vec!["running-1", "bg-1"])]
     // The same session must NOT match the `Stopped` filter, even though its
     // raw `status` is `Stopped`.
