@@ -176,7 +176,7 @@ Manage PR body drafts with human-in-the-loop review.
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `new`    | Create a new PR body draft file                                                                                                                                                                                    |
 | `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `submit` | Create a PR from the approved draft (updates existing PR if found)                                                                                                                                                 |
+| `submit` | Create or update a PR from the approved draft and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                                                                    |
 
 `new` options:
 
