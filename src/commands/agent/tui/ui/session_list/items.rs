@@ -11,7 +11,7 @@ use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
     Section, SectionHeaderRow, SessionRowEntry, TaskMark, is_related_task, kin_relation,
 };
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
+use crate::commands::agent::user_turn::UserTurn;
 
 use super::super::helpers::{
     DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
@@ -36,7 +36,7 @@ pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
-/// The longest visible user-turn label is `decide`.
+/// The longest automatic user-turn label is `failed`.
 const USER_TURN_LABEL_WIDTH: usize = 6;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
@@ -131,9 +131,13 @@ pub(super) fn build_user_turn_item(
         .filter(|note| !note.is_empty());
     let time_text = format_compact_time(turn.session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
-    let label = format!(" {:<USER_TURN_LABEL_WIDTH$} ", turn.kind.label());
+    let label = turn
+        .kind
+        .label()
+        .map(|label| format!(" {label:<USER_TURN_LABEL_WIDTH$} "));
     let line_width = term_width.saturating_sub(MARKER_WIDTH);
-    let fixed_width = 1 + 1 + label.width() + 1 + TIME_COLUMN_WIDTH;
+    let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
+    let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);
     let mut description = truncate(&title, description_width);
     if let Some(note) = note {
@@ -144,22 +148,22 @@ pub(super) fn build_user_turn_item(
         }
     }
     let description_padding = " ".repeat(description_width.saturating_sub(description.width()));
-    let symbol_style = if turn.kind == UserTurnKind::Close {
-        Style::default().fg(DIM_FG)
-    } else {
-        Style::default().fg(Color::Red)
-    };
-    let label_style = user_turn_label_style();
-
-    let item = ListItem::new(Line::from(vec![
+    let symbol_style = Style::default().fg(Color::Red);
+    let mut spans = vec![
         Span::styled(turn.kind.symbol(), symbol_style),
         Span::raw(" "),
-        Span::styled(label, label_style),
-        Span::raw(" "),
+    ];
+    if let Some(label) = label {
+        spans.push(Span::styled(label, user_turn_label_style()));
+        spans.push(Span::raw(" "));
+    }
+    spans.extend([
         Span::raw(description),
         Span::raw(description_padding),
         Span::raw(time_col),
-    ]));
+    ]);
+
+    let item = ListItem::new(Line::from(spans));
     if is_linked {
         item.style(Style::default().bg(Color::Indexed(236)))
     } else {
@@ -189,7 +193,6 @@ fn mark_glyph(mark: TaskMark, session: &Session) -> (&'static str, Color) {
         TaskMark::UserTurn => ("◐", Color::Red),
         TaskMark::Working => ("●", Color::Green),
         TaskMark::Waiting => ("◷", Color::Yellow),
-        TaskMark::Close => ("◌", DIM_FG),
         TaskMark::Unclassified => {
             let status = session.display_status();
             (status.display_symbol(), status_color(status))
@@ -258,10 +261,7 @@ pub(super) fn build_session_item(
     is_linked: bool,
 ) -> ListItem<'static> {
     let session = entry.session;
-    let is_idle = matches!(
-        entry.mark,
-        TaskMark::Done | TaskMark::Close | TaskMark::Unclassified
-    );
+    let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
     let (symbol, symbol_color) = mark_glyph(entry.mark, session);
     let status_style = Style::default().fg(symbol_color);
 
@@ -520,7 +520,6 @@ mod tests {
     #[case::user_turn(TaskMark::UserTurn, ("◐", Color::Red))]
     #[case::working(TaskMark::Working, ("●", Color::Green))]
     #[case::waiting(TaskMark::Waiting, ("◷", Color::Yellow))]
-    #[case::close(TaskMark::Close, ("◌", DIM_FG))]
     #[case::unclassified_uses_status_glyph(TaskMark::Unclassified, ("⏸", DIM_FG))]
     fn test_mark_glyph(#[case] mark: TaskMark, #[case] expected: (&str, Color)) {
         let mut session = crate::commands::agent::tui::ui::test_support::create_test_session("s");

@@ -78,12 +78,10 @@ fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<
         return Ok(());
     };
 
-    write!(
-        writer,
-        "{} #[fg=colour15,bg=colour1]{}#[default]",
-        turn.kind.symbol(),
-        turn.kind.label()
-    )?;
+    write!(writer, "{}", turn.kind.symbol())?;
+    if let Some(label) = turn.kind.label() {
+        write!(writer, " #[fg=colour15,bg=colour1]{label}#[default]")?;
+    }
     if let Some(note) = turn.note {
         write!(writer, " {}", escape_tmux_status_text(note))?;
     }
@@ -646,7 +644,7 @@ mod tests {
         let mut session = create_test_session();
         session.status = SessionStatus::Stopped;
         session.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
+            kind: AgentStatusKind::You,
             note: indoc! {"
                 #[fg=red]
                 choose a direction"
@@ -656,7 +654,7 @@ mod tests {
 
         assert_eq!(
             render_tmux_status_to_string(&[session]),
-            "◐ #[fg=colour15,bg=colour1]decide#[default] ##[fg=red] choose a direction (myproject)"
+            "◐ ##[fg=red] choose a direction (myproject)"
         );
     }
 
@@ -693,18 +691,15 @@ mod tests {
     }
 
     #[test]
-    fn test_render_tmux_status_shows_close_when_it_is_the_only_action() {
-        let mut close = create_test_session();
-        close.status = SessionStatus::Stopped;
-        close.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Close,
-            note: "close the worktree".to_string(),
+    fn test_render_tmux_status_does_not_show_done() {
+        let mut done = create_test_session();
+        done.status = SessionStatus::Stopped;
+        done.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Done,
+            note: "work is complete".to_string(),
         });
 
-        assert_eq!(
-            render_tmux_status_to_string(&[close]),
-            "◌ #[fg=colour15,bg=colour1]close#[default] close the worktree (myproject)"
-        );
+        assert_eq!(render_tmux_status_to_string(&[done]), "");
     }
 
     // =========================================================================

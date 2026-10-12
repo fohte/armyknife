@@ -99,10 +99,8 @@ pub(super) fn build_task_rows<'a>(
 }
 
 fn task_mark(session: &Session, turn_kind: Option<&UserTurnKind>) -> TaskMark {
-    match turn_kind {
-        Some(UserTurnKind::Close) => return TaskMark::Close,
-        Some(_) => return TaskMark::UserTurn,
-        None => {}
+    if turn_kind.is_some() {
+        return TaskMark::UserTurn;
     }
     // A status set before the last stop is stale once the session runs again.
     if session.status != SessionStatus::Running {

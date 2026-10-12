@@ -53,7 +53,6 @@ pub(super) enum TaskMark {
     /// Stopped while waiting on something other than the user (another
     /// session, CI, a background command).
     Waiting,
-    Close,
     /// Stopped without a reason this module recognizes; rendered with the
     /// session's plain status glyph instead of a task mark.
     Unclassified,
@@ -355,7 +354,7 @@ mod tests {
                 },
                 SessionRow::UserTurn(turn) => RowDescription::UserTurn {
                     id: turn.session.session_id.clone(),
-                    kind: turn.kind.label().to_string(),
+                    kind: turn.kind.label().unwrap_or("you").to_string(),
                 },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
@@ -382,7 +381,7 @@ mod tests {
             depth: 0,
             mark,
             is_last_sibling: false,
-            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -394,7 +393,7 @@ mod tests {
             depth: 1,
             mark,
             is_last_sibling,
-            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
         }
@@ -442,7 +441,7 @@ mod tests {
         delegated.is_delegated = true;
         let delegated_child = with_agent_status(
             running_session("delegated_child", &["pm", "design", "delegated"], 5),
-            AgentStatusKind::Decide,
+            AgentStatusKind::You,
         );
 
         let sessions: Vec<&Session> = vec![
@@ -461,7 +460,7 @@ mod tests {
                 header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "delegated_child".to_string(),
-                    kind: "decide".to_string(),
+                    kind: "you".to_string(),
                 },
                 header("TASKS"),
                 root_row("pm", TaskMark::Working, 4, 1),
@@ -501,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved() {
-        let old_turn = with_agent_status(running_session("old_turn", &[], 1), AgentStatusKind::Do);
+        let old_turn = with_agent_status(running_session("old_turn", &[], 1), AgentStatusKind::You);
         let recent = running_session("recent", &[], 9);
         let older = running_session("older", &[], 2);
         // A child's activity counts as its root moving.
@@ -509,7 +508,7 @@ mod tests {
         let parent_of_turn = running_session("parent_of_turn", &[], 0);
         let child_turn = with_agent_status(
             running_session("child_turn", &["parent_of_turn"], 3),
-            AgentStatusKind::Read,
+            AgentStatusKind::You,
         );
 
         let sessions: Vec<&Session> = vec![
@@ -564,15 +563,9 @@ mod tests {
         TaskMark::Working
     )]
     #[case::ended(SessionStatus::Ended, None, false, TaskMark::Done)]
-    #[case::close(
+    #[case::you(
         SessionStatus::Stopped,
-        Some(AgentStatusKind::Close),
-        false,
-        TaskMark::Close
-    )]
-    #[case::decide(
-        SessionStatus::Stopped,
-        Some(AgentStatusKind::Decide),
+        Some(AgentStatusKind::You),
         false,
         TaskMark::UserTurn
     )]

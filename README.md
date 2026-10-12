@@ -390,13 +390,11 @@ When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer 
 
 Use one of these kinds:
 
-- `decide`: the user needs to choose an option or direction
-- `read`: the agent answered a question and finished
-- `do`: the user needs to perform a manual task
-- `idle`: the agent is waiting for instructions
-- `close`: only closing remains, and it is not urgent
-- `done`: report completion to the parent agent
+- `you`: it is the user's turn; the note explains what they need to do
 - `wait`: another session, CI job, or external event needs to finish
+- `done`: the work is finished
+
+The legacy values `decide`, `read`, `do`, and `idle` are accepted as `you`; `close` is accepted as `done`. Existing session data and older stop hook instructions remain compatible.
 
 ```console
 $ a agent status set wait "waiting for job-42"

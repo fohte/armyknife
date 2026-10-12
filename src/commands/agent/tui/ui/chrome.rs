@@ -320,7 +320,7 @@ mod tests {
         let mut decide = create_test_session("decide");
         decide.status = SessionStatus::Stopped;
         decide.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
+            kind: AgentStatusKind::You,
             note: "choose an option".to_string(),
         });
         let mut running = create_test_session("running");

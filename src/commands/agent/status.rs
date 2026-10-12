@@ -131,6 +131,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::decide("decide", AgentStatusKind::You)]
+    #[case::read("read", AgentStatusKind::You)]
+    #[case::do_work("do", AgentStatusKind::You)]
+    #[case::idle("idle", AgentStatusKind::You)]
+    #[case::close("close", AgentStatusKind::Done)]
+    fn set_command_accepts_legacy_kind_names(
+        #[case] input: &str,
+        #[case] expected: AgentStatusKind,
+    ) {
+        let cli = TestCli::try_parse_from(["a", "status", "set", input, "legacy note"])
+            .expect("legacy status kind should parse");
+
+        assert!(
+            cli.command
+                == super::super::AgentCommands::Status(StatusCommands::Set(SetArgs {
+                    kind: expected,
+                    note: "legacy note".to_string(),
+                }))
+        );
+    }
+
+    #[rstest]
     #[case::single_line("waiting for CI", true)]
     #[case::empty("", true)]
     #[case::line_feed(indoc! {"
@@ -156,7 +178,7 @@ mod tests {
         store::save_session_to(&sessions_dir, &codex_session).expect("session should save");
         store::save_session_to(&sessions_dir, &other_session).expect("session should save");
         let expected = AgentStatus {
-            kind: AgentStatusKind::Decide,
+            kind: AgentStatusKind::You,
             note: "choose a schedule".to_string(),
         };
 

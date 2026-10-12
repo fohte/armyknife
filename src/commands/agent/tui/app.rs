@@ -421,7 +421,7 @@ mod tests {
         let mut turn = create_test_session("turn");
         turn.status = SessionStatus::Stopped;
         turn.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
+            kind: AgentStatusKind::You,
             note: "choose an option".to_string(),
         });
         let mut earlier_turn = create_test_session("earlier-turn");
