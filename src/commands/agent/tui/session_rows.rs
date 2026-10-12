@@ -374,7 +374,7 @@ mod tests {
         }
     }
 
-    fn root(id: &str, mark: TaskMark, children: usize, user_turns: usize) -> RowDescription {
+    fn root_row(id: &str, mark: TaskMark, children: usize, user_turns: usize) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
             depth: 0,
@@ -386,7 +386,7 @@ mod tests {
         }
     }
 
-    fn child(id: &str, mark: TaskMark, is_last_sibling: bool) -> RowDescription {
+    fn child_row(id: &str, mark: TaskMark, is_last_sibling: bool) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
             depth: 1,
@@ -423,8 +423,8 @@ mod tests {
                     kind: "crit".to_string(),
                 },
                 header("TASKS"),
-                root("crit", TaskMark::UserTurn, 0, 0),
-                root("running", TaskMark::Working, 0, 0),
+                root_row("crit", TaskMark::UserTurn, 0, 0),
+                root_row("running", TaskMark::Working, 0, 0),
             ]
         );
     }
@@ -462,11 +462,37 @@ mod tests {
                     kind: "decide".to_string(),
                 },
                 header("TASKS"),
-                root("pm", TaskMark::Working, 4, 1),
-                child("delegated_child", TaskMark::UserTurn, false),
-                child("design", TaskMark::Working, false),
-                child("grandchild", TaskMark::Working, false),
-                child("orphan", TaskMark::Working, true),
+                root_row("pm", TaskMark::Working, 4, 1),
+                child_row("delegated_child", TaskMark::UserTurn, false),
+                child_row("design", TaskMark::Working, false),
+                child_row("grandchild", TaskMark::Working, false),
+                child_row("orphan", TaskMark::Working, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_session_rows_keeps_sessions_with_inconsistent_ancestor_chains() {
+        let root = running_session("root", &[], 3);
+        // "parent" was re-parented under "root" after "child" recorded it
+        // as its own root.
+        let parent = running_session("parent", &["root"], 2);
+        let child = running_session("child", &["parent"], 1);
+        let cycle_a = running_session("cycle_a", &["cycle_b"], 0);
+        let cycle_b = running_session("cycle_b", &["cycle_a"], 0);
+
+        let sessions: Vec<&Session> = vec![&root, &parent, &child, &cycle_a, &cycle_b];
+        let rows = build_session_rows(&sessions, &HashMap::new());
+
+        assert_eq!(
+            describe(&rows),
+            vec![
+                header("TASKS"),
+                root_row("root", TaskMark::Working, 1, 0),
+                child_row("parent", TaskMark::Working, true),
+                root_row("child", TaskMark::Working, 0, 0),
+                root_row("cycle_a", TaskMark::Working, 0, 0),
+                root_row("cycle_b", TaskMark::Working, 0, 0),
             ]
         );
     }

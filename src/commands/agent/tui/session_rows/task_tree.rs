@@ -19,16 +19,28 @@ pub(super) fn build_task_rows<'a>(
         .filter(|session| !session.is_delegated)
         .collect();
     let member_ids: HashSet<&str> = members.iter().map(|s| s.session_id.as_str()).collect();
+    let has_displayed_ancestor = |session: &Session| {
+        session
+            .ancestor_session_ids
+            .iter()
+            .any(|id| member_ids.contains(id.as_str()))
+    };
+    let root_ids: HashSet<&str> = members
+        .iter()
+        .filter(|session| !has_displayed_ancestor(session))
+        .map(|session| session.session_id.as_str())
+        .collect();
 
     let mut groups: Vec<(&'a Session, Vec<&'a Session>)> = Vec::new();
     let mut children_by_root: HashMap<&str, Vec<&'a Session>> = HashMap::new();
     for &session in &members {
-        // The first displayed id in root-to-parent order is the root, since
-        // its own ancestors are the ids before it and none of them are shown.
+        // Ancestor lists recorded at different times can disagree (or even
+        // form a cycle); a session that reaches no root becomes one itself
+        // rather than disappearing.
         match session
             .ancestor_session_ids
             .iter()
-            .find(|id| member_ids.contains(id.as_str()))
+            .find(|id| root_ids.contains(id.as_str()))
         {
             Some(root_id) => children_by_root
                 .entry(root_id.as_str())
