@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::types::Session;
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
+use crate::commands::agent::user_turn::{UserTurn, user_turns};
+use crate::shared::config::AgentConfig;
 
 mod task_tree;
 
@@ -53,7 +54,6 @@ pub(super) enum TaskMark {
     /// Stopped while waiting on something other than the user (another
     /// session, CI, a background command).
     Waiting,
-    Close,
     /// Stopped without a reason this module recognizes; rendered with the
     /// session's plain status glyph instead of a task mark.
     Unclassified,
@@ -104,15 +104,21 @@ pub(super) struct SessionTask {
 pub(super) fn build_session_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
+    agent_config: &AgentConfig,
 ) -> Vec<SessionRow<'a>> {
-    let turns = user_turns(sessions.iter().copied());
-    let turn_kinds: HashMap<String, UserTurnKind> = turns
+    let turns = user_turns(sessions.iter().copied(), agent_config);
+    let user_turn_session_ids: HashSet<String> = turns
         .iter()
-        .map(|turn| (turn.session.session_id.clone(), turn.kind))
+        .map(|turn| turn.session.session_id.clone())
         .collect();
     let mut rows = Vec::with_capacity(sessions.len() + 2);
     push_user_turns(&mut rows, turns);
-    let task_rows = task_tree::build_task_rows(sessions, task_by_session, &turn_kinds);
+    let task_rows = task_tree::build_task_rows(
+        sessions,
+        task_by_session,
+        &user_turn_session_ids,
+        agent_config,
+    );
     if !task_rows.is_empty() {
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {
             label: "TASKS".to_string(),
@@ -255,10 +261,13 @@ pub(super) fn is_related_task(cursor: Option<&SessionTask>, other: Option<&Sessi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, Engine, SessionStatus};
+    use crate::commands::agent::types::{AgentStatus, Engine, SessionStatus};
+    use crate::commands::agent::user_turn::UserTurnKind;
+    use crate::shared::config::AgentConfig;
+    use crate::shared::config::test_support::agent_config;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
-    use std::path::PathBuf;
+    use std::{collections::HashMap, path::PathBuf};
 
     fn at_minute(minute: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 1, 1, 0, minute, 0)
@@ -306,10 +315,10 @@ mod tests {
         session
     }
 
-    fn with_agent_status(mut session: Session, kind: AgentStatusKind) -> Session {
+    fn with_agent_status(mut session: Session, kind: &str) -> Session {
         session.status = SessionStatus::Stopped;
         session.agent_status = Some(AgentStatus {
-            kind,
+            kind: kind.to_string(),
             note: "sample note".to_string(),
         });
         session
@@ -335,7 +344,7 @@ mod tests {
         },
         UserTurn {
             id: String,
-            kind: String,
+            kind: UserTurnKind,
         },
         Task {
             id: String,
@@ -356,7 +365,7 @@ mod tests {
                 },
                 SessionRow::UserTurn(turn) => RowDescription::UserTurn {
                     id: turn.session.session_id.clone(),
-                    kind: turn.kind.label().to_string(),
+                    kind: turn.kind,
                 },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
@@ -383,7 +392,7 @@ mod tests {
             depth: 0,
             mark,
             is_last_sibling: false,
-            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -395,27 +404,29 @@ mod tests {
             depth: 1,
             mark,
             is_last_sibling,
-            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
         }
     }
 
-    #[test]
-    fn test_build_session_rows_empty_input() {
-        let rows = build_session_rows(&[], &HashMap::new());
+    #[rstest]
+    fn test_build_session_rows_empty_input(agent_config: AgentConfig) {
+        let rows = build_session_rows(&[], &HashMap::new(), &agent_config);
         assert_eq!(describe(&rows), Vec::<RowDescription>::new());
     }
 
-    #[test]
-    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks() {
+    #[rstest]
+    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks(
+        agent_config: AgentConfig,
+    ) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());
         let running = running_session("running", &[], 0);
 
         let sessions: Vec<&Session> = vec![&running, &crit];
-        let rows = build_session_rows(&sessions, &HashMap::new());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -423,7 +434,7 @@ mod tests {
                 header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "crit".to_string(),
-                    kind: "crit".to_string(),
+                    kind: UserTurnKind::Crit,
                 },
                 header("TASKS"),
                 root_row("crit", TaskMark::UserTurn, 0, 0),
@@ -432,8 +443,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions() {
+    #[rstest]
+    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions(
+        agent_config: AgentConfig,
+    ) {
         let pm = running_session("pm", &[], 0);
         let design = running_session("design", &["pm"], 3);
         // The intermediate ancestor is gone, so this still nests under "pm".
@@ -443,7 +456,7 @@ mod tests {
         delegated.is_delegated = true;
         let delegated_child = with_agent_status(
             running_session("delegated_child", &["pm", "design", "delegated"], 5),
-            AgentStatusKind::Decide,
+            "needs_attention",
         );
 
         let sessions: Vec<&Session> = vec![
@@ -454,7 +467,7 @@ mod tests {
             &delegated,
             &delegated_child,
         ];
-        let rows = build_session_rows(&sessions, &HashMap::new());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -462,7 +475,7 @@ mod tests {
                 header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "delegated_child".to_string(),
-                    kind: "decide".to_string(),
+                    kind: UserTurnKind::AgentStatus,
                 },
                 header("TASKS"),
                 root_row("pm", TaskMark::Working, 4, 1),
@@ -474,8 +487,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_keeps_sessions_with_inconsistent_ancestor_chains() {
+    #[rstest]
+    fn test_build_session_rows_keeps_sessions_with_inconsistent_ancestor_chains(
+        agent_config: AgentConfig,
+    ) {
         let root = running_session("root", &[], 3);
         // "parent" was re-parented under "root" after "child" recorded it
         // as its own root.
@@ -485,7 +500,7 @@ mod tests {
         let cycle_b = running_session("cycle_b", &["cycle_a"], 0);
 
         let sessions: Vec<&Session> = vec![&root, &parent, &child, &cycle_a, &cycle_b];
-        let rows = build_session_rows(&sessions, &HashMap::new());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -500,9 +515,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved() {
-        let old_turn = with_agent_status(running_session("old_turn", &[], 1), AgentStatusKind::Do);
+    #[rstest]
+    fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved(
+        agent_config: AgentConfig,
+    ) {
+        let old_turn = with_agent_status(running_session("old_turn", &[], 1), "needs_attention");
         let recent = running_session("recent", &[], 9);
         let older = running_session("older", &[], 2);
         // A child's activity counts as its root moving.
@@ -510,7 +527,7 @@ mod tests {
         let parent_of_turn = running_session("parent_of_turn", &[], 0);
         let child_turn = with_agent_status(
             running_session("child_turn", &["parent_of_turn"], 3),
-            AgentStatusKind::Read,
+            "needs_attention",
         );
 
         let sessions: Vec<&Session> = vec![
@@ -521,7 +538,7 @@ mod tests {
             &parent_of_turn,
             &child_turn,
         ];
-        let rows = build_session_rows(&sessions, &HashMap::new());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
         let task_ids: Vec<&str> = rows
             .iter()
             .filter_map(|row| match row {
@@ -548,52 +565,48 @@ mod tests {
     #[case::background(SessionStatus::Stopped, None, true, TaskMark::Waiting)]
     #[case::agent_wait(
         SessionStatus::Stopped,
-        Some(AgentStatusKind::Wait),
+        Some("awaiting_build"),
         false,
         TaskMark::Waiting
     )]
-    #[case::agent_done(
-        SessionStatus::Paused,
-        Some(AgentStatusKind::Done),
-        false,
-        TaskMark::Done
-    )]
+    #[case::agent_done(SessionStatus::Paused, Some("finished_work"), false, TaskMark::Done)]
     #[case::stale_status_while_running(
         SessionStatus::Running,
-        Some(AgentStatusKind::Wait),
+        Some("awaiting_build"),
         false,
         TaskMark::Working
     )]
     #[case::ended(SessionStatus::Ended, None, false, TaskMark::Done)]
-    #[case::close(
+    #[case::you(
         SessionStatus::Stopped,
-        Some(AgentStatusKind::Close),
+        Some("needs_attention"),
         false,
-        TaskMark::Close
+        TaskMark::UserTurn
     )]
-    #[case::decide(
+    #[case::unknown_status_is_user(
         SessionStatus::Stopped,
-        Some(AgentStatusKind::Decide),
+        Some("removed_name"),
         false,
         TaskMark::UserTurn
     )]
     #[case::stopped_without_reason(SessionStatus::Stopped, None, false, TaskMark::Unclassified)]
     fn test_build_session_rows_task_mark(
+        agent_config: AgentConfig,
         #[case] status: SessionStatus,
-        #[case] agent_status: Option<AgentStatusKind>,
+        #[case] agent_status: Option<&str>,
         #[case] has_bg_task: bool,
         #[case] expected: TaskMark,
     ) {
         let mut session = create_test_session("s", status);
         session.agent_status = agent_status.map(|kind| AgentStatus {
-            kind,
+            kind: kind.to_string(),
             note: "sample note".to_string(),
         });
         if has_bg_task {
             session.pending_bg_task_ids.insert("bg-1".to_string());
         }
 
-        let rows = build_session_rows(&[&session], &HashMap::new());
+        let rows = build_session_rows(&[&session], &HashMap::new(), &agent_config);
         let marks: Vec<TaskMark> = rows
             .iter()
             .filter_map(|row| match row {
@@ -612,12 +625,13 @@ mod tests {
     )]
     #[case::unlinked_session_has_no_task(HashMap::new(), None)]
     fn test_build_session_rows_attaches_task_from_lookup(
+        agent_config: AgentConfig,
         #[case] task_by_session: HashMap<String, SessionTask>,
         #[case] expected: Option<SessionTask>,
     ) {
         let session = create_test_session("a", SessionStatus::Running);
         let sessions: Vec<&Session> = vec![&session];
-        let rows = build_session_rows(&sessions, &task_by_session);
+        let rows = build_session_rows(&sessions, &task_by_session, &agent_config);
 
         let task = rows.iter().find_map(|r| match r {
             SessionRow::Session(entry) => Some(entry.task.clone()),

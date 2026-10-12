@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
-use super::types::{AgentStatusKind, DisplayStatus, Session, SessionStatus};
+use super::types::{DisplayStatus, Session, SessionStatus};
+use crate::shared::config::{AgentConfig, AgentStatusState};
 use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
 /// Variant order is the shared next-action priority used by tmux status and watch.
@@ -16,37 +17,28 @@ pub(crate) enum UserTurnKind {
     Failed,
     Crit,
     Body,
-    Decide,
-    Read,
-    Do,
-    Idle,
+    AgentStatus,
     Allow,
     Ask,
     Merge,
-    Close,
 }
 
 impl UserTurnKind {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> Option<&'static str> {
         match self {
-            Self::Failed => "failed",
-            Self::Crit => "crit",
-            Self::Body => "body",
-            Self::Decide => "decide",
-            Self::Read => "read",
-            Self::Do => "do",
-            Self::Idle => "idle",
-            Self::Allow => "allow",
-            Self::Ask => "ask",
-            Self::Merge => "merge",
-            Self::Close => "close",
+            Self::Failed => Some("failed"),
+            Self::Crit => Some("crit"),
+            Self::Body => Some("body"),
+            Self::AgentStatus => None,
+            Self::Allow => Some("allow"),
+            Self::Ask => Some("ask"),
+            Self::Merge => Some("merge"),
         }
     }
 
     pub(crate) fn symbol(self) -> &'static str {
         match self {
             Self::Failed => "✗",
-            Self::Close => "◌",
             _ => "◐",
         }
     }
@@ -56,13 +48,17 @@ impl UserTurnKind {
 pub(crate) struct UserTurn<'a> {
     pub(crate) session: &'a Session,
     pub(crate) kind: UserTurnKind,
+    pub(crate) label: Option<&'a str>,
     pub(crate) note: Option<&'a str>,
 }
 
-pub(crate) fn user_turns<'a>(sessions: impl IntoIterator<Item = &'a Session>) -> Vec<UserTurn<'a>> {
+pub(crate) fn user_turns<'a>(
+    sessions: impl IntoIterator<Item = &'a Session>,
+    agent_config: &AgentConfig,
+) -> Vec<UserTurn<'a>> {
     let mut turns = sessions
         .into_iter()
-        .filter_map(user_turn)
+        .filter_map(|session| user_turn(session, agent_config))
         .collect::<Vec<_>>();
     sort_user_turns(&mut turns);
     turns
@@ -72,11 +68,14 @@ pub(crate) fn sort_user_turns(turns: &mut [UserTurn<'_>]) {
     turns.sort_by(compare_turns);
 }
 
-pub(crate) fn next_user_turn(sessions: &[Session]) -> Option<UserTurn<'_>> {
-    user_turns(sessions).into_iter().next()
+pub(crate) fn next_user_turn<'a>(
+    sessions: &'a [Session],
+    agent_config: &AgentConfig,
+) -> Option<UserTurn<'a>> {
+    user_turns(sessions, agent_config).into_iter().next()
 }
 
-fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
+fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<UserTurn<'a>> {
     let kind = if session.has_pending_permission_requests() {
         Some(UserTurnKind::Allow)
     } else if is_ask_user_question(session) {
@@ -97,27 +96,25 @@ fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
         session.status,
         SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
     ) {
-        session
-            .agent_status
-            .as_ref()
-            .and_then(|status| match status.kind {
-                AgentStatusKind::Decide => Some(UserTurnKind::Decide),
-                AgentStatusKind::Read => Some(UserTurnKind::Read),
-                AgentStatusKind::Do => Some(UserTurnKind::Do),
-                AgentStatusKind::Idle => Some(UserTurnKind::Idle),
-                AgentStatusKind::Close => Some(UserTurnKind::Close),
-                AgentStatusKind::Done | AgentStatusKind::Wait => None,
-            })
+        session.agent_status.as_ref().and_then(|status| {
+            match agent_config.status_state(&status.kind) {
+                AgentStatusState::User => Some(UserTurnKind::AgentStatus),
+                AgentStatusState::Waiting | AgentStatusState::Done => None,
+            }
+        })
     } else {
         None
     }?;
 
+    let label = match kind {
+        UserTurnKind::AgentStatus => session
+            .agent_status
+            .as_ref()
+            .map(|status| status.kind.as_str()),
+        _ => kind.label(),
+    };
     let note = match kind {
-        UserTurnKind::Decide
-        | UserTurnKind::Read
-        | UserTurnKind::Do
-        | UserTurnKind::Idle
-        | UserTurnKind::Close => session
+        UserTurnKind::AgentStatus => session
             .agent_status
             .as_ref()
             .map(|status| status.note.as_str()),
@@ -129,6 +126,7 @@ fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
     Some(UserTurn {
         session,
         kind,
+        label,
         note,
     })
 }
@@ -157,6 +155,8 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
+    use crate::shared::config::AgentStatusConfig;
+    use crate::shared::config::test_support::agent_config;
 
     fn session(session_id: &str, updated_at: DateTime<Utc>) -> Session {
         Session {
@@ -197,43 +197,45 @@ mod tests {
             .expect("valid timestamp")
     }
 
-    #[test]
-    fn user_turns_sort_by_kind_then_oldest_update() {
-        let mut newer_decide = session("decide-new", timestamp(30));
-        newer_decide.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
-            note: "choose a path".to_string(),
+    #[rstest]
+    fn user_turns_sort_by_kind_then_oldest_update(agent_config: AgentConfig) {
+        let mut newer_user_turn = session("user-new", timestamp(30));
+        newer_user_turn.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: "review the proposal".to_string(),
         });
-        let mut older_decide = session("decide-old", timestamp(10));
-        older_decide.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
-            note: "choose a path".to_string(),
+        let mut older_user_turn = session("user-old", timestamp(10));
+        older_user_turn.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: "review the proposal".to_string(),
         });
         let mut crit = session("crit", timestamp(40));
         crit.crit_urls
             .push("https://example.test/review".to_string());
         crit.pending_bg_task_ids.insert("review-task".to_string());
-        let mut close = session("close", timestamp(1));
-        close.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Close,
-            note: "close the worktree".to_string(),
+        let mut done = session("finished", timestamp(1));
+        done.agent_status = Some(AgentStatus {
+            kind: "finished_work".to_string(),
+            note: "work is complete".to_string(),
         });
-        let mut waiting = session("wait", timestamp(2));
+        let mut waiting = session("external", timestamp(2));
         waiting.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Wait,
-            note: "waiting for CI".to_string(),
+            kind: "awaiting_build".to_string(),
+            note: "waiting for a build".to_string(),
         });
 
         assert_eq!(
-            user_turns(&[newer_decide, older_decide, crit, close, waiting])
-                .into_iter()
-                .map(|turn| (turn.session.session_id.as_str(), turn.kind))
-                .collect::<Vec<_>>(),
+            user_turns(
+                &[newer_user_turn, older_user_turn, crit, done, waiting],
+                &agent_config,
+            )
+            .into_iter()
+            .map(|turn| (turn.session.session_id.as_str(), turn.kind))
+            .collect::<Vec<_>>(),
             vec![
                 ("crit", UserTurnKind::Crit),
-                ("decide-old", UserTurnKind::Decide),
-                ("decide-new", UserTurnKind::Decide),
-                ("close", UserTurnKind::Close),
+                ("user-old", UserTurnKind::AgentStatus),
+                ("user-new", UserTurnKind::AgentStatus),
             ]
         );
     }
@@ -275,30 +277,49 @@ mod tests {
         }
 
         assert_eq!(
-            next_user_turn(&[session]).map(|turn| turn.kind),
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
         );
     }
 
     #[rstest]
-    #[case::decide(AgentStatusKind::Decide, Some(UserTurnKind::Decide))]
-    #[case::read(AgentStatusKind::Read, Some(UserTurnKind::Read))]
-    #[case::do_work(AgentStatusKind::Do, Some(UserTurnKind::Do))]
-    #[case::idle(AgentStatusKind::Idle, Some(UserTurnKind::Idle))]
-    #[case::close(AgentStatusKind::Close, Some(UserTurnKind::Close))]
-    #[case::done(AgentStatusKind::Done, None)]
-    #[case::wait(AgentStatusKind::Wait, None)]
-    fn agent_status_kinds_map_to_user_turns(
-        #[case] kind: AgentStatusKind,
+    #[case::configured_user(
+        "needs_attention",
+        Some(AgentStatusState::User),
+        Some(UserTurnKind::AgentStatus),
+        Some("needs_attention")
+    )]
+    #[case::configured_waiting("external_wait", Some(AgentStatusState::Waiting), None, None)]
+    #[case::configured_done("work_finished", Some(AgentStatusState::Done), None, None)]
+    #[case::unknown_is_user(
+        "removed_name",
+        None,
+        Some(UserTurnKind::AgentStatus),
+        Some("removed_name")
+    )]
+    fn agent_status_names_map_to_user_turns(
+        #[case] kind: &str,
+        #[case] state: Option<AgentStatusState>,
         #[case] expected: Option<UserTurnKind>,
+        #[case] expected_label: Option<&str>,
     ) {
+        let mut agent_config = AgentConfig::default();
+        if let Some(state) = state {
+            agent_config
+                .statuses
+                .insert(kind.to_string(), AgentStatusConfig { state });
+        }
         let mut session = session("status", timestamp(1));
         session.agent_status = Some(AgentStatus {
-            kind,
+            kind: kind.to_string(),
             note: "describe the next step".to_string(),
         });
 
-        assert_eq!(next_user_turn(&[session]).map(|turn| turn.kind), expected);
+        assert_eq!(
+            next_user_turn(&[session], &agent_config)
+                .map(|turn| (turn.kind, turn.label, turn.note)),
+            expected.map(|kind| (kind, expected_label, Some("describe the next step")))
+        );
     }
 
     #[test]
@@ -311,101 +332,64 @@ mod tests {
             .pending_bg_task_ids
             .insert("review-task".to_string());
 
-        assert_eq!(next_user_turn(&[session]).map(|turn| turn.kind), None);
-    }
-
-    #[test]
-    fn close_is_selected_only_when_no_higher_priority_item_exists() {
-        let mut close = session("close", timestamp(1));
-        close.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Close,
-            note: String::new(),
-        });
-        let mut read = session("read", timestamp(2));
-        read.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Read,
-            note: "answer the question".to_string(),
-        });
-
         assert_eq!(
-            (
-                next_user_turn(&[close.clone(), read]).map(|turn| turn.kind),
-                next_user_turn(&[close]).map(|turn| turn.kind),
-                next_user_turn(&[]).map(|turn| turn.kind),
-            ),
-            (Some(UserTurnKind::Read), Some(UserTurnKind::Close), None,)
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            None
         );
     }
 
     #[test]
     fn external_failure_and_merge_items_use_the_shared_order() {
         let sessions = [
-            session("close", timestamp(1)),
+            session("status", timestamp(1)),
             session("merge", timestamp(2)),
             session("ask", timestamp(3)),
             session("allow", timestamp(4)),
-            session("idle", timestamp(5)),
-            session("do", timestamp(6)),
-            session("read", timestamp(7)),
-            session("decide", timestamp(8)),
-            session("body", timestamp(9)),
-            session("crit", timestamp(10)),
-            session("failed", timestamp(11)),
+            session("body", timestamp(5)),
+            session("crit", timestamp(6)),
+            session("failed", timestamp(7)),
         ];
         let mut turns = [
             UserTurn {
                 session: &sessions[0],
-                kind: UserTurnKind::Close,
+                kind: UserTurnKind::AgentStatus,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[1],
                 kind: UserTurnKind::Merge,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[2],
                 kind: UserTurnKind::Ask,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[3],
                 kind: UserTurnKind::Allow,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[4],
-                kind: UserTurnKind::Idle,
+                kind: UserTurnKind::Body,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[5],
-                kind: UserTurnKind::Do,
+                kind: UserTurnKind::Crit,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[6],
-                kind: UserTurnKind::Read,
-                note: None,
-            },
-            UserTurn {
-                session: &sessions[7],
-                kind: UserTurnKind::Decide,
-                note: None,
-            },
-            UserTurn {
-                session: &sessions[8],
-                kind: UserTurnKind::Body,
-                note: None,
-            },
-            UserTurn {
-                session: &sessions[9],
-                kind: UserTurnKind::Crit,
-                note: None,
-            },
-            UserTurn {
-                session: &sessions[10],
                 kind: UserTurnKind::Failed,
+                label: None,
                 note: None,
             },
         ];
@@ -418,14 +402,10 @@ mod tests {
                 UserTurnKind::Failed,
                 UserTurnKind::Crit,
                 UserTurnKind::Body,
-                UserTurnKind::Decide,
-                UserTurnKind::Read,
-                UserTurnKind::Do,
-                UserTurnKind::Idle,
+                UserTurnKind::AgentStatus,
                 UserTurnKind::Allow,
                 UserTurnKind::Ask,
                 UserTurnKind::Merge,
-                UserTurnKind::Close,
             ]
         );
     }

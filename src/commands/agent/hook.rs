@@ -217,15 +217,14 @@ fn process_hook_event_impl(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
-    let stop_hook_instruction = (event == HookEvent::Stop)
-        .then(config::load_config_or_default)
-        .and_then(|config| config.agent.stop_hook_instruction);
+    let agent_config = (event == HookEvent::Stop).then(|| config::load_config_or_default().agent);
+    let stop_hook_instruction = agent_config.as_ref().and_then(stop::configured_instruction);
     process_hook_event_impl_with_instruction(
         event,
         input,
         sessions_dir,
         side_effects,
-        stop_hook_instruction.as_deref(),
+        stop_hook_instruction,
     )
 }
 
@@ -1217,7 +1216,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
+    use crate::commands::agent::types::AgentStatus;
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -2784,7 +2783,7 @@ mod tests {
         existing.read_at = initial_read_at;
         if event == HookEvent::Stop {
             existing.agent_status = Some(super::super::types::AgentStatus {
-                kind: super::super::types::AgentStatusKind::Done,
+                kind: "work_finished".to_string(),
                 note: "task complete".to_string(),
             });
         }
@@ -2915,7 +2914,7 @@ mod tests {
             | StopReason::StopHookActive => {}
             StopReason::StatusSet => {
                 session.agent_status = Some(AgentStatus {
-                    kind: AgentStatusKind::Done,
+                    kind: "work_finished".to_string(),
                     note: "Example completion.".to_string(),
                 });
             }
@@ -3032,7 +3031,7 @@ mod tests {
 
         store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
             session.agent_status = Some(AgentStatus {
-                kind: AgentStatusKind::Done,
+                kind: "work_finished".to_string(),
                 note: "Example completion.".to_string(),
             });
             true
@@ -3188,27 +3187,27 @@ mod tests {
     }
 
     #[rstest]
-    #[case::configured(true, ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()), SessionStatus::Running)]
-    #[case::missing(false, ProcessResult::SessionSaved, SessionStatus::Stopped)]
+    #[case::instruction_only(None, ProcessResult::SessionSaved, SessionStatus::Stopped)]
+    #[case::empty_statuses(Some("{}"), ProcessResult::SessionSaved, SessionStatus::Stopped)]
+    #[case::configured_status(Some("{ needs_attention: { state: user } }"), ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()), SessionStatus::Running)]
     fn stop_hook_uses_instruction_from_config(
-        #[case] configured: bool,
+        #[case] statuses: Option<&str>,
         #[case] expected_result: ProcessResult,
         #[case] expected_status: SessionStatus,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let config_home = temp_dir.path().join("config");
         let config_dir = config_home.join("armyknife");
-        if configured {
-            fs::create_dir_all(&config_dir).expect("config directory should be created");
-            fs::write(
-                config_dir.join("config.yaml"),
-                indoc::indoc! {"
-                    agent:
-                      stop_hook_instruction: Please summarize the result before stopping.
-                "},
-            )
-            .expect("config should be written");
+        fs::create_dir_all(&config_dir).expect("config directory should be created");
+        let mut config_yaml = indoc::indoc! {"
+            agent:
+              stop_hook_instruction: Please summarize the result before stopping.
+        "}
+        .to_string();
+        if let Some(statuses) = statuses {
+            config_yaml.push_str(&format!("  statuses: {statuses}\n"));
         }
+        fs::write(config_dir.join("config.yaml"), config_yaml).expect("config should be written");
 
         let sessions_dir = temp_dir.path().join("sessions");
         fs::create_dir(&sessions_dir).expect("sessions directory should be created");
@@ -3579,7 +3578,7 @@ mod tests {
             let temp_dir = create_temp_sessions_dir();
             let mut existing = create_test_session(None);
             existing.agent_status = Some(AgentStatus {
-                kind: AgentStatusKind::Wait,
+                kind: "external_wait".to_string(),
                 note: "waiting for CI".to_string(),
             });
             store::save_session_to(temp_dir.path(), &existing).expect("session should save");
@@ -3610,7 +3609,7 @@ mod tests {
         fn stop_keeps_agent_status(#[case] engine: Engine) {
             let temp_dir = create_temp_sessions_dir();
             let expected = AgentStatus {
-                kind: AgentStatusKind::Wait,
+                kind: "external_wait".to_string(),
                 note: "waiting for CI".to_string(),
             };
             let mut existing = create_test_session(None);
@@ -3667,7 +3666,7 @@ mod tests {
         ) {
             let temp_dir = create_temp_sessions_dir();
             let expected_status = AgentStatus {
-                kind: AgentStatusKind::Wait,
+                kind: "external_wait".to_string(),
                 note: "waiting for CI".to_string(),
             };
             let mut existing = create_test_session(None);
@@ -3715,7 +3714,7 @@ mod tests {
         fn subagent_activity_does_not_clear_main_thread_agent_status() {
             let temp_dir = create_temp_sessions_dir();
             let expected_status = AgentStatus {
-                kind: AgentStatusKind::Wait,
+                kind: "external_wait".to_string(),
                 note: "waiting for CI".to_string(),
             };
             let mut existing = create_test_session(None);
@@ -3768,7 +3767,7 @@ mod tests {
         ) {
             let temp_dir = create_temp_sessions_dir();
             let expected_status = AgentStatus {
-                kind: AgentStatusKind::Wait,
+                kind: "external_wait".to_string(),
                 note: "waiting for CI".to_string(),
             };
             let mut existing = create_test_session(None);

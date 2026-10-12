@@ -312,7 +312,7 @@ mod tests {
     fn peer_json_includes_agent_status_when_set() {
         let mut session = session("status-session", "/repo", vec![]);
         session.agent_status = Some(AgentStatus {
-            kind: crate::commands::agent::types::AgentStatusKind::Wait,
+            kind: "external_wait".to_string(),
             note: "waiting for CI".to_string(),
         });
 
@@ -325,7 +325,7 @@ mod tests {
                 "cwd": "/repo",
                 "label": "my-label",
                 "status": "running",
-                "agent_status": {"kind": "wait", "note": "waiting for CI"},
+                "agent_status": {"kind": "external_wait", "note": "waiting for CI"},
                 "pane_id": null,
                 "engine": "claude",
             }),

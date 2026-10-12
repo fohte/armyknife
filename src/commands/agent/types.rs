@@ -9,7 +9,7 @@ use super::error::CcError;
 mod agent_status;
 mod session;
 mod status;
-pub use agent_status::{AgentStatus, AgentStatusKind};
+pub use agent_status::AgentStatus;
 pub use session::Session;
 
 /// Which coding agent CLI hosts a session. Determines the process name to

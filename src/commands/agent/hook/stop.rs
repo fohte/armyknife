@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::super::types::{Engine, HookEvent, HookInput, Session, SessionStatus};
+use crate::shared::config::AgentConfig;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct StopConditions {
@@ -13,6 +14,14 @@ pub(super) struct StopConditions {
     pub permission_pending: bool,
     pub asking_user: bool,
     pub paused: bool,
+}
+
+pub(super) fn configured_instruction(agent_config: &AgentConfig) -> Option<&str> {
+    if agent_config.statuses.is_empty() {
+        None
+    } else {
+        agent_config.stop_hook_instruction.as_deref()
+    }
 }
 
 pub(super) fn block_reason(conditions: StopConditions, instruction: Option<&str>) -> Option<&str> {

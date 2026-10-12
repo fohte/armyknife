@@ -55,7 +55,7 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows(&filtered_sessions, &app.task_by_session);
+    let rows = build_session_rows(&filtered_sessions, &app.task_by_session, &app.agent_config);
     let linked_session_ids = app.linked_session_ids_for_sidebar_cursor();
 
     // Build list items and owned row ids from the same `rows`, then drop
@@ -125,8 +125,8 @@ mod tests {
         create_test_session, render_buffer, render_buffer_with, render_to_string,
         render_to_string_with, render_to_string_with_agent_config,
     };
+    use crate::commands::agent::types::AgentStatus;
     use crate::commands::agent::types::SessionStatus;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
@@ -507,30 +507,28 @@ mod tests {
     }
 
     #[fixture]
-    fn decide_user_turn_session() -> Session {
+    fn you_user_turn_session() -> Session {
         let mut session = create_test_session("s1");
         session.status = SessionStatus::Stopped;
         session.label = Some("session-name".to_string());
         session.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
+            kind: "needs_attention".to_string(),
             note: "choose an option".to_string(),
         });
         session
     }
 
     #[rstest]
-    fn test_render_your_turn_row_shows_label_name_note_and_wait_time(
-        mut decide_user_turn_session: Session,
-    ) {
+    fn test_render_your_turn_row_shows_name_note_and_wait_time(mut you_user_turn_session: Session) {
         let now = Utc::now();
-        decide_user_turn_session.updated_at = now - chrono::Duration::minutes(48);
+        you_user_turn_session.updated_at = now - chrono::Duration::minutes(48);
 
-        let output = render_to_string(&[decide_user_turn_session], Some(1), now, 80, 10);
+        let output = render_to_string(&[you_user_turn_session], Some(1), now, 80, 10);
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐  decide  session-name choose an option                                    48m
+            >◐  needs_attention  session-name choose an option                           48m
 
              ── TASKS ──────────────────────────────────────────────────────────────────────
              ◐ project                 session-name                                      48m
@@ -544,18 +542,18 @@ mod tests {
 
     #[rstest]
     fn test_render_your_turn_row_truncates_note_before_session_name(
-        mut decide_user_turn_session: Session,
+        mut you_user_turn_session: Session,
     ) {
         let now = Utc::now();
-        decide_user_turn_session.updated_at = now;
+        you_user_turn_session.updated_at = now;
 
-        let output = render_to_string(&[decide_user_turn_session], Some(1), now, 45, 4);
+        let output = render_to_string(&[you_user_turn_session], Some(1), now, 36, 4);
 
         let expected = indoc! {"
-             agent watch 1 needs you · 0 running · 0 idle
-             ── YOUR TURN ───────────────────────────────
-            >◐  decide  session-name choose a... just now
-             ?: keys   /: search   Esc: tasks   q: quit"};
+             agent watch1 needs you · 0 running
+             ── YOUR TURN ──────────────────────
+            >◐ session-name choose a... just now
+             ?: keys   /: search   Esc: tasks"};
 
         assert_eq!(output, expected);
     }

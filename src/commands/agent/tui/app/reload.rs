@@ -133,7 +133,7 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let rows = build_session_rows(&filtered, &self.task_by_session);
+        let rows = build_session_rows(&filtered, &self.task_by_session, &self.agent_config);
         self.row_sessions = rows
             .iter()
             .map(|r| {
