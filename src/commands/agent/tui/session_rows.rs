@@ -27,18 +27,21 @@ pub(super) struct SectionHeaderRow {
     pub kind: Section,
 }
 
-/// One TASKS row. `depth` is 0 for a root and 1 for every descendant, since
-/// grandchildren and deeper are flattened onto the child level.
+/// One TASKS row. `depth` is 0 for a root and increases with each displayed
+/// parent-child relationship.
 #[derive(Debug)]
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
     pub depth: usize,
     pub mark: TaskMark,
     pub is_last_sibling: bool,
+    /// Whether each non-root ancestor was the last child in its own group.
+    /// This determines which vertical tree lines continue to this row.
+    pub tree_prefix: Vec<bool>,
     /// `false` when the session already has a selectable YOUR TURN row, so
     /// the cursor never holds two positions for one session.
     pub is_selectable: bool,
-    /// Children shown under a root (always 0 on child rows).
+    /// Descendants shown under a root (always 0 on descendant rows).
     pub child_count: usize,
     pub child_user_turn_count: usize,
     /// The tq task this session is linked to, if any. Drives the task-number
@@ -351,6 +354,7 @@ mod tests {
             depth: usize,
             mark: TaskMark,
             is_last_sibling: bool,
+            tree_prefix: Vec<bool>,
             is_selectable: bool,
             child_count: usize,
             child_user_turn_count: usize,
@@ -372,6 +376,7 @@ mod tests {
                     depth: entry.depth,
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
+                    tree_prefix: entry.tree_prefix.clone(),
                     is_selectable: entry.is_selectable,
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
@@ -392,6 +397,7 @@ mod tests {
             depth: 0,
             mark,
             is_last_sibling: false,
+            tree_prefix: Vec::new(),
             is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
@@ -404,6 +410,26 @@ mod tests {
             depth: 1,
             mark,
             is_last_sibling,
+            tree_prefix: Vec::new(),
+            is_selectable: mark != TaskMark::UserTurn,
+            child_count: 0,
+            child_user_turn_count: 0,
+        }
+    }
+
+    fn nested_row(
+        id: &str,
+        depth: usize,
+        mark: TaskMark,
+        is_last_sibling: bool,
+        tree_prefix: &[bool],
+    ) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            depth,
+            mark,
+            is_last_sibling,
+            tree_prefix: tree_prefix.to_vec(),
             is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
@@ -444,7 +470,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions(
+    fn test_build_session_rows_preserves_full_depth_and_hides_delegated_sessions(
         agent_config: AgentConfig,
     ) {
         let pm = running_session("pm", &[], 0);
@@ -479,9 +505,9 @@ mod tests {
                 },
                 header("TASKS"),
                 root_row("pm", TaskMark::Working, 4, 1),
-                child_row("delegated_child", TaskMark::UserTurn, false),
                 child_row("design", TaskMark::Working, false),
-                child_row("grandchild", TaskMark::Working, false),
+                nested_row("delegated_child", 2, TaskMark::UserTurn, false, &[false]),
+                nested_row("grandchild", 2, TaskMark::Working, true, &[false]),
                 child_row("orphan", TaskMark::Working, true),
             ]
         );
@@ -506,11 +532,11 @@ mod tests {
             describe(&rows),
             vec![
                 header("TASKS"),
-                root_row("root", TaskMark::Working, 1, 0),
+                root_row("root", TaskMark::Working, 2, 0),
                 child_row("parent", TaskMark::Working, true),
-                root_row("child", TaskMark::Working, 0, 0),
-                root_row("cycle_a", TaskMark::Working, 0, 0),
-                root_row("cycle_b", TaskMark::Working, 0, 0),
+                nested_row("child", 2, TaskMark::Working, true, &[true]),
+                root_row("cycle_a", TaskMark::Working, 1, 0),
+                child_row("cycle_b", TaskMark::Working, true),
             ]
         );
     }

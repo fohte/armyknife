@@ -4,10 +4,8 @@ use super::{SessionRowEntry, SessionTask, TaskMark};
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 
-/// Builds TASKS rows: each root (a session with no displayed ancestor)
-/// followed by every displayed descendant flattened onto one child level.
-/// Delegated sessions are left out because they belong to a single PR rather
-/// than a task.
+/// Builds TASKS rows in their displayed parent-child hierarchy. Delegated
+/// sessions are left out because they belong to a single PR rather than a task.
 pub(super) fn build_task_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
@@ -19,41 +17,29 @@ pub(super) fn build_task_rows<'a>(
         .copied()
         .filter(|session| !session.is_delegated)
         .collect();
-    let member_ids: HashSet<&str> = members.iter().map(|s| s.session_id.as_str()).collect();
-    let has_displayed_ancestor = |session: &Session| {
-        session
-            .ancestor_session_ids
-            .iter()
-            .any(|id| member_ids.contains(id.as_str()))
-    };
-    let root_ids: HashSet<&str> = members
+    let member_ids: HashSet<&str> = members
         .iter()
-        .filter(|session| !has_displayed_ancestor(session))
         .map(|session| session.session_id.as_str())
         .collect();
+    let mut children_by_parent: HashMap<&str, Vec<&'a Session>> = HashMap::new();
+    let mut roots = Vec::new();
 
-    let mut groups: Vec<(&'a Session, Vec<&'a Session>)> = Vec::new();
-    let mut children_by_root: HashMap<&str, Vec<&'a Session>> = HashMap::new();
     for &session in &members {
-        // Ancestor lists recorded at different times can disagree (or even
-        // form a cycle); a session that reaches no root becomes one itself
-        // rather than disappearing.
-        match session
+        let parent_id = session
             .ancestor_session_ids
             .iter()
-            .find(|id| root_ids.contains(id.as_str()))
-        {
-            Some(root_id) => children_by_root
-                .entry(root_id.as_str())
+            .rev()
+            .find(|id| id.as_str() != session.session_id && member_ids.contains(id.as_str()));
+        if let Some(parent_id) = parent_id {
+            children_by_parent
+                .entry(parent_id.as_str())
                 .or_default()
-                .push(session),
-            None => groups.push((session, Vec::new())),
+                .push(session);
+        } else {
+            roots.push(session);
         }
     }
-    for (root, children) in &mut groups {
-        if let Some(found) = children_by_root.remove(root.session_id.as_str()) {
-            *children = found;
-        }
+    for children in children_by_parent.values_mut() {
         children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
     }
 
@@ -64,45 +50,124 @@ pub(super) fn build_task_rows<'a>(
             agent_config,
         )
     };
-    groups.sort_by_cached_key(|(root, children)| {
-        let has_user_turn = std::iter::once(root)
-            .chain(children.iter())
-            .any(|s| mark_of(s) == TaskMark::UserTurn);
-        let last_moved = std::iter::once(root)
-            .chain(children.iter())
-            .map(|s| s.updated_at)
-            .max();
-        (!has_user_turn, std::cmp::Reverse(last_moved))
-    });
+    let mut visited = HashSet::new();
+    let mut groups = Vec::new();
 
-    let entry = |session: &'a Session, depth: usize, is_last_sibling: bool| SessionRowEntry {
-        session,
-        depth,
-        mark: mark_of(session),
-        is_last_sibling,
-        is_selectable: !user_turn_session_ids.contains(&session.session_id),
-        child_count: 0,
-        child_user_turn_count: 0,
-        task: task_by_session.get(session.session_id.as_str()).cloned(),
-    };
-    let mut rows = Vec::with_capacity(members.len());
-    for (root, children) in groups {
-        let mut root_entry = entry(root, 0, false);
-        root_entry.child_count = children.len();
-        root_entry.child_user_turn_count = children
-            .iter()
-            .filter(|child| mark_of(child) == TaskMark::UserTurn)
-            .count();
-        rows.push(root_entry);
-        let last = children.len().saturating_sub(1);
-        rows.extend(
-            children
-                .into_iter()
-                .enumerate()
-                .map(|(i, child)| entry(child, 1, i == last)),
+    // Include unvisited sessions as fallback roots. Inconsistent ancestor
+    // metadata can form cycles, leaving a component without a natural root.
+    for root in roots.into_iter().chain(members.iter().copied()) {
+        if visited.contains(root.session_id.as_str()) {
+            continue;
+        }
+
+        let mut rows = Vec::new();
+        append_subtree(
+            root,
+            0,
+            false,
+            Vec::new(),
+            &children_by_parent,
+            &mut visited,
+            &mut rows,
         );
+        let has_user_turn = rows
+            .iter()
+            .any(|row| mark_of(row.session) == TaskMark::UserTurn);
+        let last_moved = rows
+            .iter()
+            .map(|row| row.session.updated_at)
+            .max()
+            .unwrap_or(root.updated_at);
+        groups.push(TaskTreeGroup {
+            rows,
+            has_user_turn,
+            last_moved,
+        });
+    }
+
+    groups.sort_by_cached_key(|group| (!group.has_user_turn, std::cmp::Reverse(group.last_moved)));
+
+    let mut rows = Vec::with_capacity(members.len());
+    for group in groups {
+        let child_count = group.rows.len().saturating_sub(1);
+        let child_user_turn_count = group
+            .rows
+            .iter()
+            .skip(1)
+            .filter(|row| mark_of(row.session) == TaskMark::UserTurn)
+            .count();
+        for (index, row) in group.rows.into_iter().enumerate() {
+            let is_root = index == 0;
+            rows.push(SessionRowEntry {
+                session: row.session,
+                depth: row.depth,
+                mark: mark_of(row.session),
+                is_last_sibling: row.is_last_sibling,
+                tree_prefix: row.tree_prefix,
+                is_selectable: !user_turn_session_ids.contains(&row.session.session_id),
+                child_count: if is_root { child_count } else { 0 },
+                child_user_turn_count: if is_root { child_user_turn_count } else { 0 },
+                task: task_by_session
+                    .get(row.session.session_id.as_str())
+                    .cloned(),
+            });
+        }
     }
     rows
+}
+
+struct TaskTreeRow<'a> {
+    session: &'a Session,
+    depth: usize,
+    is_last_sibling: bool,
+    tree_prefix: Vec<bool>,
+}
+
+struct TaskTreeGroup<'a> {
+    rows: Vec<TaskTreeRow<'a>>,
+    has_user_turn: bool,
+    last_moved: chrono::DateTime<chrono::Utc>,
+}
+
+fn append_subtree<'a>(
+    session: &'a Session,
+    depth: usize,
+    is_last_sibling: bool,
+    tree_prefix: Vec<bool>,
+    children_by_parent: &HashMap<&str, Vec<&'a Session>>,
+    visited: &mut HashSet<&'a str>,
+    rows: &mut Vec<TaskTreeRow<'a>>,
+) {
+    if !visited.insert(session.session_id.as_str()) {
+        return;
+    }
+
+    rows.push(TaskTreeRow {
+        session,
+        depth,
+        is_last_sibling,
+        tree_prefix: tree_prefix.clone(),
+    });
+
+    let Some(children) = children_by_parent.get(session.session_id.as_str()) else {
+        return;
+    };
+    let last_index = children.len().saturating_sub(1);
+    for (index, &child) in children.iter().enumerate() {
+        let mut child_prefix = tree_prefix.clone();
+        if depth > 0 {
+            child_prefix.push(is_last_sibling);
+        }
+        append_subtree(
+            child,
+            depth + 1,
+            index == last_index,
+            child_prefix,
+            children_by_parent,
+            visited,
+            rows,
+        );
+    }
 }
 
 fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig) -> TaskMark {

@@ -345,7 +345,7 @@ pub(super) fn build_session_item(
             },
         );
 
-    let branch = tree_branch_text(entry.depth, entry.is_last_sibling);
+    let branch = tree_branch_text(entry.depth, &entry.tree_prefix, entry.is_last_sibling);
     let branch_width = branch.width();
     let title_width =
         title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
@@ -403,12 +403,21 @@ pub(super) fn build_session_item(
     }
 }
 
-fn tree_branch_text(depth: usize, is_last_sibling: bool) -> &'static str {
-    match (depth, is_last_sibling) {
-        (0, _) => "",
-        (_, true) => "└─ ",
-        (_, false) => "├─ ",
+fn tree_branch_text(depth: usize, tree_prefix: &[bool], is_last_sibling: bool) -> String {
+    if depth == 0 {
+        return String::new();
     }
+
+    let mut branch = String::new();
+    for ancestor_is_last in tree_prefix {
+        branch.push_str(if *ancestor_is_last { "   " } else { "│  " });
+    }
+    branch.push_str(if is_last_sibling {
+        "└─ "
+    } else {
+        "├─ "
+    });
+    branch
 }
 
 /// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
@@ -556,14 +565,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::root(0, true, "")]
-    #[case::middle_child(1, false, "├─ ")]
-    #[case::last_child(1, true, "└─ ")]
+    #[case::root(0, &[], true, "")]
+    #[case::middle_child(1, &[], false, "├─ ")]
+    #[case::last_child(1, &[], true, "└─ ")]
+    #[case::nested_under_middle_sibling(2, &[false], false, "│  ├─ ")]
+    #[case::great_grandchild(3, &[true, false], true, "   │  └─ ")]
     fn test_tree_branch_text(
         #[case] depth: usize,
+        #[case] tree_prefix: &[bool],
         #[case] is_last_sibling: bool,
         #[case] expected: &str,
     ) {
-        assert_eq!(tree_branch_text(depth, is_last_sibling), expected);
+        assert_eq!(
+            tree_branch_text(depth, tree_prefix, is_last_sibling),
+            expected
+        );
     }
 }
