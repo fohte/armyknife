@@ -128,6 +128,7 @@ mod tests {
             tmux_info: None,
             status,
             agent_status: None,
+            agent_status_clear_pending: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
