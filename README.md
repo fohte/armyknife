@@ -367,7 +367,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]` |         | Focus the review pane when available, then the session's tmux pane        |
 | `mark-read [-t <pane_id>]`                        |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
 | `status set <kind> <note>`                        |         | Set the calling session's reason for stopping                             |
-| `vibe on                                          | off     | status`                                                                   |     | Enable, disable, or check vibe mode for the session tree |
+| `vibe on / off / status`                          |         | Enable, disable, or check vibe mode for the session tree                  |
 | `resume [session_id]`                             | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
 | `resurrect save`                                  |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
 | `resurrect restore`                               |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
