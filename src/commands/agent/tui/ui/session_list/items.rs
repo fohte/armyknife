@@ -140,7 +140,7 @@ pub(super) fn build_user_turn_item(
     let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
     let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);
-    let mut description = title;
+    let mut description = truncate(&title, description_width);
     if let Some(note) = note {
         let note_width = description_width.saturating_sub(description.width() + 1);
         if note_width > 0 {
