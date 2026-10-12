@@ -172,7 +172,7 @@ pub struct AgentConfig {
     pub codex: CodexConfig,
 
     /// Display configuration for agent work types, keyed by skill name. The
-    /// `default` entry is used for sessions without a recorded work type.
+    /// `default` entry supplies the `a agent watch` fallback icon and color.
     #[serde(default)]
     pub work_types: HashMap<String, AgentWorkTypeConfig>,
 
@@ -196,14 +196,23 @@ pub struct AgentConfig {
 impl AgentConfig {
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
+        if skill_name == FALLBACK_WORK_TYPE_KEY {
+            return None;
+        }
+
         self.work_types.get(skill_name)
     }
 
-    /// Look up the display configuration for sessions without a recorded work type.
-    pub fn fallback_work_type(&self) -> Option<&AgentWorkTypeConfig> {
-        self.work_types.get("default")
+    /// Look up the work type displayed in `a agent watch`, including its fallback.
+    pub fn watch_work_type(&self, skill_name: Option<&str>) -> Option<&AgentWorkTypeConfig> {
+        match skill_name {
+            Some(skill_name) => self.work_type(skill_name),
+            None => self.work_types.get(FALLBACK_WORK_TYPE_KEY),
+        }
     }
 }
+
+const FALLBACK_WORK_TYPE_KEY: &str = "default";
 
 /// Worktree configuration.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
@@ -1027,18 +1036,28 @@ mod tests {
         ))
     )]
     #[case::unconfigured("unknown-flow", None)]
+    #[case::reserved_fallback_key("default", None)]
     fn agent_work_type_looks_up_by_skill_name(
         #[case] skill_name: &str,
         #[case] expected: Option<(&str, AgentWorkTypeColor)>,
     ) {
         let config = AgentConfig {
-            work_types: HashMap::from([(
-                "sample-flow".to_string(),
-                AgentWorkTypeConfig {
-                    icon: "◇".to_string(),
-                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
-                },
-            )]),
+            work_types: HashMap::from([
+                (
+                    "sample-flow".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "◇".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                    },
+                ),
+                (
+                    "default".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "∅".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                    },
+                ),
+            ]),
             ..Default::default()
         };
         let actual = config

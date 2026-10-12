@@ -327,10 +327,9 @@ pub(super) fn build_session_item(
     };
 
     let work_type_column_width = work_type_column_width(app);
-    let work_type_config = match session.work_type.as_deref() {
-        Some(skill_name) => app.agent_config.work_type(skill_name),
-        None => app.agent_config.fallback_work_type(),
-    };
+    let work_type_config = app
+        .agent_config
+        .watch_work_type(session.work_type.as_deref());
     let work_type_spans = work_type_config.map_or_else(
         || vec![Span::raw(" ".repeat(work_type_column_width))],
         |config| {
