@@ -54,6 +54,7 @@ fn set_status_in(
         .load()?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
     session.agent_status = Some(status);
+    session.agent_status_clear_pending = false;
     lock.save(&session)
 }
 
@@ -96,6 +97,7 @@ mod tests {
             tmux_info: None,
             status: SessionStatus::Running,
             agent_status: None,
+            agent_status_clear_pending: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_message: None,
@@ -146,7 +148,8 @@ mod tests {
             .to_str()
             .expect("temp dir path should be valid UTF-8");
         let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
-        let codex_session = session("codex-session", Engine::Codex);
+        let mut codex_session = session("codex-session", Engine::Codex);
+        codex_session.agent_status_clear_pending = true;
         let other_session = session("other-session", Engine::Claude);
         store::save_session_to(&sessions_dir, &codex_session).expect("session should save");
         store::save_session_to(&sessions_dir, &other_session).expect("session should save");
@@ -170,17 +173,20 @@ mod tests {
             },
         );
 
+        let codex_session = store::load_session_from(&sessions_dir, "codex-session")
+            .expect("Codex session should load")
+            .expect("Codex session should exist");
         let actual = (
-            store::load_session_from(&sessions_dir, "codex-session")
-                .expect("Codex session should load")
-                .expect("Codex session should exist")
-                .agent_status,
+            (
+                codex_session.agent_status,
+                codex_session.agent_status_clear_pending,
+            ),
             store::load_session_from(&sessions_dir, "other-session")
                 .expect("other session should load")
                 .expect("other session should exist")
                 .agent_status,
         );
 
-        assert_eq!(actual, (Some(expected), None));
+        assert_eq!(actual, ((Some(expected), false), None));
     }
 }
