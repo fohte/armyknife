@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.389](https://github.com/fohte/armyknife/compare/v0.1.388...v0.1.389) (2026-10-12)
+
+
+### Bug Fixes
+
+* **agent:** clear stop reason display on main thread resume ([#1110](https://github.com/fohte/armyknife/issues/1110)) ([3c3784b](https://github.com/fohte/armyknife/commit/3c3784b43fd8c2cbeacd3a36e10411f4ce5af183))
+
 ## [0.1.388](https://github.com/fohte/armyknife/compare/v0.1.387...v0.1.388) (2026-10-12)
 
 
