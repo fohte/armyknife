@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.394](https://github.com/fohte/armyknife/compare/v0.1.393...v0.1.394) (2026-10-12)
+
+
+### Features
+
+* **ai:** allow skipping PR draft approval validation only in vibe mode ([#1120](https://github.com/fohte/armyknife/issues/1120)) ([5da807a](https://github.com/fohte/armyknife/commit/5da807ae1d6c3144808fb1c256b2fbd9a0ae4f13))
+
 ## [0.1.393](https://github.com/fohte/armyknife/compare/v0.1.392...v0.1.393) (2026-10-12)
 
 
