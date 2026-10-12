@@ -77,8 +77,10 @@ impl App {
         }
 
         let filtered = self.filtered_sessions();
+        // Delegated sessions have no TASKS row, so they are never a parent there.
         let by_id: HashMap<&str, &Session> = filtered
             .iter()
+            .filter(|s| !s.is_delegated)
             .map(|s| (s.session_id.as_str(), *s))
             .collect();
         let ancestor_id =
@@ -128,11 +130,12 @@ impl App {
         let session_id = session.session_id.clone();
         // Check against the currently displayed sessions, not all of
         // `self.sessions`, or a session hidden by search/status filtering
-        // could enter a scope with nothing visible under it.
+        // could enter a scope with nothing visible under it. Delegated
+        // sessions have no TASKS row, so they do not count either.
         let has_descendants = self
             .filtered_sessions()
             .iter()
-            .any(|s| is_descendant_of(s, &session_id));
+            .any(|s| !s.is_delegated && is_descendant_of(s, &session_id));
         if !has_descendants {
             return;
         }
@@ -311,6 +314,27 @@ mod tests {
 
         // Row 0 is the "TASKS" header; "root"/"child" are rows 1/2.
         let mut app = create_test_app(vec![root, child]);
+        app.select_by_number(2);
+
+        app.select_parent();
+
+        assert_eq!(
+            parent_selection_state(&app),
+            (Some("root".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn test_select_parent_skips_delegated_ancestor() {
+        let root = create_test_session("root");
+        let mut delegated = create_test_session("delegated");
+        delegated.ancestor_session_ids = vec!["root".to_string()];
+        delegated.is_delegated = true;
+        let mut child = create_test_session("child");
+        child.ancestor_session_ids = vec!["root".to_string(), "delegated".to_string()];
+
+        // Row 0 is the "TASKS" header; "root"/"child" are rows 1/2.
+        let mut app = create_test_app(vec![root, delegated, child]);
         app.select_by_number(2);
 
         app.select_parent();
