@@ -400,7 +400,7 @@ Define status names under `agent.statuses`; the configured state controls how ea
 - `waiting`: another session, CI job, or external event needs to finish
 - `done`: the work is finished
 
-If a stored status name is no longer configured, armyknife treats it as `user` so it remains visible.
+When introducing `agent.statuses`, include names already stored in session records to preserve their configured states. A stored name missing from the map is treated as `user` so it remains visible.
 
 ```console
 $ a agent status set awaiting_build "waiting for a build"
