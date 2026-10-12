@@ -1827,7 +1827,7 @@ mod tests {
             serde_json::json!({
                 "description": indoc! {"
                     Instruction returned by the Stop hook when it blocks a session.
-                    When unset, the Stop hook does not block."},
+                    The hook blocks only when this is set and at least one status is configured."},
                 "type": ["string", "null"],
                 "default": null,
             })
