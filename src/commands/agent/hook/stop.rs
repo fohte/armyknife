@@ -51,6 +51,20 @@ pub(super) fn block_reason_for_hook<'a>(
     )
 }
 
+/// A status-setting continuation may emit intermediate hooks before Stop, so
+/// keep the blocked turn's final message until that Stop arrives.
+pub(super) fn preserve_last_message_after_block(
+    session: &mut Session,
+    event: HookEvent,
+    blocked_by_armyknife: bool,
+) -> bool {
+    let preserve = session.stop_blocked_by_armyknife;
+    if event == HookEvent::Stop {
+        session.stop_blocked_by_armyknife = blocked_by_armyknife;
+    }
+    preserve
+}
+
 pub(super) fn write_response(
     engine: Engine,
     event: HookEvent,

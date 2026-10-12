@@ -471,12 +471,14 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_app_with_sessions(count: usize) -> App {
+        let now = Utc::now();
         let sessions: Vec<Session> = (0..count)
             .map(|i| Session {
                 session_id: format!("session-{}", i),
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from(format!("/project/{}", i)),
@@ -484,8 +486,8 @@ mod tests {
                 tty: None,
                 tmux_info: None,
                 status: SessionStatus::Running,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
                 last_message: None,
                 current_tool: None,
                 label: None,
@@ -496,6 +498,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
@@ -560,7 +563,7 @@ mod tests {
         assert_eq!(app.list_state.selected(), expected);
     }
 
-    // Row 0 is the "RUNNING (2)" header; sessions are rows 1/2.
+    // Row 0 is the "TASKS" header; sessions are rows 1/2.
     #[rstest]
     #[case::h(KeyCode::Char('h'))]
     #[case::left(KeyCode::Left)]
@@ -574,7 +577,7 @@ mod tests {
         assert_eq!(app.list_state.selected(), Some(1));
     }
 
-    // Row 0 is the "RUNNING (2)" header; sessions are rows 1/2.
+    // Row 0 is the "TASKS" header; sessions are rows 1/2.
     #[rstest]
     #[case::l(KeyCode::Char('l'))]
     #[case::right(KeyCode::Right)]
@@ -600,7 +603,7 @@ mod tests {
         assert_eq!(app.drilldown_scope, None);
     }
 
-    // All 5 sessions default to `Running`, so row 0 is the "RUNNING (5)"
+    // All 5 sessions default to `Running`, so row 0 is the "TASKS"
     // header and rows 1-5 are the sessions.
     #[rstest]
     #[case::select_3('3', Some(1), Some(3))]
@@ -650,7 +653,7 @@ mod tests {
     #[test]
     fn test_search_mode_ctrl_n_p_for_navigation() {
         let mut app = create_test_app_with_sessions(3);
-        // Row 0 is the "RUNNING (3)" header, so the default selection
+        // Row 0 is the "TASKS" header, so the default selection
         // (first selectable row) already sits on row 1.
         assert_eq!(app.list_state.selected(), Some(1));
         handle_key_event(&mut app, key(KeyCode::Char('/')));
@@ -941,6 +944,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/running"),
@@ -960,6 +964,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
@@ -969,6 +974,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/waiting"),
@@ -988,6 +994,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
@@ -997,6 +1004,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/stopped"),
@@ -1016,6 +1024,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
@@ -1025,6 +1034,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/project/paused"),
@@ -1044,6 +1054,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
@@ -1273,6 +1284,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd,
@@ -1292,6 +1304,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,

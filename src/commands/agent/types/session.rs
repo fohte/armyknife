@@ -52,6 +52,9 @@ pub struct Session {
     /// When true, hook-detected skills cannot replace the `a agent new --kind` value.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_type_pinned: bool,
+    /// Whether this session was launched as a delegated task with `--agent`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_delegated: bool,
     /// Ancestor session IDs from root to immediate parent.
     /// Used to build tree view: if intermediate sessions are deleted,
     /// child sessions can still find their nearest living ancestor.
@@ -115,6 +118,10 @@ pub struct Session {
     /// longer relevant) and by `sweep::confirm_paused`.
     #[serde(default)]
     pub sweep_signaled: bool,
+    /// Set when armyknife blocks a Stop for a missing status, so the next
+    /// Stop can keep that blocked turn's final message.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stop_blocked_by_armyknife: bool,
     /// Which coding agent CLI this session belongs to. See `Engine`.
     #[serde(default)]
     pub engine: Engine,
@@ -144,12 +151,24 @@ mod tests {
                 session.read_at,
                 session.work_type,
                 session.vibe_enabled,
+                session.is_delegated,
                 session.work_type_pinned,
                 session.pending_human_review_ids,
                 session.agent_status,
+                session.stop_blocked_by_armyknife,
                 session.agent_status_clear_pending,
             ),
-            (None, None, false, false, BTreeSet::new(), None, false)
+            (
+                None,
+                None,
+                false,
+                false,
+                false,
+                BTreeSet::new(),
+                None,
+                false,
+                false
+            )
         );
     }
 

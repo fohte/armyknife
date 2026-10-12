@@ -86,8 +86,7 @@ pub struct App {
     /// Status filter: when set, only sessions with this status are shown.
     pub status_filter: Option<SessionStatus>,
     /// Drill-down scope: when set, the session list shows only this session
-    /// (by id) and its descendants (any depth -- same rule as the `▸{n}`
-    /// badge). Entered via `App::enter_drilldown`, exited via
+    /// (by id) and its descendants (any depth). Entered via `App::enter_drilldown`, exited via
     /// `App::exit_drilldown`. Counted as part of `has_filter()`.
     pub drilldown_scope: Option<String>,
     /// Cache of searchable text for each session (keyed by session_id).
@@ -146,11 +145,11 @@ pub struct App {
 
 impl App {
     /// Creates a new App instance with initial session data.
-    /// Selects the highest-priority user turn, or restores the previous
-    /// selection when there is no user turn.
+    /// Selects the focused session, the highest-priority user turn, or the
+    /// previous selection, in that order.
     ///
-    /// `ARMYKNIFE_FOCUS_SESSION` takes precedence over the persisted selection
-    /// when both are used as a fallback.
+    /// `ARMYKNIFE_FOCUS_SESSION` takes precedence over user turns and the
+    /// persisted selection.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
         let agent_config = crate::shared::config::load_config_or_default().agent;
@@ -160,11 +159,14 @@ impl App {
             .ok()
             .filter(|s| !s.is_empty());
         let sidebar_focused = focus_session_id.is_none();
-        let initial_session_id =
-            focus_session_id.or_else(|| store::load_last_selected_session().ok().flatten());
+        let last_selected_session_id = store::load_last_selected_session().ok().flatten();
 
-        let mut app =
-            Self::with_initial_selection(sessions, agent_config, initial_session_id.as_deref());
+        let mut app = Self::with_initial_selection(
+            sessions,
+            agent_config,
+            focus_session_id.as_deref(),
+            last_selected_session_id.as_deref(),
+        );
         app.sidebar_visible = true;
         app.sidebar_focused = sidebar_focused;
 
@@ -238,10 +240,11 @@ impl App {
     fn with_initial_selection(
         sessions: Vec<Session>,
         agent_config: AgentConfig,
-        fallback_session_id: Option<&str>,
+        focus_session_id: Option<&str>,
+        last_selected_session_id: Option<&str>,
     ) -> Self {
         let mut app = Self::with_sessions_and_agent_config(sessions, agent_config);
-        app.restore_initial_selection(fallback_session_id);
+        app.restore_initial_selection(focus_session_id, last_selected_session_id);
         app
     }
 
@@ -254,13 +257,23 @@ impl App {
             .and_then(|idx| self.sessions.get(idx))
     }
 
-    fn restore_initial_selection(&mut self, fallback_session_id: Option<&str>) {
-        let first_user_turn_id =
-            next_user_turn(&self.sessions).map(|turn| turn.session.session_id.clone());
-        if let Some(session_id) = first_user_turn_id {
+    fn restore_initial_selection(
+        &mut self,
+        focus_session_id: Option<&str>,
+        last_selected_session_id: Option<&str>,
+    ) {
+        let selected_session_id = focus_session_id
+            .filter(|focus_id| {
+                self.sessions
+                    .iter()
+                    .any(|session| session.session_id == *focus_id)
+            })
+            .map(str::to_owned)
+            .or_else(|| next_user_turn(&self.sessions).map(|turn| turn.session.session_id.clone()))
+            .or_else(|| last_selected_session_id.map(str::to_owned));
+
+        if let Some(session_id) = selected_session_id {
             self.restore_selection(None, Some(&session_id));
-        } else if let Some(session_id) = fallback_session_id {
-            self.restore_selection(self.list_state.selected(), Some(session_id));
         }
     }
 
@@ -330,6 +343,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use chrono::TimeDelta;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     /// Counter to assign distinct timestamps to test sessions.
@@ -346,6 +360,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -365,6 +380,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
@@ -391,7 +407,7 @@ mod tests {
             create_test_session("second"),
         ]);
 
-        // Row 0 is the "RUNNING (2)" header; "first"/"second" are rows 1/2.
+        // Row 0 is the "TASKS" header; "first"/"second" are rows 1/2.
         app.list_state.select(Some(2));
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
@@ -399,8 +415,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_initial_selection_prefers_the_highest_priority_user_turn() {
+    #[fixture]
+    fn sessions_with_user_turns() -> Vec<Session> {
         let mut running = create_test_session("running");
         running.status = SessionStatus::Running;
         let mut turn = create_test_session("turn");
@@ -415,16 +431,30 @@ mod tests {
             .crit_urls
             .push("https://example.com/review".to_string());
 
+        vec![running, turn, earlier_turn]
+    }
+
+    #[rstest]
+    #[case::focus_session(Some("running"), Some("earlier-turn"), "running")]
+    #[case::first_user_turn(None, Some("running"), "earlier-turn")]
+    #[case::stale_focus_falls_through(Some("missing"), Some("running"), "earlier-turn")]
+    fn test_initial_selection_prefers_focus_then_user_turn(
+        sessions_with_user_turns: Vec<Session>,
+        #[case] focus_session_id: Option<&str>,
+        #[case] last_selected_session_id: Option<&str>,
+        #[case] expected_session_id: &str,
+    ) {
         let app = App::with_initial_selection(
-            vec![running, turn, earlier_turn],
+            sessions_with_user_turns,
             AgentConfig::default(),
-            Some("running"),
+            focus_session_id,
+            last_selected_session_id,
         );
 
         assert_eq!(
             app.selected_session()
                 .map(|session| session.session_id.as_str()),
-            Some("earlier-turn")
+            Some(expected_session_id)
         );
     }
 
@@ -435,6 +465,7 @@ mod tests {
         let app = App::with_initial_selection(
             vec![first, fallback],
             AgentConfig::default(),
+            None,
             Some("fallback"),
         );
 

@@ -164,6 +164,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/example"),
@@ -185,6 +186,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
         }
     }

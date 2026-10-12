@@ -138,6 +138,7 @@ mod tests {
             work_type: None,
             vibe_enabled,
             work_type_pinned: false,
+            is_delegated: false,
             ancestor_session_ids: ancestors.iter().map(|id| (*id).to_string()).collect(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
@@ -145,6 +146,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
         }
     }

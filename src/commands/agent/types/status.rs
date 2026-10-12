@@ -121,6 +121,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -142,6 +143,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
         }
     }
