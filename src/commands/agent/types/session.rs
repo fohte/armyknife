@@ -46,6 +46,9 @@ pub struct Session {
     /// Workflow skill name that identifies this session's work type.
     #[serde(default)]
     pub work_type: Option<String>,
+    /// When true, this session explicitly enabled vibe mode.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vibe_enabled: bool,
     /// When true, hook-detected skills cannot replace the `a agent new --kind` value.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_type_pinned: bool,
@@ -140,12 +143,13 @@ mod tests {
             (
                 session.read_at,
                 session.work_type,
+                session.vibe_enabled,
                 session.work_type_pinned,
                 session.pending_human_review_ids,
                 session.agent_status,
                 session.agent_status_clear_pending,
             ),
-            (None, None, false, BTreeSet::new(), None, false)
+            (None, None, false, false, BTreeSet::new(), None, false)
         );
     }
 

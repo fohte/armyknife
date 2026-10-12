@@ -367,6 +367,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]` |         | Focus the review pane when available, then the session's tmux pane        |
 | `mark-read [-t <pane_id>]`                        |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
 | `status set <kind> <note>`                        |         | Set the calling session's reason for stopping                             |
+| `vibe on                                          | off     | status`                                                                   |     | Enable, disable, or check vibe mode for the session tree |
 | `resume [session_id]`                             | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
 | `resurrect save`                                  |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
 | `resurrect restore`                               |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
@@ -385,6 +386,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
+
+Run `a agent vibe on` in a tracked session to enable vibe mode for that session. Descendants inherit the mode through the recorded ancestor chain, so `a agent vibe off` in the enabling session disables it for the whole tree. `a agent vibe status` exits with code 0 when the current session or any ancestor has enabled vibe mode, and nonzero otherwise.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop and returns that message. If the key is omitted, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>`.
 

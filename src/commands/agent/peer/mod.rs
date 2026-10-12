@@ -230,6 +230,7 @@ mod tests {
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,
+            vibe_enabled: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from(cwd),

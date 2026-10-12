@@ -37,6 +37,7 @@ pub(crate) mod tmux_sync;
 mod tui;
 pub(crate) mod types;
 pub(crate) mod user_turn;
+mod vibe;
 mod watch;
 mod window_status;
 
@@ -67,6 +68,7 @@ pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
 pub use sweep::SweepArgs;
+pub use vibe::{VibeCommands, is_vibe_enabled};
 pub use watch::WatchArgs;
 pub use window_status::WindowStatusArgs;
 
@@ -114,6 +116,10 @@ pub enum AgentCommands {
     /// Set the calling session's reason for stopping
     #[command(subcommand)]
     Status(StatusCommands),
+
+    /// Enable, disable, or check vibe mode for the calling session tree
+    #[command(subcommand)]
+    Vibe(VibeCommands),
 
     /// Resume a Claude Code session from tmux pane's user option
     #[command(visible_alias = "r")]
@@ -181,6 +187,7 @@ impl AgentCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
+            Self::Vibe(command) => vibe::run(command)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
