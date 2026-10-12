@@ -353,6 +353,18 @@ a gh pr-review reply review <pr-number> [options]
 | ------------------- | ------------------------------ |
 | `-R, --repo <REPO>` | Target repository (owner/repo) |
 
+#### `a gh pr-merge`
+
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging is allowed only when vibe mode is enabled.
+
+```sh
+a gh pr-merge <pr-number> [options]
+```
+
+| Option              | Description                    |
+| ------------------- | ------------------------------ |
+| `-R, --repo <repo>` | Target repository (owner/repo) |
+
 ### `a agent`
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
@@ -388,7 +400,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
-Vibe mode is an opt-in marker recorded by armyknife. It enables `--no-review` for `a ai pr-draft submit`; otherwise it does not change other armyknife behavior by itself. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+Vibe mode is an opt-in marker recorded by armyknife. `a ai pr-draft submit --no-review` only skips approval validation when vibe mode is enabled, and `a gh pr-merge` checks vibe mode inside agent sessions. Other commands do not inspect this marker. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then
@@ -799,7 +811,7 @@ entries. Pass `--force` to override.
 
 ### Hooks
 
-armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
+armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit/merge). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
 
 ### Logging
 
