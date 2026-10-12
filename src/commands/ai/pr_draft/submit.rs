@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
+use crate::infra::git::cmd::run_git;
 use crate::infra::github::{
     CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
@@ -31,13 +32,14 @@ struct PrTarget {
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
-    run_impl(args, client, default_runner()).await
+    run_impl(args, client, default_runner(), write_pr_url_config).await
 }
 
 async fn run_impl(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
     run_hook: HookRunner<'_>,
+    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
@@ -154,11 +156,25 @@ async fn run_impl(
         }
     };
 
+    let config_key = format!("branch.{}.pr-url", target.branch);
+    if let Err(error) = write_config(&config_key, &pr_url) {
+        tracing::warn!(
+            branch = %target.branch,
+            error = %error,
+            "failed to cache pull request URL"
+        );
+    }
+
     println!("{pr_url}");
 
     // Cleanup
     draft.cleanup()?;
 
+    Ok(())
+}
+
+fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
+    run_git(std::path::Path::new("."), ["config", "--local", key, url])?;
     Ok(())
 }
 
@@ -174,6 +190,10 @@ mod tests {
     /// Hook stub that always succeeds. Use when the test does not care about
     /// hook invocation.
     fn noop_hook(_name: &str, _env: &[(&str, &str)]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn noop_config(_key: &str, _value: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -306,7 +326,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook).await;
+        let result = run_impl(&args, &client, &noop_hook, noop_config).await;
 
         assert!(
             result.is_ok(),
@@ -333,7 +353,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook).await;
+        let result = run_impl(&args, &client, &noop_hook, noop_config).await;
 
         assert!(
             result.is_ok(),
@@ -375,7 +395,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook).await;
+        let result = run_impl(&args, &client, &noop_hook, noop_config).await;
 
         let err = result.expect_err("submit should fail when not approved");
         assert!(matches!(
@@ -421,7 +441,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook).await;
+        let result = run_impl(&args, &client, &noop_hook, noop_config).await;
 
         let err = result.expect_err("submit should fail with empty title");
         assert!(matches!(
@@ -481,12 +501,54 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook).await;
+        let cached_config = Mutex::new(None);
+        let write_config = |key: &str, value: &str| {
+            *cached_config.lock().expect("cache spy mutex") =
+                Some((key.to_string(), value.to_string()));
+            Ok(())
+        };
+        let result = run_impl(&args, &client, &noop_hook, write_config).await;
 
-        assert!(
-            result.is_ok(),
-            "submit should update existing PR: {:?}",
-            result.err()
+        assert_eq!(
+            result
+                .map(|()| cached_config.into_inner().expect("cache spy mutex"))
+                .map_err(|error| error.to_string()),
+            Ok(Some((
+                "branch.feature/existing-pr.pr-url".to_string(),
+                "https://github.com/owner/repo_submit_update/pull/42".to_string(),
+            ))),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_creates_pr_even_when_caching_pr_url_fails() {
+        let env = setup_test_env("owner", "repo_submit_cache_url").await;
+        let branch = "feature/cache.pr-url";
+        let draft_path =
+            create_approved_draft(&env.owner, &env.repo, branch, "Ready title", "Body content");
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+        };
+
+        let client = env.mock.client();
+        let cached_config = Mutex::new(None);
+        let write_config = |key: &str, value: &str| {
+            *cached_config.lock().expect("cache spy mutex") =
+                Some((key.to_string(), value.to_string()));
+            anyhow::bail!("git config is unavailable")
+        };
+        let result = run_impl(&args, &client, &noop_hook, write_config).await;
+
+        assert_eq!(
+            result
+                .map(|()| cached_config.into_inner().expect("cache spy mutex"))
+                .map_err(|error| error.to_string()),
+            Ok(Some((
+                format!("branch.{branch}.pr-url"),
+                format!("https://github.com/{}/{}/pull/1", env.owner, env.repo),
+            ))),
         );
     }
 
@@ -514,7 +576,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook).await;
+        let result = run_impl(&args, &client, &hook, noop_config).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -576,7 +638,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook).await;
+        let result = run_impl(&args, &client, &hook, noop_config).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -604,7 +666,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let err = run_impl(&args, &client, &hook)
+        let err = run_impl(&args, &client, &hook, noop_config)
             .await
             .expect_err("hook failure must abort submission");
         assert_eq!(err.to_string(), "forbidden cross-org link");
