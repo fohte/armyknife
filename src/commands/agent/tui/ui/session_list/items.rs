@@ -131,30 +131,24 @@ pub(super) fn build_user_turn_item(
         .filter(|note| !note.is_empty());
     let time_text = format_compact_time(turn.session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
-    let full_label_width = turn
-        .label
-        .map(|label| label.width().max(USER_TURN_LABEL_WIDTH));
     let line_width = term_width.saturating_sub(MARKER_WIDTH);
-    let full_label_description_width = full_label_width.map_or_else(
-        || line_width.saturating_sub(STATUS_COLUMN_WIDTH + TIME_COLUMN_WIDTH),
-        |label_width| {
-            let label_column_width = label_width + 3;
-            line_width.saturating_sub(STATUS_COLUMN_WIDTH + label_column_width + TIME_COLUMN_WIDTH)
-        },
-    );
+    let mut label = turn.label.map(|label| {
+        let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
+        let padding = " ".repeat(label_width.saturating_sub(label.width()));
+        format!(" {label}{padding} ")
+    });
     let status_label_hides_note = turn.kind == UserTurnKind::AgentStatus
         && note.as_ref().is_some_and(|note| {
+            let fixed_width = STATUS_COLUMN_WIDTH
+                + label.as_ref().map_or(0, |label| label.width() + 1)
+                + TIME_COLUMN_WIDTH;
+            let description_width = line_width.saturating_sub(fixed_width);
             let required_width = title.width() + 1 + note.width();
-            required_width > full_label_description_width
+            required_width > description_width
         });
-    let label = turn
-        .label
-        .filter(|_| !status_label_hides_note)
-        .map(|label| {
-            let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
-            let padding = " ".repeat(label_width.saturating_sub(label.width()));
-            format!(" {label}{padding} ")
-        });
+    if status_label_hides_note {
+        label = None;
+    }
     let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
     let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);

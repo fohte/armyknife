@@ -10,6 +10,42 @@ mod agent_status;
 mod codex;
 mod editor_focus;
 mod env_overlay;
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::collections::HashMap;
+
+    use rstest::fixture;
+
+    use super::{AgentConfig, AgentStatusConfig, AgentStatusState};
+
+    #[fixture]
+    pub(crate) fn agent_config() -> AgentConfig {
+        AgentConfig {
+            statuses: HashMap::from([
+                (
+                    "needs_attention".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::User,
+                    },
+                ),
+                (
+                    "awaiting_build".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Waiting,
+                    },
+                ),
+                (
+                    "finished_work".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Done,
+                    },
+                ),
+            ]),
+            ..AgentConfig::default()
+        }
+    }
+}
+
 #[cfg(feature = "schema-gen")]
 mod schema;
 mod work_type;

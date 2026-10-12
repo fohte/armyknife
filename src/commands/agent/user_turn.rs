@@ -147,7 +147,7 @@ fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     use chrono::{DateTime, TimeZone, Utc};
@@ -156,32 +156,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
     use crate::shared::config::AgentStatusConfig;
-
-    fn configured_statuses() -> AgentConfig {
-        AgentConfig {
-            statuses: HashMap::from([
-                (
-                    "needs_attention".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::User,
-                    },
-                ),
-                (
-                    "external_wait".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Waiting,
-                    },
-                ),
-                (
-                    "work_finished".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Done,
-                    },
-                ),
-            ]),
-            ..AgentConfig::default()
-        }
-    }
+    use crate::shared::config::test_support::agent_config;
 
     fn session(session_id: &str, updated_at: DateTime<Utc>) -> Session {
         Session {
@@ -221,9 +196,8 @@ mod tests {
             .expect("valid timestamp")
     }
 
-    #[test]
-    fn user_turns_sort_by_kind_then_oldest_update() {
-        let agent_config = configured_statuses();
+    #[rstest]
+    fn user_turns_sort_by_kind_then_oldest_update(agent_config: AgentConfig) {
         let mut newer_user_turn = session("user-new", timestamp(30));
         newer_user_turn.agent_status = Some(AgentStatus {
             kind: "needs_attention".to_string(),
@@ -240,12 +214,12 @@ mod tests {
         crit.pending_bg_task_ids.insert("review-task".to_string());
         let mut done = session("finished", timestamp(1));
         done.agent_status = Some(AgentStatus {
-            kind: "work_finished".to_string(),
+            kind: "finished_work".to_string(),
             note: "work is complete".to_string(),
         });
         let mut waiting = session("external", timestamp(2));
         waiting.agent_status = Some(AgentStatus {
-            kind: "external_wait".to_string(),
+            kind: "awaiting_build".to_string(),
             note: "waiting for a build".to_string(),
         });
 

@@ -263,7 +263,8 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine, SessionStatus};
     use crate::commands::agent::user_turn::UserTurnKind;
-    use crate::shared::config::{AgentConfig, AgentStatusConfig, AgentStatusState};
+    use crate::shared::config::AgentConfig;
+    use crate::shared::config::test_support::agent_config;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
     use std::{collections::HashMap, path::PathBuf};
@@ -311,32 +312,6 @@ mod tests {
         session.ancestor_session_ids = ancestors.iter().map(|s| s.to_string()).collect();
         session.updated_at = at_minute(minute);
         session
-    }
-
-    fn test_agent_config() -> AgentConfig {
-        AgentConfig {
-            statuses: HashMap::from([
-                (
-                    "needs_attention".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::User,
-                    },
-                ),
-                (
-                    "external_wait".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Waiting,
-                    },
-                ),
-                (
-                    "work_finished".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Done,
-                    },
-                ),
-            ]),
-            ..AgentConfig::default()
-        }
     }
 
     fn with_agent_status(mut session: Session, kind: &str) -> Session {
@@ -434,21 +409,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_session_rows_empty_input() {
-        let rows = build_session_rows(&[], &HashMap::new(), &test_agent_config());
+    #[rstest]
+    fn test_build_session_rows_empty_input(agent_config: AgentConfig) {
+        let rows = build_session_rows(&[], &HashMap::new(), &agent_config);
         assert_eq!(describe(&rows), Vec::<RowDescription>::new());
     }
 
-    #[test]
-    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks() {
+    #[rstest]
+    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks(
+        agent_config: AgentConfig,
+    ) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());
         let running = running_session("running", &[], 0);
 
         let sessions: Vec<&Session> = vec![&running, &crit];
-        let rows = build_session_rows(&sessions, &HashMap::new(), &test_agent_config());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -465,8 +442,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions() {
+    #[rstest]
+    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions(
+        agent_config: AgentConfig,
+    ) {
         let pm = running_session("pm", &[], 0);
         let design = running_session("design", &["pm"], 3);
         // The intermediate ancestor is gone, so this still nests under "pm".
@@ -487,7 +466,7 @@ mod tests {
             &delegated,
             &delegated_child,
         ];
-        let rows = build_session_rows(&sessions, &HashMap::new(), &test_agent_config());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -507,8 +486,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_keeps_sessions_with_inconsistent_ancestor_chains() {
+    #[rstest]
+    fn test_build_session_rows_keeps_sessions_with_inconsistent_ancestor_chains(
+        agent_config: AgentConfig,
+    ) {
         let root = running_session("root", &[], 3);
         // "parent" was re-parented under "root" after "child" recorded it
         // as its own root.
@@ -518,7 +499,7 @@ mod tests {
         let cycle_b = running_session("cycle_b", &["cycle_a"], 0);
 
         let sessions: Vec<&Session> = vec![&root, &parent, &child, &cycle_a, &cycle_b];
-        let rows = build_session_rows(&sessions, &HashMap::new(), &test_agent_config());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
 
         assert_eq!(
             describe(&rows),
@@ -533,8 +514,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved() {
+    #[rstest]
+    fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved(
+        agent_config: AgentConfig,
+    ) {
         let old_turn = with_agent_status(running_session("old_turn", &[], 1), "needs_attention");
         let recent = running_session("recent", &[], 9);
         let older = running_session("older", &[], 2);
@@ -554,7 +537,7 @@ mod tests {
             &parent_of_turn,
             &child_turn,
         ];
-        let rows = build_session_rows(&sessions, &HashMap::new(), &test_agent_config());
+        let rows = build_session_rows(&sessions, &HashMap::new(), &agent_config);
         let task_ids: Vec<&str> = rows
             .iter()
             .filter_map(|row| match row {
@@ -581,14 +564,14 @@ mod tests {
     #[case::background(SessionStatus::Stopped, None, true, TaskMark::Waiting)]
     #[case::agent_wait(
         SessionStatus::Stopped,
-        Some("external_wait"),
+        Some("awaiting_build"),
         false,
         TaskMark::Waiting
     )]
-    #[case::agent_done(SessionStatus::Paused, Some("work_finished"), false, TaskMark::Done)]
+    #[case::agent_done(SessionStatus::Paused, Some("finished_work"), false, TaskMark::Done)]
     #[case::stale_status_while_running(
         SessionStatus::Running,
-        Some("external_wait"),
+        Some("awaiting_build"),
         false,
         TaskMark::Working
     )]
@@ -607,6 +590,7 @@ mod tests {
     )]
     #[case::stopped_without_reason(SessionStatus::Stopped, None, false, TaskMark::Unclassified)]
     fn test_build_session_rows_task_mark(
+        agent_config: AgentConfig,
         #[case] status: SessionStatus,
         #[case] agent_status: Option<&str>,
         #[case] has_bg_task: bool,
@@ -621,7 +605,7 @@ mod tests {
             session.pending_bg_task_ids.insert("bg-1".to_string());
         }
 
-        let rows = build_session_rows(&[&session], &HashMap::new(), &test_agent_config());
+        let rows = build_session_rows(&[&session], &HashMap::new(), &agent_config);
         let marks: Vec<TaskMark> = rows
             .iter()
             .filter_map(|row| match row {
@@ -640,12 +624,13 @@ mod tests {
     )]
     #[case::unlinked_session_has_no_task(HashMap::new(), None)]
     fn test_build_session_rows_attaches_task_from_lookup(
+        agent_config: AgentConfig,
         #[case] task_by_session: HashMap<String, SessionTask>,
         #[case] expected: Option<SessionTask>,
     ) {
         let session = create_test_session("a", SessionStatus::Running);
         let sessions: Vec<&Session> = vec![&session];
-        let rows = build_session_rows(&sessions, &task_by_session, &test_agent_config());
+        let rows = build_session_rows(&sessions, &task_by_session, &agent_config);
 
         let task = rows.iter().find_map(|r| match r {
             SessionRow::Session(entry) => Some(entry.task.clone()),

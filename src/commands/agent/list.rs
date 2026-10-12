@@ -251,11 +251,10 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, SessionStatus, TmuxInfo};
-    use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use crate::shared::config::test_support::agent_config;
     use chrono::Duration;
     use indoc::indoc;
     use rstest::rstest;
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn create_test_session() -> Session {
@@ -617,41 +616,14 @@ mod tests {
         assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
     }
 
-    fn test_agent_config() -> AgentConfig {
-        AgentConfig {
-            statuses: HashMap::from([
-                (
-                    "needs_attention".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::User,
-                    },
-                ),
-                (
-                    "awaiting_build".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Waiting,
-                    },
-                ),
-                (
-                    "finished_work".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Done,
-                    },
-                ),
-            ]),
-            ..AgentConfig::default()
-        }
-    }
-
-    fn render_tmux_status_to_string(sessions: &[Session]) -> String {
+    fn render_tmux_status_to_string(sessions: &[Session], agent_config: &AgentConfig) -> String {
         let mut output = Vec::new();
-        render_tmux_status(&mut output, sessions, &test_agent_config())
-            .expect("render should succeed");
+        render_tmux_status(&mut output, sessions, agent_config).expect("render should succeed");
         String::from_utf8(output).expect("valid utf8")
     }
 
-    #[test]
-    fn test_render_tmux_status_empty_when_no_action_is_available() {
+    #[rstest]
+    fn test_render_tmux_status_empty_when_no_action_is_available(agent_config: AgentConfig) {
         let mut waiting_without_reason = create_test_session();
         waiting_without_reason.status = SessionStatus::WaitingInput;
         let mut waiting_for_other_work = create_test_session();
@@ -666,26 +638,36 @@ mod tests {
         });
 
         assert_eq!(
-            render_tmux_status_to_string(&[
-                Session {
-                    status: SessionStatus::Running,
-                    ..create_test_session()
-                },
-                waiting_without_reason,
-                waiting_for_other_work,
-                done,
-                create_test_session(),
-            ]),
+            render_tmux_status_to_string(
+                &[
+                    Session {
+                        status: SessionStatus::Running,
+                        ..create_test_session()
+                    },
+                    waiting_without_reason,
+                    waiting_for_other_work,
+                    done,
+                    create_test_session(),
+                ],
+                &agent_config
+            ),
             ""
         );
     }
 
-    #[test]
-    fn test_render_tmux_status_shows_agent_note_and_escapes_tmux_markup() {
+    #[rstest]
+    fn test_render_tmux_status_escapes_configured_name_and_note(mut agent_config: AgentConfig) {
+        let kind = "needs#[fg=red]";
+        agent_config.statuses.insert(
+            kind.to_string(),
+            crate::shared::config::AgentStatusConfig {
+                state: crate::shared::config::AgentStatusState::User,
+            },
+        );
         let mut session = create_test_session();
         session.status = SessionStatus::Stopped;
         session.agent_status = Some(AgentStatus {
-            kind: "needs_attention".to_string(),
+            kind: kind.to_string(),
             note: indoc! {"
                 #[fg=red]
                 choose a direction"
@@ -694,13 +676,13 @@ mod tests {
         });
 
         assert_eq!(
-            render_tmux_status_to_string(&[session]),
-            "◐ #[fg=colour15,bg=colour1]needs_attention#[default] ##[fg=red] choose a direction (myproject)"
+            render_tmux_status_to_string(&[session], &agent_config),
+            "◐ #[fg=colour15,bg=colour1]needs##[fg=red]#[default] ##[fg=red] choose a direction (myproject)"
         );
     }
 
-    #[test]
-    fn test_render_tmux_status_labels_automatic_waits() {
+    #[rstest]
+    fn test_render_tmux_status_labels_automatic_waits(agent_config: AgentConfig) {
         let mut body = create_test_session();
         body.status = SessionStatus::Stopped;
         body.pending_bg_task_ids.insert("review-task".to_string());
@@ -721,7 +703,9 @@ mod tests {
         assert_eq!(
             [body, permission, ask]
                 .iter()
-                .map(|session| render_tmux_status_to_string(std::slice::from_ref(session)))
+                .map(|session| {
+                    render_tmux_status_to_string(std::slice::from_ref(session), &agent_config)
+                })
                 .collect::<Vec<_>>(),
             vec![
                 "◐ #[fg=colour15,bg=colour1]body#[default] (myproject)",
@@ -731,8 +715,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_render_tmux_status_does_not_show_done() {
+    #[rstest]
+    fn test_render_tmux_status_does_not_show_done(agent_config: AgentConfig) {
         let mut done = create_test_session();
         done.status = SessionStatus::Stopped;
         done.agent_status = Some(AgentStatus {
@@ -740,7 +724,7 @@ mod tests {
             note: "work is complete".to_string(),
         });
 
-        assert_eq!(render_tmux_status_to_string(&[done]), "");
+        assert_eq!(render_tmux_status_to_string(&[done], &agent_config), "");
     }
 
     // =========================================================================
