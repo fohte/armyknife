@@ -193,10 +193,11 @@ Manage PR body drafts with human-in-the-loop review.
 
 `submit` options:
 
-| Option         | Description            |
-| -------------- | ---------------------- |
-| `--base <ref>` | Base branch for the PR |
-| `--draft`      | Create as draft PR     |
+| Option         | Description                                              |
+| -------------- | -------------------------------------------------------- |
+| `--base <ref>` | Base branch for the PR                                   |
+| `--draft`      | Create as draft PR                                       |
+| `--no-review`  | Skip approval verification (available only in vibe mode) |
 
 #### `a ai review`
 
