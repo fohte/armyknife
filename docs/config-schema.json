@@ -139,7 +139,7 @@
           "default": null
         },
         "work_types": {
-          "description": "Display configuration for agent work types, keyed by skill name.",
+          "description": "Display configuration for agent work types, keyed by skill name. The\n`default` entry is used for sessions without a recorded work type.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/AgentWorkTypeConfig"
@@ -217,7 +217,7 @@
       ]
     },
     "AgentWorkTypeConfig": {
-      "description": "Display settings for a skill-backed agent work type.",
+      "description": "Display settings for an agent work type.",
       "type": "object",
       "properties": {
         "color": {

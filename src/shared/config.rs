@@ -171,7 +171,8 @@ pub struct AgentConfig {
     #[serde(default)]
     pub codex: CodexConfig,
 
-    /// Display configuration for agent work types, keyed by skill name.
+    /// Display configuration for agent work types, keyed by skill name. The
+    /// `default` entry is used for sessions without a recorded work type.
     #[serde(default)]
     pub work_types: HashMap<String, AgentWorkTypeConfig>,
 
@@ -196,6 +197,11 @@ impl AgentConfig {
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)
+    }
+
+    /// Look up the display configuration for sessions without a recorded work type.
+    pub fn fallback_work_type(&self) -> Option<&AgentWorkTypeConfig> {
+        self.work_types.get("default")
     }
 }
 
@@ -962,6 +968,9 @@ mod tests {
         let yaml = indoc! {"
             agent:
               work_types:
+                default:
+                  icon: ∅
+                  color: yellow
                 sample-flow:
                   icon: ◇
                   color: cyan
@@ -977,6 +986,13 @@ mod tests {
         assert_eq!(
             config.agent.work_types,
             HashMap::from([
+                (
+                    "default".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "∅".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                    },
+                ),
                 (
                     "sample-flow".to_string(),
                     AgentWorkTypeConfig {

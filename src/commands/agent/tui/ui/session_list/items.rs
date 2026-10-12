@@ -327,23 +327,23 @@ pub(super) fn build_session_item(
     };
 
     let work_type_column_width = work_type_column_width(app);
-    let work_type_spans = session
-        .work_type
-        .as_deref()
-        .and_then(|skill_name| app.agent_config.work_type(skill_name))
-        .map_or_else(
-            || vec![Span::raw(" ".repeat(work_type_column_width))],
-            |config| {
-                let icon_width = config.icon.width();
-                vec![
-                    Span::styled(
-                        config.icon.clone(),
-                        Style::default().fg(Color::from(config.color)),
-                    ),
-                    Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
-                ]
-            },
-        );
+    let work_type_config = match session.work_type.as_deref() {
+        Some(skill_name) => app.agent_config.work_type(skill_name),
+        None => app.agent_config.fallback_work_type(),
+    };
+    let work_type_spans = work_type_config.map_or_else(
+        || vec![Span::raw(" ".repeat(work_type_column_width))],
+        |config| {
+            let icon_width = config.icon.width();
+            vec![
+                Span::styled(
+                    config.icon.clone(),
+                    Style::default().fg(Color::from(config.color)),
+                ),
+                Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
+            ]
+        },
+    );
 
     let branch = tree_branch_text(entry.depth, entry.is_last_sibling);
     let branch_width = branch.width();
