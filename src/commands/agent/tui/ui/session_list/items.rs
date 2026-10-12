@@ -113,7 +113,7 @@ fn format_compact_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format!("{}d", hours / 24)
 }
 
-/// Renders a user-turn row with its label and note ahead of the session name.
+/// Renders a user-turn row with its session name ahead of the note.
 pub(super) fn build_user_turn_item(
     turn: &UserTurn<'_>,
     app: &App,
@@ -129,17 +129,20 @@ pub(super) fn build_user_turn_item(
         .note
         .map(|note| note.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|note| !note.is_empty());
-    let description = match note {
-        Some(note) => format!("{note} {title}"),
-        None => title,
-    };
     let time_text = format_compact_time(turn.session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
     let label = format!(" {:<USER_TURN_LABEL_WIDTH$} ", turn.kind.label());
     let line_width = term_width.saturating_sub(MARKER_WIDTH);
     let fixed_width = 1 + 1 + label.width() + 1 + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);
-    let description = truncate(&description, description_width);
+    let mut description = truncate(&title, description_width);
+    if let Some(note) = note {
+        let note_width = description_width.saturating_sub(description.width() + 1);
+        if note_width > 0 {
+            description.push(' ');
+            description.push_str(&truncate(&note, note_width));
+        }
+    }
     let description_padding = " ".repeat(description_width.saturating_sub(description.width()));
     let symbol_style = if turn.kind == UserTurnKind::Close {
         Style::default().fg(DIM_FG)

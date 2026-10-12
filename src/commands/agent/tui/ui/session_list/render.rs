@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_your_turn_row_shows_label_note_name_and_wait_time() {
+    fn test_render_your_turn_row_shows_label_name_note_and_wait_time() {
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
@@ -527,7 +527,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐  decide  choose an option session-name                                    48m
+            >◐  decide  session-name choose an option                                    48m
 
 
 
@@ -535,6 +535,30 @@ mod tests {
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_your_turn_row_truncates_note_before_session_name() {
+        let now = Utc::now();
+
+        let mut session = create_test_session("s1");
+        session.updated_at = now;
+        session.status = SessionStatus::Stopped;
+        session.label = Some("session-name".to_string());
+        session.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: "choose an option".to_string(),
+        });
+
+        let output = render_to_string(&[session], Some(1), now, 45, 4);
+
+        let expected = indoc! {"
+             agent watch 1 needs you · 0 running · 0 idle
+             ── YOUR TURN ───────────────────────────────
+            >◐  decide  session-name choose a... just now
+             ?: keys   /: search   Esc: tasks   q: quit"};
 
         assert_eq!(output, expected);
     }
