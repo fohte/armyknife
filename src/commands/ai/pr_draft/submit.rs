@@ -20,6 +20,10 @@ pub struct SubmitArgs {
     /// Create as draft PR
     #[arg(long)]
     pub draft: bool,
+
+    /// Skip draft approval verification (vibe mode only)
+    #[arg(long)]
+    pub no_review: bool,
 }
 
 /// Holds the target repository and branch information for PR creation
@@ -38,6 +42,7 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
+        crate::commands::agent::is_vibe_enabled,
     )
     .await
 }
@@ -48,6 +53,7 @@ async fn run_impl(
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+    is_vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
@@ -88,8 +94,13 @@ async fn run_impl(
 
     let draft = DraftFile::from_path(draft_path.clone())?;
 
-    // Verify approval
-    draft.verify_approval()?;
+    if args.no_review {
+        if !is_vibe_enabled()? {
+            anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
+        }
+    } else {
+        draft.verify_approval()?;
+    }
 
     // Validate title
     if draft.frontmatter.title.trim().is_empty() {
@@ -212,7 +223,9 @@ mod tests {
     use super::*;
     use crate::infra::github::GitHubMockServer;
     use crate::shared::env_var::EnvVars;
+    use clap::Parser;
     use indoc::indoc;
+    use rstest::rstest;
     use std::fs;
     use std::sync::Mutex;
 
@@ -228,6 +241,10 @@ mod tests {
 
     fn no_current_repo() -> Option<(String, String)> {
         None
+    }
+
+    fn no_vibe() -> anyhow::Result<bool> {
+        Ok(false)
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
@@ -311,6 +328,27 @@ mod tests {
         title: &str,
         body: &str,
     ) -> PathBuf {
+        create_draft(owner, repo, branch, title, body, true)
+    }
+
+    fn create_unapproved_draft(
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) -> PathBuf {
+        create_draft(owner, repo, branch, title, body, false)
+    }
+
+    fn create_draft(
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        title: &str,
+        body: &str,
+        approved: bool,
+    ) -> PathBuf {
         let repo_info = RepoInfo {
             owner: owner.to_string(),
             repo: repo.to_string(),
@@ -326,19 +364,99 @@ mod tests {
                 ---
                 title: "{title}"
                 steps:
-                  submit: true
+                  submit: {approved}
                 ---
                 {body}
             "#},
             title = title,
-            body = body
+            body = body,
+            approved = approved,
         );
         fs::write(&draft_path, content).expect("write draft");
-        DraftFile::from_path(draft_path.clone())
-            .expect("draft file")
-            .save_approval()
-            .expect("save approval");
+        if approved {
+            DraftFile::from_path(draft_path.clone())
+                .expect("draft file")
+                .save_approval()
+                .expect("save approval");
+        }
         draft_path
+    }
+
+    #[test]
+    fn submit_parses_no_review_flag() {
+        let parsed =
+            crate::cli::Cli::try_parse_from(["a", "ai", "pr-draft", "submit", "--no-review"])
+                .expect("--no-review should be a valid submit option");
+
+        assert!(
+            parsed.command
+                == crate::cli::Commands::Ai(crate::commands::ai::AiCommands::PrDraft(
+                    super::super::PrDraftCommands::Submit(SubmitArgs {
+                        filepath: None,
+                        base: None,
+                        draft: false,
+                        no_review: true,
+                    }),
+                )),
+        );
+    }
+
+    #[rstest]
+    #[case::vibe_enabled(true, Ok(()), true)]
+    #[case::vibe_disabled(
+        false,
+        Err("The --no-review option is only available when vibe mode is enabled.".to_string()),
+        false
+    )]
+    #[tokio::test]
+    async fn submit_with_no_review_requires_vibe_mode(
+        #[case] vibe_enabled: bool,
+        #[case] expected_result: Result<(), String>,
+        #[case] expected_hook_invoked: bool,
+    ) {
+        let repo = if vibe_enabled {
+            "repo_submit_no_review_vibe"
+        } else {
+            "repo_submit_no_review_regular"
+        };
+        let env = setup_test_env("owner", repo).await;
+        let draft_path = create_unapproved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/no-review",
+            "Ready title",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: true,
+        };
+
+        let spy = HookSpy::default();
+        let hook = |name: &str, env: &[(&str, &str)]| {
+            spy.record(name, env);
+            Ok(())
+        };
+        let client = env.mock.client();
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, || {
+            Ok(vibe_enabled)
+        })
+        .await
+        .map_err(|error| error.to_string());
+        let hook_names = spy
+            .calls()
+            .into_iter()
+            .map(|call| call.name)
+            .collect::<Vec<_>>();
+        let expected_hook_names = if expected_hook_invoked {
+            vec![PRE_PR_SUBMIT_HOOK.to_string()]
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!((result, hook_names), (expected_result, expected_hook_names),);
     }
 
     #[tokio::test]
@@ -356,10 +474,19 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert!(
             result.is_ok(),
@@ -383,10 +510,19 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert!(
             result.is_ok(),
@@ -425,10 +561,19 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            || Ok(true),
+        )
+        .await;
 
         let err = result.expect_err("submit should fail when not approved");
         assert!(matches!(
@@ -471,10 +616,19 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         let err = result.expect_err("submit should fail with empty title");
         assert!(matches!(
@@ -531,6 +685,7 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
@@ -541,7 +696,15 @@ mod tests {
             Ok(())
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -564,6 +727,7 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
@@ -574,7 +738,15 @@ mod tests {
             anyhow::bail!("git config is unavailable")
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -597,6 +769,7 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let client = env.mock.client();
@@ -607,7 +780,15 @@ mod tests {
             Ok(())
         };
         let unrelated_repo = || Some(("other-owner".to_string(), "other-repo".to_string()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, unrelated_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            unrelated_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -658,6 +839,7 @@ mod tests {
             filepath: Some(draft_path),
             base: Some("master".to_string()),
             draft: false,
+            no_review: false,
         };
 
         let spy = HookSpy::default();
@@ -667,7 +849,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo).await;
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -720,6 +902,7 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let spy = HookSpy::default();
@@ -729,7 +912,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo).await;
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -750,6 +933,7 @@ mod tests {
             filepath: Some(draft_path),
             base: None,
             draft: false,
+            no_review: false,
         };
 
         let hook = |_name: &str, _env: &[(&str, &str)]| -> anyhow::Result<()> {
@@ -757,7 +941,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let err = run_impl(&args, &client, &hook, noop_config, no_current_repo)
+        let err = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe)
             .await
             .expect_err("hook failure must abort submission");
         assert_eq!(err.to_string(), "forbidden cross-org link");
