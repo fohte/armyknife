@@ -770,6 +770,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             engine: Engine::Claude,
         }
@@ -1591,6 +1592,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 engine: Engine::Claude,
             }

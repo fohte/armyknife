@@ -109,6 +109,10 @@ pub struct Session {
     /// longer relevant) and by `sweep::confirm_paused`.
     #[serde(default)]
     pub sweep_signaled: bool,
+    /// Set when armyknife blocks a Stop for a missing status, so the next
+    /// Stop can keep that blocked turn's final message.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stop_blocked_by_armyknife: bool,
     /// Which coding agent CLI this session belongs to. See `Engine`.
     #[serde(default)]
     pub engine: Engine,
@@ -140,8 +144,9 @@ mod tests {
                 session.work_type_pinned,
                 session.pending_human_review_ids,
                 session.agent_status,
+                session.stop_blocked_by_armyknife,
             ),
-            (None, None, false, BTreeSet::new(), None)
+            (None, None, false, BTreeSet::new(), None, false)
         );
     }
 

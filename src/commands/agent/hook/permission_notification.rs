@@ -257,6 +257,7 @@ mod tests {
             )]),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             engine: Engine::Codex,
         }
