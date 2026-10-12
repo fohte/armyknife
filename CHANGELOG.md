@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.395](https://github.com/fohte/armyknife/compare/v0.1.394...v0.1.395) (2026-10-12)
+
+
+### Features
+
+* **agent:** allow configuring status names and consolidate display states into three kinds ([#1122](https://github.com/fohte/armyknife/issues/1122)) ([e2ceec4](https://github.com/fohte/armyknife/commit/e2ceec4001746b9cc671d4cd09e60fba2ec63f3e))
+
 ## [0.1.394](https://github.com/fohte/armyknife/compare/v0.1.393...v0.1.394) (2026-10-12)
 
 
