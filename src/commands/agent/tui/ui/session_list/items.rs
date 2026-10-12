@@ -345,7 +345,7 @@ pub(super) fn build_session_item(
             },
         );
 
-    let branch = tree_branch_text(entry.depth, &entry.tree_prefix, entry.is_last_sibling);
+    let branch = tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling);
     let branch_width = branch.width();
     let title_width =
         title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
@@ -403,10 +403,10 @@ pub(super) fn build_session_item(
     }
 }
 
-fn tree_branch_text(depth: usize, tree_prefix: &[bool], is_last_sibling: bool) -> String {
-    if depth == 0 {
+pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bool) -> String {
+    let Some(tree_prefix) = tree_prefix else {
         return String::new();
-    }
+    };
 
     let mut branch = String::new();
     for ancestor_is_last in tree_prefix {
@@ -565,19 +565,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::root(0, &[], true, "")]
-    #[case::middle_child(1, &[], false, "├─ ")]
-    #[case::last_child(1, &[], true, "└─ ")]
-    #[case::nested_under_middle_sibling(2, &[false], false, "│  ├─ ")]
-    #[case::great_grandchild(3, &[true, false], true, "   │  └─ ")]
+    #[case::root(None, true, "")]
+    #[case::middle_child(Some(vec![]), false, "├─ ")]
+    #[case::last_child(Some(vec![]), true, "└─ ")]
+    #[case::nested_under_middle_sibling(Some(vec![false]), false, "│  ├─ ")]
+    #[case::great_grandchild(Some(vec![true, false]), true, "   │  └─ ")]
     fn test_tree_branch_text(
-        #[case] depth: usize,
-        #[case] tree_prefix: &[bool],
+        #[case] tree_prefix: Option<Vec<bool>>,
         #[case] is_last_sibling: bool,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            tree_branch_text(depth, tree_prefix, is_last_sibling),
+            tree_branch_text(tree_prefix.as_deref(), is_last_sibling),
             expected
         );
     }

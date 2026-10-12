@@ -27,17 +27,16 @@ pub(super) struct SectionHeaderRow {
     pub kind: Section,
 }
 
-/// One TASKS row. `depth` is 0 for a root and increases with each displayed
-/// parent-child relationship.
+/// One TASKS row. `tree_prefix` is `None` for a root; descendants carry one
+/// sibling marker for each non-root ancestor between the root and parent.
 #[derive(Debug)]
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
-    pub depth: usize,
     pub mark: TaskMark,
     pub is_last_sibling: bool,
     /// Whether each non-root ancestor was the last child in its own group.
-    /// This determines which vertical tree lines continue to this row.
-    pub tree_prefix: Vec<bool>,
+    /// `None` identifies a root; an empty prefix identifies a direct child.
+    pub tree_prefix: Option<Vec<bool>>,
     /// `false` when the session already has a selectable YOUR TURN row, so
     /// the cursor never holds two positions for one session.
     pub is_selectable: bool,
@@ -351,10 +350,9 @@ mod tests {
         },
         Task {
             id: String,
-            depth: usize,
             mark: TaskMark,
             is_last_sibling: bool,
-            tree_prefix: Vec<bool>,
+            tree_prefix: Option<Vec<bool>>,
             is_selectable: bool,
             child_count: usize,
             child_user_turn_count: usize,
@@ -373,7 +371,6 @@ mod tests {
                 },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
-                    depth: entry.depth,
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
                     tree_prefix: entry.tree_prefix.clone(),
@@ -394,10 +391,9 @@ mod tests {
     fn root_row(id: &str, mark: TaskMark, children: usize, user_turns: usize) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
-            depth: 0,
             mark,
             is_last_sibling: false,
-            tree_prefix: Vec::new(),
+            tree_prefix: None,
             is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
@@ -407,10 +403,9 @@ mod tests {
     fn child_row(id: &str, mark: TaskMark, is_last_sibling: bool) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
-            depth: 1,
             mark,
             is_last_sibling,
-            tree_prefix: Vec::new(),
+            tree_prefix: Some(Vec::new()),
             is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
@@ -419,17 +414,15 @@ mod tests {
 
     fn nested_row(
         id: &str,
-        depth: usize,
         mark: TaskMark,
         is_last_sibling: bool,
         tree_prefix: &[bool],
     ) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
-            depth,
             mark,
             is_last_sibling,
-            tree_prefix: tree_prefix.to_vec(),
+            tree_prefix: Some(tree_prefix.to_vec()),
             is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
@@ -478,6 +471,9 @@ mod tests {
         // The intermediate ancestor is gone, so this still nests under "pm".
         let orphan = running_session("orphan", &["pm", "deleted_middle"], 1);
         let grandchild = running_session("grandchild", &["pm", "design"], 2);
+        let great_grandchild =
+            running_session("great_grandchild", &["pm", "design", "grandchild"], 6);
+        let qa = running_session("qa", &["pm", "design"], 0);
         let mut delegated = running_session("delegated", &["pm", "design"], 4);
         delegated.is_delegated = true;
         let delegated_child = with_agent_status(
@@ -490,6 +486,8 @@ mod tests {
             &design,
             &orphan,
             &grandchild,
+            &great_grandchild,
+            &qa,
             &delegated,
             &delegated_child,
         ];
@@ -504,10 +502,12 @@ mod tests {
                     kind: UserTurnKind::AgentStatus,
                 },
                 header("TASKS"),
-                root_row("pm", TaskMark::Working, 4, 1),
+                root_row("pm", TaskMark::Working, 6, 1),
                 child_row("design", TaskMark::Working, false),
-                nested_row("delegated_child", 2, TaskMark::UserTurn, false, &[false]),
-                nested_row("grandchild", 2, TaskMark::Working, true, &[false]),
+                nested_row("delegated_child", TaskMark::UserTurn, false, &[false]),
+                nested_row("grandchild", TaskMark::Working, false, &[false]),
+                nested_row("great_grandchild", TaskMark::Working, true, &[false, false],),
+                nested_row("qa", TaskMark::Working, true, &[false]),
                 child_row("orphan", TaskMark::Working, true),
             ]
         );
@@ -534,7 +534,7 @@ mod tests {
                 header("TASKS"),
                 root_row("root", TaskMark::Working, 2, 0),
                 child_row("parent", TaskMark::Working, true),
-                nested_row("child", 2, TaskMark::Working, true, &[true]),
+                nested_row("child", TaskMark::Working, true, &[true]),
                 root_row("cycle_a", TaskMark::Working, 1, 0),
                 child_row("cycle_b", TaskMark::Working, true),
             ]

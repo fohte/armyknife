@@ -17,11 +17,11 @@ pub(super) fn build_task_rows<'a>(
         .copied()
         .filter(|session| !session.is_delegated)
         .collect();
-    let member_ids: HashSet<&str> = members
+    let member_ids: HashSet<&'a str> = members
         .iter()
         .map(|session| session.session_id.as_str())
         .collect();
-    let mut children_by_parent: HashMap<&str, Vec<&'a Session>> = HashMap::new();
+    let mut children_by_parent: HashMap<&'a str, Vec<&'a Session>> = HashMap::new();
     let mut roots = Vec::new();
 
     for &session in &members {
@@ -43,15 +43,14 @@ pub(super) fn build_task_rows<'a>(
         children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
     }
 
-    let mark_of = |session: &Session| {
-        task_mark(
-            session,
-            user_turn_session_ids.contains(&session.session_id),
-            agent_config,
-        )
-    };
     let mut visited = HashSet::new();
     let mut groups = Vec::new();
+    let builder = TaskTreeBuilder {
+        children_by_parent: &children_by_parent,
+        task_by_session,
+        user_turn_session_ids,
+        agent_config,
+    };
 
     // Include unvisited sessions as fallback roots. Inconsistent ancestor
     // metadata can form cycles, leaving a component without a natural root.
@@ -61,18 +60,8 @@ pub(super) fn build_task_rows<'a>(
         }
 
         let mut rows = Vec::new();
-        append_subtree(
-            root,
-            0,
-            false,
-            Vec::new(),
-            &children_by_parent,
-            &mut visited,
-            &mut rows,
-        );
-        let has_user_turn = rows
-            .iter()
-            .any(|row| mark_of(row.session) == TaskMark::UserTurn);
+        builder.append_subtree(root, false, None, &mut visited, &mut rows);
+        let has_user_turn = rows.iter().any(|row| row.mark == TaskMark::UserTurn);
         let last_moved = rows
             .iter()
             .map(|row| row.session.updated_at)
@@ -94,79 +83,74 @@ pub(super) fn build_task_rows<'a>(
             .rows
             .iter()
             .skip(1)
-            .filter(|row| mark_of(row.session) == TaskMark::UserTurn)
+            .filter(|row| row.mark == TaskMark::UserTurn)
             .count();
-        for (index, row) in group.rows.into_iter().enumerate() {
-            let is_root = index == 0;
-            rows.push(SessionRowEntry {
-                session: row.session,
-                depth: row.depth,
-                mark: mark_of(row.session),
-                is_last_sibling: row.is_last_sibling,
-                tree_prefix: row.tree_prefix,
-                is_selectable: !user_turn_session_ids.contains(&row.session.session_id),
-                child_count: if is_root { child_count } else { 0 },
-                child_user_turn_count: if is_root { child_user_turn_count } else { 0 },
-                task: task_by_session
-                    .get(row.session.session_id.as_str())
-                    .cloned(),
-            });
+        let mut group_rows = group.rows;
+        if let Some(root) = group_rows.first_mut() {
+            root.child_count = child_count;
+            root.child_user_turn_count = child_user_turn_count;
         }
+        rows.extend(group_rows);
     }
     rows
 }
 
-struct TaskTreeRow<'a> {
-    session: &'a Session,
-    depth: usize,
-    is_last_sibling: bool,
-    tree_prefix: Vec<bool>,
-}
-
 struct TaskTreeGroup<'a> {
-    rows: Vec<TaskTreeRow<'a>>,
+    rows: Vec<SessionRowEntry<'a>>,
     has_user_turn: bool,
     last_moved: chrono::DateTime<chrono::Utc>,
 }
 
-fn append_subtree<'a>(
-    session: &'a Session,
-    depth: usize,
-    is_last_sibling: bool,
-    tree_prefix: Vec<bool>,
-    children_by_parent: &HashMap<&str, Vec<&'a Session>>,
-    visited: &mut HashSet<&'a str>,
-    rows: &mut Vec<TaskTreeRow<'a>>,
-) {
-    if !visited.insert(session.session_id.as_str()) {
-        return;
-    }
+struct TaskTreeBuilder<'context, 'session> {
+    children_by_parent: &'context HashMap<&'session str, Vec<&'session Session>>,
+    task_by_session: &'context HashMap<String, SessionTask>,
+    user_turn_session_ids: &'context HashSet<String>,
+    agent_config: &'context AgentConfig,
+}
 
-    rows.push(TaskTreeRow {
-        session,
-        depth,
-        is_last_sibling,
-        tree_prefix: tree_prefix.clone(),
-    });
-
-    let Some(children) = children_by_parent.get(session.session_id.as_str()) else {
-        return;
-    };
-    let last_index = children.len().saturating_sub(1);
-    for (index, &child) in children.iter().enumerate() {
-        let mut child_prefix = tree_prefix.clone();
-        if depth > 0 {
-            child_prefix.push(is_last_sibling);
+impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
+    fn append_subtree(
+        &self,
+        session: &'session Session,
+        is_last_sibling: bool,
+        tree_prefix: Option<Vec<bool>>,
+        visited: &mut HashSet<&'session str>,
+        rows: &mut Vec<SessionRowEntry<'session>>,
+    ) {
+        if !visited.insert(session.session_id.as_str()) {
+            return;
         }
-        append_subtree(
-            child,
-            depth + 1,
-            index == last_index,
-            child_prefix,
-            children_by_parent,
-            visited,
-            rows,
-        );
+
+        let has_user_turn = self.user_turn_session_ids.contains(&session.session_id);
+        rows.push(SessionRowEntry {
+            session,
+            mark: task_mark(session, has_user_turn, self.agent_config),
+            is_last_sibling,
+            tree_prefix: tree_prefix.clone(),
+            is_selectable: !has_user_turn,
+            child_count: 0,
+            child_user_turn_count: 0,
+            task: self
+                .task_by_session
+                .get(session.session_id.as_str())
+                .cloned(),
+        });
+
+        let Some(children) = self.children_by_parent.get(session.session_id.as_str()) else {
+            return;
+        };
+        let last_index = children.len().saturating_sub(1);
+        for (index, &child) in children.iter().enumerate() {
+            let child_prefix = Some(match &tree_prefix {
+                Some(prefix) => {
+                    let mut child_prefix = prefix.clone();
+                    child_prefix.push(is_last_sibling);
+                    child_prefix
+                }
+                None => Vec::new(),
+            });
+            self.append_subtree(child, index == last_index, child_prefix, visited, rows);
+        }
     }
 }
 
