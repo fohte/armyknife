@@ -513,6 +513,19 @@ mod tests {
     }
 
     #[rstest]
+    #[case::done(TaskMark::Done, ("✓", DIM_FG))]
+    #[case::user_turn(TaskMark::UserTurn, ("◐", Color::Red))]
+    #[case::working(TaskMark::Working, ("●", Color::Green))]
+    #[case::waiting(TaskMark::Waiting, ("◷", Color::Yellow))]
+    #[case::close(TaskMark::Close, ("◌", DIM_FG))]
+    #[case::unclassified_uses_status_glyph(TaskMark::Unclassified, ("⏸", DIM_FG))]
+    fn test_mark_glyph(#[case] mark: TaskMark, #[case] expected: (&str, Color)) {
+        let mut session = crate::commands::agent::tui::ui::test_support::create_test_session("s");
+        session.status = SessionStatus::Paused;
+        assert_eq!(mark_glyph(mark, &session), expected);
+    }
+
+    #[rstest]
     #[case::no_children_shows_no_badge(0, 0, "")]
     #[case::children_without_user_turns(3, 0, " ◐ 0/3")]
     #[case::children_with_user_turns(10, 3, " ◐ 3/10")]
