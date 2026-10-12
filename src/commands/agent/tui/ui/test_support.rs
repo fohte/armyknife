@@ -36,6 +36,7 @@ pub(super) fn create_test_session(id: &str) -> Session {
         sweep_signaled: false,
         stop_blocked_by_armyknife: false,
         agent_status: None,
+        agent_status_clear_pending: false,
         engine: Engine::Claude,
     }
 }

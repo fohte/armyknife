@@ -273,6 +273,7 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine: Engine::Claude,
         }
     }
@@ -427,6 +428,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
             Session {
@@ -454,6 +456,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
             Session {
@@ -481,6 +484,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
             Session {
@@ -508,6 +512,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
         ];
@@ -806,6 +811,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
             Session {
@@ -838,6 +844,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
             Session {
@@ -865,6 +872,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             },
         ];

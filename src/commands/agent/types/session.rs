@@ -31,6 +31,9 @@ pub struct Session {
     /// The reason this agent stopped for its next step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AgentStatus>,
+    /// Preserve `agent_status` across status-only events until activity resumes.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub agent_status_clear_pending: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
@@ -145,8 +148,9 @@ mod tests {
                 session.pending_human_review_ids,
                 session.agent_status,
                 session.stop_blocked_by_armyknife,
+                session.agent_status_clear_pending,
             ),
-            (None, None, false, BTreeSet::new(), None, false)
+            (None, None, false, BTreeSet::new(), None, false, false)
         );
     }
 

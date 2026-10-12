@@ -416,6 +416,7 @@ fn process_hook_event_impl_with_instruction(
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine: input.engine,
         }
     });
@@ -436,8 +437,22 @@ fn process_hook_event_impl_with_instruction(
     session.sweep_signaled = false;
 
     if event == HookEvent::UserPromptSubmit {
-        session.agent_status = None;
         session.stop_blocked_by_armyknife = false;
+    }
+
+    // Status belongs to the main thread. Notifications, subagent hooks, and
+    // SessionStart(resume) can update session state without resuming its work.
+    if event == HookEvent::Stop {
+        session.agent_status_clear_pending = session.agent_status.is_some();
+    } else if input.agent_id.is_none()
+        && (event == HookEvent::UserPromptSubmit
+            || (session.agent_status_clear_pending
+                && event != HookEvent::Notification
+                && !(event == HookEvent::SessionStart
+                    && input.source.as_deref() == Some("resume"))))
+    {
+        session.agent_status = None;
+        session.agent_status_clear_pending = false;
     }
 
     // Track per-agent permission-request waits. Each concurrently running
@@ -1235,6 +1250,17 @@ mod tests {
         create_test_input_with_source(notification_type, None)
     }
 
+    fn load_agent_status_state(sessions_dir: &Path) -> (Option<AgentStatus>, bool, SessionStatus) {
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        (
+            session.agent_status,
+            session.agent_status_clear_pending,
+            session.status,
+        )
+    }
+
     fn create_test_input_with_source(
         notification_type: Option<&str>,
         source: Option<&str>,
@@ -1736,6 +1762,7 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine: Engine::Claude,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
@@ -2194,6 +2221,7 @@ mod tests {
             sweep_signaled,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
@@ -2801,6 +2829,7 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine: Engine::Claude,
         }
     }
@@ -3594,12 +3623,194 @@ mod tests {
                 .expect("stop hook should succeed");
             });
 
-            let actual = store::load_session_from(temp_dir.path(), "test-123")
+            let session = store::load_session_from(temp_dir.path(), "test-123")
                 .expect("session should load")
-                .expect("session should exist")
-                .agent_status;
+                .expect("session should exist");
 
-            assert_eq!(actual, Some(expected));
+            assert_eq!(
+                (session.agent_status, session.agent_status_clear_pending),
+                (Some(expected), true)
+            );
+        }
+
+        #[rstest]
+        #[case::repeated_stop(HookEvent::Stop, None, None, SessionStatus::Stopped)]
+        #[case::idle_prompt(
+            HookEvent::Notification,
+            Some("idle_prompt"),
+            None,
+            SessionStatus::Stopped
+        )]
+        #[case::permission_prompt(
+            HookEvent::Notification,
+            Some("permission_prompt"),
+            None,
+            SessionStatus::WaitingInput
+        )]
+        #[case::session_start_resume(
+            HookEvent::SessionStart,
+            None,
+            Some("resume"),
+            SessionStatus::Stopped
+        )]
+        fn activity_clears_agent_status_after_non_activity_event(
+            #[case] event: HookEvent,
+            #[case] notification_type: Option<&str>,
+            #[case] source: Option<&str>,
+            #[case] event_status: SessionStatus,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let expected_status = AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            };
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(expected_status.clone());
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+
+            process_hook_event_impl(
+                HookEvent::Stop,
+                create_test_input(None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("stop hook should succeed");
+            let after_stop = load_agent_status_state(temp_dir.path());
+
+            process_hook_event_impl(
+                event,
+                create_test_input_with_source(notification_type, source),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("non-activity hook should succeed");
+            let after_non_activity = load_agent_status_state(temp_dir.path());
+
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                create_test_input_with_tool("Bash", None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("post-tool-use hook should succeed");
+            let after_activity = load_agent_status_state(temp_dir.path());
+
+            assert_eq!(
+                [after_stop, after_non_activity, after_activity],
+                [
+                    (Some(expected_status.clone()), true, SessionStatus::Stopped),
+                    (Some(expected_status), true, event_status),
+                    (None, false, SessionStatus::Running),
+                ]
+            );
+        }
+
+        #[test]
+        fn subagent_activity_does_not_clear_main_thread_agent_status() {
+            let temp_dir = create_temp_sessions_dir();
+            let expected_status = AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            };
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(expected_status.clone());
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+
+            process_hook_event_impl(
+                HookEvent::Stop,
+                create_test_input(None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("stop hook should succeed");
+
+            let mut subagent_input = create_test_input_with_tool("Bash", None);
+            subagent_input.agent_id = Some("subagent-1".to_string());
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                subagent_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("subagent post-tool-use hook should succeed");
+            let after_subagent_activity = load_agent_status_state(temp_dir.path());
+
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                create_test_input_with_tool("Bash", None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("main-thread post-tool-use hook should succeed");
+            let after_main_thread_activity = load_agent_status_state(temp_dir.path());
+
+            assert_eq!(
+                [after_subagent_activity, after_main_thread_activity],
+                [
+                    (Some(expected_status), true, SessionStatus::Running,),
+                    (None, false, SessionStatus::Running),
+                ]
+            );
+        }
+
+        #[rstest]
+        #[case::claude(Engine::Claude, SessionStatus::Ended)]
+        #[case::codex(Engine::Codex, SessionStatus::Stopped)]
+        fn session_end_preserves_agent_status_until_activity(
+            #[case] engine: Engine,
+            #[case] ended_status: SessionStatus,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let expected_status = AgentStatus {
+                kind: AgentStatusKind::Wait,
+                note: "waiting for CI".to_string(),
+            };
+            let mut existing = create_test_session(None);
+            existing.agent_status = Some(expected_status.clone());
+            existing.engine = engine;
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            process_hook_event_impl(
+                HookEvent::Stop,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("stop hook should succeed");
+            let after_stop = load_agent_status_state(temp_dir.path());
+
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            process_hook_event_impl(
+                HookEvent::SessionEnd,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("session-end hook should succeed");
+            let after_session_end = load_agent_status_state(temp_dir.path());
+
+            let mut input = create_test_input_with_tool("Bash", None);
+            input.engine = engine;
+            process_hook_event_impl(
+                HookEvent::PostToolUse,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("post-tool-use hook should succeed");
+            let after_activity = load_agent_status_state(temp_dir.path());
+
+            assert_eq!(
+                [after_stop, after_session_end, after_activity],
+                [
+                    (Some(expected_status.clone()), true, SessionStatus::Stopped),
+                    (Some(expected_status), true, ended_status),
+                    (None, false, SessionStatus::Running),
+                ]
+            );
         }
 
         #[rstest]
@@ -3813,6 +4024,7 @@ mod tests {
                 sweep_signaled: false,
                 stop_blocked_by_armyknife: false,
                 agent_status: None,
+                agent_status_clear_pending: false,
                 engine: Engine::Claude,
             }
         }

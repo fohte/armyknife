@@ -105,6 +105,7 @@ fn record_in(
         sweep_signaled: false,
         stop_blocked_by_armyknife: false,
         agent_status: None,
+        agent_status_clear_pending: false,
         engine: Engine::Codex,
     });
 
@@ -167,6 +168,7 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             agent_status: None,
+            agent_status_clear_pending: false,
             engine: Engine::Codex,
         }
     }

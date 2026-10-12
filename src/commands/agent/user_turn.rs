@@ -171,6 +171,7 @@ mod tests {
             tmux_info: None,
             status: SessionStatus::Stopped,
             agent_status: None,
+            agent_status_clear_pending: false,
             created_at: updated_at,
             updated_at,
             last_message: None,
