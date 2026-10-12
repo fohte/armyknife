@@ -345,7 +345,6 @@ mod tests {
             depth: usize,
             mark: TaskMark,
             is_last_sibling: bool,
-            is_selectable: bool,
             child_count: usize,
             child_user_turn_count: usize,
         },
@@ -366,7 +365,6 @@ mod tests {
                     depth: entry.depth,
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
-                    is_selectable: row.session_id().is_some(),
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
                 },
@@ -386,7 +384,6 @@ mod tests {
             depth: 0,
             mark,
             is_last_sibling: false,
-            is_selectable: true,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -398,7 +395,6 @@ mod tests {
             depth: 1,
             mark,
             is_last_sibling,
-            is_selectable: true,
             child_count: 0,
             child_user_turn_count: 0,
         }
@@ -411,9 +407,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_user_turn_also_appears_selectable_in_tasks(
-        agent_config: AgentConfig,
-    ) {
+    fn test_build_session_rows_user_turn_also_appears_in_tasks(agent_config: AgentConfig) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());

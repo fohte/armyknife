@@ -25,7 +25,7 @@ mod reload;
 mod sidebar;
 mod worktree;
 
-use reload::{build_title_cache, get_title_display_name, load_sessions};
+use reload::{SelectionAnchor, build_title_cache, get_title_display_name, load_sessions};
 pub(super) use worktree::resolve_labels_for_cwds;
 
 /// Top-level view selection.
@@ -276,7 +276,7 @@ impl App {
             .or_else(|| last_selected_session_id.map(str::to_owned));
 
         if let Some(session_id) = selected_session_id {
-            self.restore_selection(None, Some(&session_id));
+            self.restore_selection(SelectionAnchor::for_session(session_id));
         }
     }
 
