@@ -103,7 +103,7 @@ pub struct NewArgs {
     #[arg(long, requires = "worktree")]
     pub force: bool,
 
-    /// Require vibe mode to be enabled before launching the new session.
+    /// Require vibe mode in the current or an ancestor session. This flag does not enable it.
     #[arg(long)]
     pub vibe: bool,
 
@@ -435,13 +435,29 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_vibe_flag(&["a"], false, true, false, true)]
-    #[case::vibe_enabled(&["a", "--vibe"], true, true, true, true)]
-    #[case::vibe_disabled(&["a", "--vibe"], false, false, true, false)]
+    #[case::without_vibe_flag(&["a"], false, None, None, false, true)]
+    #[case::vibe_enabled(&["a", "--vibe"], true, None, None, true, true)]
+    #[case::vibe_disabled(
+        &["a", "--vibe"],
+        false,
+        None,
+        Some("Vibe mode must be enabled to use --vibe."),
+        true,
+        false
+    )]
+    #[case::vibe_check_fails(
+        &["a", "--vibe"],
+        false,
+        Some("session lookup failed"),
+        Some("session lookup failed"),
+        true,
+        false
+    )]
     fn vibe_flag_gates_session_launch(
         #[case] argv: &[&str],
         #[case] vibe_enabled: bool,
-        #[case] expected_result: bool,
+        #[case] vibe_check_error: Option<&str>,
+        #[case] expected_error: Option<&str>,
         #[case] expected_vibe_check: bool,
         #[case] expected_launch: bool,
     ) {
@@ -453,7 +469,10 @@ mod tests {
             &args,
             || {
                 vibe_checked.set(true);
-                Ok(vibe_enabled)
+                match vibe_check_error {
+                    Some(error) => Err(anyhow::anyhow!("{}", error)),
+                    None => Ok(vibe_enabled),
+                }
             },
             || {
                 launched.set(true);
@@ -461,21 +480,14 @@ mod tests {
             },
         );
 
+        let expected_result = expected_error.map_or_else(|| Ok(()), |error| Err(error.to_string()));
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
                 vibe_checked.get(),
                 launched.get(),
             ),
-            (
-                if expected_result {
-                    Ok(())
-                } else {
-                    Err("Vibe mode must be enabled to use --vibe.".to_string())
-                },
-                expected_vibe_check,
-                expected_launch,
-            ),
+            (expected_result, expected_vibe_check, expected_launch,),
         );
     }
 
