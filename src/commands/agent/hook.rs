@@ -1197,6 +1197,15 @@ mod tests {
     use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use rstest::{fixture, rstest};
 
+    fn process_hook_event_without_instruction(
+        event: HookEvent,
+        input: HookInput,
+        sessions_dir: &Path,
+        side_effects: &SideEffects,
+    ) -> Result<ProcessResult> {
+        process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
     struct TqArchiveContext {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -1726,7 +1735,7 @@ mod tests {
 
         let input = create_test_input_with_session_and_source("paused-sess", None, source);
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "paused-sess")
@@ -1771,8 +1780,13 @@ mod tests {
         let sessions_dir = temp_dir.path();
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "s")
             .expect("load")
@@ -1853,8 +1867,13 @@ mod tests {
             .map(|(event, payload)| {
                 let mut input = parse_stdin_json(&payload).expect("Codex payload should parse");
                 input.engine = Engine::Codex;
-                process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
-                    .expect("hook should succeed");
+                process_hook_event_without_instruction(
+                    event,
+                    input,
+                    sessions_dir,
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
                 store::load_session_from(sessions_dir, "codex-lifecycle")
                     .expect("load")
                     .expect("session exists")
@@ -1912,7 +1931,7 @@ mod tests {
         ))
         .expect("Codex permission payload should parse");
         permission_input.engine = Engine::Codex;
-        process_hook_event_impl(
+        process_hook_event_without_instruction(
             HookEvent::PermissionRequest,
             permission_input,
             sessions_dir,
@@ -1924,7 +1943,7 @@ mod tests {
             parse_stdin_json(&codex_payload(resolution_event_name, resolution_extra))
                 .expect("Codex resolution payload should parse");
         resolution_input.engine = Engine::Codex;
-        process_hook_event_impl(
+        process_hook_event_without_instruction(
             resolution_event,
             resolution_input,
             sessions_dir,
@@ -2039,8 +2058,13 @@ mod tests {
         let payload = r#"{"session_id":"paused-bg-sess","cwd":"/tmp/test","background_tasks":[{"id":"bg-1","type":"shell","status":"running"}]}"#;
         let input: HookInput = serde_json::from_str(payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "paused-bg-sess")
             .expect("load")
@@ -2068,7 +2092,7 @@ mod tests {
 
         let input = create_test_input_with_session_and_source("signaled-sess", None, None);
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "signaled-sess")
@@ -2563,7 +2587,7 @@ mod tests {
         )
         .expect("valid JSON");
 
-        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+        process_hook_event_without_instruction(event, input, sessions_dir, &SideEffects::none())
             .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "resolve-sess")
@@ -2872,6 +2896,54 @@ mod tests {
             ProcessResult::SessionSaved
         };
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::configured(true, ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()), SessionStatus::Running)]
+    #[case::missing(false, ProcessResult::SessionSaved, SessionStatus::Stopped)]
+    fn stop_hook_uses_instruction_from_config(
+        #[case] configured: bool,
+        #[case] expected_result: ProcessResult,
+        #[case] expected_status: SessionStatus,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let config_home = temp_dir.path().join("config");
+        let config_dir = config_home.join("armyknife");
+        if configured {
+            fs::create_dir_all(&config_dir).expect("config directory should be created");
+            fs::write(
+                config_dir.join("config.yaml"),
+                indoc::indoc! {"
+                    agent:
+                      stop_hook_instruction: Please summarize the result before stopping.
+                "},
+            )
+            .expect("config should be written");
+        }
+
+        let sessions_dir = temp_dir.path().join("sessions");
+        fs::create_dir(&sessions_dir).expect("sessions directory should be created");
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "last_assistant_message": "Example response.",
+        }))
+        .expect("stop payload should deserialize");
+
+        let xdg_config_home = config_home.to_str().expect("config path should be UTF-8");
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(xdg_config_home)),
+                ("ARMYKNIFE_AGENT__STOP_HOOK_INSTRUCTION", None::<&str>),
+            ],
+            || process_hook_event_impl(HookEvent::Stop, input, &sessions_dir, &SideEffects::none()),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(&sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!((result, session.status), (expected_result, expected_status));
     }
 
     #[test]
@@ -3259,7 +3331,7 @@ mod tests {
             input.engine = engine;
 
             temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
-                process_hook_event_impl(
+                process_hook_event_without_instruction(
                     HookEvent::Stop,
                     input,
                     temp_dir.path(),

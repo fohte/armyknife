@@ -39,7 +39,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
-`agent.stop_hook_instruction` is an optional message returned when the Stop hook blocks a session. When the key is omitted, the Stop hook does not block.
+`agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. When configured, the hook blocks that stop and returns the message; when omitted, the hook does not block.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -55,6 +55,8 @@ For editor autocompletion, add the following to the top of your config file:
 agent:
   # Sent to the delegator after a delegated PR merges; omitted means no notification.
   merge_notification: 'Branch {branch} merged: {pr_url}'
+  # Returned when the Stop hook cannot infer why the agent stopped; omitted means no stop blocking.
+  stop_hook_instruction: 'Summarize the result before stopping.'
   work_types: # per-skill icon and color metadata
     example-workflow:
       icon: '◇'
@@ -384,7 +386,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared when the next `UserPromptSubmit` hook arrives, and a set status appears as `agent_status` in `a agent peer` JSON output.
 
-When a `Stop` hook cannot infer why the agent stopped, it blocks the stop until the agent sets a status with `a agent status set <kind> <note>`. Background work, pending permission prompts, `AskUserQuestion`, an existing status, and `stop_hook_active` are recognized automatically and do not require a status. A blocked stop keeps the session running and skips stop notifications and auto-compaction.
+When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop and returns that message. If the key is omitted, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>`.
 
 Use one of these kinds:
 

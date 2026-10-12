@@ -120,17 +120,17 @@ mod tests {
         assert_eq!(block_reason(conditions, Some(TEST_INSTRUCTION)), None);
     }
 
-    #[test]
-    fn unknown_stop_uses_the_configured_instruction() {
+    #[rstest]
+    #[case::configured(Some(TEST_INSTRUCTION), Some(TEST_INSTRUCTION))]
+    #[case::missing(None, None)]
+    fn unknown_stop_returns_only_a_configured_instruction(
+        #[case] instruction: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
         assert_eq!(
-            block_reason(StopConditions::default(), Some(TEST_INSTRUCTION)),
-            Some(TEST_INSTRUCTION)
+            block_reason(StopConditions::default(), instruction),
+            expected
         );
-    }
-
-    #[test]
-    fn unknown_stop_does_not_block_without_an_instruction() {
-        assert_eq!(block_reason(StopConditions::default(), None), None);
     }
 
     #[rstest]
