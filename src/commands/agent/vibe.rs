@@ -9,7 +9,7 @@ use crate::shared::env_var::EnvVars;
 pub enum VibeCommands {
     /// Enable vibe mode for the calling session
     On,
-    /// Disable vibe mode for the calling session
+    /// Clear the calling session's explicit vibe setting; inherited settings still apply
     Off,
     /// Check whether this session or an ancestor enabled vibe mode
     Status,
@@ -30,8 +30,10 @@ pub fn run(command: &VibeCommands) -> Result<()> {
     }
 }
 
-/// Returns whether the calling session or any recorded ancestor explicitly enabled vibe mode.
-/// Returns false outside a tracked session or when its session record is missing.
+/// Returns whether the calling session or a stored ancestor explicitly enabled vibe mode.
+///
+/// An ancestor's flag is inherited only while its session record exists. Returns `false` outside a tracked
+/// session or when the caller's session record is missing.
 pub fn is_vibe_enabled() -> Result<bool> {
     let Some(session_id) = EnvVars::load().own_session_id() else {
         return Ok(false);
@@ -64,17 +66,25 @@ fn set(enabled: bool) -> Result<()> {
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
-    let lock = store::lock_session_for_update(&sessions_dir, &session_id)?;
+    set_in(&sessions_dir, &session_id, enabled)?;
+
+    if enabled {
+        println!("Vibe mode enabled.");
+    } else if is_vibe_enabled_for(&sessions_dir, &session_id)? {
+        println!("Vibe mode remains enabled by an ancestor.");
+    } else {
+        println!("Vibe mode disabled.");
+    }
+    Ok(())
+}
+
+fn set_in(sessions_dir: &std::path::Path, session_id: &str, enabled: bool) -> Result<()> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let mut session = lock
         .load()?
-        .ok_or_else(|| CcError::SessionNotFound(session_id.clone()))?;
+        .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
     session.vibe_enabled = enabled;
     lock.save(&session)?;
-
-    println!(
-        "Vibe mode {}.",
-        if enabled { "enabled" } else { "disabled" }
-    );
     Ok(())
 }
 
@@ -157,45 +167,64 @@ mod tests {
         let child = session("child", &["root"], false);
         store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
         store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
+        set_in(&test_store.sessions_dir, "child", true).expect("on should save");
+        let enabled = is_vibe_enabled_for(&test_store.sessions_dir, "child")
+            .expect("vibe status should load");
+        let child_enabled = store::load_session_from(&test_store.sessions_dir, "child")
+            .expect("child should load")
+            .expect("child should exist")
+            .vibe_enabled;
+        let root_enabled = store::load_session_from(&test_store.sessions_dir, "root")
+            .expect("root should load")
+            .expect("root should exist")
+            .vibe_enabled;
+        set_in(&test_store.sessions_dir, "child", false).expect("off should save");
+        let disabled = is_vibe_enabled_for(&test_store.sessions_dir, "child")
+            .expect("vibe status should load");
+
+        let actual = (enabled, disabled, child_enabled, root_enabled);
+
+        assert_eq!(actual, (true, false, true, false));
+    }
+
+    #[rstest]
+    fn disabling_the_enabling_ancestor_disables_descendant_status(test_store: TestStore) {
+        let root = session("root", &[], false);
+        let child = session("child", &["root"], false);
+        store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
+        store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
         let cache_home = test_store
             .cache_home
             .to_str()
             .expect("cache path should be valid UTF-8");
 
-        let actual = temp_env::with_vars(
-            [
-                ("XDG_CACHE_HOME", Some(cache_home)),
-                ("ARMYKNIFE_SESSION_ID", Some("child")),
-                ("CODEX_SESSION_ID", None::<&str>),
-            ],
-            || {
-                run(&VibeCommands::On).expect("on should save");
-                let enabled = is_vibe_enabled().expect("vibe status should load");
-                let enabled_status = run(&VibeCommands::Status).is_ok();
-                run(&VibeCommands::Off).expect("off should save");
-                let disabled = is_vibe_enabled().expect("vibe status should load");
-                let disabled_status_is_error = run(&VibeCommands::Status).is_err();
-                let child_enabled = store::load_session_from(&test_store.sessions_dir, "child")
-                    .expect("child should load")
-                    .expect("child should exist")
-                    .vibe_enabled;
-                let root_enabled = store::load_session_from(&test_store.sessions_dir, "root")
-                    .expect("root should load")
-                    .expect("root should exist")
-                    .vibe_enabled;
+        let run_for = |session_id, command| {
+            with_session_env(cache_home, Some(session_id), || run(command).is_ok())
+        };
+        let status_command_succeeds_for = |session_id| {
+            with_session_env(cache_home, Some(session_id), || {
+                run(&VibeCommands::Status).is_ok()
+            })
+        };
 
-                (
-                    enabled,
-                    enabled_status,
-                    disabled,
-                    disabled_status_is_error,
-                    child_enabled,
-                    root_enabled,
-                )
-            },
+        let enabled_command_succeeded = run_for("root", &VibeCommands::On);
+        let child_status_succeeds = status_command_succeeds_for("child");
+        let child_off_command_succeeded = run_for("child", &VibeCommands::Off);
+        let child_status_still_succeeds = status_command_succeeds_for("child");
+        let disabled_command_succeeded = run_for("root", &VibeCommands::Off);
+        let child_status_fails = !status_command_succeeds_for("child");
+
+        assert_eq!(
+            (
+                enabled_command_succeeded,
+                child_status_succeeds,
+                child_off_command_succeeded,
+                child_status_still_succeeds,
+                disabled_command_succeeded,
+                child_status_fails,
+            ),
+            (true, true, true, true, true, true),
         );
-
-        assert_eq!(actual, (true, true, false, true, false, false));
     }
 
     #[rstest]
@@ -210,16 +239,22 @@ mod tests {
             .cache_home
             .to_str()
             .expect("cache path should be valid UTF-8");
-        let actual = temp_env::with_vars(
-            [
-                ("XDG_CACHE_HOME", Some(cache_home)),
-                ("ARMYKNIFE_SESSION_ID", Some("child")),
-                ("CODEX_SESSION_ID", None::<&str>),
-            ],
-            || is_vibe_enabled().expect("vibe status should load"),
-        );
+        let actual = with_session_env(cache_home, Some("child"), || {
+            is_vibe_enabled().expect("vibe status should load")
+        });
 
         assert!(actual);
+    }
+
+    #[rstest]
+    fn missing_ancestor_record_does_not_enable_vibe_mode(test_store: TestStore) {
+        let child = session("child", &["removed-root"], false);
+        store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
+
+        let actual = is_vibe_enabled_for(&test_store.sessions_dir, "child")
+            .expect("vibe status should load");
+
+        assert!(!actual);
     }
 
     #[rstest]
@@ -229,6 +264,15 @@ mod tests {
 
         let actual = temp_env::with_vars(
             [
+                (
+                    "XDG_CACHE_HOME",
+                    Some(
+                        test_store
+                            .cache_home
+                            .to_str()
+                            .expect("cache path should be valid UTF-8"),
+                    ),
+                ),
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("ARMYKNIFE_ANCESTOR_SESSION_IDS", Some("root")),
@@ -237,5 +281,16 @@ mod tests {
         );
 
         assert!(!actual);
+    }
+
+    fn with_session_env<T>(cache_home: &str, session_id: Option<&str>, f: impl FnOnce() -> T) -> T {
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home)),
+                ("ARMYKNIFE_SESSION_ID", session_id),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            f,
+        )
     }
 }

@@ -387,7 +387,15 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
-Run `a agent vibe on` in a tracked session to enable vibe mode for that session. Descendants inherit the mode through the recorded ancestor chain, so `a agent vibe off` in the enabling session disables it for the whole tree. `a agent vibe status` exits with code 0 when the current session or any ancestor has enabled vibe mode, and nonzero otherwise.
+Vibe mode is an opt-in marker recorded by armyknife; it does not change other armyknife behavior by itself. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+
+```console
+if a agent vibe status >/dev/null 2>&1; then
+  # Continue with the vibe workflow.
+fi
+```
+
+Run `a agent vibe on` in a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop and returns that message. If the key is omitted, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>`.
 
