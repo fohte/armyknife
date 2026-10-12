@@ -508,26 +508,31 @@ mod tests {
         assert_eq!(buffer[(1, 2)].fg, Color::Cyan);
     }
 
-    #[test]
-    fn test_render_your_turn_row_shows_label_note_name_and_wait_time() {
-        let now = Utc::now();
-
+    #[fixture]
+    fn decide_user_turn_session() -> Session {
         let mut session = create_test_session("s1");
-        session.updated_at = now - chrono::Duration::minutes(48);
         session.status = SessionStatus::Stopped;
         session.label = Some("session-name".to_string());
         session.agent_status = Some(AgentStatus {
             kind: AgentStatusKind::Decide,
             note: "choose an option".to_string(),
         });
+        session
+    }
 
-        let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(1), now, 80, 10);
+    #[rstest]
+    fn test_render_your_turn_row_shows_label_name_note_and_wait_time(
+        mut decide_user_turn_session: Session,
+    ) {
+        let now = Utc::now();
+        decide_user_turn_session.updated_at = now - chrono::Duration::minutes(48);
+
+        let output = render_to_string(&[decide_user_turn_session], Some(1), now, 80, 10);
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐  decide  choose an option session-name                                    48m
+            >◐  decide  session-name choose an option                                    48m
 
 
 
@@ -535,6 +540,24 @@ mod tests {
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[rstest]
+    fn test_render_your_turn_row_truncates_note_before_session_name(
+        mut decide_user_turn_session: Session,
+    ) {
+        let now = Utc::now();
+        decide_user_turn_session.updated_at = now;
+
+        let output = render_to_string(&[decide_user_turn_session], Some(1), now, 45, 4);
+
+        let expected = indoc! {"
+             agent watch 1 needs you · 0 running · 0 idle
+             ── YOUR TURN ───────────────────────────────
+            >◐  decide  session-name choose a... just now
+             ?: keys   /: search   Esc: tasks   q: quit"};
 
         assert_eq!(output, expected);
     }
