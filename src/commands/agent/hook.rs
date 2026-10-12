@@ -414,6 +414,7 @@ fn process_hook_event_impl_with_instruction(
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine: input.engine,
@@ -434,6 +435,10 @@ fn process_hook_event_impl_with_instruction(
     // is no longer relevant -- clear it so a later SessionEnd isn't
     // mistaken for the confirmation of that earlier signal.
     session.sweep_signaled = false;
+
+    if event == HookEvent::UserPromptSubmit {
+        session.stop_blocked_by_armyknife = false;
+    }
 
     // Status belongs to the main thread. Notifications, subagent hooks, and
     // SessionStart(resume) can update session state without resuming its work.
@@ -545,6 +550,8 @@ fn process_hook_event_impl_with_instruction(
             )
         })
         .flatten();
+    let preserve_last_message =
+        stop::preserve_last_message_after_block(&mut session, event, stop_block_reason.is_some());
     if stop_block_reason.is_some() {
         status = SessionStatus::Running;
     }
@@ -595,50 +602,52 @@ fn process_hook_event_impl_with_instruction(
     session_lock.save(&session)?;
     drop(session_lock);
 
-    // Update last_message. The `Stop` payload's final assistant message is
-    // preferred when present: the transcript may not hold it yet when the
-    // hook fires. Claude Code without it falls back to re-reading the
-    // transcript (see get_last_message_with_retry's retry loop). Codex's
-    // other events carry no such field and leave last_message untouched.
-    let last_message = match session.engine {
-        Engine::Claude
-            if event == HookEvent::Stop
-                && input
-                    .last_assistant_message
-                    .as_deref()
-                    .is_some_and(|m| !m.is_empty()) =>
-        {
-            input.last_assistant_message.clone()
-        }
-        Engine::Claude => {
-            let max_retries = if event == HookEvent::Stop {
-                TRANSCRIPT_MAX_RETRIES
-            } else {
-                0
-            };
-            get_last_message_with_retry(
-                &session.cwd,
+    if !preserve_last_message {
+        // The Stop payload's final assistant message is preferred when
+        // present: the transcript may not hold it yet when the hook fires.
+        // Claude Code without it falls back to re-reading the transcript
+        // (see get_last_message_with_retry's retry loop). Codex's other
+        // events carry no such field and leave last_message untouched.
+        let last_message = match session.engine {
+            Engine::Claude
+                if event == HookEvent::Stop
+                    && input
+                        .last_assistant_message
+                        .as_deref()
+                        .is_some_and(|m| !m.is_empty()) =>
+            {
+                input.last_assistant_message.clone()
+            }
+            Engine::Claude => {
+                let max_retries = if event == HookEvent::Stop {
+                    TRANSCRIPT_MAX_RETRIES
+                } else {
+                    0
+                };
+                get_last_message_with_retry(
+                    &session.cwd,
+                    &session.session_id,
+                    session.last_message.as_deref(),
+                    TRANSCRIPT_RETRY_DELAY,
+                    max_retries,
+                )
+            }
+            Engine::Codex if event == HookEvent::Stop => input.last_assistant_message.clone(),
+            Engine::Codex => session.last_message.clone(),
+        };
+        if last_message != session.last_message {
+            // Compare-and-swap against the pre-read value: a slower sibling
+            // event's own transcript read could otherwise finish and save first,
+            // and this unconditional write would then clobber it with a stale
+            // message.
+            store::update_session_last_message_if_unchanged_in(
+                sessions_dir,
                 &session.session_id,
                 session.last_message.as_deref(),
-                TRANSCRIPT_RETRY_DELAY,
-                max_retries,
-            )
+                last_message.clone(),
+            )?;
+            session.last_message = last_message;
         }
-        Engine::Codex if event == HookEvent::Stop => input.last_assistant_message.clone(),
-        Engine::Codex => session.last_message.clone(),
-    };
-    if last_message != session.last_message {
-        // Compare-and-swap against the pre-read value: a slower sibling
-        // event's own transcript read could otherwise finish and save first,
-        // and this unconditional write would then clobber it with a stale
-        // message.
-        store::update_session_last_message_if_unchanged_in(
-            sessions_dir,
-            &session.session_id,
-            session.last_message.as_deref(),
-            last_message.clone(),
-        )?;
-        session.last_message = last_message;
     }
 
     // Push the window's aggregated Claude Code status into its
@@ -1751,6 +1760,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
@@ -2209,6 +2219,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine,
@@ -2816,6 +2827,7 @@ mod tests {
             pending_permission_request_ids: Default::default(),
             read_at: None,
             sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
@@ -2922,6 +2934,249 @@ mod tests {
             ProcessResult::SessionSaved
         };
         assert_eq!(result, expected);
+    }
+
+    fn stop_input(engine: Engine, message: &str, stop_hook_active: bool) -> HookInput {
+        let mut input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "blocked-stop-session",
+            "cwd": "/tmp/test",
+            "last_assistant_message": message,
+            "stop_hook_active": stop_hook_active,
+        }))
+        .expect("stop payload should deserialize");
+        input.engine = engine;
+        input
+    }
+
+    fn process_test_stop(
+        engine: Engine,
+        message: &str,
+        stop_hook_active: bool,
+        sessions_dir: &Path,
+    ) -> Result<ProcessResult> {
+        process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            stop_input(engine, message, stop_hook_active),
+            sessions_dir,
+            &SideEffects::none(),
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+        )
+    }
+
+    fn run_hook_and_snapshot(
+        event: HookEvent,
+        input: HookInput,
+        sessions_dir: &Path,
+    ) -> Result<(ProcessResult, Option<String>, bool)> {
+        let instruction = (event == HookEvent::Stop).then_some(TEST_STOP_HOOK_INSTRUCTION);
+        let result = process_hook_event_impl_with_instruction(
+            event,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            instruction,
+        )?;
+        let session = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        Ok((
+            result,
+            session.last_message,
+            session.stop_blocked_by_armyknife,
+        ))
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn armyknife_block_preserves_the_message_across_continuation_hooks(#[case] engine: Engine) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let blocked_reason = TEST_STOP_HOOK_INSTRUCTION.to_string();
+
+        let mut recorded = Vec::new();
+        recorded.push(
+            run_hook_and_snapshot(
+                HookEvent::Stop,
+                stop_input(engine, "The task is complete.", false),
+                sessions_dir,
+            )
+            .expect("stop hook should succeed"),
+        );
+
+        recorded.push(
+            run_hook_and_snapshot(
+                HookEvent::PostToolUse,
+                stop_input(engine, "Tool continuation message.", false),
+                sessions_dir,
+            )
+            .expect("post tool hook should succeed"),
+        );
+
+        recorded.push(
+            run_hook_and_snapshot(
+                HookEvent::PreToolUse,
+                stop_input(engine, "Tool preflight message.", false),
+                sessions_dir,
+            )
+            .expect("pre tool hook should succeed"),
+        );
+
+        store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
+            session.agent_status = Some(AgentStatus {
+                kind: AgentStatusKind::Done,
+                note: "Example completion.".to_string(),
+            });
+            true
+        })
+        .expect("session status should update");
+        recorded.push(
+            run_hook_and_snapshot(
+                HookEvent::Stop,
+                stop_input(engine, "Status set.", false),
+                sessions_dir,
+            )
+            .expect("stop hook should succeed"),
+        );
+
+        store::update_session_in(sessions_dir, "blocked-stop-session", |session| {
+            session.agent_status = None;
+            true
+        })
+        .expect("session status should clear");
+        recorded.push(
+            run_hook_and_snapshot(
+                HookEvent::Stop,
+                stop_input(engine, "The follow-up turn is complete.", false),
+                sessions_dir,
+            )
+            .expect("stop hook should succeed"),
+        );
+
+        assert_eq!(
+            recorded,
+            vec![
+                (
+                    ProcessResult::StopBlocked(blocked_reason.clone()),
+                    Some("The task is complete.".to_string()),
+                    true
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    Some("The task is complete.".to_string()),
+                    true
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    Some("The task is complete.".to_string()),
+                    true
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    Some("The task is complete.".to_string()),
+                    false
+                ),
+                (
+                    ProcessResult::StopBlocked(blocked_reason),
+                    Some("The follow-up turn is complete.".to_string()),
+                    true,
+                ),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn user_prompt_submit_clears_the_previous_block_marker(#[case] engine: Engine) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let blocked_reason = TEST_STOP_HOOK_INSTRUCTION.to_string();
+
+        let first_block = process_test_stop(
+            engine,
+            "The previous turn is complete.",
+            false,
+            sessions_dir,
+        )
+        .expect("stop hook should succeed");
+        let prompt_submit = process_hook_event_impl(
+            HookEvent::UserPromptSubmit,
+            stop_input(engine, "", false),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("user prompt hook should succeed");
+        let after_prompt = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let next_block =
+            process_test_stop(engine, "The new turn is complete.", false, sessions_dir)
+                .expect("stop hook should succeed");
+        let after_next_stop = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                first_block,
+                prompt_submit,
+                after_prompt.stop_blocked_by_armyknife,
+                next_block,
+                after_next_stop.last_message,
+                after_next_stop.stop_blocked_by_armyknife,
+            ),
+            (
+                ProcessResult::StopBlocked(blocked_reason.clone()),
+                ProcessResult::SessionSaved,
+                false,
+                ProcessResult::StopBlocked(blocked_reason),
+                Some("The new turn is complete.".to_string()),
+                true,
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn stop_hook_active_does_not_arm_the_message_preservation_marker(#[case] engine: Engine) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+
+        // Another hook can set this flag without armyknife blocking the Stop.
+        let external_block_result =
+            process_test_stop(engine, "Previous stop message.", true, sessions_dir)
+                .expect("stop hook should succeed");
+        let after_external_block = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+
+        let armyknife_block_result =
+            process_test_stop(engine, "Current stop message.", false, sessions_dir)
+                .expect("stop hook should succeed");
+        let after_armyknife_block = store::load_session_from(sessions_dir, "blocked-stop-session")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                external_block_result,
+                after_external_block.last_message,
+                after_external_block.stop_blocked_by_armyknife,
+                armyknife_block_result,
+                after_armyknife_block.last_message,
+                after_armyknife_block.stop_blocked_by_armyknife,
+            ),
+            (
+                ProcessResult::SessionSaved,
+                Some("Previous stop message.".to_string()),
+                false,
+                ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string(),),
+                Some("Current stop message.".to_string()),
+                true,
+            )
+        );
     }
 
     #[rstest]
@@ -3765,6 +4020,7 @@ mod tests {
                 pending_permission_request_ids: Default::default(),
                 read_at: None,
                 sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
