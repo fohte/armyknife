@@ -11,7 +11,7 @@ use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
     Section, SectionHeaderRow, SessionRowEntry, TaskMark, is_related_task, kin_relation,
 };
-use crate::commands::agent::user_turn::UserTurn;
+use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
 
 use super::super::helpers::{
     DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
@@ -36,7 +36,7 @@ pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
-/// The longest automatic user-turn label is `failed`.
+/// The longest automatic user-turn label is `failed`; configured names can be wider.
 const USER_TURN_LABEL_WIDTH: usize = 6;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
@@ -131,11 +131,30 @@ pub(super) fn build_user_turn_item(
         .filter(|note| !note.is_empty());
     let time_text = format_compact_time(turn.session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
-    let label = turn
-        .kind
-        .label()
-        .map(|label| format!(" {label:<USER_TURN_LABEL_WIDTH$} "));
+    let full_label_width = turn
+        .label
+        .map(|label| label.width().max(USER_TURN_LABEL_WIDTH));
     let line_width = term_width.saturating_sub(MARKER_WIDTH);
+    let full_label_description_width = full_label_width.map_or_else(
+        || line_width.saturating_sub(STATUS_COLUMN_WIDTH + TIME_COLUMN_WIDTH),
+        |label_width| {
+            let label_column_width = label_width + 3;
+            line_width.saturating_sub(STATUS_COLUMN_WIDTH + label_column_width + TIME_COLUMN_WIDTH)
+        },
+    );
+    let status_label_hides_note = turn.kind == UserTurnKind::AgentStatus
+        && note.as_ref().is_some_and(|note| {
+            let required_width = title.width() + 1 + note.width();
+            required_width > full_label_description_width
+        });
+    let label = turn
+        .label
+        .filter(|_| !status_label_hides_note)
+        .map(|label| {
+            let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
+            let padding = " ".repeat(label_width.saturating_sub(label.width()));
+            format!(" {label}{padding} ")
+        });
     let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
     let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);

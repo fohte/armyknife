@@ -269,7 +269,10 @@ impl App {
                     .any(|session| session.session_id == *focus_id)
             })
             .map(str::to_owned)
-            .or_else(|| next_user_turn(&self.sessions).map(|turn| turn.session.session_id.clone()))
+            .or_else(|| {
+                next_user_turn(&self.sessions, &self.agent_config)
+                    .map(|turn| turn.session.session_id.clone())
+            })
             .or_else(|| last_selected_session_id.map(str::to_owned));
 
         if let Some(session_id) = selected_session_id {
@@ -341,7 +344,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
+    use crate::commands::agent::types::AgentStatus;
     use chrono::TimeDelta;
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
@@ -421,7 +424,7 @@ mod tests {
         let mut turn = create_test_session("turn");
         turn.status = SessionStatus::Stopped;
         turn.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+            kind: "needs_attention".to_string(),
             note: "choose an option".to_string(),
         });
         let mut earlier_turn = create_test_session("earlier-turn");

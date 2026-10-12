@@ -12,6 +12,7 @@ use super::types::Engine;
 use super::types::{DisplayStatus, Session, StatusColor};
 use super::user_turn::next_user_turn;
 use crate::infra::tmux::escape_format_value;
+use crate::shared::config::{self, AgentConfig};
 use crate::shared::table::{color, pad_or_truncate};
 
 /// Column widths for fixed-width columns
@@ -39,12 +40,14 @@ pub fn run(args: &ListArgs) -> Result<()> {
     // Clean up stale sessions first
     store::cleanup_stale_sessions()?;
 
+    let agent_config = config::load_config_or_default().agent;
+
     // Load all sessions
     let sessions = session_status::list_sessions_with_bg_run_status()?;
 
     if args.tmux {
         let mut stdout = io::stdout().lock();
-        render_tmux_status(&mut stdout, &sessions)?;
+        render_tmux_status(&mut stdout, &sessions, &agent_config)?;
         return Ok(());
     }
 
@@ -73,14 +76,22 @@ fn calculate_title_width(term_width: usize) -> usize {
 }
 
 /// Renders the highest-priority user action for the tmux status bar.
-fn render_tmux_status<W: Write>(writer: &mut W, sessions: &[Session]) -> Result<()> {
-    let Some(turn) = next_user_turn(sessions) else {
+fn render_tmux_status<W: Write>(
+    writer: &mut W,
+    sessions: &[Session],
+    agent_config: &AgentConfig,
+) -> Result<()> {
+    let Some(turn) = next_user_turn(sessions, agent_config) else {
         return Ok(());
     };
 
     write!(writer, "{}", turn.kind.symbol())?;
-    if let Some(label) = turn.kind.label() {
-        write!(writer, " #[fg=colour15,bg=colour1]{label}#[default]")?;
+    if let Some(label) = turn.label {
+        write!(
+            writer,
+            " #[fg=colour15,bg=colour1]{}#[default]",
+            escape_tmux_status_text(label)
+        )?;
     }
     if let Some(note) = turn.note {
         write!(writer, " {}", escape_tmux_status_text(note))?;
@@ -239,10 +250,12 @@ fn format_relative_time(dt: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, SessionStatus, TmuxInfo};
+    use crate::commands::agent::types::{AgentStatus, SessionStatus, TmuxInfo};
+    use crate::shared::config::{AgentStatusConfig, AgentStatusState};
     use chrono::Duration;
     use indoc::indoc;
     use rstest::rstest;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn create_test_session() -> Session {
@@ -599,13 +612,41 @@ mod tests {
     #[test]
     fn test_render_tmux_status_empty() {
         let mut output = Vec::new();
-        render_tmux_status(&mut output, &[]).expect("render should succeed");
+        render_tmux_status(&mut output, &[], &AgentConfig::default())
+            .expect("render should succeed");
         assert_eq!(String::from_utf8(output).expect("valid utf8"), "");
+    }
+
+    fn test_agent_config() -> AgentConfig {
+        AgentConfig {
+            statuses: HashMap::from([
+                (
+                    "needs_attention".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::User,
+                    },
+                ),
+                (
+                    "awaiting_build".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Waiting,
+                    },
+                ),
+                (
+                    "finished_work".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Done,
+                    },
+                ),
+            ]),
+            ..AgentConfig::default()
+        }
     }
 
     fn render_tmux_status_to_string(sessions: &[Session]) -> String {
         let mut output = Vec::new();
-        render_tmux_status(&mut output, sessions).expect("render should succeed");
+        render_tmux_status(&mut output, sessions, &test_agent_config())
+            .expect("render should succeed");
         String::from_utf8(output).expect("valid utf8")
     }
 
@@ -615,13 +656,13 @@ mod tests {
         waiting_without_reason.status = SessionStatus::WaitingInput;
         let mut waiting_for_other_work = create_test_session();
         waiting_for_other_work.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Wait,
-            note: "waiting for CI".to_string(),
+            kind: "awaiting_build".to_string(),
+            note: "waiting for a build".to_string(),
         });
         let mut done = create_test_session();
         done.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Done,
-            note: "reported to parent".to_string(),
+            kind: "finished_work".to_string(),
+            note: "work is complete".to_string(),
         });
 
         assert_eq!(
@@ -644,7 +685,7 @@ mod tests {
         let mut session = create_test_session();
         session.status = SessionStatus::Stopped;
         session.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+            kind: "needs_attention".to_string(),
             note: indoc! {"
                 #[fg=red]
                 choose a direction"
@@ -654,7 +695,7 @@ mod tests {
 
         assert_eq!(
             render_tmux_status_to_string(&[session]),
-            "◐ ##[fg=red] choose a direction (myproject)"
+            "◐ #[fg=colour15,bg=colour1]needs_attention#[default] ##[fg=red] choose a direction (myproject)"
         );
     }
 
@@ -695,7 +736,7 @@ mod tests {
         let mut done = create_test_session();
         done.status = SessionStatus::Stopped;
         done.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Done,
+            kind: "finished_work".to_string(),
             note: "work is complete".to_string(),
         });
 

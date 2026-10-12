@@ -55,7 +55,7 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows(&filtered_sessions, &app.task_by_session);
+    let rows = build_session_rows(&filtered_sessions, &app.task_by_session, &app.agent_config);
     let linked_session_ids = app.linked_session_ids_for_sidebar_cursor();
 
     // Build list items and owned row ids from the same `rows`, then drop
@@ -125,8 +125,8 @@ mod tests {
         create_test_session, render_buffer, render_buffer_with, render_to_string,
         render_to_string_with, render_to_string_with_agent_config,
     };
+    use crate::commands::agent::types::AgentStatus;
     use crate::commands::agent::types::SessionStatus;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
@@ -512,7 +512,7 @@ mod tests {
         session.status = SessionStatus::Stopped;
         session.label = Some("session-name".to_string());
         session.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+            kind: "needs_attention".to_string(),
             note: "choose an option".to_string(),
         });
         session
@@ -528,7 +528,7 @@ mod tests {
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
              ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐ session-name choose an option                                             48m
+            >◐  needs_attention  session-name choose an option                           48m
 
              ── TASKS ──────────────────────────────────────────────────────────────────────
              ◐ project                 session-name                                      48m

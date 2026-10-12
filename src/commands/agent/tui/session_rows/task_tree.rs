@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{SessionRowEntry, SessionTask, TaskMark};
-use crate::commands::agent::types::{AgentStatusKind, DisplayStatus, Session, SessionStatus};
+use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
+use crate::shared::config::{AgentConfig, AgentStatusState};
 
 /// Builds TASKS rows: each root (a session with no displayed ancestor)
 /// followed by every displayed descendant flattened onto one child level.
@@ -11,6 +12,7 @@ pub(super) fn build_task_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
     user_turn_session_ids: &HashSet<String>,
+    agent_config: &AgentConfig,
 ) -> Vec<SessionRowEntry<'a>> {
     let members: Vec<&'a Session> = sessions
         .iter()
@@ -55,8 +57,13 @@ pub(super) fn build_task_rows<'a>(
         children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
     }
 
-    let mark_of =
-        |session: &Session| task_mark(session, user_turn_session_ids.contains(&session.session_id));
+    let mark_of = |session: &Session| {
+        task_mark(
+            session,
+            user_turn_session_ids.contains(&session.session_id),
+            agent_config,
+        )
+    };
     groups.sort_by_cached_key(|(root, children)| {
         let has_user_turn = std::iter::once(root)
             .chain(children.iter())
@@ -98,15 +105,19 @@ pub(super) fn build_task_rows<'a>(
     rows
 }
 
-fn task_mark(session: &Session, has_user_turn: bool) -> TaskMark {
+fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig) -> TaskMark {
     if has_user_turn {
         return TaskMark::UserTurn;
     }
     // A status set before the last stop is stale once the session runs again.
     if session.status != SessionStatus::Running {
-        match session.agent_status.as_ref().map(|status| status.kind) {
-            Some(AgentStatusKind::Done) => return TaskMark::Done,
-            Some(AgentStatusKind::Wait) => return TaskMark::Waiting,
+        match session
+            .agent_status
+            .as_ref()
+            .map(|status| agent_config.status_state(&status.kind))
+        {
+            Some(AgentStatusState::Done) => return TaskMark::Done,
+            Some(AgentStatusState::Waiting) => return TaskMark::Waiting,
             _ => {}
         }
     }

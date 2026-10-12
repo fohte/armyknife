@@ -35,11 +35,13 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
-Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, merge notification text under `agent.merge_notification`, and Stop hook instructions under `agent.stop_hook_instruction`.
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, merge notification text under `agent.merge_notification`, status names and states under `agent.statuses`, and Stop hook instructions under `agent.stop_hook_instruction`.
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
-`agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. When configured, the hook blocks that stop and returns the message; when omitted, the hook does not block.
+`agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear in YOUR TURN and tmux's next action; `waiting` and `done` status names mark TASKS rows without appearing in YOUR TURN. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
+
+`agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -55,7 +57,11 @@ For editor autocompletion, add the following to the top of your config file:
 agent:
   # Sent to the delegator after a delegated PR merges; omitted means no notification.
   merge_notification: 'Branch {branch} merged: {pr_url}'
-  # Returned when the Stop hook cannot infer why the agent stopped; omitted means no stop blocking.
+  statuses: # user-defined status names mapped to display behavior
+    needs_attention: { state: user }
+    awaiting_build: { state: waiting }
+    work_finished: { state: done }
+  # Returned when the Stop hook cannot infer why the agent stopped; only active when statuses are configured.
   stop_hook_instruction: 'Summarize the result before stopping.'
   work_types: # per-skill icon and color metadata
     example-workflow:
@@ -388,16 +394,16 @@ Run `a agent status set` from a tracked Claude Code or Codex session. Claude Cod
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop and returns that message. If the key is omitted, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>`.
 
-Use one of these kinds:
+Define status names under `agent.statuses`; the configured state controls how each status is shown:
 
-- `you`: it is the user's turn; the note explains what they need to do
-- `wait`: another session, CI job, or external event needs to finish
+- `user`: the user has a turn; the status name and note explain what they need to do
+- `waiting`: another session, CI job, or external event needs to finish
 - `done`: the work is finished
 
-The legacy values `decide`, `read`, `do`, and `idle` are accepted as `you`; `close` is accepted as `done`. Existing session data and older stop hook instructions remain compatible.
+If a stored status name is no longer configured, armyknife treats it as `user` so it remains visible.
 
 ```console
-$ a agent status set wait "waiting for job-42"
+$ a agent status set awaiting_build "waiting for a build"
 ```
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
@@ -419,7 +425,7 @@ The session list shows YOUR TURN first, then TASKS: a tree of sessions where eac
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
-`a agent list --tmux` prints one next user action for a tmux status line and includes the session name at the end. The shared action order is `failed`, `crit`, `body`, `you`, `allow`, `ask`, then `merge`; `you` shows only its symbol and note, with no label. The oldest session update wins within each action. A `done` or `wait` status produces no user action.
+`a agent list --tmux` prints one next user action for a tmux status line and includes the session name at the end. The shared action order is `failed`, `crit`, `body`, user-state status names, `allow`, `ask`, then `merge`; configured status names are shown as labels. The oldest session update wins within each action. `waiting` and `done` statuses produce no user action.
 
 Run this command inside a tracked Claude Code or Codex session. The session must have an armyknife session record and expose `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`. Paused sessions are resumed before delivery. Notifications are best-effort: Codex may queue a message until its thread is idle, and an ended session is not resumed. Output files are written under the system temporary directory and may be removed by the OS.
 
@@ -739,7 +745,7 @@ set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-cc-pane-work
 
 #### Task linking (tq)
 
-When the `tq` CLI is on `PATH`, a linked session shows its `#<number>` in a fixed-width column, and its TASKS row shows the task title instead of the session name. TASKS rows show this column; YOUR TURN rows show the session name and note, plus a label for automatically detected actions. Rows without a linked task reserve the same column, keeping every TASKS-row title aligned. The number dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. If the linked task is closed, its number renders struck through in a dusty purple, overriding the related/dimmed coloring. Older `tq` binaries that predate task status reporting are treated as open. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
+When the `tq` CLI is on `PATH`, a linked session shows its `#<number>` in a fixed-width column, and its TASKS row shows the task title instead of the session name. TASKS rows show this column; YOUR TURN rows show the session name, configured status name or automatic label, and note. Rows without a linked task reserve the same column, keeping every TASKS-row title aligned. The number dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. If the linked task is closed, its number renders struck through in a dusty purple, overriding the related/dimmed coloring. Older `tq` binaries that predate task status reporting are treated as open. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
 
 When `tq` isn't on `PATH`, or the command fails, rows keep task associations from the last successful lookup, including data restored from cache at startup. During an initial load without a cache, the task-number column and sidebar tree show skeleton placeholders; task numbers or blank cells replace the placeholders without moving session titles. If that load fails, the sidebar shows `Failed to load tq tasks`; press `r` to retry. Local operations (focus, resume) are never blocked by `tq` being down.
 

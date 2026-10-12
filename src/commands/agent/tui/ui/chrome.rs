@@ -185,7 +185,7 @@ struct HeaderCounts {
 
 fn header_counts(app: &App) -> HeaderCounts {
     let sessions = app.filtered_sessions();
-    let turns = user_turns(sessions.iter().copied());
+    let turns = user_turns(sessions.iter().copied(), &app.agent_config);
     let turn_session_ids: HashSet<&str> = turns
         .iter()
         .map(|turn| turn.session.session_id.as_str())
@@ -286,7 +286,7 @@ mod tests {
     use crate::commands::agent::tui::ui::test_support::{
         create_test_session, render_to_string, render_to_string_with, wt_row,
     };
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, Session, SessionStatus};
+    use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
     use rstest::rstest;
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         let mut decide = create_test_session("decide");
         decide.status = SessionStatus::Stopped;
         decide.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+            kind: "needs_attention".to_string(),
             note: "choose an option".to_string(),
         });
         let mut running = create_test_session("running");

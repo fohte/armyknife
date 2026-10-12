@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
-use super::types::{AgentStatusKind, DisplayStatus, Session, SessionStatus};
+use super::types::{DisplayStatus, Session, SessionStatus};
+use crate::shared::config::{AgentConfig, AgentStatusState};
 use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
 /// Variant order is the shared next-action priority used by tmux status and watch.
@@ -16,7 +17,7 @@ pub(crate) enum UserTurnKind {
     Failed,
     Crit,
     Body,
-    You,
+    AgentStatus,
     Allow,
     Ask,
     Merge,
@@ -28,7 +29,7 @@ impl UserTurnKind {
             Self::Failed => Some("failed"),
             Self::Crit => Some("crit"),
             Self::Body => Some("body"),
-            Self::You => None,
+            Self::AgentStatus => None,
             Self::Allow => Some("allow"),
             Self::Ask => Some("ask"),
             Self::Merge => Some("merge"),
@@ -47,13 +48,17 @@ impl UserTurnKind {
 pub(crate) struct UserTurn<'a> {
     pub(crate) session: &'a Session,
     pub(crate) kind: UserTurnKind,
+    pub(crate) label: Option<&'a str>,
     pub(crate) note: Option<&'a str>,
 }
 
-pub(crate) fn user_turns<'a>(sessions: impl IntoIterator<Item = &'a Session>) -> Vec<UserTurn<'a>> {
+pub(crate) fn user_turns<'a>(
+    sessions: impl IntoIterator<Item = &'a Session>,
+    agent_config: &AgentConfig,
+) -> Vec<UserTurn<'a>> {
     let mut turns = sessions
         .into_iter()
-        .filter_map(user_turn)
+        .filter_map(|session| user_turn(session, agent_config))
         .collect::<Vec<_>>();
     sort_user_turns(&mut turns);
     turns
@@ -63,11 +68,14 @@ pub(crate) fn sort_user_turns(turns: &mut [UserTurn<'_>]) {
     turns.sort_by(compare_turns);
 }
 
-pub(crate) fn next_user_turn(sessions: &[Session]) -> Option<UserTurn<'_>> {
-    user_turns(sessions).into_iter().next()
+pub(crate) fn next_user_turn<'a>(
+    sessions: &'a [Session],
+    agent_config: &AgentConfig,
+) -> Option<UserTurn<'a>> {
+    user_turns(sessions, agent_config).into_iter().next()
 }
 
-fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
+fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<UserTurn<'a>> {
     let kind = if session.has_pending_permission_requests() {
         Some(UserTurnKind::Allow)
     } else if is_ask_user_question(session) {
@@ -88,19 +96,25 @@ fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
         session.status,
         SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
     ) {
-        session
-            .agent_status
-            .as_ref()
-            .and_then(|status| match status.kind {
-                AgentStatusKind::You => Some(UserTurnKind::You),
-                AgentStatusKind::Done | AgentStatusKind::Wait => None,
-            })
+        session.agent_status.as_ref().and_then(|status| {
+            match agent_config.status_state(&status.kind) {
+                AgentStatusState::User => Some(UserTurnKind::AgentStatus),
+                AgentStatusState::Waiting | AgentStatusState::Done => None,
+            }
+        })
     } else {
         None
     }?;
 
+    let label = match kind {
+        UserTurnKind::AgentStatus => session
+            .agent_status
+            .as_ref()
+            .map(|status| status.kind.as_str()),
+        _ => kind.label(),
+    };
     let note = match kind {
-        UserTurnKind::You => session
+        UserTurnKind::AgentStatus => session
             .agent_status
             .as_ref()
             .map(|status| status.note.as_str()),
@@ -112,6 +126,7 @@ fn user_turn(session: &Session) -> Option<UserTurn<'_>> {
     Some(UserTurn {
         session,
         kind,
+        label,
         note,
     })
 }
@@ -132,7 +147,7 @@ fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
     use std::path::PathBuf;
 
     use chrono::{DateTime, TimeZone, Utc};
@@ -140,6 +155,33 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
+    use crate::shared::config::AgentStatusConfig;
+
+    fn configured_statuses() -> AgentConfig {
+        AgentConfig {
+            statuses: HashMap::from([
+                (
+                    "needs_attention".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::User,
+                    },
+                ),
+                (
+                    "external_wait".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Waiting,
+                    },
+                ),
+                (
+                    "work_finished".to_string(),
+                    AgentStatusConfig {
+                        state: AgentStatusState::Done,
+                    },
+                ),
+            ]),
+            ..AgentConfig::default()
+        }
+    }
 
     fn session(session_id: &str, updated_at: DateTime<Utc>) -> Session {
         Session {
@@ -181,40 +223,44 @@ mod tests {
 
     #[test]
     fn user_turns_sort_by_kind_then_oldest_update() {
-        let mut newer_you = session("you-new", timestamp(30));
-        newer_you.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+        let agent_config = configured_statuses();
+        let mut newer_user_turn = session("user-new", timestamp(30));
+        newer_user_turn.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
             note: "review the proposal".to_string(),
         });
-        let mut older_you = session("you-old", timestamp(10));
-        older_you.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::You,
+        let mut older_user_turn = session("user-old", timestamp(10));
+        older_user_turn.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
             note: "review the proposal".to_string(),
         });
         let mut crit = session("crit", timestamp(40));
         crit.crit_urls
             .push("https://example.test/review".to_string());
         crit.pending_bg_task_ids.insert("review-task".to_string());
-        let mut done = session("done", timestamp(1));
+        let mut done = session("finished", timestamp(1));
         done.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Done,
+            kind: "work_finished".to_string(),
             note: "work is complete".to_string(),
         });
-        let mut waiting = session("wait", timestamp(2));
+        let mut waiting = session("external", timestamp(2));
         waiting.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Wait,
+            kind: "external_wait".to_string(),
             note: "waiting for a build".to_string(),
         });
 
         assert_eq!(
-            user_turns(&[newer_you, older_you, crit, done, waiting])
-                .into_iter()
-                .map(|turn| (turn.session.session_id.as_str(), turn.kind))
-                .collect::<Vec<_>>(),
+            user_turns(
+                &[newer_user_turn, older_user_turn, crit, done, waiting],
+                &agent_config,
+            )
+            .into_iter()
+            .map(|turn| (turn.session.session_id.as_str(), turn.kind))
+            .collect::<Vec<_>>(),
             vec![
                 ("crit", UserTurnKind::Crit),
-                ("you-old", UserTurnKind::You),
-                ("you-new", UserTurnKind::You),
+                ("user-old", UserTurnKind::AgentStatus),
+                ("user-new", UserTurnKind::AgentStatus),
             ]
         );
     }
@@ -256,28 +302,48 @@ mod tests {
         }
 
         assert_eq!(
-            next_user_turn(&[session]).map(|turn| turn.kind),
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
         );
     }
 
     #[rstest]
-    #[case::you(AgentStatusKind::You, Some(UserTurnKind::You))]
-    #[case::done(AgentStatusKind::Done, None)]
-    #[case::wait(AgentStatusKind::Wait, None)]
-    fn agent_status_kinds_map_to_user_turns(
-        #[case] kind: AgentStatusKind,
+    #[case::configured_user(
+        "needs_attention",
+        Some(AgentStatusState::User),
+        Some(UserTurnKind::AgentStatus),
+        Some("needs_attention")
+    )]
+    #[case::configured_waiting("external_wait", Some(AgentStatusState::Waiting), None, None)]
+    #[case::configured_done("work_finished", Some(AgentStatusState::Done), None, None)]
+    #[case::unknown_is_user(
+        "removed_name",
+        None,
+        Some(UserTurnKind::AgentStatus),
+        Some("removed_name")
+    )]
+    fn agent_status_names_map_to_user_turns(
+        #[case] kind: &str,
+        #[case] state: Option<AgentStatusState>,
         #[case] expected: Option<UserTurnKind>,
+        #[case] expected_label: Option<&str>,
     ) {
+        let mut agent_config = AgentConfig::default();
+        if let Some(state) = state {
+            agent_config
+                .statuses
+                .insert(kind.to_string(), AgentStatusConfig { state });
+        }
         let mut session = session("status", timestamp(1));
         session.agent_status = Some(AgentStatus {
-            kind,
+            kind: kind.to_string(),
             note: "describe the next step".to_string(),
         });
 
         assert_eq!(
-            next_user_turn(&[session]).map(|turn| (turn.kind, turn.note)),
-            expected.map(|kind| (kind, Some("describe the next step")))
+            next_user_turn(&[session], &agent_config)
+                .map(|turn| (turn.kind, turn.label, turn.note)),
+            expected.map(|kind| (kind, expected_label, Some("describe the next step")))
         );
     }
 
@@ -291,13 +357,16 @@ mod tests {
             .pending_bg_task_ids
             .insert("review-task".to_string());
 
-        assert_eq!(next_user_turn(&[session]).map(|turn| turn.kind), None);
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            None
+        );
     }
 
     #[test]
     fn external_failure_and_merge_items_use_the_shared_order() {
         let sessions = [
-            session("you", timestamp(1)),
+            session("status", timestamp(1)),
             session("merge", timestamp(2)),
             session("ask", timestamp(3)),
             session("allow", timestamp(4)),
@@ -308,37 +377,44 @@ mod tests {
         let mut turns = [
             UserTurn {
                 session: &sessions[0],
-                kind: UserTurnKind::You,
+                kind: UserTurnKind::AgentStatus,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[1],
                 kind: UserTurnKind::Merge,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[2],
                 kind: UserTurnKind::Ask,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[3],
                 kind: UserTurnKind::Allow,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[4],
                 kind: UserTurnKind::Body,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[5],
                 kind: UserTurnKind::Crit,
+                label: None,
                 note: None,
             },
             UserTurn {
                 session: &sessions[6],
                 kind: UserTurnKind::Failed,
+                label: None,
                 note: None,
             },
         ];
@@ -351,7 +427,7 @@ mod tests {
                 UserTurnKind::Failed,
                 UserTurnKind::Crit,
                 UserTurnKind::Body,
-                UserTurnKind::You,
+                UserTurnKind::AgentStatus,
                 UserTurnKind::Allow,
                 UserTurnKind::Ask,
                 UserTurnKind::Merge,

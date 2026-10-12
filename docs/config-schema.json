@@ -23,6 +23,7 @@
         },
         "default_engine": "claude",
         "merge_notification": null,
+        "statuses": {},
         "stop_hook_instruction": null,
         "work_types": {},
         "worktree": {
@@ -121,8 +122,16 @@
           ],
           "default": null
         },
+        "statuses": {
+          "description": "User-defined status names and the state each name represents.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AgentStatusConfig"
+          },
+          "default": {}
+        },
         "stop_hook_instruction": {
-          "description": "Instruction returned by the Stop hook when it blocks a session.\nWhen unset, the Stop hook does not block.",
+          "description": "Instruction returned by the Stop hook when it blocks a session.\nThe hook blocks only when this is set and at least one status is configured.",
           "type": [
             "string",
             "null"
@@ -159,6 +168,28 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentStatusConfig": {
+      "description": "Configuration for one user-defined agent status name.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/AgentStatusState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "AgentStatusState": {
+      "description": "Meaning assigned to a configured agent status name.",
+      "type": "string",
+      "enum": [
+        "user",
+        "waiting",
+        "done"
+      ]
     },
     "AgentWorkTypeColor": {
       "description": "A terminal color accepted for an agent work type.",

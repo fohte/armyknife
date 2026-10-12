@@ -6,12 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::commands::agent::types::Engine;
 use crate::commands::ai::review::reviewer::Reviewer;
 
+mod agent_status;
 mod codex;
 mod editor_focus;
 mod env_overlay;
 #[cfg(feature = "schema-gen")]
 mod schema;
 mod work_type;
+pub use agent_status::{AgentStatusConfig, AgentStatusState};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 #[cfg(feature = "schema-gen")]
@@ -125,7 +127,7 @@ pub struct AgentConfig {
     pub merge_notification: Option<String>,
 
     /// Instruction returned by the Stop hook when it blocks a session.
-    /// When unset, the Stop hook does not block.
+    /// The hook blocks only when this is set and at least one status is configured.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
 
@@ -136,6 +138,10 @@ pub struct AgentConfig {
     /// Display configuration for agent work types, keyed by skill name.
     #[serde(default)]
     pub work_types: HashMap<String, AgentWorkTypeConfig>,
+
+    /// User-defined status names and the state each name represents.
+    #[serde(default)]
+    pub statuses: HashMap<String, AgentStatusConfig>,
 
     /// Worktree settings used by `a agent` and worktree cleanup commands.
     #[serde(default)]
@@ -764,6 +770,7 @@ mod tests {
                         reasoning_effort: None,
                     },
                     work_types: HashMap::new(),
+                    statuses: HashMap::new(),
                     worktree: WorktreeConfig {
                         dir: ".worktrees".to_string(),
                         branch_prefix: "fohte/".to_string(),
