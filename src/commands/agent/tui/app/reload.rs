@@ -363,10 +363,12 @@ mod tests {
 
     #[test]
     fn test_selection_follows_session_across_status_change() {
-        let mut app = create_test_app(vec![
-            create_test_session("running-1"),
-            create_test_session("running-2"),
-        ]);
+        let running_1 = create_test_session("running-1");
+        let mut running_2 = create_test_session("running-2");
+        running_2
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        let mut app = create_test_app(vec![running_1, running_2]);
         app.select_by_number(2);
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),

@@ -5,14 +5,16 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
+use crate::commands::agent::user_turn::{UserTurn, user_turns};
 
 /// One row in the session list's selection/render order.
 ///
-/// Section headers are not individually selectable; only `Session` rows are
-/// (see [`SessionRow::session_id`]).
+/// Section headers are not individually selectable; both row variants carry
+/// a session ID (see [`SessionRow::session_id`]).
 #[derive(Debug)]
 pub(super) enum SessionRow<'a> {
     SectionHeader(SectionHeaderRow),
+    UserTurn(UserTurn<'a>),
     Session(SessionRowEntry<'a>),
 }
 
@@ -20,7 +22,7 @@ pub(super) enum SessionRow<'a> {
 pub(super) struct SectionHeaderRow {
     pub label: String,
     /// Which section this header represents, so the renderer can color it
-    /// consistently with that section's status (e.g. amber for NEEDS YOU).
+    /// consistently with that section's status (e.g. red for YOUR TURN).
     pub kind: Section,
 }
 
@@ -44,6 +46,7 @@ impl<'a> SessionRow<'a> {
     /// The session_id occupying this row, if it is individually selectable.
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
+            SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
             SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
             SessionRow::SectionHeader(_) => None,
         }
@@ -52,7 +55,8 @@ impl<'a> SessionRow<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
-    NeedsYou,
+    UserTurn,
+    Waiting,
     Running,
     Unread,
     Idle,
@@ -78,7 +82,7 @@ pub(super) struct SessionTask {
 
 fn section_of(session: &Session) -> Section {
     match session.display_status() {
-        DisplayStatus::WaitingInput => Section::NeedsYou,
+        DisplayStatus::WaitingInput => Section::Waiting,
         DisplayStatus::Running | DisplayStatus::Background => Section::Running,
         DisplayStatus::UnreadStopped => Section::Unread,
         _ => Section::Idle,
@@ -129,11 +133,10 @@ impl<'a> SessionLookup<'a> {
     }
 }
 
-/// Buckets `sessions` into the fixed 4-section status grouping: NEEDS YOU
-/// (waiting) -> RUNNING -> UNREAD (unread stopped) -> PAUSED/STOPPED, each
-/// omitted entirely (no header) when empty. Within a section, sessions keep
-/// the relative order of `sessions` (the caller is expected to pass them
-/// already time-sorted).
+/// Buckets `sessions` into YOUR TURN -> WAITING -> RUNNING -> UNREAD (unread
+/// stopped) -> PAUSED/STOPPED, omitting empty sections. YOUR TURN uses the
+/// shared priority order from `user_turns`; unclassified waiting sessions
+/// remain visible under WAITING. Other sections preserve the input order.
 ///
 /// `task_by_session` attaches each row's linked tq task (see [`SessionTask`])
 /// for the task-number column; a session absent from it gets `task: None`
@@ -144,34 +147,44 @@ pub(super) fn build_session_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
 ) -> Vec<SessionRow<'a>> {
+    let turns = user_turns(sessions.iter().copied());
     let lookup = SessionLookup::new(sessions);
-    build_status_section_rows(sessions, &lookup, task_by_session)
+    build_status_section_rows(sessions, &lookup, task_by_session, turns)
 }
 
 fn build_status_section_rows<'a>(
     sessions: &[&'a Session],
     lookup: &SessionLookup<'a>,
     task_by_session: &HashMap<String, SessionTask>,
+    turns: Vec<UserTurn<'a>>,
 ) -> Vec<SessionRow<'a>> {
-    let mut needs_you = Vec::new();
+    let user_turn_session_ids: HashSet<&str> = turns
+        .iter()
+        .map(|turn| turn.session.session_id.as_str())
+        .collect();
     let mut running = Vec::new();
     let mut unread = Vec::new();
     let mut idle = Vec::new();
+    let mut waiting = Vec::new();
     for &session in sessions {
+        if user_turn_session_ids.contains(session.session_id.as_str()) {
+            continue;
+        }
         match section_of(session) {
-            Section::NeedsYou => needs_you.push(session),
+            Section::UserTurn | Section::Waiting => waiting.push(session),
             Section::Running => running.push(session),
             Section::Unread => unread.push(session),
             Section::Idle => idle.push(session),
         }
     }
 
-    let mut rows = Vec::with_capacity(sessions.len() + 4);
+    let mut rows = Vec::with_capacity(sessions.len() + 6);
+    push_user_turns(&mut rows, turns);
     push_group(
         &mut rows,
-        "NEEDS YOU".to_string(),
-        Section::NeedsYou,
-        &needs_you,
+        format!("WAITING ({})", waiting.len()),
+        Section::Waiting,
+        &waiting,
         lookup,
         task_by_session,
     );
@@ -203,6 +216,18 @@ fn build_status_section_rows<'a>(
     );
 
     rows
+}
+
+fn push_user_turns<'a>(rows: &mut Vec<SessionRow<'a>>, turns: Vec<UserTurn<'a>>) {
+    if turns.is_empty() {
+        return;
+    }
+
+    rows.push(SessionRow::SectionHeader(SectionHeaderRow {
+        label: "YOUR TURN".to_string(),
+        kind: Section::UserTurn,
+    }));
+    rows.extend(turns.into_iter().map(SessionRow::UserTurn));
 }
 
 fn push_group<'a>(
@@ -376,6 +401,7 @@ pub(super) fn is_related_task(cursor: Option<&SessionTask>, other: Option<&Sessi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use chrono::Utc;
     use rstest::rstest;
     use std::path::PathBuf;
@@ -435,6 +461,11 @@ mod tests {
         Header {
             label: String,
         },
+        UserTurn {
+            id: String,
+            kind: String,
+            note: Option<String>,
+        },
         Session {
             id: String,
             breadcrumb: Option<String>,
@@ -447,6 +478,11 @@ mod tests {
             .map(|row| match row {
                 SessionRow::SectionHeader(header) => RowDescription::Header {
                     label: header.label.clone(),
+                },
+                SessionRow::UserTurn(turn) => RowDescription::UserTurn {
+                    id: turn.session.session_id.clone(),
+                    kind: turn.kind.label().to_string(),
+                    note: turn.note.map(String::from),
                 },
                 SessionRow::Session(entry) => RowDescription::Session {
                     id: entry.session.session_id.clone(),
@@ -465,7 +501,10 @@ mod tests {
 
     #[test]
     fn test_build_session_rows_one_session_per_section() {
-        let waiting = create_test_session("waiting", SessionStatus::WaitingInput);
+        let mut waiting = create_test_session("waiting", SessionStatus::WaitingInput);
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
         let running = create_test_session("running", SessionStatus::Running);
         let mut unread = create_test_session("unread", SessionStatus::Stopped);
         unread.read_at = None;
@@ -478,12 +517,12 @@ mod tests {
             describe(&rows),
             vec![
                 RowDescription::Header {
-                    label: "NEEDS YOU".to_string(),
+                    label: "YOUR TURN".to_string(),
                 },
-                RowDescription::Session {
+                RowDescription::UserTurn {
                     id: "waiting".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
+                    kind: "crit".to_string(),
+                    note: None,
                 },
                 RowDescription::Header {
                     label: "RUNNING (1)".to_string(),
@@ -514,6 +553,59 @@ mod tests {
     }
 
     #[test]
+    fn test_build_session_rows_sorts_user_turns_and_keeps_unknown_waits_visible() {
+        let mut close = create_test_session("close", SessionStatus::Paused);
+        close.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Close,
+            note: "close the PR".to_string(),
+        });
+        let mut decide = create_test_session("decide", SessionStatus::Stopped);
+        decide.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: "choose an option".to_string(),
+        });
+        let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
+        crit.crit_urls
+            .push("https://example.com/review".to_string());
+        let unknown_wait = create_test_session("unknown", SessionStatus::WaitingInput);
+        let sessions: Vec<&Session> = vec![&close, &unknown_wait, &decide, &crit];
+
+        let rows = build_session_rows(&sessions, &HashMap::new());
+
+        assert_eq!(
+            describe(&rows),
+            vec![
+                RowDescription::Header {
+                    label: "YOUR TURN".to_string(),
+                },
+                RowDescription::UserTurn {
+                    id: "crit".to_string(),
+                    kind: "crit".to_string(),
+                    note: None,
+                },
+                RowDescription::UserTurn {
+                    id: "decide".to_string(),
+                    kind: "decide".to_string(),
+                    note: Some("choose an option".to_string()),
+                },
+                RowDescription::UserTurn {
+                    id: "close".to_string(),
+                    kind: "close".to_string(),
+                    note: Some("close the PR".to_string()),
+                },
+                RowDescription::Header {
+                    label: "WAITING (1)".to_string(),
+                },
+                RowDescription::Session {
+                    id: "unknown".to_string(),
+                    breadcrumb: None,
+                    descendant_count: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn test_section_of_stopped_with_pending_bg_task_is_running() {
         // `display_status()` reports `Background` for a Stopped session with
         // a pending bg task and no crit link, and Background groups with
@@ -531,7 +623,7 @@ mod tests {
             .pending_human_review_ids
             .insert("review-id".to_string());
 
-        assert_eq!(section_of(&session), Section::NeedsYou);
+        assert_eq!(section_of(&session), Section::Waiting);
     }
 
     #[test]
@@ -741,7 +833,10 @@ mod tests {
         let paused = create_test_session("paused", SessionStatus::Paused);
         let unread = create_test_session("unread", SessionStatus::Stopped);
         let running = create_test_session("running", SessionStatus::Running);
-        let waiting = create_test_session("waiting", SessionStatus::WaitingInput);
+        let mut waiting = create_test_session("waiting", SessionStatus::WaitingInput);
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
 
         // Deliberately out of the fixed section order.
         let sessions: Vec<&Session> = vec![&paused, &unread, &running, &waiting];
@@ -780,7 +875,7 @@ mod tests {
 
         let task = rows.iter().find_map(|r| match r {
             SessionRow::Session(entry) => Some(entry.task.clone()),
-            SessionRow::SectionHeader(_) => None,
+            SessionRow::SectionHeader(_) | SessionRow::UserTurn(_) => None,
         });
         assert_eq!(task, Some(expected));
     }

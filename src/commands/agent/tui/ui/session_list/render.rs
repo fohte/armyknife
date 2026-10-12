@@ -11,13 +11,12 @@ use crate::commands::agent::tui::app::{App, AppMode};
 use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows};
 
 use super::super::helpers::DIM_FG;
-use super::items::{build_header_item, build_session_item};
-/// Renders the session list, grouped into fixed status sections (NEEDS YOU /
-/// RUNNING / UNREAD / PAUSED-STOPPED), each session as one row (two for
-/// `WaitingInput`), with fixed-width columns so the time column aligns
-/// vertically across every row regardless of section. A session linked to a
-/// tq task (`app.task_by_session`) gets a fixed-width task-number column,
-/// dimmed unless its task is related to the cursor row's task (see
+use super::items::{build_header_item, build_session_item, build_user_turn_item};
+/// Renders YOUR TURN first, followed by WAITING and the fixed status sections
+/// (RUNNING / UNREAD / PAUSED-STOPPED). YOUR TURN rows use the priority shared
+/// with tmux status; remaining sessions keep their status rows. A session
+/// linked to a tq task (`app.task_by_session`) gets a fixed-width task-number
+/// column, dimmed unless its task is related to the cursor row's task (see
 /// [`crate::commands::agent::tui::session_rows::is_related_task`]).
 pub(in crate::commands::agent::tui::ui) fn render_session_list(
     frame: &mut Frame,
@@ -76,6 +75,13 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
+            SessionRow::UserTurn(turn) => build_user_turn_item(
+                turn,
+                app,
+                now,
+                term_width,
+                linked_session_ids.contains(&turn.session.session_id),
+            ),
             SessionRow::Session(entry) => build_session_item(
                 entry,
                 app,
@@ -121,6 +127,7 @@ mod tests {
         render_to_string_with, render_to_string_with_agent_config,
     };
     use crate::commands::agent::types::SessionStatus;
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
     use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
@@ -167,19 +174,17 @@ mod tests {
     fn test_repo_column_is_always_dim() {
         let now = Utc::now();
 
-        let mut waiting = create_test_session("waiting");
-        waiting.status = SessionStatus::WaitingInput;
-        let mut running = create_test_session("running");
-        running.status = SessionStatus::Running;
+        let mut first = create_test_session("first");
+        first.status = SessionStatus::Running;
+        let mut second = create_test_session("second");
+        second.status = SessionStatus::Running;
 
-        let sessions = vec![waiting, running];
+        let sessions = vec![first, second];
         let buffer = render_buffer(&sessions, Some(2), now, 80, 12);
 
-        // Row 2 is "waiting"'s row, row 6 is "running"'s row (accounting
-        // for the question line and blank separator in between). Column 3
-        // is the first character of the repo column for either row.
+        // Column 3 is the first character of the repo column for both rows.
         assert_eq!(buffer[(3, 2)].fg, DIM_FG);
-        assert_eq!(buffer[(3, 6)].fg, DIM_FG);
+        assert_eq!(buffer[(3, 3)].fg, DIM_FG);
     }
 
     #[test]
@@ -235,15 +240,17 @@ mod tests {
     }
 
     #[test]
-    fn test_render_wide_work_type_icon_keeps_title_and_question_aligned() {
+    fn test_render_user_turn_row_is_independent_of_work_type_icon_width() {
         let now = Utc::now();
 
         let mut waiting = create_test_session("wide");
         waiting.updated_at = now;
         waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
         waiting.work_type = Some("wide-skill".to_string());
         waiting.label = Some("Wide".to_string());
-        waiting.current_tool = Some("Choose".to_string());
 
         let mut unknown = create_test_session("unknown");
         unknown.updated_at = now;
@@ -266,12 +273,12 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project               界  Wide                                        just now
-                                        “Choose”
+             ── YOUR TURN ──────────────────────────────────────────────────────────────────
+            >◐  crit    Wide                                                        just now
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
              ● project                  Blank                                       just now
+
 
 
 
@@ -502,50 +509,26 @@ mod tests {
     }
 
     #[test]
-    fn test_render_needs_you_section_shows_question_line() {
+    fn test_render_your_turn_row_shows_label_note_name_and_wait_time() {
         let now = Utc::now();
 
         let mut session = create_test_session("s1");
-        session.updated_at = now;
-        session.status = SessionStatus::WaitingInput;
-        session.current_tool = Some("Which approach do you prefer?".to_string());
+        session.updated_at = now - chrono::Duration::minutes(48);
+        session.status = SessionStatus::Stopped;
+        session.label = Some("session-name".to_string());
+        session.agent_status = Some(AgentStatus {
+            kind: AgentStatusKind::Decide,
+            note: "choose an option".to_string(),
+        });
 
         let sessions = vec![session];
         let output = render_to_string(&sessions, Some(1), now, 80, 10);
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 0 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project                 project                                      just now
-                                       “Which approach do you prefer?”
+             ── YOUR TURN ──────────────────────────────────────────────────────────────────
+            >◐  decide  choose an option session-name                                    48m
 
-
-
-
-
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
-
-        assert_eq!(output, expected);
-    }
-
-    #[test]
-    fn test_render_waiting_session_with_no_question_shows_empty_quotes() {
-        let now = Utc::now();
-
-        let mut session = create_test_session("s1");
-        session.updated_at = now;
-        session.status = SessionStatus::WaitingInput;
-        session.current_tool = None;
-        session.last_message = None;
-
-        let sessions = vec![session];
-        let output = render_to_string(&sessions, Some(1), now, 80, 10);
-
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 0 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project                 project                                      just now
-                                       “”
 
 
 
@@ -603,20 +586,19 @@ mod tests {
         let mut child = create_test_session("child");
         child.updated_at = now - chrono::Duration::minutes(2);
         child.ancestor_session_ids = vec!["parent".to_string()];
-        child.status = SessionStatus::WaitingInput;
-        child.current_tool = Some("Pick one".to_string());
+        child.status = SessionStatus::Paused;
 
         let sessions = vec![parent, child];
-        let output = render_to_string(&sessions, Some(1), now, 80, 12);
+        let output = render_to_string(&sessions, Some(3), now, 80, 12);
 
         let expected = indoc! {"
-             agent watch                                    1 needs you · 1 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-            >◐ project                 project › project                                  2m
-                                       “Pick one”
-
+             agent watch                                    0 needs you · 1 running · 1 idle
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
              ● project                 project ▸1                                   just now
+
+             ── PAUSED (1) ─────────────────────────────────────────────────────────────────
+            >⏸ project                 project › project                                  2m
+
 
 
 
@@ -640,7 +622,9 @@ mod tests {
         let mut waiting = create_test_session("waiting");
         waiting.updated_at = now;
         waiting.status = SessionStatus::WaitingInput;
-        waiting.current_tool = Some("Pick one".to_string());
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
 
         let mut running = create_test_session("running");
         running.updated_at = now;
@@ -660,12 +644,12 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project                 project                                      just now
-                                       “Pick one”
+             ── YOUR TURN ──────────────────────────────────────────────────────────────────
+             ◐  crit    project                                                     just now
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >● project                 project                                      just now
+
 
 
 
@@ -703,9 +687,8 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 2 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project                 project                                      just now
-                                       “Pick one”
+             ── YOUR TURN ──────────────────────────────────────────────────────────────────
+             ◐  crit    project                                                     just now
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
              ● project                 project                                      just now
@@ -715,6 +698,7 @@ mod tests {
 
              ── PAUSED (1) ─────────────────────────────────────────────────────────────────
             >⏸ project                 project                                      just now
+
 
 
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
@@ -736,12 +720,12 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                    1 needs you · 1 running · 0 idle
-             ── NEEDS YOU ──────────────────────────────────────────────────────────────────
-             ◐ project                 project                                      just now
-                                       “Pick one”
+             ── YOUR TURN ──────────────────────────────────────────────────────────────────
+             ◐  crit    project                                                     just now
 
              ── RUNNING (1) ────────────────────────────────────────────────────────────────
             >● project                 project                                      just now
+
 
 
 

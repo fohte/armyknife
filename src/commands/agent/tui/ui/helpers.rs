@@ -81,20 +81,19 @@ pub(super) fn status_color(status: DisplayStatus) -> Color {
     }
 }
 
-/// Counts sessions by status. `Background` folds into `running`: it means
-/// the main loop is idle but a task is still in flight, which reads as
-/// "running" from the user's perspective -- the same grouping `section_of`
-/// uses to place these sessions in the RUNNING section.
-pub(super) fn count_statuses(sessions: &[Session]) -> (usize, usize, usize, usize) {
+/// Counts running and idle sessions for the header. `Background` folds into
+/// `running`; WaitingInput sessions do not contribute to either count.
+pub(super) fn count_statuses<'a>(
+    sessions: impl IntoIterator<Item = &'a Session>,
+) -> (usize, usize, usize) {
     let mut running = 0;
-    let mut waiting = 0;
     let mut stopped = 0;
     let mut paused = 0;
 
     for session in sessions {
         match session.display_status() {
             DisplayStatus::Running | DisplayStatus::Background => running += 1,
-            DisplayStatus::WaitingInput => waiting += 1,
+            DisplayStatus::WaitingInput => {}
             DisplayStatus::Paused => paused += 1,
             DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
                 stopped += 1
@@ -102,7 +101,7 @@ pub(super) fn count_statuses(sessions: &[Session]) -> (usize, usize, usize, usiz
         }
     }
 
-    (running, waiting, stopped, paused)
+    (running, stopped, paused)
 }
 
 /// Gets the title display name for a session without external file I/O.
@@ -304,11 +303,7 @@ mod tests {
             },
         ];
 
-        let (running, waiting, stopped, paused) = count_statuses(&sessions);
-        assert_eq!(running, 2);
-        assert_eq!(waiting, 1);
-        assert_eq!(stopped, 1);
-        assert_eq!(paused, 0);
+        assert_eq!(count_statuses(&sessions), (2, 1, 0));
     }
 
     #[test]
@@ -317,19 +312,7 @@ mod tests {
         background.status = SessionStatus::Stopped;
         background.pending_bg_task_ids.insert("bg-1".to_string());
 
-        assert_eq!(count_statuses(&[background]), (1, 0, 0, 0));
-    }
-
-    #[test]
-    fn test_count_statuses_human_review_wait_counts_as_waiting() {
-        let mut review = create_test_session("review");
-        review.status = SessionStatus::Stopped;
-        review.pending_bg_task_ids.insert("task-1".to_string());
-        review
-            .pending_human_review_ids
-            .insert("review-id".to_string());
-
-        assert_eq!(count_statuses(&[review]), (0, 1, 0, 0));
+        assert_eq!(count_statuses(&[background]), (1, 0, 0));
     }
 
     #[test]
@@ -352,11 +335,7 @@ mod tests {
             },
         ];
 
-        let (running, waiting, stopped, paused) = count_statuses(&sessions);
-        assert_eq!(running, 1);
-        assert_eq!(waiting, 0);
-        assert_eq!(stopped, 0);
-        assert_eq!(paused, 2);
+        assert_eq!(count_statuses(&sessions), (1, 0, 2));
     }
 
     #[test]
