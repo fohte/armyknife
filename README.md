@@ -180,7 +180,7 @@ Manage PR body drafts with human-in-the-loop review.
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `new`    | Create a new PR body draft file                                                                                                                                                                                    |
 | `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `submit` | Create or update a PR from the approved draft and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                                                                    |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                 |
 
 `new` options:
 
@@ -193,11 +193,11 @@ Manage PR body drafts with human-in-the-loop review.
 
 `submit` options:
 
-| Option         | Description                                              |
-| -------------- | -------------------------------------------------------- |
-| `--base <ref>` | Base branch for the PR                                   |
-| `--draft`      | Create as draft PR                                       |
-| `--no-review`  | Skip approval verification (available only in vibe mode) |
+| Option         | Description                                                                   |
+| -------------- | ----------------------------------------------------------------------------- |
+| `--base <ref>` | Base branch for the PR                                                        |
+| `--draft`      | Create as draft PR                                                            |
+| `--no-review`  | Skip approval verification (requires vibe mode, enabled by `a agent vibe on`) |
 
 #### `a ai review`
 
@@ -388,7 +388,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
-Vibe mode is an opt-in marker recorded by armyknife; it does not change other armyknife behavior by itself. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+Vibe mode is an opt-in marker recorded by armyknife. It enables `--no-review` for `a ai pr-draft submit`; otherwise it does not change other armyknife behavior by itself. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then

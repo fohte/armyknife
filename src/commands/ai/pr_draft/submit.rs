@@ -42,29 +42,12 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
-    )
-    .await
-}
-
-async fn run_impl(
-    args: &SubmitArgs,
-    gh_client: &(impl PrClient + RepoClient),
-    run_hook: HookRunner<'_>,
-    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
-    current_repo_identity: impl FnOnce() -> Option<(String, String)>,
-) -> anyhow::Result<()> {
-    run_impl_with_vibe(
-        args,
-        gh_client,
-        run_hook,
-        write_config,
-        current_repo_identity,
         crate::commands::agent::is_vibe_enabled,
     )
     .await
 }
 
-async fn run_impl_with_vibe(
+async fn run_impl(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
     run_hook: HookRunner<'_>,
@@ -260,6 +243,10 @@ mod tests {
         None
     }
 
+    fn no_vibe() -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
     /// Captures every hook invocation so tests can assert on hook name, env,
     /// and the contents of any temp file referenced by env. The body file is
     /// read **inside** the hook closure because `run_pr_hook` deletes the
@@ -453,12 +440,11 @@ mod tests {
             Ok(())
         };
         let client = env.mock.client();
-        let result =
-            run_impl_with_vibe(&args, &client, &hook, noop_config, no_current_repo, || {
-                Ok(vibe_enabled)
-            })
-            .await
-            .map_err(|error| error.to_string());
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, || {
+            Ok(vibe_enabled)
+        })
+        .await
+        .map_err(|error| error.to_string());
         let hook_names = spy
             .calls()
             .into_iter()
@@ -492,7 +478,15 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert!(
             result.is_ok(),
@@ -520,7 +514,15 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert!(
             result.is_ok(),
@@ -563,7 +565,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl_with_vibe(
+        let result = run_impl(
             &args,
             &client,
             &noop_hook,
@@ -618,7 +620,15 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &noop_hook, noop_config, no_current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            no_vibe,
+        )
+        .await;
 
         let err = result.expect_err("submit should fail with empty title");
         assert!(matches!(
@@ -686,7 +696,15 @@ mod tests {
             Ok(())
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -720,7 +738,15 @@ mod tests {
             anyhow::bail!("git config is unavailable")
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, current_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            current_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -754,7 +780,15 @@ mod tests {
             Ok(())
         };
         let unrelated_repo = || Some(("other-owner".to_string(), "other-repo".to_string()));
-        let result = run_impl(&args, &client, &noop_hook, write_config, unrelated_repo).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            write_config,
+            unrelated_repo,
+            no_vibe,
+        )
+        .await;
 
         assert_eq!(
             result
@@ -815,7 +849,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo).await;
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -878,7 +912,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo).await;
+        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -907,7 +941,7 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let err = run_impl(&args, &client, &hook, noop_config, no_current_repo)
+        let err = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe)
             .await
             .expect_err("hook failure must abort submission");
         assert_eq!(err.to_string(), "forbidden cross-org link");
