@@ -217,6 +217,25 @@ fn process_hook_event_impl(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
+    let stop_hook_instruction = (event == HookEvent::Stop)
+        .then(config::load_config_or_default)
+        .and_then(|config| config.agent.stop_hook_instruction);
+    process_hook_event_impl_with_instruction(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction.as_deref(),
+    )
+}
+
+fn process_hook_event_impl_with_instruction(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
     // Claude's SessionEnd confirms termination; Codex's hook does not because
@@ -505,7 +524,13 @@ fn process_hook_event_impl(
 
     let stop_block_reason = (event == HookEvent::Stop)
         .then(|| {
-            stop::block_reason_for_hook(&input, &session, was_waiting_for_input, was_asking_user)
+            stop::block_reason_for_hook(
+                &input,
+                &session,
+                was_waiting_for_input,
+                was_asking_user,
+                stop_hook_instruction,
+            )
         })
         .flatten();
     if stop_block_reason.is_some() {
@@ -2279,18 +2304,18 @@ mod tests {
     )]
     // Stop overwrites both sets wholesale from the registry's current view --
     // an id no longer present in background_tasks is dropped, not merged
-    // with whatever was pending before. With no remaining reason to stop,
-    // the session stays Running until the agent reports its status.
+    // with whatever was pending before. Without a configured instruction,
+    // the Stop hook lets the session transition to Stopped.
     #[case::stale_ids_are_dropped(
         &["stale-bg"], &["stale-agent"],
         r#","background_tasks":[]"#,
-        &[], &[], SessionStatus::Running,
+        &[], &[], SessionStatus::Stopped,
     )]
     // Claude Code older than v2.1.145 omits the field entirely; it
     // deserializes to an empty vec and both sets fall back to "nothing
     // pending".
     #[case::missing_field_falls_back_to_empty(
-        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Running,
+        &["stale-bg"], &["stale-agent"], "", &[], &[], SessionStatus::Stopped,
     )]
     fn stop_refreshes_pending_task_ids_from_background_tasks(
         #[case] initial_bg: &[&str],
@@ -2313,8 +2338,14 @@ mod tests {
             format!(r#"{{"session_id":"task-sess","cwd":"/tmp/test"{background_tasks_json}}}"#);
         let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            None,
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "task-sess")
             .expect("load")
@@ -2545,9 +2576,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_background_tasks_field("", &[], SessionStatus::Running)]
+    #[case::no_background_tasks_field("", &[], SessionStatus::Stopped)]
     // `background_tasks` present but agent-x's subagent already finished.
-    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Running)]
+    #[case::empty_background_tasks_array(r#","background_tasks":[]"#, &[], SessionStatus::Stopped)]
     // A different subagent (agent-y) is still live; agent-x's stale key is
     // still dropped. The session still transitions to Stopped: `status`
     // reflects the main loop going idle, not agent-y's still-pending task
@@ -2574,8 +2605,14 @@ mod tests {
         );
         let input: HookInput = serde_json::from_str(&payload).expect("valid JSON");
 
-        process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-            .expect("hook should succeed");
+        process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            None,
+        )
+        .expect("hook should succeed");
 
         let reloaded = store::load_session_from(sessions_dir, "stale-perm-sess")
             .expect("load")
@@ -2754,17 +2791,21 @@ mod tests {
         Paused,
     }
 
+    const TEST_STOP_HOOK_INSTRUCTION: &str = "Please summarize the result before stopping.";
+
     #[rstest]
-    #[case::unknown(StopReason::Unknown, true)]
-    #[case::status_set(StopReason::StatusSet, false)]
-    #[case::background_task(StopReason::BackgroundTask, false)]
-    #[case::session_cron(StopReason::SessionCron, false)]
-    #[case::permission_prompt(StopReason::PermissionPrompt, false)]
-    #[case::ask_user_question(StopReason::AskUserQuestion, false)]
-    #[case::stop_hook_active(StopReason::StopHookActive, false)]
-    #[case::paused(StopReason::Paused, false)]
-    fn stop_requires_status_only_when_reason_is_unknown(
+    #[case::unknown_with_instruction(StopReason::Unknown, true, true)]
+    #[case::unknown_without_instruction(StopReason::Unknown, false, false)]
+    #[case::status_set(StopReason::StatusSet, false, false)]
+    #[case::background_task(StopReason::BackgroundTask, false, false)]
+    #[case::session_cron(StopReason::SessionCron, false, false)]
+    #[case::permission_prompt(StopReason::PermissionPrompt, false, false)]
+    #[case::ask_user_question(StopReason::AskUserQuestion, false, false)]
+    #[case::stop_hook_active(StopReason::StopHookActive, false, false)]
+    #[case::paused(StopReason::Paused, false, false)]
+    fn stop_blocking_requires_an_instruction_and_an_unknown_reason(
         #[case] reason: StopReason,
+        #[case] has_instruction: bool,
         #[case] blocked: bool,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
@@ -2815,16 +2856,18 @@ mod tests {
             StopReason::Paused => session.status = SessionStatus::Paused,
         });
 
-        let result =
-            process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &SideEffects::none())
-                .expect("stop hook should succeed");
+        let instruction = has_instruction.then_some(TEST_STOP_HOOK_INSTRUCTION);
+        let result = process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+            instruction,
+        )
+        .expect("stop hook should succeed");
 
         let expected = if blocked {
-            ProcessResult::StopBlocked(
-                stop::block_reason(stop::StopConditions::default())
-                    .expect("unknown stop should require a status")
-                    .to_string(),
-            )
+            ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string())
         } else {
             ProcessResult::SessionSaved
         };
@@ -2863,7 +2906,15 @@ mod tests {
                 ("ARMYKNIFE_NOTIFICATION__ENABLED", Some("true")),
                 ("ARMYKNIFE_AGENT__AUTO_COMPACT__ENABLED", Some("true")),
             ],
-            || process_hook_event_impl(HookEvent::Stop, input, sessions_dir, &side_effects),
+            || {
+                process_hook_event_impl_with_instruction(
+                    HookEvent::Stop,
+                    input,
+                    sessions_dir,
+                    &side_effects,
+                    Some(TEST_STOP_HOOK_INSTRUCTION),
+                )
+            },
         )
         .expect("stop hook should succeed");
         let saved_session = store::load_session_from(sessions_dir, "test-123")
@@ -2893,11 +2944,7 @@ mod tests {
         assert_eq!(
             recorded,
             (
-                ProcessResult::StopBlocked(
-                    stop::block_reason(stop::StopConditions::default())
-                        .expect("unknown stop should require a status")
-                        .to_string(),
-                ),
+                ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
                 SessionStatus::Running,
                 vec![(
                     None,

@@ -124,6 +124,11 @@ pub struct AgentConfig {
     #[serde(default)]
     pub merge_notification: Option<String>,
 
+    /// Instruction returned by the Stop hook when it blocks a session.
+    /// When unset, the Stop hook does not block.
+    #[serde(default)]
+    pub stop_hook_instruction: Option<String>,
+
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]
     pub codex: CodexConfig,
@@ -753,6 +758,7 @@ mod tests {
                 agent: AgentConfig {
                     default_engine: Engine::Claude,
                     merge_notification: None,
+                    stop_hook_instruction: None,
                     codex: CodexConfig {
                         model: None,
                         reasoning_effort: None,
@@ -876,6 +882,25 @@ mod tests {
                     Branch {branch} merged: {pr_url}
                 "}
                     .to_string()
+                ),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_agent_stop_hook_instruction_yaml() {
+        let yaml = indoc! {"
+            agent:
+              stop_hook_instruction: Please summarize the result before stopping.
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent,
+            AgentConfig {
+                stop_hook_instruction: Some(
+                    "Please summarize the result before stopping.".to_string()
                 ),
                 ..Default::default()
             }
@@ -1745,6 +1770,21 @@ mod tests {
                 "description": indoc! {"
                     Message template sent to the delegator when a delegated branch's PR merges.
                     Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent."},
+                "type": ["string", "null"],
+                "default": null,
+            })
+        );
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_contains_stop_hook_instruction_description(schema_value: serde_json::Value) {
+        assert_eq!(
+            schema_value["$defs"]["AgentConfig"]["properties"]["stop_hook_instruction"],
+            serde_json::json!({
+                "description": indoc! {"
+                    Instruction returned by the Stop hook when it blocks a session.
+                    When unset, the Stop hook does not block."},
                 "type": ["string", "null"],
                 "default": null,
             })

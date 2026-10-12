@@ -5,19 +5,6 @@ use serde_json::{Value, json};
 
 use super::super::types::{Engine, HookEvent, HookInput, Session, SessionStatus};
 
-const STATUS_INSTRUCTION: &str = indoc::indoc! {"
-    Set your status with `a agent status set <kind> <note>` before stopping.
-    Write a one-line note describing what you need or what is complete.
-    The first five kinds mean it is the user's turn; `done` and `wait` do not:
-    - `decide`: Ask the user to choose between options or set a direction.
-    - `read`: Answer the user's question and finish.
-    - `do`: Wait for the user to perform a manual action, such as verification or registration.
-    - `idle`: Wait for the user's next instruction.
-    - `close`: Only closing remains; it is not urgent.
-    - `done`: Report completion to the parent agent.
-    - `wait`: Wait for another session, CI, or other external work to finish.
-"};
-
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct StopConditions {
     pub stop_hook_active: bool,
@@ -28,7 +15,7 @@ pub(super) struct StopConditions {
     pub paused: bool,
 }
 
-pub(super) fn block_reason(conditions: StopConditions) -> Option<&'static str> {
+pub(super) fn block_reason(conditions: StopConditions, instruction: Option<&str>) -> Option<&str> {
     if conditions.stop_hook_active
         || conditions.has_agent_status
         || conditions.has_pending_work
@@ -38,26 +25,30 @@ pub(super) fn block_reason(conditions: StopConditions) -> Option<&'static str> {
     {
         None
     } else {
-        Some(STATUS_INSTRUCTION)
+        instruction
     }
 }
 
-pub(super) fn block_reason_for_hook(
+pub(super) fn block_reason_for_hook<'a>(
     input: &HookInput,
     session: &Session,
     was_waiting_for_input: bool,
     was_asking_user: bool,
-) -> Option<&'static str> {
-    block_reason(StopConditions {
-        stop_hook_active: input.stop_hook_active,
-        has_agent_status: session.agent_status.is_some(),
-        has_pending_work: session.has_pending_bg_tasks()
-            || !input.background_tasks.is_empty()
-            || !input.session_crons.is_empty(),
-        permission_pending: was_waiting_for_input || session.has_pending_permission_requests(),
-        asking_user: was_asking_user,
-        paused: session.status == SessionStatus::Paused,
-    })
+    instruction: Option<&'a str>,
+) -> Option<&'a str> {
+    block_reason(
+        StopConditions {
+            stop_hook_active: input.stop_hook_active,
+            has_agent_status: session.agent_status.is_some(),
+            has_pending_work: session.has_pending_bg_tasks()
+                || !input.background_tasks.is_empty()
+                || !input.session_crons.is_empty(),
+            permission_pending: was_waiting_for_input || session.has_pending_permission_requests(),
+            asking_user: was_asking_user,
+            paused: session.status == SessionStatus::Paused,
+        },
+        instruction,
+    )
 }
 
 pub(super) fn write_response(
@@ -94,8 +85,9 @@ fn response_value(engine: Engine, block_reason: Option<&str>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indoc::indoc;
     use rstest::rstest;
+
+    const TEST_INSTRUCTION: &str = "Please summarize the result before stopping.";
 
     #[derive(Debug, Clone, Copy)]
     enum KnownStopReason {
@@ -125,26 +117,20 @@ mod tests {
             KnownStopReason::Paused => conditions.paused = true,
         }
 
-        assert_eq!(block_reason(conditions), None);
+        assert_eq!(block_reason(conditions, Some(TEST_INSTRUCTION)), None);
     }
 
     #[test]
-    fn unknown_stop_requires_status_with_all_kind_meanings() {
+    fn unknown_stop_uses_the_configured_instruction() {
         assert_eq!(
-            block_reason(StopConditions::default()),
-            Some(indoc! {"
-                Set your status with `a agent status set <kind> <note>` before stopping.
-                Write a one-line note describing what you need or what is complete.
-                The first five kinds mean it is the user's turn; `done` and `wait` do not:
-                - `decide`: Ask the user to choose between options or set a direction.
-                - `read`: Answer the user's question and finish.
-                - `do`: Wait for the user to perform a manual action, such as verification or registration.
-                - `idle`: Wait for the user's next instruction.
-                - `close`: Only closing remains; it is not urgent.
-                - `done`: Report completion to the parent agent.
-                - `wait`: Wait for another session, CI, or other external work to finish.
-            "})
+            block_reason(StopConditions::default(), Some(TEST_INSTRUCTION)),
+            Some(TEST_INSTRUCTION)
         );
+    }
+
+    #[test]
+    fn unknown_stop_does_not_block_without_an_instruction() {
+        assert_eq!(block_reason(StopConditions::default(), None), None);
     }
 
     #[rstest]
@@ -152,17 +138,12 @@ mod tests {
     #[case::codex(Engine::Codex)]
     fn stop_block_writes_the_complete_response(#[case] engine: Engine) {
         let mut output = Vec::new();
-        write_response(
-            engine,
-            HookEvent::Stop,
-            Some(STATUS_INSTRUCTION),
-            &mut output,
-        )
-        .expect("response should write");
+        write_response(engine, HookEvent::Stop, Some(TEST_INSTRUCTION), &mut output)
+            .expect("response should write");
 
         let mut expected = serde_json::to_vec(&json!({
             "decision": "block",
-            "reason": STATUS_INSTRUCTION,
+            "reason": TEST_INSTRUCTION,
         }))
         .expect("expected response should serialize");
         expected.push(b'\n');
