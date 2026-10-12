@@ -114,3 +114,15 @@ if grep -oE 'https?://github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+' \
   exit 1
 fi
 ```
+
+## `pre-pr-merge`
+
+Runs after the pull request is confirmed open and safe, and before armyknife waits for required checks. A non-zero exit aborts the merge.
+
+| Variable                | Description                        |
+| ----------------------- | ---------------------------------- |
+| `ARMYKNIFE_PR_NUMBER`   | Pull request number                |
+| `ARMYKNIFE_PR_OWNER`    | Target repository owner            |
+| `ARMYKNIFE_PR_REPO`     | Target repository name             |
+| `ARMYKNIFE_PR_URL`      | Pull request URL                   |
+| `ARMYKNIFE_PR_HEAD_SHA` | Head commit SHA confirmed at start |

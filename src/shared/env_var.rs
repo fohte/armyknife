@@ -25,6 +25,8 @@ const PR_HEAD: &str = "ARMYKNIFE_PR_HEAD";
 const PR_BASE: &str = "ARMYKNIFE_PR_BASE";
 const PR_NUMBER: &str = "ARMYKNIFE_PR_NUMBER";
 const PR_IS_UPDATE: &str = "ARMYKNIFE_PR_IS_UPDATE";
+const PR_URL: &str = "ARMYKNIFE_PR_URL";
+const PR_HEAD_SHA: &str = "ARMYKNIFE_PR_HEAD_SHA";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
 pub struct EnvVars {
@@ -188,6 +190,16 @@ impl EnvVars {
     /// Returns the env var name for PR_IS_UPDATE ("1" when updating, "0" when creating).
     pub fn pr_is_update_name() -> &'static str {
         PR_IS_UPDATE
+    }
+
+    /// Returns the env var name for the URL of a pull request.
+    pub fn pr_url_name() -> &'static str {
+        PR_URL
+    }
+
+    /// Returns the env var name for the pull request head commit SHA.
+    pub fn pr_head_sha_name() -> &'static str {
+        PR_HEAD_SHA
     }
 }
 

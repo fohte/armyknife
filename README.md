@@ -352,6 +352,18 @@ a gh pr-review reply review <pr-number> [options]
 | ------------------- | ------------------------------ |
 | `-R, --repo <REPO>` | Target repository (owner/repo) |
 
+#### `a gh pr-merge`
+
+Safely squash-merge a pull request after running the optional `pre-pr-merge` hook and waiting for required checks. Inside an agent session, merging is allowed only when vibe mode is enabled.
+
+```sh
+a gh pr-merge <pr-number> [options]
+```
+
+| Option              | Description                    |
+| ------------------- | ------------------------------ |
+| `-R, --repo <repo>` | Target repository (owner/repo) |
+
 ### `a agent`
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
