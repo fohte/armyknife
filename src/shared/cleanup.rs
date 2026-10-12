@@ -379,6 +379,7 @@ mod tests {
             label: None,
             work_type: None,
             work_type_pinned: false,
+            vibe_enabled: false,
             is_delegated: false,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: Default::default(),

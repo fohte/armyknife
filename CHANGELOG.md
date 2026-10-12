@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.392](https://github.com/fohte/armyknife/compare/v0.1.391...v0.1.392) (2026-10-12)
+
+
+### Features
+
+* **agent:** support vibe mode resolution for session trees ([#1117](https://github.com/fohte/armyknife/issues/1117)) ([425c927](https://github.com/fohte/armyknife/commit/425c927c1d71510d2c3da89846332ba60e945c89))
+
 ## [0.1.391](https://github.com/fohte/armyknife/compare/v0.1.390...v0.1.391) (2026-10-12)
 
 

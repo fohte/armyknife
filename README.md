@@ -358,6 +358,18 @@ a gh pr-review reply review <pr-number> [options]
 | ------------------- | ------------------------------ |
 | `-R, --repo <REPO>` | Target repository (owner/repo) |
 
+#### `a gh pr-merge`
+
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging is allowed only when vibe mode is enabled.
+
+```sh
+a gh pr-merge <pr-number> [options]
+```
+
+| Option              | Description                    |
+| ------------------- | ------------------------------ |
+| `-R, --repo <repo>` | Target repository (owner/repo) |
+
 ### `a agent`
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
@@ -373,6 +385,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]` |         | Focus the review pane when available, then the session's tmux pane        |
 | `mark-read [-t <pane_id>]`                        |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)          |
 | `status set <kind> <note>`                        |         | Set the calling session's reason for stopping                             |
+| `vibe on / off / status`                          |         | Enable, disable, or check vibe mode for the session tree                  |
 | `resume [session_id]`                             | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)  |
 | `resurrect save`                                  |         | Save pane session IDs for tmux-resurrect (run from post-save hook)        |
 | `resurrect restore`                               |         | Restore pane session IDs and relaunch Claude Code (from post-restore)     |
@@ -391,6 +404,16 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
+
+Vibe mode is an opt-in marker recorded by armyknife. `a gh pr-merge` checks it inside agent sessions. Other commands do not inspect this marker. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+
+```console
+if a agent vibe status >/dev/null 2>&1; then
+  # Continue with the vibe workflow.
+fi
+```
+
+Run `a agent vibe on` in a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
@@ -791,7 +814,7 @@ entries. Pass `--force` to override.
 
 ### Hooks
 
-armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
+armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit/merge). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
 
 ### Logging
 
