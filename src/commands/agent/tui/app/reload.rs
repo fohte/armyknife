@@ -27,10 +27,10 @@ impl App {
 
     /// Performs a full reload of all sessions.
     fn full_reload(&mut self) -> Result<()> {
-        // Remember the currently selected session_id and row position
-        // before any mutation below can reset `list_state` (`apply_filter`
-        // always does).
+        // Remember the selected row occurrence before any mutation below can
+        // reset `list_state` (`apply_filter` always does).
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let selected_occurrence = self.selected_session_row_occurrence().unwrap_or_default();
         let old_pos = self.list_state.selected();
 
         self.sessions = load_sessions()?;
@@ -45,7 +45,11 @@ impl App {
 
         // Re-apply filter with current query
         self.apply_filter();
-        self.restore_selection(old_pos, selected_session_id.as_deref());
+        self.restore_selection_with_occurrence(
+            old_pos,
+            selected_session_id.as_deref(),
+            selected_occurrence,
+        );
 
         Ok(())
     }
@@ -55,6 +59,7 @@ impl App {
         // Same ordering requirement as `full_reload`: capture the position
         // before `apply_filter` below can reset it.
         let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
+        let selected_occurrence = self.selected_session_row_occurrence().unwrap_or_default();
         let old_pos = self.list_state.selected();
 
         for change in changes {
@@ -96,7 +101,11 @@ impl App {
         }
 
         self.apply_filter();
-        self.restore_selection(old_pos, selected_session_id.as_deref());
+        self.restore_selection_with_occurrence(
+            old_pos,
+            selected_session_id.as_deref(),
+            selected_occurrence,
+        );
 
         Ok(())
     }
@@ -159,6 +168,36 @@ impl App {
         self.position_of_session_row_where(|session| session.session_id == session_id)
     }
 
+    fn position_of_session_row_occurrence(
+        &self,
+        session_id: &str,
+        occurrence: usize,
+    ) -> Option<usize> {
+        self.row_sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(position, session_index)| {
+                let session = (*session_index).and_then(|idx| self.sessions.get(idx))?;
+                (session.session_id == session_id).then_some(position)
+            })
+            .nth(occurrence)
+            .or_else(|| self.position_of_session_row(session_id))
+    }
+
+    /// Returns the selected session's occurrence among its rows in display order.
+    /// A session with a YOUR TURN row also appears later in TASKS.
+    pub(super) fn selected_session_row_occurrence(&self) -> Option<usize> {
+        let position = self.list_state.selected()?;
+        let session_index = self.row_sessions.get(position).copied().flatten()?;
+        let preceding_rows = self.row_sessions.get(..position)?;
+        Some(
+            preceding_rows
+                .iter()
+                .filter(|row| **row == Some(session_index))
+                .count(),
+        )
+    }
+
     pub(super) fn position_of_session_row_where(
         &self,
         predicate: impl Fn(&Session) -> bool,
@@ -184,8 +223,17 @@ impl App {
         old_pos: Option<usize>,
         old_session_id: Option<String>,
     ) {
+        self.resync_selection_with_occurrence(old_pos, old_session_id, 0);
+    }
+
+    fn resync_selection_with_occurrence(
+        &mut self,
+        old_pos: Option<usize>,
+        old_session_id: Option<String>,
+        occurrence: usize,
+    ) {
         if let Some(id) = old_session_id
-            && let Some(pos) = self.position_of_session_row(&id)
+            && let Some(pos) = self.position_of_session_row_occurrence(&id, occurrence)
         {
             self.list_state.select(Some(pos));
             return;
@@ -215,8 +263,17 @@ impl App {
     /// otherwise the fallback in [`Self::resync_selection`] anchors on that
     /// reset position instead of the user's actual previous cursor.
     pub(super) fn restore_selection(&mut self, old_pos: Option<usize>, session_id: Option<&str>) {
+        self.restore_selection_with_occurrence(old_pos, session_id, 0);
+    }
+
+    pub(super) fn restore_selection_with_occurrence(
+        &mut self,
+        old_pos: Option<usize>,
+        session_id: Option<&str>,
+        occurrence: usize,
+    ) {
         self.rebuild_row_order();
-        self.resync_selection(old_pos, session_id.map(String::from));
+        self.resync_selection_with_occurrence(old_pos, session_id.map(String::from), occurrence);
     }
 
     /// Persists the currently selected session ID to disk.
@@ -393,6 +450,39 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("running-2")
+        );
+    }
+
+    #[test]
+    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session() {
+        let mut waiting = create_test_session("waiting");
+        waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        let mut app = create_test_app(vec![waiting, create_test_session("running")]);
+
+        let task_position = app
+            .position_of_session_row_occurrence("waiting", 1)
+            .expect("TASKS row is displayed");
+        app.list_state.select(Some(task_position));
+        let old_pos = app.list_state.selected();
+        let selected_session_id = app.selected_session().map(|s| s.session_id.clone());
+        let selected_occurrence = app.selected_session_row_occurrence().unwrap_or_default();
+
+        app.apply_filter();
+        app.restore_selection_with_occurrence(
+            old_pos,
+            selected_session_id.as_deref(),
+            selected_occurrence,
+        );
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.selected_session_row_occurrence(),
+            ),
+            (Some("waiting"), Some(1)),
         );
     }
 
