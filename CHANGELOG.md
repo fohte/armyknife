@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.390](https://github.com/fohte/armyknife/compare/v0.1.389...v0.1.390) (2026-10-12)
+
+
+### Bug Fixes
+
+* **agent/hook:** preserve last message prior to status block ([#1113](https://github.com/fohte/armyknife/issues/1113)) ([fd1e4f8](https://github.com/fohte/armyknife/commit/fd1e4f8e1ac67b24bf1140996d4e73ad9934b84b))
+
 ## [0.1.389](https://github.com/fohte/armyknife/compare/v0.1.388...v0.1.389) (2026-10-12)
 
 
