@@ -235,8 +235,14 @@ mod tests {
     }
 
     #[rstest]
-    fn records_kind_without_other_metadata(sessions_dir: TempDir) {
-        let env_vars = [(EnvVars::session_work_type_name(), "sample-skill")];
+    #[case::kind_only(EnvVars::session_work_type_name(), "sample-skill")]
+    #[case::delegated_only(EnvVars::session_delegated_name(), "1")]
+    fn records_single_launch_metadata(
+        sessions_dir: TempDir,
+        #[case] key: &str,
+        #[case] value: &str,
+    ) {
+        let env_vars = [(key, value)];
         record_from_env_in(
             sessions_dir.path(),
             "thread-a",
@@ -248,31 +254,34 @@ mod tests {
         let mut actual = session_json(sessions_dir.path());
         actual["created_at"] = json!("<timestamp>");
         actual["updated_at"] = json!("<timestamp>");
-        assert_eq!(
-            actual,
-            json!({
-                "session_id": "thread-a",
-                "cwd": "/workspace/delegate",
-                "transcript_path": null,
-                "tty": null,
-                "tmux_info": null,
-                "status": "running",
-                "created_at": "<timestamp>",
-                "updated_at": "<timestamp>",
-                "last_message": null,
-                "current_tool": null,
-                "label": null,
-                "work_type": "sample-skill",
-                "work_type_pinned": true,
-                "ancestor_session_ids": [],
-                "pending_bg_task_ids": [],
-                "pending_agent_task_ids": [],
-                "pending_permission_agent_ids": [],
-                "read_at": null,
-                "sweep_signaled": false,
-                "engine": "codex"
-            })
-        );
+        let mut expected = json!({
+            "session_id": "thread-a",
+            "cwd": "/workspace/delegate",
+            "transcript_path": null,
+            "tty": null,
+            "tmux_info": null,
+            "status": "running",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "last_message": null,
+            "current_tool": null,
+            "label": null,
+            "work_type": null,
+            "ancestor_session_ids": [],
+            "pending_bg_task_ids": [],
+            "pending_agent_task_ids": [],
+            "pending_permission_agent_ids": [],
+            "read_at": null,
+            "sweep_signaled": false,
+            "engine": "codex"
+        });
+        if key == EnvVars::session_work_type_name() {
+            expected["work_type"] = json!(value);
+            expected["work_type_pinned"] = json!(true);
+        } else {
+            expected["is_delegated"] = json!(true);
+        }
+        assert_eq!(actual, expected);
     }
 
     #[rstest]

@@ -80,7 +80,7 @@ impl EnvVars {
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
             session_label: non_empty_var(SESSION_LABEL),
             session_work_type: non_empty_var(SESSION_WORK_TYPE),
-            session_delegated: std::env::var(SESSION_DELEGATED).is_ok(),
+            session_delegated: non_empty_var(SESSION_DELEGATED).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
