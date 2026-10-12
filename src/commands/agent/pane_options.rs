@@ -87,6 +87,7 @@ mod tests {
             label: None,
             work_type: work_type.map(str::to_string),
             work_type_pinned: false,
+            is_delegated: false,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),

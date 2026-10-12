@@ -46,6 +46,9 @@ pub struct Session {
     /// When true, hook-detected skills cannot replace the `a agent new --kind` value.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_type_pinned: bool,
+    /// Whether this session was launched as a delegated task with `--agent`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_delegated: bool,
     /// Ancestor session IDs from root to immediate parent.
     /// Used to build tree view: if intermediate sessions are deleted,
     /// child sessions can still find their nearest living ancestor.
@@ -137,11 +140,12 @@ mod tests {
             (
                 session.read_at,
                 session.work_type,
+                session.is_delegated,
                 session.work_type_pinned,
                 session.pending_human_review_ids,
                 session.agent_status,
             ),
-            (None, None, false, BTreeSet::new(), None)
+            (None, None, false, false, BTreeSet::new(), None)
         );
     }
 

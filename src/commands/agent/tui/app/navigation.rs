@@ -56,9 +56,7 @@ impl App {
     }
 
     /// Moves the cursor to the selected session's nearest displayed
-    /// ancestor -- the same session named in its breadcrumb prefix (see
-    /// `session_rows::nearest_living_ancestor`), so the jump target and the
-    /// breadcrumb never disagree.
+    /// ancestor (see `session_rows::nearest_living_ancestor`).
     ///
     /// No-op for a root session (no ancestors at all). If the session has
     /// ancestors but none of them are currently displayed (filtered out by
@@ -118,10 +116,9 @@ impl App {
     }
 
     /// Enters drill-down scope on the selected session: the list narrows to
-    /// that session plus its descendants (any depth, matching the `▸{n}`
-    /// badge rule -- see `session_rows::is_descendant_of`). No-op when the
-    /// session has no descendants (i.e. no badge is shown for it), and when
-    /// there is no selection. Keeps the cursor on the same session --
+    /// that session plus its descendants (any depth -- see
+    /// `session_rows::is_descendant_of`). No-op when the session has no
+    /// displayed descendants, and when there is no selection. Keeps the cursor on the same session --
     /// jumping the selection elsewhere would make the scope change hard to
     /// follow.
     pub fn enter_drilldown(&mut self) {
@@ -130,9 +127,8 @@ impl App {
         };
         let session_id = session.session_id.clone();
         // Check against the currently displayed sessions, not all of
-        // `self.sessions` -- must match exactly what `descendant_counts`
-        // (the `▸{n}` badge) considers, or a session hidden by search/status
-        // filtering could enter a scope for a badge the user can't see.
+        // `self.sessions`, or a session hidden by search/status filtering
+        // could enter a scope with nothing visible under it.
         let has_descendants = self
             .filtered_sessions()
             .iter()
@@ -184,6 +180,7 @@ mod tests {
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -223,7 +220,7 @@ mod tests {
     #[test]
     fn test_select_next_wraps() {
         let mut app = create_test_app(vec![create_test_session("1"), create_test_session("2")]);
-        // Both sessions default to `Running`, so row 0 is the "RUNNING (2)"
+        // Both sessions default to `Running`, so row 0 is the "TASKS"
         // header (not selectable) and rows 1-2 are the sessions. Starting
         // on the last selectable row exercises wraparound skipping the
         // header at row 0 rather than landing on it.
@@ -245,7 +242,7 @@ mod tests {
         assert_eq!(app.list_state.selected(), Some(2));
     }
 
-    // 3 sessions default to `Running`, so row 0 is the "RUNNING (3)" header
+    // 3 sessions default to `Running`, so row 0 is the "TASKS" header
     // and rows 1-3 are the sessions; `select_by_number` picks among rows
     // 1-3 regardless of `initial` (it does not depend on current selection).
     #[rstest]
@@ -312,7 +309,7 @@ mod tests {
         let mut child = create_test_session("child");
         child.ancestor_session_ids = vec!["root".to_string()];
 
-        // Row 0 is the "RUNNING (2)" header; "root"/"child" are rows 1/2.
+        // Row 0 is the "TASKS" header; "root"/"child" are rows 1/2.
         let mut app = create_test_app(vec![root, child]);
         app.select_by_number(2);
 
@@ -332,7 +329,7 @@ mod tests {
         let mut child = create_test_session("child");
         child.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
 
-        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/parent/child.
+        // Row 0 is the "TASKS" header; rows 1-3 are root/parent/child.
         let mut app = create_test_app(vec![root, parent, child]);
         app.select_by_number(3);
 
@@ -462,7 +459,7 @@ mod tests {
         let mut leaf = create_test_session("leaf");
         leaf.ancestor_session_ids = vec!["root".to_string(), "mid".to_string()];
 
-        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/mid/leaf.
+        // Row 0 is the "TASKS" header; rows 1-3 are root/mid/leaf.
         let mut app = create_test_app(vec![root, mid, leaf]);
         app.select_by_number(1);
 
@@ -583,7 +580,7 @@ mod tests {
         let mut child = create_test_session("child");
         child.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
 
-        // Row 0 is the "RUNNING (3)" header; rows 1-3 are root/parent/child.
+        // Row 0 is the "TASKS" header; rows 1-3 are root/parent/child.
         let mut app = create_test_app(vec![root, parent, child]);
         app.select_by_number(1);
         app.enter_drilldown();

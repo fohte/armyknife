@@ -39,6 +39,7 @@ fn record_from_env_in(
     let metadata = metadata_from_env(env_vars);
     if metadata.label.is_none()
         && metadata.work_type.is_none()
+        && !metadata.is_delegated
         && metadata.ancestor_session_ids.is_empty()
     {
         return Ok(());
@@ -51,6 +52,7 @@ fn record_from_env_in(
 struct SessionMetadata<'a> {
     label: Option<&'a str>,
     work_type: Option<&'a str>,
+    is_delegated: bool,
     ancestor_session_ids: Vec<String>,
 }
 
@@ -66,6 +68,7 @@ fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
     SessionMetadata {
         label: non_empty_env(env_vars, EnvVars::session_label_name()),
         work_type: non_empty_env(env_vars, EnvVars::session_work_type_name()),
+        is_delegated: non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some(),
         ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
             .map(parse_ancestor_session_ids)
             .unwrap_or_default(),
@@ -83,6 +86,7 @@ fn record_in(
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         session_id: session_id.to_string(),
         work_type: None,
+        is_delegated: false,
         work_type_pinned: false,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
@@ -115,6 +119,7 @@ fn record_in(
         session.work_type = Some(work_type.to_string());
         session.work_type_pinned = true;
     }
+    session.is_delegated |= metadata.is_delegated;
     if !metadata.ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = metadata.ancestor_session_ids;
     }
@@ -145,6 +150,7 @@ mod tests {
             session_id: "thread-a".to_string(),
             work_type: Some("detected-skill".to_string()),
             work_type_pinned: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/original"),
@@ -192,6 +198,7 @@ mod tests {
             SessionMetadata {
                 label: Some("explicit label"),
                 work_type,
+                is_delegated: false,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             },
         )
@@ -316,6 +323,7 @@ mod tests {
             SessionMetadata {
                 label,
                 work_type,
+                is_delegated: false,
                 ancestor_session_ids: ancestors,
             },
         )
@@ -340,6 +348,7 @@ mod tests {
             SessionMetadata {
                 label: None,
                 work_type: None,
+                is_delegated: false,
                 ancestor_session_ids: vec!["parent".to_string()],
             },
         )
@@ -374,6 +383,7 @@ mod tests {
             ("UNRELATED", "value"),
             (EnvVars::session_label_name(), "delegate label"),
             (EnvVars::session_work_type_name(), "sample-skill"),
+            (EnvVars::session_delegated_name(), "1"),
             (EnvVars::ancestor_session_ids_name(), "root, parent"),
         ];
 
@@ -382,6 +392,7 @@ mod tests {
             SessionMetadata {
                 label: Some("delegate label"),
                 work_type: Some("sample-skill"),
+                is_delegated: true,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             }
         );

@@ -208,6 +208,12 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     if let Some(ref kind) = common.kind {
         env_vars.push((EnvVars::session_work_type_name().to_string(), kind.clone()));
     }
+    if common.agent {
+        env_vars.push((
+            EnvVars::session_delegated_name().to_string(),
+            "1".to_string(),
+        ));
+    }
     // Resolve parent session ID: explicit flag > ARMYKNIFE_SESSION_ID env var.
     // ARMYKNIFE_SESSION_ID is set by the SessionStart hook via CLAUDE_ENV_FILE,
     // so `a agent new` called from a Claude Code Bash tool automatically inherits
@@ -559,16 +565,23 @@ mod tests {
     }
 
     #[rstest]
-    #[case::omitted(None, vec![])]
+    #[case::omitted(None, false, vec![])]
     #[case::explicit_kind(
         Some("sample-skill"),
+        false,
         vec![(
             EnvVars::session_work_type_name().to_string(),
             "sample-skill".to_string(),
         )]
     )]
-    fn build_env_vars_passes_kind(
+    #[case::agent_launch(
+        None,
+        true,
+        vec![(EnvVars::session_delegated_name().to_string(), "1".to_string())]
+    )]
+    fn build_env_vars_passes_launch_metadata(
         #[case] kind: Option<&str>,
+        #[case] agent: bool,
         #[case] expected: Vec<(String, String)>,
     ) {
         temp_env::with_vars(
@@ -580,7 +593,7 @@ mod tests {
             || {
                 let common = CommonNewArgs {
                     prompt: None,
-                    agent: false,
+                    agent,
                     label: None,
                     kind: kind.map(str::to_string),
                     model: None,

@@ -86,8 +86,7 @@ pub struct App {
     /// Status filter: when set, only sessions with this status are shown.
     pub status_filter: Option<SessionStatus>,
     /// Drill-down scope: when set, the session list shows only this session
-    /// (by id) and its descendants (any depth -- same rule as the `▸{n}`
-    /// badge). Entered via `App::enter_drilldown`, exited via
+    /// (by id) and its descendants (any depth). Entered via `App::enter_drilldown`, exited via
     /// `App::exit_drilldown`. Counted as part of `has_filter()`.
     pub drilldown_scope: Option<String>,
     /// Cache of searchable text for each session (keyed by session_id).
@@ -345,6 +344,7 @@ mod tests {
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -389,7 +389,7 @@ mod tests {
             create_test_session("second"),
         ]);
 
-        // Row 0 is the "RUNNING (2)" header; "first"/"second" are rows 1/2.
+        // Row 0 is the "TASKS" header; "first"/"second" are rows 1/2.
         app.list_state.select(Some(2));
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),

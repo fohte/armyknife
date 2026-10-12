@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-use crate::commands::agent::types::Engine;
-use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
-use crate::commands::agent::user_turn::{UserTurn, user_turns};
+use crate::commands::agent::types::Session;
+use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
+
+mod task_tree;
 
 /// One row in the session list's selection/render order.
 ///
@@ -26,20 +26,37 @@ pub(super) struct SectionHeaderRow {
     pub kind: Section,
 }
 
+/// One TASKS row. `depth` is 0 for a root and 1 for every descendant, since
+/// grandchildren and deeper are flattened onto the child level.
 #[derive(Debug)]
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
-    /// Nearest living ancestor among the currently displayed sessions, for
-    /// the `parent title › ` breadcrumb prefix. `None` for root sessions or
-    /// when every ancestor has been filtered out of the current view.
-    pub breadcrumb_ancestor: Option<&'a Session>,
-    /// Number of currently displayed sessions that descend from this one
-    /// (any depth, not just direct children -- see [`descendant_counts`]).
-    /// Drives the `▸{n}` badge; `0` means no badge.
-    pub descendant_count: usize,
+    pub depth: usize,
+    pub mark: TaskMark,
+    pub is_last_sibling: bool,
+    /// `false` when the session already has a selectable YOUR TURN row, so
+    /// the cursor never holds two positions for one session.
+    pub is_selectable: bool,
+    /// Children shown under a root (always 0 on child rows).
+    pub child_count: usize,
+    pub child_user_turn_count: usize,
     /// The tq task this session is linked to, if any. Drives the task-number
-    /// column and cursor-relative task-kinship styling.
+    /// column, the row name, and cursor-relative task-kinship styling.
     pub task: Option<SessionTask>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TaskMark {
+    Done,
+    UserTurn,
+    Working,
+    /// Stopped while waiting on something other than the user (another
+    /// session, CI, a background command).
+    Waiting,
+    Close,
+    /// Stopped without a reason this module recognizes; rendered with the
+    /// session's plain status glyph instead of a task mark.
+    Unclassified,
 }
 
 impl<'a> SessionRow<'a> {
@@ -47,7 +64,10 @@ impl<'a> SessionRow<'a> {
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
             SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
-            SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
+            SessionRow::Session(entry) if entry.is_selectable => {
+                Some(entry.session.session_id.as_str())
+            }
+            SessionRow::Session(_) => None,
             SessionRow::SectionHeader(_) => None,
         }
     }
@@ -56,10 +76,7 @@ impl<'a> SessionRow<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     UserTurn,
-    Waiting,
-    Running,
-    Unread,
-    Idle,
+    Tasks,
 }
 
 /// A tq task linked to a session, as needed for rendering the task-number
@@ -80,140 +97,29 @@ pub(super) struct SessionTask {
     pub is_closed: bool,
 }
 
-fn section_of(session: &Session) -> Section {
-    match session.display_status() {
-        DisplayStatus::WaitingInput => Section::Waiting,
-        DisplayStatus::Running | DisplayStatus::Background => Section::Running,
-        DisplayStatus::UnreadStopped => Section::Unread,
-        _ => Section::Idle,
-    }
-}
-
-/// Whether `session` sits in the last section (Paused, read Stopped, Ended).
-/// Exposed for the renderer's idle-styling decision, so the "which statuses
-/// count as idle" rule lives in one place.
-pub(super) fn is_idle_session(session: &Session) -> bool {
-    matches!(section_of(session), Section::Idle)
-}
-
-/// Label for the last section, based on which idle statuses are actually
-/// present. Ended sessions are rare in practice (retained briefly for
-/// `claude -c` resume) and fall under "STOPPED" alongside read Stopped
-/// sessions.
-fn idle_section_label(idle: &[&Session]) -> &'static str {
-    let has_paused = idle.iter().any(|s| s.status == SessionStatus::Paused);
-    let has_other = idle.iter().any(|s| s.status != SessionStatus::Paused);
-    match (has_paused, has_other) {
-        (true, false) => "PAUSED",
-        (false, true) => "STOPPED",
-        _ => "PAUSED / STOPPED",
-    }
-}
-
-/// Bundles the lookup structures every row builder needs
-/// (`breadcrumb_ancestor` / `descendant_count`), computed once from the full
-/// displayed session set.
-struct SessionLookup<'a> {
-    by_id: HashMap<&'a str, &'a Session>,
-    descendant_counts: HashMap<String, usize>,
-}
-
-impl<'a> SessionLookup<'a> {
-    fn new(sessions: &[&'a Session]) -> Self {
-        let by_id: HashMap<&'a str, &'a Session> = sessions
-            .iter()
-            .map(|s| (s.session_id.as_str(), *s))
-            .collect();
-        let displayed_ids: HashSet<&str> = by_id.keys().copied().collect();
-        let descendant_counts = descendant_counts(sessions, &displayed_ids);
-        Self {
-            by_id,
-            descendant_counts,
-        }
-    }
-}
-
-/// Buckets `sessions` into YOUR TURN -> WAITING -> RUNNING -> UNREAD (unread
-/// stopped) -> PAUSED/STOPPED, omitting empty sections. YOUR TURN uses the
-/// shared priority order from `user_turns`; unclassified waiting sessions
-/// remain visible under WAITING. Other sections preserve the input order.
+/// Builds YOUR TURN followed by the TASKS session tree.
 ///
-/// `task_by_session` attaches each row's linked tq task (see [`SessionTask`])
-/// for the task-number column; a session absent from it gets `task: None`
-/// and renders an empty cell. Callers can pass an empty map unconditionally
-/// when tq integration is unavailable -- there is no separate "ungrouped"
-/// mode to branch on.
+/// `task_by_session` attaches each row's linked tq task (see [`SessionTask`]);
+/// callers can pass an empty map when tq integration is unavailable.
 pub(super) fn build_session_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
 ) -> Vec<SessionRow<'a>> {
     let turns = user_turns(sessions.iter().copied());
-    let lookup = SessionLookup::new(sessions);
-    build_status_section_rows(sessions, &lookup, task_by_session, turns)
-}
-
-fn build_status_section_rows<'a>(
-    sessions: &[&'a Session],
-    lookup: &SessionLookup<'a>,
-    task_by_session: &HashMap<String, SessionTask>,
-    turns: Vec<UserTurn<'a>>,
-) -> Vec<SessionRow<'a>> {
-    let user_turn_session_ids: HashSet<&str> = turns
+    let turn_kinds: HashMap<String, UserTurnKind> = turns
         .iter()
-        .map(|turn| turn.session.session_id.as_str())
+        .map(|turn| (turn.session.session_id.clone(), turn.kind))
         .collect();
-    let mut running = Vec::new();
-    let mut unread = Vec::new();
-    let mut idle = Vec::new();
-    let mut waiting = Vec::new();
-    for &session in sessions {
-        if user_turn_session_ids.contains(session.session_id.as_str()) {
-            continue;
-        }
-        match section_of(session) {
-            Section::UserTurn | Section::Waiting => waiting.push(session),
-            Section::Running => running.push(session),
-            Section::Unread => unread.push(session),
-            Section::Idle => idle.push(session),
-        }
-    }
-
-    let mut rows = Vec::with_capacity(sessions.len() + 6);
+    let mut rows = Vec::with_capacity(sessions.len() + 2);
     push_user_turns(&mut rows, turns);
-    push_group(
-        &mut rows,
-        format!("WAITING ({})", waiting.len()),
-        Section::Waiting,
-        &waiting,
-        lookup,
-        task_by_session,
-    );
-    push_group(
-        &mut rows,
-        format!("RUNNING ({})", running.len()),
-        Section::Running,
-        &running,
-        lookup,
-        task_by_session,
-    );
-    push_group(
-        &mut rows,
-        format!("UNREAD ({})", unread.len()),
-        Section::Unread,
-        &unread,
-        lookup,
-        task_by_session,
-    );
-
-    let idle_label = format!("{} ({})", idle_section_label(&idle), idle.len());
-    push_group(
-        &mut rows,
-        idle_label,
-        Section::Idle,
-        &idle,
-        lookup,
-        task_by_session,
-    );
+    let task_rows = task_tree::build_task_rows(sessions, task_by_session, &turn_kinds);
+    if !task_rows.is_empty() {
+        rows.push(SessionRow::SectionHeader(SectionHeaderRow {
+            label: "TASKS".to_string(),
+            kind: Section::Tasks,
+        }));
+        rows.extend(task_rows.into_iter().map(SessionRow::Session));
+    }
 
     rows
 }
@@ -230,60 +136,9 @@ fn push_user_turns<'a>(rows: &mut Vec<SessionRow<'a>>, turns: Vec<UserTurn<'a>>)
     rows.extend(turns.into_iter().map(SessionRow::UserTurn));
 }
 
-fn push_group<'a>(
-    rows: &mut Vec<SessionRow<'a>>,
-    label: String,
-    kind: Section,
-    group: &[&'a Session],
-    lookup: &SessionLookup<'a>,
-    task_by_session: &HashMap<String, SessionTask>,
-) {
-    if group.is_empty() {
-        return;
-    }
-    rows.push(SessionRow::SectionHeader(SectionHeaderRow { label, kind }));
-    for &session in group {
-        rows.push(SessionRow::Session(SessionRowEntry {
-            session,
-            breadcrumb_ancestor: nearest_living_ancestor(session, &lookup.by_id),
-            descendant_count: lookup
-                .descendant_counts
-                .get(session.session_id.as_str())
-                .copied()
-                .unwrap_or(0),
-            task: task_by_session.get(session.session_id.as_str()).cloned(),
-        }));
-    }
-}
-
-/// Counts, for every displayed session, how many other displayed sessions
-/// carry its ID anywhere in `ancestor_session_ids` -- i.e. every displayed
-/// descendant at any depth, not just direct children. This lets a badge
-/// count survive an intermediate session being Ended or deleted, and only
-/// ever counts sessions actually visible in the current (filtered) view, so
-/// the number always matches what's on screen.
-fn descendant_counts(
-    sessions: &[&Session],
-    displayed_ids: &HashSet<&str>,
-) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for &ancestor_id in displayed_ids {
-        let count = sessions
-            .iter()
-            .filter(|s| is_descendant_of(s, ancestor_id))
-            .count();
-        if count > 0 {
-            counts.insert(ancestor_id.to_string(), count);
-        }
-    }
-    counts
-}
-
 /// Whether `session` descends from `ancestor_id` at any depth (i.e.
-/// `ancestor_id` appears anywhere in `ancestor_session_ids`). Shared by the
-/// descendant-count badge above and the drill-down scope filter
-/// (`App::apply_filter`), so the two never disagree on what counts as a
-/// descendant.
+/// `ancestor_id` appears anywhere in `ancestor_session_ids`). Used by the
+/// drill-down scope filter (`App::apply_filter`).
 pub(super) fn is_descendant_of(session: &Session, ancestor_id: &str) -> bool {
     session
         .ancestor_session_ids
@@ -295,8 +150,7 @@ pub(super) fn is_descendant_of(session: &Session, ancestor_id: &str) -> bool {
 /// in `by_id` (the currently displayed ones). Walks `ancestor_session_ids`
 /// from the end (nearest ancestor) to the start (root).
 ///
-/// Shared with `App::select_parent`, so the "jump to parent" navigation
-/// always lands on the same session the breadcrumb prefix names.
+/// Used by `App::select_parent` for the "jump to parent" navigation.
 pub(super) fn nearest_living_ancestor<'a>(
     session: &Session,
     by_id: &HashMap<&str, &'a Session>,
@@ -328,8 +182,8 @@ pub(super) enum KinDirection {
 ///
 /// Distance is derived purely from `ancestor_session_ids`, so it does not
 /// depend on which intermediate ancestors happen to be displayed -- unlike
-/// [`nearest_living_ancestor`] and [`descendant_counts`], which intentionally
-/// scope to the current view.
+/// [`nearest_living_ancestor`], which intentionally scopes to the current
+/// view.
 pub(super) fn kin_relation(selected: &Session, session: &Session) -> Option<(KinDirection, usize)> {
     if selected.session_id == session.session_id {
         return None;
@@ -401,16 +255,23 @@ pub(super) fn is_related_task(cursor: Option<&SessionTask>, other: Option<&Sessi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, AgentStatusKind};
-    use chrono::Utc;
+    use crate::commands::agent::types::{AgentStatus, AgentStatusKind, Engine, SessionStatus};
+    use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
     use std::path::PathBuf;
+
+    fn at_minute(minute: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 1, 0, minute, 0)
+            .single()
+            .unwrap()
+    }
 
     fn create_test_session(id: &str, status: SessionStatus) -> Session {
         Session {
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,
+            is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/home/user/project"),
@@ -418,8 +279,8 @@ mod tests {
             tty: None,
             tmux_info: None,
             status,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: at_minute(0),
+            updated_at: at_minute(0),
             last_message: None,
             current_tool: None,
             label: None,
@@ -435,11 +296,19 @@ mod tests {
         }
     }
 
-    /// A read (non-unread) Stopped session: `read_at` set so it does not
-    /// land in UNREAD.
-    fn create_read_stopped_session(id: &str) -> Session {
-        let mut session = create_test_session(id, SessionStatus::Stopped);
-        session.read_at = Some(Utc::now());
+    fn running_session(id: &str, ancestors: &[&str], minute: u32) -> Session {
+        let mut session = create_test_session(id, SessionStatus::Running);
+        session.ancestor_session_ids = ancestors.iter().map(|s| s.to_string()).collect();
+        session.updated_at = at_minute(minute);
+        session
+    }
+
+    fn with_agent_status(mut session: Session, kind: AgentStatusKind) -> Session {
+        session.status = SessionStatus::Stopped;
+        session.agent_status = Some(AgentStatus {
+            kind,
+            note: "sample note".to_string(),
+        });
         session
     }
 
@@ -464,12 +333,15 @@ mod tests {
         UserTurn {
             id: String,
             kind: String,
-            note: Option<String>,
         },
-        Session {
+        Task {
             id: String,
-            breadcrumb: Option<String>,
-            descendant_count: usize,
+            depth: usize,
+            mark: TaskMark,
+            is_last_sibling: bool,
+            is_selectable: bool,
+            child_count: usize,
+            child_user_turn_count: usize,
         },
     }
 
@@ -482,15 +354,48 @@ mod tests {
                 SessionRow::UserTurn(turn) => RowDescription::UserTurn {
                     id: turn.session.session_id.clone(),
                     kind: turn.kind.label().to_string(),
-                    note: turn.note.map(String::from),
                 },
-                SessionRow::Session(entry) => RowDescription::Session {
+                SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
-                    breadcrumb: entry.breadcrumb_ancestor.map(|s| s.session_id.clone()),
-                    descendant_count: entry.descendant_count,
+                    depth: entry.depth,
+                    mark: entry.mark,
+                    is_last_sibling: entry.is_last_sibling,
+                    is_selectable: entry.is_selectable,
+                    child_count: entry.child_count,
+                    child_user_turn_count: entry.child_user_turn_count,
                 },
             })
             .collect()
+    }
+
+    fn header(label: &str) -> RowDescription {
+        RowDescription::Header {
+            label: label.to_string(),
+        }
+    }
+
+    fn root(id: &str, mark: TaskMark, children: usize, user_turns: usize) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            depth: 0,
+            mark,
+            is_last_sibling: false,
+            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            child_count: children,
+            child_user_turn_count: user_turns,
+        }
+    }
+
+    fn child(id: &str, mark: TaskMark, is_last_sibling: bool) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            depth: 1,
+            mark,
+            is_last_sibling,
+            is_selectable: mark != TaskMark::UserTurn && mark != TaskMark::Close,
+            child_count: 0,
+            child_user_turn_count: 0,
+        }
     }
 
     #[test]
@@ -500,363 +405,175 @@ mod tests {
     }
 
     #[test]
-    fn test_build_session_rows_one_session_per_section() {
-        let mut waiting = create_test_session("waiting", SessionStatus::WaitingInput);
-        waiting
-            .crit_urls
-            .push("https://example.com/review".to_string());
-        let running = create_test_session("running", SessionStatus::Running);
-        let mut unread = create_test_session("unread", SessionStatus::Stopped);
-        unread.read_at = None;
-        let paused = create_test_session("paused", SessionStatus::Paused);
-
-        let sessions: Vec<&Session> = vec![&waiting, &running, &unread, &paused];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "YOUR TURN".to_string(),
-                },
-                RowDescription::UserTurn {
-                    id: "waiting".to_string(),
-                    kind: "crit".to_string(),
-                    note: None,
-                },
-                RowDescription::Header {
-                    label: "RUNNING (1)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "running".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-                RowDescription::Header {
-                    label: "UNREAD (1)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "unread".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-                RowDescription::Header {
-                    label: "PAUSED (1)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "paused".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_sorts_user_turns_and_keeps_unknown_waits_visible() {
-        let mut close = create_test_session("close", SessionStatus::Paused);
-        close.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Close,
-            note: "close the PR".to_string(),
-        });
-        let mut decide = create_test_session("decide", SessionStatus::Stopped);
-        decide.agent_status = Some(AgentStatus {
-            kind: AgentStatusKind::Decide,
-            note: "choose an option".to_string(),
-        });
+    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks() {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());
-        let unknown_wait = create_test_session("unknown", SessionStatus::WaitingInput);
-        let sessions: Vec<&Session> = vec![&close, &unknown_wait, &decide, &crit];
+        let running = running_session("running", &[], 0);
 
+        let sessions: Vec<&Session> = vec![&running, &crit];
         let rows = build_session_rows(&sessions, &HashMap::new());
 
         assert_eq!(
             describe(&rows),
             vec![
-                RowDescription::Header {
-                    label: "YOUR TURN".to_string(),
-                },
+                header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "crit".to_string(),
                     kind: "crit".to_string(),
-                    note: None,
                 },
-                RowDescription::UserTurn {
-                    id: "decide".to_string(),
-                    kind: "decide".to_string(),
-                    note: Some("choose an option".to_string()),
-                },
-                RowDescription::UserTurn {
-                    id: "close".to_string(),
-                    kind: "close".to_string(),
-                    note: Some("close the PR".to_string()),
-                },
-                RowDescription::Header {
-                    label: "WAITING (1)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "unknown".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
+                header("TASKS"),
+                root("crit", TaskMark::UserTurn, 0, 0),
+                root("running", TaskMark::Working, 0, 0),
             ]
         );
     }
 
     #[test]
-    fn test_section_of_stopped_with_pending_bg_task_is_running() {
-        // `display_status()` reports `Background` for a Stopped session with
-        // a pending bg task and no crit link, and Background groups with
-        // Running because the session is still mid-task.
-        let mut session = create_test_session("s1", SessionStatus::Stopped);
-        session.pending_bg_task_ids.insert("bg-1".to_string());
-        assert_eq!(section_of(&session), Section::Running);
-    }
+    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions() {
+        let pm = running_session("pm", &[], 0);
+        let design = running_session("design", &["pm"], 3);
+        // The intermediate ancestor is gone, so this still nests under "pm".
+        let orphan = running_session("orphan", &["pm", "deleted_middle"], 1);
+        let grandchild = running_session("grandchild", &["pm", "design"], 2);
+        let mut delegated = running_session("delegated", &["pm", "design"], 4);
+        delegated.is_delegated = true;
+        let delegated_child = with_agent_status(
+            running_session("delegated_child", &["pm", "design", "delegated"], 5),
+            AgentStatusKind::Decide,
+        );
 
-    #[test]
-    fn test_section_of_human_review_wait_with_pending_bg_task_is_needs_you() {
-        let mut session = create_test_session("review", SessionStatus::Stopped);
-        session.pending_bg_task_ids.insert("task-1".to_string());
-        session
-            .pending_human_review_ids
-            .insert("review-id".to_string());
-
-        assert_eq!(section_of(&session), Section::Waiting);
-    }
-
-    #[test]
-    fn test_build_session_rows_empty_sections_produce_no_header() {
-        let running = create_test_session("running", SessionStatus::Running);
-        let sessions: Vec<&Session> = vec![&running];
+        let sessions: Vec<&Session> = vec![
+            &pm,
+            &design,
+            &orphan,
+            &grandchild,
+            &delegated,
+            &delegated_child,
+        ];
         let rows = build_session_rows(&sessions, &HashMap::new());
 
         assert_eq!(
             describe(&rows),
             vec![
-                RowDescription::Header {
-                    label: "RUNNING (1)".to_string(),
+                header("YOUR TURN"),
+                RowDescription::UserTurn {
+                    id: "delegated_child".to_string(),
+                    kind: "decide".to_string(),
                 },
-                RowDescription::Session {
-                    id: "running".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
+                header("TASKS"),
+                root("pm", TaskMark::Working, 4, 1),
+                child("delegated_child", TaskMark::UserTurn, false),
+                child("design", TaskMark::Working, false),
+                child("grandchild", TaskMark::Working, false),
+                child("orphan", TaskMark::Working, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_session_rows_orders_roots_by_user_turn_then_last_moved() {
+        let old_turn = with_agent_status(running_session("old_turn", &[], 1), AgentStatusKind::Do);
+        let recent = running_session("recent", &[], 9);
+        let older = running_session("older", &[], 2);
+        // A child's activity counts as its root moving.
+        let older_child = running_session("older_child", &["older"], 10);
+        let parent_of_turn = running_session("parent_of_turn", &[], 0);
+        let child_turn = with_agent_status(
+            running_session("child_turn", &["parent_of_turn"], 3),
+            AgentStatusKind::Read,
+        );
+
+        let sessions: Vec<&Session> = vec![
+            &old_turn,
+            &recent,
+            &older,
+            &older_child,
+            &parent_of_turn,
+            &child_turn,
+        ];
+        let rows = build_session_rows(&sessions, &HashMap::new());
+        let task_ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            task_ids,
+            vec![
+                "parent_of_turn",
+                "child_turn",
+                "old_turn",
+                "older",
+                "older_child",
+                "recent",
             ]
         );
     }
 
     #[rstest]
-    #[case::paused_only(
-        vec![SessionStatus::Paused, SessionStatus::Paused],
-        "PAUSED (2)"
+    #[case::running(SessionStatus::Running, None, false, TaskMark::Working)]
+    #[case::background(SessionStatus::Stopped, None, true, TaskMark::Waiting)]
+    #[case::agent_wait(
+        SessionStatus::Stopped,
+        Some(AgentStatusKind::Wait),
+        false,
+        TaskMark::Waiting
     )]
-    #[case::stopped_only(
-        vec![SessionStatus::Ended],
-        "STOPPED (1)"
+    #[case::agent_done(
+        SessionStatus::Paused,
+        Some(AgentStatusKind::Done),
+        false,
+        TaskMark::Done
     )]
-    #[case::mixed(
-        vec![SessionStatus::Paused, SessionStatus::Ended],
-        "PAUSED / STOPPED (2)"
+    #[case::stale_status_while_running(
+        SessionStatus::Running,
+        Some(AgentStatusKind::Wait),
+        false,
+        TaskMark::Working
     )]
-    fn test_idle_section_label(#[case] statuses: Vec<SessionStatus>, #[case] expected: &str) {
-        let sessions: Vec<Session> = statuses
-            .into_iter()
-            .enumerate()
-            .map(|(i, status)| {
-                if status == SessionStatus::Stopped {
-                    create_read_stopped_session(&i.to_string())
-                } else {
-                    create_test_session(&i.to_string(), status)
-                }
+    #[case::ended(SessionStatus::Ended, None, false, TaskMark::Done)]
+    #[case::close(
+        SessionStatus::Stopped,
+        Some(AgentStatusKind::Close),
+        false,
+        TaskMark::Close
+    )]
+    #[case::decide(
+        SessionStatus::Stopped,
+        Some(AgentStatusKind::Decide),
+        false,
+        TaskMark::UserTurn
+    )]
+    #[case::stopped_without_reason(SessionStatus::Stopped, None, false, TaskMark::Unclassified)]
+    fn test_build_session_rows_task_mark(
+        #[case] status: SessionStatus,
+        #[case] agent_status: Option<AgentStatusKind>,
+        #[case] has_bg_task: bool,
+        #[case] expected: TaskMark,
+    ) {
+        let mut session = create_test_session("s", status);
+        session.agent_status = agent_status.map(|kind| AgentStatus {
+            kind,
+            note: "sample note".to_string(),
+        });
+        if has_bg_task {
+            session.pending_bg_task_ids.insert("bg-1".to_string());
+        }
+
+        let rows = build_session_rows(&[&session], &HashMap::new());
+        let marks: Vec<TaskMark> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SessionRow::Session(entry) => Some(entry.mark),
+                _ => None,
             })
             .collect();
-        let refs: Vec<&Session> = sessions.iter().collect();
-        let rows = build_session_rows(&refs, &HashMap::new());
 
-        let header_label = match rows.first() {
-            Some(SessionRow::SectionHeader(header)) => header.label.clone(),
-            _ => panic!("expected a section header row"),
-        };
-        assert_eq!(header_label, expected);
-    }
-
-    #[test]
-    fn test_build_session_rows_idle_section_shows_individual_rows() {
-        let paused1 = create_test_session("paused1", SessionStatus::Paused);
-        let paused2 = create_test_session("paused2", SessionStatus::Paused);
-        let sessions: Vec<&Session> = vec![&paused1, &paused2];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "PAUSED (2)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "paused1".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-                RowDescription::Session {
-                    id: "paused2".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_breadcrumb_skips_deleted_ancestor() {
-        let root = create_test_session("root", SessionStatus::Running);
-        let mut child = create_test_session("child", SessionStatus::Running);
-        child.ancestor_session_ids = vec!["root".to_string(), "deleted_middle".to_string()];
-
-        let sessions: Vec<&Session> = vec![&root, &child];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "RUNNING (2)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "root".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 1,
-                },
-                RowDescription::Session {
-                    id: "child".to_string(),
-                    breadcrumb: Some("root".to_string()),
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_descendant_count_covers_every_depth() {
-        let root = create_test_session("root", SessionStatus::Running);
-        let mut mid = create_test_session("mid", SessionStatus::Running);
-        mid.ancestor_session_ids = vec!["root".to_string()];
-        let mut leaf = create_test_session("leaf", SessionStatus::Running);
-        leaf.ancestor_session_ids = vec!["root".to_string(), "mid".to_string()];
-
-        let sessions: Vec<&Session> = vec![&root, &mid, &leaf];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "RUNNING (3)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "root".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 2,
-                },
-                RowDescription::Session {
-                    id: "mid".to_string(),
-                    breadcrumb: Some("root".to_string()),
-                    descendant_count: 1,
-                },
-                RowDescription::Session {
-                    id: "leaf".to_string(),
-                    breadcrumb: Some("mid".to_string()),
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_descendant_count_survives_deleted_intermediate_ancestor() {
-        let root = create_test_session("root", SessionStatus::Running);
-        let mut leaf = create_test_session("leaf", SessionStatus::Running);
-        leaf.ancestor_session_ids = vec!["root".to_string(), "deleted_middle".to_string()];
-
-        let sessions: Vec<&Session> = vec![&root, &leaf];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "RUNNING (2)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "root".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 1,
-                },
-                RowDescription::Session {
-                    id: "leaf".to_string(),
-                    breadcrumb: Some("root".to_string()),
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_descendant_count_ignores_sessions_outside_current_view() {
-        // "child" is a real descendant of "root" but was filtered out of the
-        // current view before `build_session_rows` was called (e.g. by
-        // search/status filtering), so it must not be reflected in the count.
-        let root = create_test_session("root", SessionStatus::Running);
-
-        let sessions: Vec<&Session> = vec![&root];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        assert_eq!(
-            describe(&rows),
-            vec![
-                RowDescription::Header {
-                    label: "RUNNING (1)".to_string(),
-                },
-                RowDescription::Session {
-                    id: "root".to_string(),
-                    breadcrumb: None,
-                    descendant_count: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_session_rows_section_order_ignores_input_order() {
-        let paused = create_test_session("paused", SessionStatus::Paused);
-        let unread = create_test_session("unread", SessionStatus::Stopped);
-        let running = create_test_session("running", SessionStatus::Running);
-        let mut waiting = create_test_session("waiting", SessionStatus::WaitingInput);
-        waiting
-            .crit_urls
-            .push("https://example.com/review".to_string());
-
-        // Deliberately out of the fixed section order.
-        let sessions: Vec<&Session> = vec![&paused, &unread, &running, &waiting];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
-        assert_eq!(session_ids, vec!["waiting", "running", "unread", "paused"]);
-    }
-
-    #[test]
-    fn test_build_session_rows_within_section_order_matches_input() {
-        let running_b = create_test_session("running_b", SessionStatus::Running);
-        let running_a = create_test_session("running_a", SessionStatus::Running);
-
-        // Input order is "b then a"; the function must not re-sort.
-        let sessions: Vec<&Session> = vec![&running_b, &running_a];
-        let rows = build_session_rows(&sessions, &HashMap::new());
-
-        let session_ids: Vec<&str> = rows.iter().filter_map(|r| r.session_id()).collect();
-        assert_eq!(session_ids, vec!["running_b", "running_a"]);
+        assert_eq!(marks, vec![expected]);
     }
 
     #[rstest]
