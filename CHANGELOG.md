@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.387](https://github.com/fohte/armyknife/compare/v0.1.386...v0.1.387) (2026-10-12)
+
+
+### Features
+
+* **agent:** add YOUR TURN section to watch ([#1105](https://github.com/fohte/armyknife/issues/1105)) ([7ee6ec7](https://github.com/fohte/armyknife/commit/7ee6ec7c47f98169375abe860215f09ee1dd8ad4))
+
 ## [0.1.386](https://github.com/fohte/armyknife/compare/v0.1.385...v0.1.386) (2026-10-11)
 
 
