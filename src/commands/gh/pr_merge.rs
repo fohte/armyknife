@@ -5,7 +5,7 @@ use anyhow::{Context, bail};
 use clap::Args;
 
 use crate::commands::agent::is_vibe_enabled;
-use crate::infra::{external_tool::ExternalTool, git, process};
+use crate::infra::{external_tool::ExternalTool, git, github::PrState, process};
 use crate::shared::{env_var::EnvVars, hooks};
 
 const REQUIRED_CHECKS_TIMEOUT: Duration = Duration::from_secs(300);
@@ -53,12 +53,18 @@ trait PrMergeClient {
         repo: &str,
         pr_number: u64,
     ) -> anyhow::Result<()>;
-    fn squash_merge(&self, owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<()>;
+    fn squash_merge(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        head_sha: &str,
+    ) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PrSnapshot {
-    state: String,
+    state: PrState,
     head_sha: String,
     merge_state_status: String,
     url: String,
@@ -89,10 +95,10 @@ fn run_merge(
     let current = client.view_pr(owner, repo, pr_number)?;
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
-    if let Err(merge_error) = client.squash_merge(owner, repo, pr_number) {
+    if let Err(merge_error) = client.squash_merge(owner, repo, pr_number, &initial.head_sha) {
         if client
             .view_pr(owner, repo, pr_number)
-            .is_ok_and(|pr| pr.state == "MERGED")
+            .is_ok_and(|pr| pr.state == PrState::Merged)
         {
             return Ok(());
         }
@@ -100,10 +106,10 @@ fn run_merge(
     }
 
     let merged = client.view_pr(owner, repo, pr_number)?;
-    if merged.state != "MERGED" {
+    if merged.state != PrState::Merged {
         bail!(
-            "The squash merge command succeeded, but PR #{pr_number} is not merged (state: {}).",
-            merged.state
+            "The squash merge command succeeded, but PR #{pr_number} is not merged (state: {:?}).",
+            merged.state,
         );
     }
 
@@ -115,8 +121,8 @@ fn ensure_pr_is_open_and_safe(
     pr_number: u64,
     expected_head_sha: Option<&str>,
 ) -> anyhow::Result<()> {
-    if pr.state != "OPEN" {
-        bail!("PR #{pr_number} is not open (state: {}).", pr.state);
+    if pr.state != PrState::Open {
+        bail!("PR #{pr_number} is not open (state: {:?}).", pr.state);
     }
     if pr.head_sha.is_empty() {
         bail!("PR #{pr_number} did not report a head SHA.");
@@ -149,7 +155,7 @@ impl PrMergeClient for GhCli {
         let response: GhPrResponse = serde_json::from_slice(&output.stdout)
             .context("Failed to parse gh pr view response")?;
         Ok(PrSnapshot {
-            state: response.state,
+            state: parse_pr_state(&response.state)?,
             head_sha: response.head_ref_oid,
             merge_state_status: response.merge_state_status.unwrap_or_default(),
             url: response.url,
@@ -175,10 +181,17 @@ impl PrMergeClient for GhCli {
         ];
         let mut command = ExternalTool::Gh.command();
         command.args(&args);
+        println!(
+            "Waiting for required checks (up to {} seconds)...",
+            REQUIRED_CHECKS_TIMEOUT.as_secs()
+        );
         let output = match process::run_with_timeout(command, REQUIRED_CHECKS_TIMEOUT) {
             Ok(output) => output,
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                bail!("Timed out after 300 seconds waiting for required checks.");
+                bail!(
+                    "Timed out after {} seconds waiting for required checks.",
+                    REQUIRED_CHECKS_TIMEOUT.as_secs()
+                );
             }
             Err(error) => return Err(error).context("Failed to wait for required checks"),
         };
@@ -188,14 +201,20 @@ impl PrMergeClient for GhCli {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        if output.status.success() || no_required_checks_reported(&output_text) {
+        if required_checks_succeeded(output.status.success(), &output_text) {
             return Ok(());
         }
 
         bail!("Required checks failed: {}", output_text.trim());
     }
 
-    fn squash_merge(&self, owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<()> {
+    fn squash_merge(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        head_sha: &str,
+    ) -> anyhow::Result<()> {
         let pr_number = pr_number.to_string();
         let repository = format!("{owner}/{repo}");
         let args = [
@@ -205,6 +224,8 @@ impl PrMergeClient for GhCli {
             "--repo",
             repository.as_str(),
             "--squash",
+            "--match-head-commit",
+            head_sha,
         ];
         run_gh(&args).map(|_| ())
     }
@@ -232,8 +253,19 @@ fn run_gh(args: &[&str]) -> anyhow::Result<Output> {
     Ok(output)
 }
 
-fn no_required_checks_reported(output: &str) -> bool {
-    output.contains("no required checks reported") || output.contains("no checks reported on the")
+fn parse_pr_state(state: &str) -> anyhow::Result<PrState> {
+    match state {
+        "OPEN" => Ok(PrState::Open),
+        "CLOSED" => Ok(PrState::Closed),
+        "MERGED" => Ok(PrState::Merged),
+        _ => bail!("Unknown PR state returned by gh: {state}"),
+    }
+}
+
+fn required_checks_succeeded(status_success: bool, output: &str) -> bool {
+    status_success
+        || output.contains("no required checks reported")
+        || output.contains("no checks reported on the")
 }
 
 #[cfg(test)]
@@ -283,8 +315,14 @@ mod tests {
             Ok(())
         }
 
-        fn squash_merge(&self, _owner: &str, _repo: &str, _pr_number: u64) -> anyhow::Result<()> {
-            self.events.borrow_mut().push("merge".to_string());
+        fn squash_merge(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            head_sha: &str,
+        ) -> anyhow::Result<()> {
+            self.events.borrow_mut().push(format!("merge:{head_sha}"));
             if self.merge_error {
                 anyhow::bail!("fake merge failed");
             }
@@ -292,9 +330,9 @@ mod tests {
         }
     }
 
-    fn snapshot(state: &str, head_sha: &str, merge_state_status: &str) -> PrSnapshot {
+    fn snapshot(state: PrState, head_sha: &str, merge_state_status: &str) -> PrSnapshot {
         PrSnapshot {
-            state: state.to_string(),
+            state,
             head_sha: head_sha.to_string(),
             merge_state_status: merge_state_status.to_string(),
             url: "https://github.com/example-org/example-repo/pull/42".to_string(),
@@ -319,9 +357,9 @@ mod tests {
     fn run_merge_calls_hook_and_checks_before_squash_merge(events: Rc<RefCell<Vec<String>>>) {
         let client = fake_client(
             &[
-                snapshot("OPEN", "head-a", "CLEAN"),
-                snapshot("OPEN", "head-a", "CLEAN"),
-                snapshot("MERGED", "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
             ],
             Rc::clone(&events),
             false,
@@ -343,7 +381,7 @@ mod tests {
                     "hook:[(\"ARMYKNIFE_PR_NUMBER\", \"42\"), (\"ARMYKNIFE_PR_OWNER\", \"example-org\"), (\"ARMYKNIFE_PR_REPO\", \"example-repo\"), (\"ARMYKNIFE_PR_URL\", \"https://github.com/example-org/example-repo/pull/42\"), (\"ARMYKNIFE_PR_HEAD_SHA\", \"head-a\")]".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
-                    "merge".to_string(),
+                    "merge:head-a".to_string(),
                     "view".to_string(),
                 ],
             ),
@@ -353,7 +391,7 @@ mod tests {
     #[rstest]
     fn run_merge_stops_when_pre_merge_hook_fails(events: Rc<RefCell<Vec<String>>>) {
         let client = fake_client(
-            &[snapshot("OPEN", "head-a", "CLEAN")],
+            &[snapshot(PrState::Open, "head-a", "CLEAN")],
             Rc::clone(&events),
             false,
             false,
@@ -372,10 +410,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::closed("CLOSED", "CLEAN")]
-    #[case::merge_conflicts("OPEN", "DIRTY")]
+    #[case::closed(PrState::Closed, "CLEAN")]
+    #[case::merge_conflicts(PrState::Open, "DIRTY")]
     fn run_merge_stops_for_unsafe_initial_pr(
-        #[case] state: &str,
+        #[case] state: PrState,
         #[case] merge_state_status: &str,
         events: Rc<RefCell<Vec<String>>>,
     ) {
@@ -401,7 +439,7 @@ mod tests {
     #[rstest]
     fn run_merge_stops_when_required_checks_fail(events: Rc<RefCell<Vec<String>>>) {
         let client = fake_client(
-            &[snapshot("OPEN", "head-a", "CLEAN")],
+            &[snapshot(PrState::Open, "head-a", "CLEAN")],
             Rc::clone(&events),
             true,
             false,
@@ -426,8 +464,8 @@ mod tests {
     fn run_merge_rejects_head_changes_after_required_checks(events: Rc<RefCell<Vec<String>>>) {
         let client = fake_client(
             &[
-                snapshot("OPEN", "head-a", "CLEAN"),
-                snapshot("OPEN", "head-b", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-b", "CLEAN"),
             ],
             Rc::clone(&events),
             false,
@@ -450,9 +488,9 @@ mod tests {
     fn run_merge_accepts_merge_error_when_pr_is_already_merged(events: Rc<RefCell<Vec<String>>>) {
         let client = fake_client(
             &[
-                snapshot("OPEN", "head-a", "CLEAN"),
-                snapshot("OPEN", "head-a", "CLEAN"),
-                snapshot("MERGED", "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
             ],
             Rc::clone(&events),
             false,
@@ -470,7 +508,7 @@ mod tests {
                     "view".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
-                    "merge".to_string(),
+                    "merge:head-a".to_string(),
                     "view".to_string(),
                 ],
             ),
@@ -493,10 +531,57 @@ mod tests {
     }
 
     #[rstest]
-    #[case::required_checks_absent("no required checks reported", true)]
-    #[case::checks_absent("no checks reported on the head commit", true)]
-    #[case::checks_present("Required checks are pending", false)]
-    fn no_required_checks_reported_cases(#[case] output: &str, #[case] expected: bool) {
-        assert_eq!(no_required_checks_reported(output), expected);
+    #[case::checks_succeeded(true, "", true)]
+    #[case::required_checks_absent(false, "no required checks reported", true)]
+    #[case::checks_absent(false, "no checks reported on the head commit", true)]
+    #[case::checks_failed(false, "Required checks are pending", false)]
+    fn required_checks_succeeded_cases(
+        #[case] status_success: bool,
+        #[case] output: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(required_checks_succeeded(status_success, output), expected);
+    }
+
+    #[rstest]
+    #[case::open("OPEN", Ok(PrState::Open))]
+    #[case::closed("CLOSED", Ok(PrState::Closed))]
+    #[case::merged("MERGED", Ok(PrState::Merged))]
+    #[case::unknown("QUEUED", Err("Unknown PR state returned by gh: QUEUED"))]
+    fn parse_pr_state_cases(#[case] state: &str, #[case] expected: Result<PrState, &str>) {
+        assert_eq!(
+            parse_pr_state(state).map_err(|error| error.to_string()),
+            expected.map_err(str::to_string),
+        );
+    }
+
+    #[rstest]
+    #[case::closed(PrState::Closed, "CLEAN")]
+    #[case::merge_conflicts(PrState::Open, "DIRTY")]
+    fn run_merge_stops_if_pr_becomes_unsafe_after_checks(
+        #[case] state: PrState,
+        #[case] merge_state_status: &str,
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(state, "head-a", merge_state_status),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42);
+
+        assert_eq!(
+            (result.is_err(), events.borrow().clone()),
+            (
+                true,
+                vec!["view".to_string(), "checks".to_string(), "view".to_string()],
+            ),
+        );
     }
 }
