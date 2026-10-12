@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::types::Session;
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
+use crate::commands::agent::user_turn::{UserTurn, user_turns};
 
 mod task_tree;
 
@@ -105,13 +105,13 @@ pub(super) fn build_session_rows<'a>(
     task_by_session: &HashMap<String, SessionTask>,
 ) -> Vec<SessionRow<'a>> {
     let turns = user_turns(sessions.iter().copied());
-    let turn_kinds: HashMap<String, UserTurnKind> = turns
+    let user_turn_session_ids: HashSet<String> = turns
         .iter()
-        .map(|turn| (turn.session.session_id.clone(), turn.kind))
+        .map(|turn| turn.session.session_id.clone())
         .collect();
     let mut rows = Vec::with_capacity(sessions.len() + 2);
     push_user_turns(&mut rows, turns);
-    let task_rows = task_tree::build_task_rows(sessions, task_by_session, &turn_kinds);
+    let task_rows = task_tree::build_task_rows(sessions, task_by_session, &user_turn_session_ids);
     if !task_rows.is_empty() {
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {
             label: "TASKS".to_string(),
@@ -255,6 +255,7 @@ pub(super) fn is_related_task(cursor: Option<&SessionTask>, other: Option<&Sessi
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, AgentStatusKind, Engine, SessionStatus};
+    use crate::commands::agent::user_turn::UserTurnKind;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
     use std::path::PathBuf;
@@ -333,7 +334,7 @@ mod tests {
         },
         UserTurn {
             id: String,
-            kind: String,
+            kind: UserTurnKind,
         },
         Task {
             id: String,
@@ -354,7 +355,7 @@ mod tests {
                 },
                 SessionRow::UserTurn(turn) => RowDescription::UserTurn {
                     id: turn.session.session_id.clone(),
-                    kind: turn.kind.label().unwrap_or("you").to_string(),
+                    kind: turn.kind,
                 },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
@@ -421,7 +422,7 @@ mod tests {
                 header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "crit".to_string(),
-                    kind: "crit".to_string(),
+                    kind: UserTurnKind::Crit,
                 },
                 header("TASKS"),
                 root_row("crit", TaskMark::UserTurn, 0, 0),
@@ -460,7 +461,7 @@ mod tests {
                 header("YOUR TURN"),
                 RowDescription::UserTurn {
                     id: "delegated_child".to_string(),
-                    kind: "you".to_string(),
+                    kind: UserTurnKind::You,
                 },
                 header("TASKS"),
                 root_row("pm", TaskMark::Working, 4, 1),

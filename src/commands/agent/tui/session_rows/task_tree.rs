@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::{SessionRowEntry, SessionTask, TaskMark};
 use crate::commands::agent::types::{AgentStatusKind, DisplayStatus, Session, SessionStatus};
-use crate::commands::agent::user_turn::UserTurnKind;
 
 /// Builds TASKS rows: each root (a session with no displayed ancestor)
 /// followed by every displayed descendant flattened onto one child level.
@@ -11,7 +10,7 @@ use crate::commands::agent::user_turn::UserTurnKind;
 pub(super) fn build_task_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
-    turn_kinds: &HashMap<String, UserTurnKind>,
+    user_turn_session_ids: &HashSet<String>,
 ) -> Vec<SessionRowEntry<'a>> {
     let members: Vec<&'a Session> = sessions
         .iter()
@@ -56,7 +55,8 @@ pub(super) fn build_task_rows<'a>(
         children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
     }
 
-    let mark_of = |session: &Session| task_mark(session, turn_kinds.get(&session.session_id));
+    let mark_of =
+        |session: &Session| task_mark(session, user_turn_session_ids.contains(&session.session_id));
     groups.sort_by_cached_key(|(root, children)| {
         let has_user_turn = std::iter::once(root)
             .chain(children.iter())
@@ -73,7 +73,7 @@ pub(super) fn build_task_rows<'a>(
         depth,
         mark: mark_of(session),
         is_last_sibling,
-        is_selectable: !turn_kinds.contains_key(&session.session_id),
+        is_selectable: !user_turn_session_ids.contains(&session.session_id),
         child_count: 0,
         child_user_turn_count: 0,
         task: task_by_session.get(session.session_id.as_str()).cloned(),
@@ -98,8 +98,8 @@ pub(super) fn build_task_rows<'a>(
     rows
 }
 
-fn task_mark(session: &Session, turn_kind: Option<&UserTurnKind>) -> TaskMark {
-    if turn_kind.is_some() {
+fn task_mark(session: &Session, has_user_turn: bool) -> TaskMark {
+    if has_user_turn {
         return TaskMark::UserTurn;
     }
     // A status set before the last stop is stale once the session runs again.
