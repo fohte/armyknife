@@ -150,10 +150,10 @@ async fn close_worktree(
     .await
 }
 
-pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Result<()> {
+pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
     let args = CloseArgs {
         target: None,
-        force,
+        force: false,
         skip_hooks: false,
     };
     let sessions = super::store::list_sessions()?;
@@ -1120,11 +1120,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_merge_path_refuses_the_callers_session_before_prepare_with_force() {
+    async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
         let target_session = session();
         let args = CloseArgs {
             target: None,
-            force: true,
+            force: false,
             skip_hooks: false,
         };
         let calls = RefCell::new(Vec::new());
