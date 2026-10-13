@@ -64,7 +64,7 @@ tungstenite = { version = "=0.30.0", default-features = false, features = ["hand
 uuid = { version = "=1.23.5", features = ["v4"] }
 
 [dev-dependencies]
-rstest = "=0.26.1"
+rstest = "=0.27.0"
 temp-env = "=0.3.6"
 wiremock = "=0.6.5"
 
