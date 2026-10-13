@@ -68,6 +68,7 @@ pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
 pub use sweep::SweepArgs;
+pub(crate) use vibe::ensure_repo_vibe_access;
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub use watch::WatchArgs;
 pub use window_status::WindowStatusArgs;

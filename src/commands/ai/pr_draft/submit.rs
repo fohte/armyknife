@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
+use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::cmd::run_git;
 use crate::infra::github::{
     CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
+use crate::shared::config::{Config, load_config};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -21,7 +23,7 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub draft: bool,
 
-    /// Skip draft approval verification (vibe mode only)
+    /// Skip draft approval verification when vibe mode and the target repository are allowed
     #[arg(long)]
     pub no_review: bool,
 }
@@ -42,9 +44,21 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
-        crate::commands::agent::is_vibe_enabled,
+        |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
+}
+
+fn ensure_no_review_access(
+    vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
+    load_config: impl FnOnce() -> anyhow::Result<Config>,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    if !vibe_enabled()? {
+        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
+    }
+    ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
 async fn run_impl(
@@ -53,7 +67,7 @@ async fn run_impl(
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
-    is_vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
+    vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
@@ -95,9 +109,7 @@ async fn run_impl(
     let draft = DraftFile::from_path(draft_path.clone())?;
 
     if args.no_review {
-        if !is_vibe_enabled()? {
-            anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
-        }
+        vibe_access_check(&target.owner, &target.repo)?;
     } else {
         draft.verify_approval()?;
     }
@@ -222,6 +234,7 @@ fn read_current_repo_identity() -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::infra::github::GitHubMockServer;
+    use crate::shared::config::Config;
     use crate::shared::env_var::EnvVars;
     use clap::Parser;
     use indoc::indoc;
@@ -243,8 +256,8 @@ mod tests {
         None
     }
 
-    fn no_vibe() -> anyhow::Result<bool> {
-        Ok(false)
+    fn no_vibe_access(_owner: &str, _repo: &str) -> anyhow::Result<()> {
+        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
@@ -402,24 +415,45 @@ mod tests {
     }
 
     #[rstest]
-    #[case::vibe_enabled(true, Ok(()), true)]
+    #[case::vibe_enabled(
+        "repo_submit_no_review_vibe",
+        true,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Ok(()),
+        true
+    )]
+    #[case::repo_disabled(
+        "repo_submit_no_review_config_denied",
+        true,
+        "{}",
+        Err("Vibe mode is disabled by configuration for repository example-org/repo_submit_no_review_config_denied.".to_string()),
+        false
+    )]
     #[case::vibe_disabled(
+        "repo_submit_no_review_regular",
         false,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
         Err("The --no-review option is only available when vibe mode is enabled.".to_string()),
         false
     )]
     #[tokio::test]
-    async fn submit_with_no_review_requires_vibe_mode(
+    async fn submit_with_no_review_requires_vibe_and_repo_access(
+        #[case] repo: &str,
         #[case] vibe_enabled: bool,
+        #[case] config_yaml: &str,
         #[case] expected_result: Result<(), String>,
         #[case] expected_hook_invoked: bool,
     ) {
-        let repo = if vibe_enabled {
-            "repo_submit_no_review_vibe"
-        } else {
-            "repo_submit_no_review_regular"
-        };
-        let env = setup_test_env("owner", repo).await;
+        let env = setup_test_env("example-org", repo).await;
+        let config: Config = serde_yaml::from_str(config_yaml).unwrap();
         let draft_path = create_unapproved_draft(
             &env.owner,
             &env.repo,
@@ -434,15 +468,25 @@ mod tests {
             no_review: true,
         };
 
+        let target_repo = std::cell::RefCell::new(None);
         let spy = HookSpy::default();
         let hook = |name: &str, env: &[(&str, &str)]| {
             spy.record(name, env);
             Ok(())
         };
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, || {
-            Ok(vibe_enabled)
-        })
+        let vibe_access_check = |owner: &str, repo: &str| {
+            target_repo.replace(Some((owner.to_string(), repo.to_string())));
+            ensure_no_review_access(|| Ok(vibe_enabled), || Ok(config), owner, repo)
+        };
+        let result = run_impl(
+            &args,
+            &client,
+            &hook,
+            noop_config,
+            no_current_repo,
+            vibe_access_check,
+        )
         .await
         .map_err(|error| error.to_string());
         let hook_names = spy
@@ -456,7 +500,14 @@ mod tests {
             Vec::new()
         };
 
-        assert_eq!((result, hook_names), (expected_result, expected_hook_names),);
+        assert_eq!(
+            (result, hook_names, target_repo.into_inner()),
+            (
+                expected_result,
+                expected_hook_names,
+                Some((env.owner.clone(), env.repo.clone())),
+            ),
+        );
     }
 
     #[tokio::test]
@@ -484,7 +535,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -520,7 +571,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -571,7 +622,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
-            || Ok(true),
+            |_, _| Ok(()),
         )
         .await;
 
@@ -626,7 +677,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -702,7 +753,7 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -744,7 +795,7 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -786,7 +837,7 @@ mod tests {
             &noop_hook,
             write_config,
             unrelated_repo,
-            no_vibe,
+            no_vibe_access,
         )
         .await;
 
@@ -849,7 +900,15 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &hook,
+            noop_config,
+            no_current_repo,
+            no_vibe_access,
+        )
+        .await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -912,7 +971,15 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let result = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe).await;
+        let result = run_impl(
+            &args,
+            &client,
+            &hook,
+            noop_config,
+            no_current_repo,
+            no_vibe_access,
+        )
+        .await;
         assert!(result.is_ok(), "submit failed: {:?}", result.err());
 
         let calls = spy.calls();
@@ -941,9 +1008,16 @@ mod tests {
         };
 
         let client = env.mock.client();
-        let err = run_impl(&args, &client, &hook, noop_config, no_current_repo, no_vibe)
-            .await
-            .expect_err("hook failure must abort submission");
+        let err = run_impl(
+            &args,
+            &client,
+            &hook,
+            noop_config,
+            no_current_repo,
+            no_vibe_access,
+        )
+        .await
+        .expect_err("hook failure must abort submission");
         assert_eq!(err.to_string(), "forbidden cross-org link");
     }
 }

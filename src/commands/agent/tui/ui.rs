@@ -8,6 +8,5 @@ mod session_content;
 mod session_list;
 #[cfg(test)]
 pub(super) mod test_support;
-mod tq_sidebar;
 
 pub use chrome::render;

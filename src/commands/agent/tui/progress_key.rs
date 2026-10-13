@@ -13,7 +13,6 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     app.clear_error();
     let current_rows = app.progress_session_id.as_deref() == app.selected_session_id();
     match (key.code, key.modifiers) {
-        (KeyCode::Tab, _) => app.cycle_pane_focus(),
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) if current_rows => {
             app.select_progress_row(1);
         }
@@ -40,9 +39,6 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
         (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
         (KeyCode::Esc, _) => {
             app.progress_focused = false;
-            if app.narrow_layout {
-                app.show_narrow_session_list_screen();
-            }
         }
         _ => {}
     }
@@ -388,43 +384,6 @@ mod tests {
                 open_progress_target: expected_target,
                 ..Default::default()
             }),
-        );
-    }
-
-    #[test]
-    fn tab_cycles_between_tasks_progress_and_tq_sidebar() {
-        let mut app = App::with_sessions(vec![session("selected")]);
-        app.sidebar_visible = true;
-        app.sidebar_available = true;
-
-        app.cycle_pane_focus();
-        let after_progress = (app.sidebar_focused, app.progress_focused);
-        app.cycle_pane_focus();
-        let after_sidebar = (app.sidebar_focused, app.progress_focused);
-        app.cycle_pane_focus();
-        let after_tasks = (app.sidebar_focused, app.progress_focused);
-
-        assert_eq!(
-            [after_progress, after_sidebar, after_tasks],
-            [(false, true), (true, false), (false, false)],
-        );
-    }
-
-    #[test]
-    fn narrow_layout_tab_reaches_sidebar_when_hidden_in_wide_layout() {
-        let mut app = App::with_sessions(vec![session("selected")]);
-        app.narrow_layout = true;
-
-        app.cycle_pane_focus();
-        let after_progress = (app.sidebar_focused, app.progress_focused);
-        app.cycle_pane_focus();
-        let after_sidebar = (app.sidebar_focused, app.progress_focused);
-        app.cycle_pane_focus();
-        let after_tasks = (app.sidebar_focused, app.progress_focused);
-
-        assert_eq!(
-            [after_progress, after_sidebar, after_tasks],
-            [(false, true), (true, false), (false, false)],
         );
     }
 

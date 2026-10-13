@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.407](https://github.com/fohte/armyknife/compare/v0.1.406...v0.1.407) (2026-10-13)
+
+
+### Features
+
+* **agent/tui:** remove the tq task sidebar ([#1147](https://github.com/fohte/armyknife/issues/1147)) ([4d6772b](https://github.com/fohte/armyknife/commit/4d6772b7a22491ce5a4d427539a2ef89e3275cbc))
+
+## [0.1.406](https://github.com/fohte/armyknife/compare/v0.1.405...v0.1.406) (2026-10-13)
+
+
+### Features
+
+* **agent:** configure vibe repository access ([#1145](https://github.com/fohte/armyknife/issues/1145)) ([3571c06](https://github.com/fohte/armyknife/commit/3571c0620448548d00bbfc149f83eaba764ad2a1))
+
+## [0.1.405](https://github.com/fohte/armyknife/compare/v0.1.404...v0.1.405) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/tui:** handle failed sessions in PROGRESS ([#1143](https://github.com/fohte/armyknife/issues/1143)) ([a2a3e39](https://github.com/fohte/armyknife/commit/a2a3e395baa0d5f8b0015e56ad268cd5d5b5604d))
+
 ## [0.1.404](https://github.com/fohte/armyknife/compare/v0.1.403...v0.1.404) (2026-10-13)
 
 

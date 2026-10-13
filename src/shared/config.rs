@@ -91,6 +91,13 @@ impl Config {
     /// Returns the raw JSON value at the path, or None if the path is missing
     /// or resolves to null. Callers format scalars and collections as needed.
     pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<serde_json::Value> {
+        if key == "repo.vibe" {
+            let (owner, repo) = repo_id?.split_once('/')?;
+            return Some(serde_json::Value::Bool(
+                self.is_vibe_allowed_for_repo(owner, repo),
+            ));
+        }
+
         if let Some(repo_key) = key.strip_prefix("repo.") {
             // Fall back to RepoConfig::default() when no entry exists for this
             // repo, so per-field serde defaults (e.g. direct_commit = false)
@@ -115,6 +122,18 @@ impl Config {
         }
     }
 
+    /// Resolve whether vibe mode is allowed for a repository.
+    /// GitHub owner and repository names are compared without case sensitivity for this policy.
+    /// Other config lookups retain their existing key matching behavior.
+    /// An explicit repository setting overrides its owner's setting.
+    pub fn is_vibe_allowed_for_repo(&self, owner: &str, repo: &str) -> bool {
+        let repo_id = format!("{owner}/{repo}");
+        let org_vibe =
+            strictest_vibe(self.orgs.iter(), owner, |config| Some(config.vibe)).unwrap_or(false);
+
+        strictest_vibe(self.repos.iter(), &repo_id, |config| config.vibe).unwrap_or(org_vibe)
+    }
+
     /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).
     /// Resolution order: repo (`repos.<owner>/<repo>.ai.review.reviewers`) -> org
     /// (`orgs.<owner>.ai.review.reviewers`) -> None (caller falls back to its own default).
@@ -132,6 +151,17 @@ impl Config {
         }
         None
     }
+}
+
+fn strictest_vibe<'a, ConfigType: 'a>(
+    entries: impl Iterator<Item = (&'a String, &'a ConfigType)>,
+    key: &str,
+    vibe: impl Fn(&ConfigType) -> Option<bool>,
+) -> Option<bool> {
+    entries
+        .filter(|(configured_key, _)| configured_key.eq_ignore_ascii_case(key))
+        .filter_map(|(_, config)| vibe(config))
+        .reduce(|allowed, next| allowed && next)
 }
 
 /// Resolve a dot-separated path against a JSON value. Null is treated as
@@ -354,6 +384,10 @@ pub struct RepoConfig {
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
+    /// Whether vibe mode is allowed for this repository. When omitted, the org setting applies.
+    #[serde(default)]
+    pub vibe: Option<bool>,
+
     /// AI-related per-repo overrides (e.g., reviewer set for `a ai review wait`).
     #[serde(default)]
     pub ai: AiConfig,
@@ -364,6 +398,11 @@ pub struct RepoConfig {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OrgConfig {
+    /// Whether vibe mode is allowed for repositories owned by this organization (default: false).
+    #[serde(default)]
+    #[cfg_attr(feature = "schema-gen", schemars(default))]
+    pub vibe: bool,
+
     /// AI-related per-org defaults (e.g., reviewer set for `a ai review wait`).
     #[serde(default)]
     pub ai: AiConfig,

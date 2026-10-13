@@ -384,7 +384,10 @@ pub(super) fn load_vibe_enabled_session_ids() -> Result<HashSet<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::session_rows::SessionTask;
+    use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
     use chrono::{TimeDelta, Utc};
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     /// Counter to assign distinct timestamps to test sessions.
@@ -485,6 +488,16 @@ mod tests {
     // Row-order / selection-persistence tests (TRIAGE inbox layout)
     // =========================================================================
 
+    #[fixture]
+    fn app_with_user_turn_and_active_session() -> App {
+        let mut waiting = create_test_session("awaiting-1");
+        waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        create_test_app(vec![waiting, create_test_session("active-1")])
+    }
+
     #[test]
     fn test_selection_follows_session_across_status_change() {
         let running_1 = create_test_session("running-1");
@@ -516,14 +529,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session() {
-        let mut waiting = create_test_session("awaiting-1");
-        waiting.status = SessionStatus::WaitingInput;
-        waiting
-            .crit_urls
-            .push("https://example.com/review".to_string());
-        let mut app = create_test_app(vec![waiting, create_test_session("active-1")]);
+    #[rstest]
+    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session(
+        app_with_user_turn_and_active_session: App,
+    ) {
+        let mut app = app_with_user_turn_and_active_session;
 
         let task_position = app
             .position_of_session_row_occurrence("awaiting-1", 1)
@@ -541,6 +551,72 @@ mod tests {
                 app.selected_session_row_occurrence(),
             ),
             (Some("awaiting-1"), Some(1)),
+        );
+    }
+
+    #[rstest]
+    fn test_tq_snapshot_updates_preserve_selected_task_occurrence(
+        app_with_user_turn_and_active_session: App,
+    ) {
+        let mut app = app_with_user_turn_and_active_session;
+
+        let initial_task = SessionTask {
+            task_id: "initial-task".to_string(),
+            task_number: 10,
+            task_title: "Initial title".to_string(),
+            parent_task_id: None,
+            is_closed: false,
+        };
+        app.set_tq_snapshot(TqSnapshot::new(HashMap::from([(
+            "awaiting-1".to_string(),
+            vec![initial_task.clone()],
+        )])));
+        app.rebuild_row_order();
+
+        assert_eq!(
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.selected_session_row_occurrence(),
+                app.task_by_session.clone(),
+            ),
+            (
+                Some("awaiting-1"),
+                Some(0),
+                HashMap::from([("awaiting-1".to_string(), initial_task)]),
+            ),
+        );
+
+        let task_position = app
+            .position_of_session_row_occurrence("awaiting-1", 1)
+            .expect("TASKS row is displayed");
+        app.list_state.select(Some(task_position));
+
+        let refreshed_task = SessionTask {
+            task_id: "refreshed-task".to_string(),
+            task_number: 20,
+            task_title: "Refreshed title".to_string(),
+            parent_task_id: None,
+            is_closed: false,
+        };
+        app.set_tq_snapshot(TqSnapshot::new(HashMap::from([(
+            "awaiting-1".to_string(),
+            vec![refreshed_task.clone()],
+        )])));
+        app.rebuild_row_order();
+
+        assert_eq!(
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.selected_session_row_occurrence(),
+                app.task_by_session.clone(),
+            ),
+            (
+                Some("awaiting-1"),
+                Some(1),
+                HashMap::from([("awaiting-1".to_string(), refreshed_task)]),
+            ),
         );
     }
 

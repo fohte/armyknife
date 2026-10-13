@@ -103,6 +103,8 @@ orgs: # per-org defaults, keyed by GitHub owner (org or user)
     ai:
       review:
         reviewers: [coderabbit] # default reviewers for `a ai review wait`/`request` in this org
+  example-org:
+    vibe: true # allow vibe-gated actions in this owner's repositories (default: false)
 
 repos: # per-repository overrides, keyed by "owner/repo"
   fohte/dotfiles:
@@ -111,6 +113,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
     ai:
       review:
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
+  example-org/example-repo:
+    vibe: false # override the org vibe setting (default: inherit)
 ```
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
@@ -207,11 +211,11 @@ Manage PR body drafts with human-in-the-loop review.
 
 `submit` options:
 
-| Option         | Description                                                                   |
-| -------------- | ----------------------------------------------------------------------------- |
-| `--base <ref>` | Base branch for the PR                                                        |
-| `--draft`      | Create as draft PR                                                            |
-| `--no-review`  | Skip approval verification (requires vibe mode, enabled by `a agent vibe on`) |
+| Option         | Description                                                                      |
+| -------------- | -------------------------------------------------------------------------------- |
+| `--base <ref>` | Base branch for the PR                                                           |
+| `--draft`      | Create as draft PR                                                               |
+| `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
 
 #### `a ai review`
 
@@ -369,7 +373,7 @@ a gh pr-review reply review <pr-number> [options]
 
 #### `a gh pr-merge`
 
-Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging is allowed only when vibe mode is enabled.
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
 
 ```sh
 a gh pr-merge <pr-number> [options]
@@ -414,7 +418,9 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
-Vibe mode is an opt-in marker recorded by armyknife. `a ai pr-draft submit --no-review` only skips approval validation when vibe mode is enabled. `a agent new --vibe` requires vibe mode, and `a gh pr-merge` checks it inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
+
+`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and `a gh pr-merge` applies both checks inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which reports whether the current session or a stored ancestor enabled the marker; it does not check repository access:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then
@@ -451,7 +457,7 @@ a agent watch
 set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
 ```
 
-On wide terminals, `a agent watch` can show the tq task sidebar, the YOUR TURN/TASKS session list, and the PROGRESS pane side by side. Use `C-b` to show or hide the sidebar, and `Enter` to apply a task or project filter. Task filters include descendant tasks; the **タスクなし** row shows sessions without linked tq tasks. Moving the sidebar or session-list cursor highlights matching rows in the other pane. `Tab` cycles focus through TASKS, PROGRESS, and the sidebar when it is visible; with the sidebar hidden, it switches between TASKS and PROGRESS. When focus moves between the sidebar and TASKS, the newly focused pane's cursor moves to its first matching row; from **すべて**, TASKS starts at its first session. Press `r` while the sidebar has focus to refresh tq data. On narrow terminals, each view uses the full screen: `Tab` cycles through TASKS, PROGRESS, and the sidebar even if the sidebar was hidden in the wide layout. `Enter` on a sidebar row applies its filter and returns to TASKS. `Esc` from PROGRESS returns to TASKS; from TASKS it returns to the sidebar row linked to the selected session unless a search, status, or drill-down filter must be cleared first. At startup in the narrow layout, `ARMYKNIFE_FOCUS_SESSION` opens TASKS first; otherwise the sidebar is shown.
+`a agent watch` shows the YOUR TURN/TASKS session list and the PROGRESS pane side by side. `Tab` switches focus between TASKS and PROGRESS, and `Esc` from PROGRESS returns to TASKS. On narrow terminals, the focused pane uses the full screen. In TASKS, `Esc` clears an active filter or quits. TASKS is focused at startup.
 
 PROGRESS follows the selected TASKS session. Its first row shows that session's role and current state. By default, rows below show its direct delegates, their session or PR title and PR number when available, and marks for implementation, diff review, PR body, CI, and merge. When the selected session links to a tq task with an `実装` checklist, the rows show planned PRs grouped by Batch, with unmatched delegates kept as regular rows. A row says `(PR unavailable)` when its worktree, branch, or GitHub `origin` remote cannot be resolved. `✓` means done, `◐` needs user attention, `●` is active, `◷` is waiting, and `○` is not started or unknown. An existing PR marks implementation, diff review, and PR body done unless a linked review is active; otherwise implementation follows the delegate's session state. Linked Crit and PR-body review activity updates their stage marks. CI follows the latest commit's check rollup; merge follows PR state and CI progress. Press `Enter` on a delegate row to focus its session pane when available; otherwise a known PR link opens.
 
@@ -498,7 +504,7 @@ The command sends Ctrl+D and waits up to five seconds for the agent to exit, the
 | `--from <ref>`                                       | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                                                                                                                                                                                                                                                       |
 | `--force`                                            | Force create new branch even if it already exists (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                |
 | `--skip-hooks`                                       | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                               |
-| `--vibe`                                             | Require vibe mode in the current or an ancestor session; the flag does not enable it                                                                                                                                                                                                                                                                                                                                     |
+| `--vibe`                                             | Require vibe mode in the current or an ancestor session and an allowed target repository; the flag does not enable it                                                                                                                                                                                                                                                                                                    |
 | `-R, --repo <path>`                                  | Target repository path (default: current directory)                                                                                                                                                                                                                                                                                                                                                                      |
 | `--prompt <text>`                                    | Initial prompt to send to the agent (Claude Code or Codex)                                                                                                                                                                                                                                                                                                                                                               |
 | `--agent`                                            | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                                                                                                                                                                                                                                                   |
@@ -791,7 +797,7 @@ set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-cc-pane-work
 
 When the `tq` CLI is on `PATH`, a linked session shows its `#<number>` in a fixed-width column, and its TASKS row shows the task title instead of the session name. TASKS rows show this column; YOUR TURN rows show the session name and configured status name or automatic label before the note. The note is shortened or omitted when the row is too narrow. Rows without a linked task reserve the same column, keeping every TASKS-row title aligned. The number dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. If the linked task is closed, its number renders struck through in a dusty purple, overriding the related/dimmed coloring. Older `tq` binaries that predate task status reporting are treated as open. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
 
-When `tq` isn't on `PATH`, or the command fails, rows keep task associations from the last successful lookup, including data restored from cache at startup. During an initial load without a cache, the task-number column and sidebar tree show skeleton placeholders; task numbers or blank cells replace the placeholders without moving session titles. If that load fails, the sidebar shows `Failed to load tq tasks`; press `r` to retry. Local operations (focus, resume) are never blocked by `tq` being down.
+When `tq` isn't on `PATH`, or the command fails, rows keep task associations from the last successful lookup, including data restored from cache at startup. During an initial load without a cache, the task-number column shows skeleton placeholders; task numbers or blank cells replace the placeholders without moving session titles. Local operations (focus, resume) are never blocked by `tq` being down.
 
 Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
 
@@ -869,6 +875,8 @@ Configuration management.
 Get a configuration value by dot-separated key. Supports any config field (e.g., `agent.worktree.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
+
+`a config get repo.vibe` prints the effective allowlist value for the current repository.
 
 ```sh
 $ a config get agent.worktree.branch_prefix

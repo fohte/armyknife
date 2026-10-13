@@ -64,10 +64,10 @@ pub enum AppEvent {
     },
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
-    /// tq sidebar snapshot fetch completed. `Ok(None)` means the fetch was
+    /// tq task snapshot fetch completed. `Ok(None)` means the fetch was
     /// skipped because tq is unavailable or there are no local sessions, so
     /// cached task links should remain in use.
-    TqSidebarFetched(std::result::Result<Option<TqSnapshot>, String>),
+    TqTasksFetched(std::result::Result<Option<TqSnapshot>, String>),
     /// `tq task url` fetch completed for a `t`-keypress request. `Ok(url)`
     /// is opened in the browser; `Err` (tq missing/unreachable) is logged
     /// and otherwise ignored -- the same silent degrade as every other tq
@@ -190,22 +190,22 @@ impl EventHandler {
         });
     }
 
-    /// Kick off a one-shot fetch of the tq sidebar snapshot. Returns
-    /// immediately; the result arrives as [`AppEvent::TqSidebarFetched`].
+    /// Kick off a one-shot fetch of the tq task links. Returns
+    /// immediately; the result arrives as [`AppEvent::TqTasksFetched`].
     /// Same runtime-unavailable
     /// fallback as [`Self::start_clean_pr_fetch`].
-    pub fn start_tq_sidebar_fetch(&self, local_session_ids: HashSet<String>) {
+    pub fn start_tq_task_fetch(&self, local_session_ids: HashSet<String>) {
         let tx = self.sender.clone();
         let Some(rt) = self.rt_handle.as_ref().cloned() else {
-            let _ = tx.send(AppEvent::TqSidebarFetched(Err(
+            let _ = tx.send(AppEvent::TqTasksFetched(Err(
                 "tokio runtime is not available".to_string(),
             )));
             return;
         };
         let client = TqClient::detect();
         rt.spawn(async move {
-            let result = super::tq_fetch::fetch_sidebar_snapshot(client, local_session_ids).await;
-            let _ = tx.send(AppEvent::TqSidebarFetched(result));
+            let result = super::tq_fetch::fetch_task_snapshot(client, local_session_ids).await;
+            let _ = tx.send(AppEvent::TqTasksFetched(result));
         });
     }
 

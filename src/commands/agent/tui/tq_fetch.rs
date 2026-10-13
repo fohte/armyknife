@@ -10,38 +10,12 @@ use super::tq_snapshot::TqSnapshot;
 use crate::commands::agent::claude_sessions::normalize_title;
 use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
 
-/// Fetches tq's session -> tasks listing and reduces it to one
-/// [`SessionTask`] per locally known session_id.
+/// Fetches tq task links for local sessions and their missing parent sessions.
 ///
-/// Returns `Ok(None)` when the fetch is skipped because tq is unavailable or
-/// there are no local sessions. A successful lookup returns `Some`, including
-/// an empty map when no tasks are linked, so callers can retain cached links
-/// when no fresh result is available.
-#[cfg(test)]
-pub async fn fetch_session_tasks(
-    client: Option<TqClient>,
-    local_session_ids: HashSet<String>,
-) -> Result<Option<HashMap<String, SessionTask>>, String> {
-    let Some(client) = client else {
-        return Ok(None);
-    };
-    if local_session_ids.is_empty() {
-        // Skip the round trip: tq's --session-id filter needs at least one
-        // id, and an empty request would otherwise return its full history.
-        return Ok(None);
-    }
-
-    let sessions = client
-        .list_session_tasks(&local_session_ids)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(Some(build_task_by_session(sessions, &local_session_ids)))
-}
-
-/// Fetches the linked task IDs, their full task records and all projects as
-/// one snapshot for the sidebar and the session task-number column.
-pub async fn fetch_sidebar_snapshot(
+/// Returns `Ok(None)` when tq is unavailable or there are no local sessions.
+/// A successful lookup returns a snapshot even when no tasks are linked, so
+/// callers can clear stale associations.
+pub async fn fetch_task_snapshot(
     client: Option<TqClient>,
     local_session_ids: HashSet<String>,
 ) -> Result<Option<TqSnapshot>, String> {
@@ -57,36 +31,20 @@ pub async fn fetch_sidebar_snapshot(
         .await
         .map_err(|e| e.to_string())?;
 
-    let linked_task_ids = sessions
-        .iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .flat_map(|session| session.tasks.iter().map(|task| task.id.clone()))
-        .collect::<HashSet<_>>();
-
     let client_ref = &client;
     let parent_sessions = fetch_missing_parent_sessions(
         &sessions,
         &local_session_ids,
         |parent_session_ids| async move { client_ref.list_session_tasks(&parent_session_ids).await },
-    );
-    let (mut parent_sessions, tasks, projects) = if linked_task_ids.is_empty() {
-        let (parent_sessions, projects) =
-            tokio::try_join!(parent_sessions, client.list_projects()).map_err(|e| e.to_string())?;
-        (parent_sessions, Vec::new(), projects)
-    } else {
-        tokio::try_join!(
-            parent_sessions,
-            client.list_sidebar_tasks(&linked_task_ids),
-            client.list_projects(),
-        )
-        .map_err(|e| e.to_string())?
-    };
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut sessions = sessions;
-    sessions.append(&mut parent_sessions);
+    sessions.extend(parent_sessions);
     let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
 
-    Ok(Some(TqSnapshot::new(session_tasks, tasks, projects)))
+    Ok(Some(TqSnapshot::new(session_tasks)))
 }
 
 fn parent_session_ids(
@@ -343,15 +301,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn client_none_skips_without_spawning_tq() {
-        let result = fetch_session_tasks(None, ids(&["session-1"])).await;
+    async fn missing_client_skips_without_spawning_tq() {
+        let result = fetch_task_snapshot(None, ids(&["session-1"])).await;
 
         assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]
-    async fn empty_local_session_ids_skips_without_spawning_tq() {
-        let result = fetch_session_tasks(Some(TqClient), HashSet::new()).await;
+    async fn empty_local_session_ids_skip_without_spawning_tq() {
+        let result = fetch_task_snapshot(Some(TqClient), HashSet::new()).await;
 
         assert_eq!(result, Ok(None));
     }

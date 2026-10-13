@@ -459,6 +459,11 @@
               "reviewers": null
             }
           }
+        },
+        "vibe": {
+          "description": "Whether vibe mode is allowed for repositories owned by this organization (default: false).",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false
@@ -515,6 +520,14 @@
           "description": "Language for commit messages and PR content (e.g., \"ja\", \"en\").",
           "type": [
             "string",
+            "null"
+          ],
+          "default": null
+        },
+        "vibe": {
+          "description": "Whether vibe mode is allowed for this repository. When omitted, the org setting applies.",
+          "type": [
+            "boolean",
             "null"
           ],
           "default": null

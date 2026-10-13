@@ -152,14 +152,14 @@ mod tests {
     fn format_value_renders_map_as_yaml() {
         let cfg = config_from_yaml(indoc! {"
             orgs:
-              fohte:
+              example-org:
                 ai:
                   review:
                     reviewers: [coderabbit]
         "});
         let v = cfg
-            .get_value("orgs.fohte", Some("fohte/any"))
-            .expect("orgs.fohte exists");
+            .get_value("orgs.example-org", Some("example-org/example-repo"))
+            .expect("organization config exists");
         let yaml = format_value(&v).unwrap();
         assert_eq!(
             yaml,
@@ -168,6 +168,7 @@ mod tests {
                   review:
                     reviewers:
                     - coderabbit
+                vibe: false
             "}
         );
     }
@@ -244,6 +245,105 @@ mod tests {
             scalar(cfg.get_value("repo.direct_commit", Some(repo_id))).as_deref(),
             Some(expected)
         );
+    }
+
+    #[rstest]
+    #[case::denied_by_default("{}", "example-org/example-repo", false)]
+    #[case::org_value_falls_back(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        "example-org/example-repo",
+        true
+    )]
+    #[case::repo_false_overrides_org_true(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/example-repo:
+                vibe: false
+        "},
+        "example-org/example-repo",
+        false
+    )]
+    #[case::repo_true_overrides_org_false(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: false
+            repos:
+              example-org/example-repo:
+                vibe: true
+        "},
+        "example-org/example-repo",
+        true
+    )]
+    #[case::mixed_case_repo_blocklist_overrides_org_allow(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/restricted-repository:
+                vibe: false
+        "},
+        "EXAMPLE-ORG/Restricted-Repository",
+        false
+    )]
+    #[case::mixed_case_org_uses_configured_owner(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        "EXAMPLE-ORG/example-repository",
+        true
+    )]
+    #[case::case_variant_org_blocklist_takes_precedence(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+              EXAMPLE-ORG:
+                vibe: false
+        "},
+        "Example-Org/example-repository",
+        false
+    )]
+    #[case::case_variant_repo_blocklist_takes_precedence(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/restricted-repository:
+                vibe: true
+              EXAMPLE-ORG/RESTRICTED-REPOSITORY:
+                vibe: false
+        "},
+        "Example-Org/Restricted-Repository",
+        false
+    )]
+    fn get_value_repo_vibe_resolves_effective_value(
+        #[case] yaml: &str,
+        #[case] repo_id: &str,
+        #[case] expected: bool,
+    ) {
+        let cfg = config_from_yaml(yaml);
+
+        assert_eq!(
+            cfg.get_value("repo.vibe", Some(repo_id)),
+            Some(serde_json::Value::Bool(expected)),
+        );
+    }
+
+    #[test]
+    fn get_value_repo_vibe_requires_repository_context() {
+        assert_eq!(Config::default().get_value("repo.vibe", None), None,);
     }
 
     #[rstest]
