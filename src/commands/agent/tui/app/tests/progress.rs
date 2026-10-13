@@ -81,15 +81,18 @@ fn local_progress_refresh_preserves_the_selected_delegate_row(
     let mut app = create_test_app(vec![selected.clone(), delegated_session.clone()]);
     app.update_row_order(&[None, Some("selected"), Some("delegate")]);
     app.list_state.select(Some(1));
-    app.progress_session_id = Some("selected".to_string());
-    app.progress_rows = build_progress_rows(
-        &selected,
-        &[FetchedDelegate {
-            session: delegated_session,
-            pull_request: None,
-            lookup_unavailable: false,
-        }],
-        &AgentConfig::default(),
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: vec![FetchedDelegate {
+                session: delegated_session,
+                pull_request: None,
+                lookup_unavailable: false,
+            }],
+            github_error: None,
+        }),
     );
     app.progress_list_state.select(Some(1));
     app.progress_table_state.select(Some(0));
@@ -143,20 +146,18 @@ fn local_progress_refresh_preserves_the_selected_delegate_row(
 }
 
 #[rstest]
-fn skips_remote_refresh_when_the_selected_session_has_no_delegates(timestamp: DateTime<Utc>) {
+fn shows_only_the_work_row_when_the_selected_session_has_no_delegates(timestamp: DateTime<Utc>) {
     let mut app = create_test_app(vec![create_test_session_at("selected", timestamp)]);
 
-    let should_fetch = app.begin_progress_refresh("selected");
+    app.begin_progress_refresh("selected");
 
     assert_eq!(
         (
-            should_fetch,
             app.progress_session_id.clone(),
             app.progress_rows.clone(),
             app.progress_error.clone(),
         ),
         (
-            false,
             Some("selected".to_string()),
             vec![ProgressRow::Work(WorkProgressRow {
                 session_id: "selected".to_string(),
@@ -182,39 +183,36 @@ fn shows_local_delegates_before_pr_status_is_fetched(
     app.update_row_order(&[None, Some("selected"), Some("delegate")]);
     app.list_state.select(Some(1));
 
-    let should_fetch = app.begin_progress_refresh("selected");
+    app.begin_progress_refresh("selected");
 
     assert_eq!(
-        (should_fetch, app.progress_rows.clone()),
-        (
-            true,
-            vec![
-                ProgressRow::Work(WorkProgressRow {
-                    session_id: "selected".to_string(),
-                    role: "session".to_string(),
-                    mark: ProgressMark::Working,
-                    status_label: None,
-                    note: None,
-                    pane_id: None,
-                }),
-                ProgressRow::PullRequest(PrProgressRow {
-                    session_id: "delegate".to_string(),
-                    title: "Local delegate".to_string(),
-                    number: None,
-                    url: None,
-                    pane_id: None,
-                    is_ended: false,
-                    lookup_unavailable: false,
-                    stages: StageMarks {
-                        implementation: ProgressMark::Working,
-                        diff_review: ProgressMark::NotStarted,
-                        pr_body: ProgressMark::NotStarted,
-                        ci: ProgressMark::NotStarted,
-                        merge: ProgressMark::NotStarted,
-                    },
-                }),
-            ],
-        ),
+        app.progress_rows.clone(),
+        vec![
+            ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "session".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "delegate".to_string(),
+                title: "Local delegate".to_string(),
+                number: None,
+                url: None,
+                pane_id: None,
+                is_ended: false,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Working,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            }),
+        ],
     );
 }
 
@@ -231,7 +229,7 @@ fn reuses_cached_progress_when_returning_to_a_session(
     ]);
     app.update_row_order(&[None, Some("selected"), Some("other"), Some("delegate")]);
     app.list_state.select(Some(1));
-    let _ = app.begin_progress_refresh("selected");
+    app.begin_progress_refresh("selected");
 
     app.apply_progress_result(
         "selected",
@@ -255,13 +253,12 @@ fn reuses_cached_progress_when_returning_to_a_session(
     );
 
     app.list_state.select(Some(2));
-    let _ = app.begin_progress_refresh("other");
+    app.begin_progress_refresh("other");
     app.list_state.select(Some(1));
-    let should_fetch = app.begin_progress_refresh("selected");
+    app.begin_progress_refresh("selected");
 
     assert_eq!(
         (
-            should_fetch,
             app.progress_session_id.as_deref(),
             app.progress_rows.clone(),
             app.progress_error.clone(),
@@ -269,7 +266,6 @@ fn reuses_cached_progress_when_returning_to_a_session(
             app.progress_table_state.selected(),
         ),
         (
-            true,
             Some("selected"),
             vec![
                 ProgressRow::Work(WorkProgressRow {
@@ -300,6 +296,139 @@ fn reuses_cached_progress_when_returning_to_a_session(
             None,
             Some(0),
             None,
+        ),
+    );
+}
+
+#[rstest]
+fn keeps_fetched_progress_for_ended_delegates_after_local_refresh(
+    timestamp: DateTime<Utc>,
+    mut delegated_session: Session,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    delegated_session.status = SessionStatus::Ended;
+    let mut app = create_test_app(vec![selected]);
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: vec![FetchedDelegate {
+                session: delegated_session,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 42,
+                        title: "Finished change".to_string(),
+                        state: PrState::Open,
+                        url: "https://example.test/pull/42".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
+                lookup_unavailable: false,
+            }],
+            github_error: None,
+        }),
+    );
+
+    app.refresh_progress_from_sessions("selected");
+
+    assert_eq!(
+        (
+            app.progress_rows.clone(),
+            app.progress_error.clone(),
+            app.progress_session_id.as_deref(),
+        ),
+        (
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Finished change".to_string(),
+                    number: Some(42),
+                    url: Some("https://example.test/pull/42".to_string()),
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Working,
+                        merge: ProgressMark::Waiting,
+                    },
+                }),
+            ],
+            None,
+            Some("selected"),
+        ),
+    );
+}
+
+#[rstest]
+fn preserves_local_delegate_rows_and_selection_when_fetch_fails(
+    timestamp: DateTime<Utc>,
+    delegated_session: Session,
+) {
+    let mut app = create_test_app(vec![
+        create_test_session_at("selected", timestamp),
+        delegated_session,
+    ]);
+    app.update_row_order(&[None, Some("selected"), Some("delegate")]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.progress_list_state.select(Some(1));
+    app.progress_table_state.select(Some(0));
+
+    app.apply_progress_result("selected", Err("progress fetch failed".to_string()));
+
+    assert_eq!(
+        (
+            app.selected_session_id(),
+            app.progress_session_id.as_deref(),
+            app.progress_rows.clone(),
+            app.progress_error.clone(),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        (
+            Some("selected"),
+            Some("selected"),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "delegate".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+            Some("progress fetch failed".to_string()),
+            Some(1),
+            Some(0),
         ),
     );
 }

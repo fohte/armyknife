@@ -214,9 +214,13 @@ pub(super) fn refresh_rows_from_sessions(
     existing_rows: &[ProgressRow],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
+    let has_delegated_work = !delegated.is_empty()
+        || existing_rows
+            .iter()
+            .any(|row| matches!(row, ProgressRow::PullRequest(_)));
     let mut rows = vec![ProgressRow::Work(work_progress_row(
         selected,
-        !delegated.is_empty(),
+        has_delegated_work,
         agent_config,
     ))];
     let mut previous = existing_rows
@@ -246,6 +250,17 @@ pub(super) fn refresh_rows_from_sessions(
             row.stages.pr_body = updated_stages.pr_body;
         }
         rows.push(ProgressRow::PullRequest(row));
+    }
+
+    // Ended delegates leave the live session list before their PR is resolved.
+    for row in existing_rows {
+        if let ProgressRow::PullRequest(row) = row
+            && !delegated
+                .iter()
+                .any(|session| session.session_id == row.session_id)
+        {
+            rows.push(ProgressRow::PullRequest(row.clone()));
+        }
     }
 
     rows

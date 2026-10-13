@@ -12,38 +12,15 @@ pub(super) struct CachedProgress {
 }
 
 impl App {
-    pub(in crate::commands::agent::tui) fn begin_progress_refresh(
-        &mut self,
-        session_id: &str,
-    ) -> bool {
-        let Some(session) = self
-            .selected_session()
-            .filter(|session| session.session_id == session_id)
-            .cloned()
-        else {
-            return false;
-        };
-        let rows = self.existing_progress_rows(session_id);
-        let snapshot = self.local_progress_snapshot(&session, &rows);
-        let should_fetch = snapshot.rows.len() > 1;
-        self.store_progress_snapshot(session_id, snapshot);
-        should_fetch
+    pub(in crate::commands::agent::tui) fn begin_progress_refresh(&mut self, session_id: &str) {
+        self.refresh_local_progress(session_id, None);
     }
 
     pub(in crate::commands::agent::tui) fn refresh_progress_from_sessions(
         &mut self,
         session_id: &str,
     ) {
-        let Some(selected) = self
-            .selected_session()
-            .filter(|session| session.session_id == session_id)
-            .cloned()
-        else {
-            return;
-        };
-        let rows = self.existing_progress_rows(session_id);
-        let snapshot = self.local_progress_snapshot(&selected, &rows);
-        self.store_progress_snapshot(session_id, snapshot);
+        self.refresh_local_progress(session_id, None);
     }
 
     pub(in crate::commands::agent::tui) fn apply_progress_result(
@@ -53,45 +30,26 @@ impl App {
     ) {
         match result {
             Ok(progress) if progress.selected_session_id == session_id => {
-                let Some(selected) = self
-                    .sessions
-                    .iter()
-                    .find(|session| session.session_id == session_id)
-                    .cloned()
-                else {
+                let Some(selected) = self.session_by_id(session_id) else {
                     return;
                 };
-                let fetched_rows =
-                    build_progress_rows(&selected, &progress.delegated, &self.agent_config);
-                let delegated = direct_delegates(self.sessions.clone(), session_id);
-                let rows = refresh_rows_from_sessions(
-                    &selected,
-                    &delegated,
-                    &fetched_rows,
-                    &self.agent_config,
-                );
-                let error = (!delegated.is_empty())
-                    .then_some(progress.github_error)
-                    .flatten();
+                let has_delegates = !progress.delegated.is_empty();
+                let delegated = progress
+                    .delegated
+                    .into_iter()
+                    .map(|mut fetched| {
+                        if let Some(session) = self.session_by_id(&fetched.session.session_id) {
+                            fetched.session = session;
+                        }
+                        fetched
+                    })
+                    .collect::<Vec<_>>();
+                let rows = build_progress_rows(&selected, &delegated, &self.agent_config);
+                let error = has_delegates.then_some(progress.github_error).flatten();
                 self.store_progress_snapshot(session_id, CachedProgress { rows, error });
             }
             Ok(_) => {}
-            Err(error) => {
-                let Some(selected) = self
-                    .sessions
-                    .iter()
-                    .find(|session| session.session_id == session_id)
-                    .cloned()
-                else {
-                    return;
-                };
-                let rows = self.existing_progress_rows(session_id);
-                let mut snapshot = self.local_progress_snapshot(&selected, &rows);
-                if snapshot.rows.len() > 1 {
-                    snapshot.error = Some(error);
-                }
-                self.store_progress_snapshot(session_id, snapshot);
-            }
+            Err(error) => self.refresh_local_progress(session_id, Some(error)),
         }
     }
 
@@ -99,11 +57,26 @@ impl App {
         self.progress_cache
             .get(session_id)
             .map(|snapshot| snapshot.rows.clone())
-            .or_else(|| {
-                (self.progress_session_id.as_deref() == Some(session_id))
-                    .then(|| self.progress_rows.clone())
-            })
             .unwrap_or_default()
+    }
+
+    fn session_by_id(&self, session_id: &str) -> Option<Session> {
+        self.sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .cloned()
+    }
+
+    fn refresh_local_progress(&mut self, session_id: &str, error: Option<String>) {
+        let Some(selected) = self.session_by_id(session_id) else {
+            return;
+        };
+        let rows = self.existing_progress_rows(session_id);
+        let mut snapshot = self.local_progress_snapshot(&selected, &rows);
+        if snapshot.rows.len() > 1 {
+            snapshot.error = error.or(snapshot.error);
+        }
+        self.store_progress_snapshot(session_id, snapshot);
     }
 
     fn local_progress_snapshot(
@@ -114,12 +87,12 @@ impl App {
         let delegated = direct_delegates(self.sessions.clone(), &selected.session_id);
         let rows =
             refresh_rows_from_sessions(selected, &delegated, existing_rows, &self.agent_config);
-        let error = if delegated.is_empty() {
-            None
-        } else {
+        let error = if rows.len() > 1 {
             self.progress_cache
                 .get(&selected.session_id)
                 .and_then(|snapshot| snapshot.error.clone())
+        } else {
+            None
         };
         CachedProgress { rows, error }
     }
