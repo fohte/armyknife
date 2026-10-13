@@ -335,7 +335,7 @@ pub(super) fn build_session_item(
         },
     );
 
-    let branch = tree_branch_text(entry.depth, entry.is_last_sibling);
+    let branch = tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling);
     let branch_width = branch.width();
     let title_width =
         title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
@@ -393,12 +393,21 @@ pub(super) fn build_session_item(
     }
 }
 
-fn tree_branch_text(depth: usize, is_last_sibling: bool) -> &'static str {
-    match (depth, is_last_sibling) {
-        (0, _) => "",
-        (_, true) => "└─ ",
-        (_, false) => "├─ ",
+pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bool) -> String {
+    let Some(tree_prefix) = tree_prefix else {
+        return String::new();
+    };
+
+    let mut branch = String::new();
+    for ancestor_is_last in tree_prefix {
+        branch.push_str(if *ancestor_is_last { "   " } else { "│  " });
     }
+    branch.push_str(if is_last_sibling {
+        "└─ "
+    } else {
+        "├─ "
+    });
+    branch
 }
 
 /// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
@@ -546,14 +555,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::root(0, true, "")]
-    #[case::middle_child(1, false, "├─ ")]
-    #[case::last_child(1, true, "└─ ")]
+    #[case::root(None, true, "")]
+    #[case::middle_child(Some(vec![]), false, "├─ ")]
+    #[case::last_child(Some(vec![]), true, "└─ ")]
+    #[case::nested_under_middle_sibling(Some(vec![false]), false, "│  ├─ ")]
+    #[case::great_grandchild(Some(vec![true, false]), true, "   │  └─ ")]
     fn test_tree_branch_text(
-        #[case] depth: usize,
+        #[case] tree_prefix: Option<Vec<bool>>,
         #[case] is_last_sibling: bool,
         #[case] expected: &str,
     ) {
-        assert_eq!(tree_branch_text(depth, is_last_sibling), expected);
+        assert_eq!(
+            tree_branch_text(tree_prefix.as_deref(), is_last_sibling),
+            expected
+        );
     }
 }

@@ -27,15 +27,17 @@ pub(super) struct SectionHeaderRow {
     pub kind: Section,
 }
 
-/// One TASKS row. `depth` is 0 for a root and 1 for every descendant, since
-/// grandchildren and deeper are flattened onto the child level.
+/// One TASKS row. `tree_prefix` is `None` for a root; descendants carry one
+/// sibling marker for each non-root ancestor between the root and parent.
 #[derive(Debug)]
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
-    pub depth: usize,
     pub mark: TaskMark,
     pub is_last_sibling: bool,
-    /// Children shown under a root (always 0 on child rows).
+    /// Whether each non-root ancestor was the last child in its own group.
+    /// `None` identifies a root; an empty prefix identifies a direct child.
+    pub tree_prefix: Option<Vec<bool>>,
+    /// Descendants shown under a root (always 0 on descendant rows).
     pub child_count: usize,
     pub child_user_turn_count: usize,
     /// The tq task this session is linked to, if any. Drives the task-number
@@ -57,7 +59,7 @@ pub(super) enum TaskMark {
 }
 
 impl<'a> SessionRow<'a> {
-    /// The session_id occupying this row, if it is individually selectable.
+    /// The session_id occupying this row, if it belongs to a session.
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
             SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
@@ -342,9 +344,9 @@ mod tests {
         },
         Task {
             id: String,
-            depth: usize,
             mark: TaskMark,
             is_last_sibling: bool,
+            tree_prefix: Option<Vec<bool>>,
             child_count: usize,
             child_user_turn_count: usize,
         },
@@ -362,9 +364,9 @@ mod tests {
                 },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
-                    depth: entry.depth,
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
+                    tree_prefix: entry.tree_prefix.clone(),
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
                 },
@@ -381,9 +383,9 @@ mod tests {
     fn root_row(id: &str, mark: TaskMark, children: usize, user_turns: usize) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
-            depth: 0,
             mark,
             is_last_sibling: false,
+            tree_prefix: None,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -392,9 +394,25 @@ mod tests {
     fn child_row(id: &str, mark: TaskMark, is_last_sibling: bool) -> RowDescription {
         RowDescription::Task {
             id: id.to_string(),
-            depth: 1,
             mark,
             is_last_sibling,
+            tree_prefix: Some(Vec::new()),
+            child_count: 0,
+            child_user_turn_count: 0,
+        }
+    }
+
+    fn nested_row(
+        id: &str,
+        mark: TaskMark,
+        is_last_sibling: bool,
+        tree_prefix: &[bool],
+    ) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            mark,
+            is_last_sibling,
+            tree_prefix: Some(tree_prefix.to_vec()),
             child_count: 0,
             child_user_turn_count: 0,
         }
@@ -407,7 +425,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_user_turn_also_appears_in_tasks(agent_config: AgentConfig) {
+    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks(
+        agent_config: AgentConfig,
+    ) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());
@@ -432,7 +452,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_flattens_descendants_and_hides_delegated_sessions(
+    fn test_build_session_rows_preserves_full_depth_and_hides_delegated_sessions(
         agent_config: AgentConfig,
     ) {
         let pm = running_session("pm", &[], 0);
@@ -440,6 +460,9 @@ mod tests {
         // The intermediate ancestor is gone, so this still nests under "pm".
         let orphan = running_session("orphan", &["pm", "deleted_middle"], 1);
         let grandchild = running_session("grandchild", &["pm", "design"], 2);
+        let great_grandchild =
+            running_session("great_grandchild", &["pm", "design", "grandchild"], 6);
+        let qa = running_session("qa", &["pm", "design"], 0);
         let mut delegated = running_session("delegated", &["pm", "design"], 4);
         delegated.is_delegated = true;
         let delegated_child = with_agent_status(
@@ -452,6 +475,8 @@ mod tests {
             &design,
             &orphan,
             &grandchild,
+            &great_grandchild,
+            &qa,
             &delegated,
             &delegated_child,
         ];
@@ -466,10 +491,12 @@ mod tests {
                     kind: UserTurnKind::AgentStatus,
                 },
                 header("TASKS"),
-                root_row("pm", TaskMark::Working, 4, 1),
-                child_row("delegated_child", TaskMark::UserTurn, false),
+                root_row("pm", TaskMark::Working, 6, 1),
                 child_row("design", TaskMark::Working, false),
-                child_row("grandchild", TaskMark::Working, false),
+                nested_row("delegated_child", TaskMark::UserTurn, false, &[false]),
+                nested_row("grandchild", TaskMark::Working, false, &[false]),
+                nested_row("great_grandchild", TaskMark::Working, true, &[false, false],),
+                nested_row("qa", TaskMark::Working, true, &[false]),
                 child_row("orphan", TaskMark::Working, true),
             ]
         );
@@ -494,11 +521,11 @@ mod tests {
             describe(&rows),
             vec![
                 header("TASKS"),
-                root_row("root", TaskMark::Working, 1, 0),
+                root_row("root", TaskMark::Working, 2, 0),
                 child_row("parent", TaskMark::Working, true),
-                root_row("child", TaskMark::Working, 0, 0),
-                root_row("cycle_a", TaskMark::Working, 0, 0),
-                root_row("cycle_b", TaskMark::Working, 0, 0),
+                nested_row("child", TaskMark::Working, true, &[true]),
+                root_row("cycle_a", TaskMark::Working, 1, 0),
+                child_row("cycle_b", TaskMark::Working, true),
             ]
         );
     }

@@ -135,6 +135,7 @@ mod tests {
 
     use super::super::items::{
         MIN_WORK_TYPE_COLUMN_WIDTH, TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_BASE_INDENT,
+        tree_branch_text,
     };
 
     const WAITING_QUESTION_INDENT: usize =
@@ -813,14 +814,14 @@ mod tests {
     // `a` sits one generation past `MAX_KIN_DISTANCE` and must render
     // uncolored, same as the cursor row `e` itself. Rows: chrome(y0),
     // section header(y1), a(y2) b(y3) c(y4) d(y5) e(y6), in input order.
-    #[case::beyond_cap_ancestor_a(2, false, Color::Reset)]
-    #[case::great_grandparent_b(3, true, Color::Indexed(146))]
-    #[case::grandparent_c(4, true, Color::Indexed(111))]
-    #[case::parent_d(5, true, Color::Indexed(39))]
-    #[case::cursor_row_e(6, true, Color::Reset)]
+    #[case::beyond_cap_ancestor_a(2, None, Color::Reset)]
+    #[case::great_grandparent_b(3, Some(vec![]), Color::Indexed(146))]
+    #[case::grandparent_c(4, Some(vec![true]), Color::Indexed(111))]
+    #[case::parent_d(5, Some(vec![true, true]), Color::Indexed(39))]
+    #[case::cursor_row_e(6, Some(vec![true, true, true]), Color::Reset)]
     fn test_render_kin_highlight_ancestor_ramp_and_cap(
         #[case] row_y: u16,
-        #[case] is_child: bool,
+        #[case] tree_prefix: Option<Vec<bool>>,
         #[case] expected_fg: Color,
     ) {
         let now = Utc::now();
@@ -847,8 +848,8 @@ mod tests {
         let sessions = vec![a, b, c, d, e];
         // list_state index: header=0, a=1, b=2, c=3, d=4, e=5 -- select "e".
         let buffer = render_buffer(&sessions, Some(5), now, 80, 12);
-        let branch_width = if is_child { "├─ ".width() } else { 0 };
-        let title_column = WAITING_QUESTION_INDENT + branch_width;
+        let title_column =
+            WAITING_QUESTION_INDENT + tree_branch_text(tree_prefix.as_deref(), false).width();
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
@@ -859,14 +860,15 @@ mod tests {
     // (distance 2); `great_uncle` shares only the great-grandparent root,
     // one generation past `MAX_COLLATERAL_KIN_DISTANCE`, and must render
     // uncolored, same as the cursor row itself. Rows: chrome(y0),
-    // header(y1), root(y2) gp_a(y3) gp_b(y4) parent_a(y5) parent_a2(y6)
-    // selected(y7) sibling(y8) cousin(y9), in input order.
-    #[case::beyond_cap_great_uncle(4, Color::Reset)]
-    #[case::cursor_row_selected(7, Color::Reset)]
-    #[case::sibling(8, Color::Indexed(129))]
-    #[case::cousin(9, Color::Indexed(135))]
+    // header(y1), root(y2), gp_a(y3), parent_a(y4), selected(y5),
+    // sibling(y6), parent_a2(y7), cousin(y8), gp_b(y9).
+    #[case::beyond_cap_great_uncle(9, Some(vec![]), Color::Reset)]
+    #[case::cursor_row_selected(5, Some(vec![false, false]), Color::Reset)]
+    #[case::sibling(6, Some(vec![false, false]), Color::Indexed(129))]
+    #[case::cousin(8, Some(vec![false, true]), Color::Indexed(135))]
     fn test_render_kin_highlight_collateral_ramp_and_cap(
         #[case] row_y: u16,
+        #[case] tree_prefix: Option<Vec<bool>>,
         #[case] expected_fg: Color,
     ) {
         let now = Utc::now();
@@ -909,10 +911,11 @@ mod tests {
         let sessions = vec![
             root, gp_a, gp_b, parent_a, parent_a2, selected, sibling, cousin,
         ];
-        // list_state index: header=0, root=1, gp_a=2, gp_b=3, parent_a=4,
-        // parent_a2=5, selected=6, sibling=7, cousin=8 -- select "selected".
-        let buffer = render_buffer(&sessions, Some(6), now, 80, 20);
-        let title_column = WAITING_QUESTION_INDENT + "├─ ".width();
+        // list_state index: header=0, root=1, gp_a=2, parent_a=3,
+        // selected=4, sibling=5, parent_a2=6, cousin=7, gp_b=8.
+        let buffer = render_buffer(&sessions, Some(4), now, 80, 20);
+        let title_column =
+            WAITING_QUESTION_INDENT + tree_branch_text(tree_prefix.as_deref(), false).width();
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
