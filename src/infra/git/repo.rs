@@ -117,6 +117,12 @@ impl GitRepo {
         }
     }
 
+    /// Reads a repository-local Git configuration value.
+    pub fn local_config_value(&self, key: &str) -> Option<String> {
+        run_git_optional(&self.workdir, ["config", "--local", "--get", key])
+            .filter(|value| !value.is_empty())
+    }
+
     pub fn local_branch_exists(&self, branch: &str) -> bool {
         run_git_optional(
             &self.workdir,

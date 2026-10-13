@@ -40,6 +40,8 @@ use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+mod pr_number;
+
 use super::client::GitHubClient;
 
 /// Create a mock user JSON object for GitHub API Author model.

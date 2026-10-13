@@ -6,5 +6,7 @@
 mod client;
 mod error;
 
-pub use client::{SessionTasks, TqClient, TqTask, TqTaskStatus};
+pub use client::{
+    SessionTasks, TqChecklist, TqChecklistItem, TqClient, TqGithubLink, TqTask, TqTaskStatus,
+};
 pub use error::{Result, TqError};

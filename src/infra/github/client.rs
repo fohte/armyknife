@@ -6,6 +6,8 @@ use anyhow::Context;
 use indoc::indoc;
 use serde::Deserialize;
 
+mod partial_graphql;
+
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
 use crate::infra::external_tool::ExternalTool;

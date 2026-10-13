@@ -7,6 +7,6 @@ mod progress;
 mod session_content;
 mod session_list;
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
 
 pub use chrome::render;

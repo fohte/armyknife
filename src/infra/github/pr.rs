@@ -184,6 +184,7 @@ impl PrClient for GitHubClient {
 /// Maximum number of branch queries per single GraphQL request.
 /// GitHub GraphQL API has complexity limits; 50 branches keeps us well within bounds.
 const BATCH_SIZE: usize = 50;
+pub(super) const PR_PROGRESS_FIELDS: &str = "number title state url mergedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
 
 impl GitHubClient {
     /// Fetch PR status for multiple repo/branch combinations in a single GraphQL call.
@@ -270,7 +271,7 @@ impl GitHubClient {
             let mut branch_parts = Vec::new();
             let mut branch_alias_map = HashMap::new();
             let pr_fields = if include_ci_state {
-                "number title state url mergedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+                PR_PROGRESS_FIELDS
             } else {
                 "number title state url mergedAt"
             };
@@ -363,7 +364,7 @@ fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
     })
 }
 
-fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgressInfo> {
+pub(super) fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgressInfo> {
     let pull_request = parse_pr_node(node)?;
     let ci_state = node
         .get("commits")

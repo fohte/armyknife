@@ -56,9 +56,13 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     };
 
+    let has_implementation = app
+        .progress_rows
+        .iter()
+        .any(|row| matches!(row, ProgressRow::ImplementationHeader { .. }));
     let has_delegates = app.progress_rows.len() > 1;
     let work_height = 1;
-    let header_height = if has_delegates { 1 } else { 0 };
+    let header_height = usize::from(has_delegates && !has_implementation) as u16;
     let [work_area, header_area, rows_area] = Layout::vertical([
         Constraint::Length(work_height),
         Constraint::Length(header_height),
@@ -67,7 +71,9 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     .areas(inner);
     render_work_row(frame, work_area, &work, app);
 
-    if has_delegates {
+    if has_implementation {
+        render_checklist_rows(frame, rows_area, app);
+    } else if has_delegates {
         render_stage_header(frame, header_area, inner.width);
         render_pr_rows(frame, rows_area, app);
     } else if let Some(error) = app.progress_error.as_deref() {
@@ -151,7 +157,11 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .filter_map(|row| match row {
             ProgressRow::PullRequest(row) => Some(pr_table_row(row)),
-            ProgressRow::Work(_) => None,
+            ProgressRow::Work(_)
+            | ProgressRow::ImplementationHeader { .. }
+            | ProgressRow::BatchHeader { .. }
+            | ProgressRow::ChecklistPullRequest { .. }
+            | ProgressRow::PlannedPullRequest { .. } => None,
         })
         .collect::<Vec<_>>();
     let table = Table::new(table_rows, stage_widths())
@@ -165,10 +175,90 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(table, area, &mut app.progress_table_state);
 }
 
+fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App) {
+    let table_rows = app
+        .progress_rows
+        .iter()
+        .skip(1)
+        .map(checklist_table_row)
+        .collect::<Vec<_>>();
+    let table = Table::new(table_rows, stage_widths())
+        .column_spacing(1)
+        .highlight_symbol(if app.progress_focused { "› " } else { "> " })
+        .row_highlight_style(Style::default().bg(if app.progress_focused {
+            Color::DarkGray
+        } else {
+            Color::Indexed(236)
+        }));
+    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+}
+
+fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
+    match row {
+        ProgressRow::ImplementationHeader {
+            merged_pr_count,
+            total_pr_count,
+            collapsed,
+        } => {
+            let disclosure = if *collapsed { "▸" } else { "▾" };
+            let mut cells = vec![Cell::from(format!(
+                "{disclosure} 実装 (PR {merged_pr_count}/{total_pr_count})"
+            ))];
+            if !collapsed {
+                cells.extend([
+                    Cell::from("実装"),
+                    Cell::from("差分"),
+                    Cell::from("body"),
+                    Cell::from("CI"),
+                    Cell::from("merge"),
+                ]);
+            } else {
+                cells.extend((0..5).map(|_| Cell::from("")));
+            }
+            Row::new(cells).style(Style::default().fg(Color::DarkGray))
+        }
+        ProgressRow::BatchHeader {
+            title,
+            merged_pr_count,
+            collapsed,
+            ..
+        } => {
+            let title = if *collapsed {
+                format!("  ▸ {title} ({merged_pr_count} PR merged)")
+            } else {
+                format!("  ▾ {title}")
+            };
+            Row::new(vec![
+                Cell::from(title),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ])
+            .style(Style::default().fg(Color::DarkGray))
+        }
+        ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    "),
+        ProgressRow::PlannedPullRequest { title, .. } => Row::new(vec![
+            Cell::from(format!("    ○ {title}")).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+        ]),
+        ProgressRow::Work(_) | ProgressRow::PullRequest(_) => Row::new(Vec::<Cell>::new()),
+    }
+}
+
 fn pr_table_row(row: &PrProgressRow) -> Row<'static> {
+    pr_table_row_with_indent(row, "")
+}
+
+fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str) -> Row<'static> {
     let mut name = match row.number {
-        Some(number) => format!("#{number} {}", row.title),
-        None => row.title.clone(),
+        Some(number) => format!("{indent}#{number} {}", row.title),
+        None => format!("{indent}{}", row.title),
     };
     if row.lookup_unavailable {
         name.push_str(" (PR unavailable)");
@@ -336,6 +426,97 @@ mod tests {
                 "│› #17 Sample change                          ✓    ◐    ●     ◷   ○",
                 "│  Sample delegate (PR unavailable)           ●    ○    ○     ○   ○",
                 "│",
+            ],
+        );
+    }
+
+    #[test]
+    fn renders_implementation_batches_and_unstarted_pull_requests() {
+        let mut session = create_test_session("selected");
+        session.work_type = Some("builder".to_string());
+        let mut app = App::with_sessions(vec![session]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![
+            ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "builder".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 1,
+                total_pr_count: 2,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-1".to_string(),
+                title: "Batch 1".to_string(),
+                merged_pr_count: 1,
+                collapsed: true,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-2".to_string(),
+                title: "Batch 2".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch-2".to_string(),
+                row: PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Sample change".to_string(),
+                    number: Some(17),
+                    url: Some("https://example.test/pull/17".to_string()),
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::User,
+                        pr_body: ProgressMark::Working,
+                        ci: ProgressMark::Waiting,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+            ProgressRow::PlannedPullRequest {
+                batch_id: "batch-3".to_string(),
+                checklist_item_id: "item-3".to_string(),
+                title: "Future change".to_string(),
+            },
+        ];
+        app.progress_list_state.select(Some(4));
+        app.progress_table_state.select(Some(3));
+
+        let backend = TestBackend::new(84, 7);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let actual = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                "│PROGRESS: project",
+                "│  ● builder",
+                "│  ▾ 実 装  (PR 1/2)                                        実 装  差 分  body  CI  merge",
+                "│    ▸ Batch 1 (1 PR merged)",
+                "│    ▾ Batch 2",
+                "│›     #17 Sample change                                  ✓    ◐    ●     ◷   ○",
+                "│      ○ Future change",
             ],
         );
     }
