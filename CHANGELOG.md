@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.412](https://github.com/fohte/armyknife/compare/v0.1.411...v0.1.412) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/watch:** show progress for a tq task ([#1157](https://github.com/fohte/armyknife/issues/1157)) ([0c8dbe6](https://github.com/fohte/armyknife/commit/0c8dbe600265ab1f88ab9617af724cc53b4f9101))
+
 ## [0.1.411](https://github.com/fohte/armyknife/compare/v0.1.410...v0.1.411) (2026-10-13)
 
 
