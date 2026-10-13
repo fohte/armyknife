@@ -7,16 +7,9 @@ use crate::shared::config::{AgentConfig, AgentStatusState};
 
 use super::progress_batches::ImplementationPlan;
 
-#[path = "progress_marks.rs"]
-mod progress_marks;
-#[expect(
-    unused_imports,
-    reason = "Keep all mark helpers available through progress."
-)]
-pub(super) use progress_marks::{
-    active_review_mark, completed_stage_marks, pr_ci_merge_marks, session_mark,
-    session_stage_marks, stage_marks,
-};
+pub(super) mod marks;
+
+use marks::{session_mark, session_stage_marks, stage_marks};
 
 #[derive(Debug)]
 pub(super) struct FetchedProgress {

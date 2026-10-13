@@ -5,9 +5,10 @@ use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
 
+use super::progress::marks::{completed_stage_marks, pr_ci_merge_marks};
 use super::progress::{
-    FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks, completed_stage_marks,
-    has_delegated_descendant, pr_ci_merge_marks, pr_progress_row, work_progress_row,
+    FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
+    has_delegated_descendant, pr_progress_row, work_progress_row,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
