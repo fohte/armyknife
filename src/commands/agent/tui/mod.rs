@@ -215,13 +215,20 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut crit_session_id = None;
 
     let mut progress_refresh_schedule = ProgressRefreshSchedule::new(Instant::now());
-    progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
+    if let Some(session_id) = app.selected_session_id().map(str::to_owned)
+        && app.begin_progress_refresh(&session_id)
+    {
+        progress_refresh_schedule.request(Some(session_id));
+    }
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
     app.tq_refresh_started();
     event_handler.start_tq_sidebar_fetch(local_session_ids);
     let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
+    if let Some(session_id) = progress_refresh_schedule.start_pending() {
+        event_handler.start_progress_fetch(session_id);
+    }
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -398,10 +405,14 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             }
         }
         let selected_session_after_events = app.selected_session_id().map(str::to_owned);
-        if selected_session_before_events != selected_session_after_events
-            || periodic_progress_refresh_due
-        {
-            progress_refresh_schedule.request(selected_session_after_events.clone());
+        let selection_changed = selected_session_before_events != selected_session_after_events;
+        if selection_changed || periodic_progress_refresh_due {
+            let mut pending_session_id = selected_session_after_events.clone();
+            if selection_changed && progress_refresh_schedule.in_flight {
+                pending_session_id =
+                    pending_session_id.filter(|session_id| app.begin_progress_refresh(session_id));
+            }
+            progress_refresh_schedule.request(pending_session_id);
         }
         // A new session may already be tq-linked; refresh its prefix along
         // with periodic refreshes, coalescing requests while one is running.
@@ -416,8 +427,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
 
         if let Some(session_id) = progress_refresh_schedule.start_pending() {
-            app.begin_progress_refresh(&session_id);
-            event_handler.start_progress_fetch(session_id);
+            if app.begin_progress_refresh(&session_id) {
+                event_handler.start_progress_fetch(session_id);
+            } else {
+                progress_refresh_schedule.fetch_completed();
+            }
         }
 
         if app.should_quit {

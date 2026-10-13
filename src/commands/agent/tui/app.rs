@@ -18,6 +18,8 @@ use super::tq_sidebar::SidebarSelection;
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
+use progress::CachedProgress;
+
 mod clean;
 mod delete;
 mod filter;
@@ -153,8 +155,8 @@ pub struct App {
     pub(super) progress_table_state: TableState,
     pub(super) progress_rows: Vec<ProgressRow>,
     pub(super) progress_session_id: Option<String>,
-    pub(super) progress_loading: bool,
     pub(super) progress_error: Option<String>,
+    progress_cache: HashMap<String, CachedProgress>,
     /// Whether the PROGRESS pane currently receives keyboard input.
     pub progress_focused: bool,
 }
@@ -258,8 +260,8 @@ impl App {
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),
             progress_session_id: None,
-            progress_loading: false,
             progress_error: None,
+            progress_cache: HashMap::new(),
             progress_focused: false,
         };
         app.rebuild_row_order();
