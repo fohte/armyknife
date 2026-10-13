@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::KeyEffects;
 use super::app::{App, AppMode, View};
 use super::event::KeyEvent;
-use super::{crit_key, progress_key, sidebar_key, title_edit, worktree_session_children};
+use super::{crit_key, progress_key, title_edit, worktree_session_children};
 use crate::commands::agent::resume;
 use crate::commands::agent::types::SessionStatus;
 use crate::infra::tmux;
@@ -103,13 +103,7 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
 
         // Clear filter or quit
         (KeyCode::Esc, _) => {
-            if app.narrow_layout && !app.sidebar_focused {
-                if app.has_non_sidebar_filter() {
-                    app.clear_non_sidebar_filters();
-                } else {
-                    app.show_narrow_sidebar_screen();
-                }
-            } else if app.has_filter() {
+            if app.has_filter() {
                 app.clear_filter();
             } else {
                 app.quit();
@@ -219,18 +213,13 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 }
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
+    if app.mode == AppMode::Normal && key.code == KeyCode::Tab {
+        app.cycle_pane_focus();
+        return KeyEffects::default();
+    }
+
     if app.mode == AppMode::Normal
         && let Some(effects) = progress_key::handle(app, key)
-    {
-        return effects;
-    }
-
-    if app.mode == AppMode::Normal && app.narrow_layout && app.sidebar_focused {
-        return handle_narrow_sidebar_key_event(app, key);
-    }
-
-    if app.mode == AppMode::Normal
-        && let Some(effects) = sidebar_key::handle(app, key)
     {
         return effects;
     }
@@ -295,22 +284,6 @@ fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
         AppMode::Edit { .. } => title_edit::handle_key_event(app, key),
     }
-}
-
-fn handle_narrow_sidebar_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
-    if let Some(effects) = sidebar_key::handle(app, key) {
-        return effects;
-    }
-
-    app.clear_error();
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
-        (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
-        (KeyCode::Esc, _) if app.has_filter() => app.clear_filter(),
-        (KeyCode::Esc, _) => app.quit(),
-        _ => {}
-    }
-    KeyEffects::default()
 }
 
 /// Handles key events in the clean view.

@@ -17,7 +17,6 @@ use super::progress::{
 };
 use super::progress_fetch::direct_delegates;
 use super::session_rows::SessionTask;
-use super::tq_sidebar::SidebarSelection;
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -26,7 +25,7 @@ mod delete;
 mod filter;
 mod navigation;
 mod reload;
-mod sidebar;
+mod tq;
 mod worktree;
 
 use reload::{
@@ -134,22 +133,12 @@ pub struct App {
     /// The first tq task linked to each session in the displayed snapshot,
     /// keyed by session_id. May come from the cache while tq is unavailable.
     pub task_by_session: HashMap<String, SessionTask>,
-    /// Full tq data used by the task navigation sidebar.
+    /// tq task links used by TASKS rows and tmux pane options.
     pub tq_snapshot: Option<TqSnapshot>,
-    /// Whether the current tq refresh is still running or most recently failed.
+    /// Whether a tq lookup is currently running.
     pub tq_refreshing: bool,
-    pub tq_refresh_failed: bool,
-    /// Sidebar visibility and focus. Width availability is updated by the renderer.
-    pub sidebar_visible: bool,
-    pub sidebar_focused: bool,
-    pub sidebar_available: bool,
     /// Whether the session view is using the single-pane layout.
     pub narrow_layout: bool,
-    /// The filter currently applied to the session list and the sidebar cursor.
-    pub sidebar_selection: SidebarSelection,
-    pub sidebar_cursor: SidebarSelection,
-    pub sidebar_collapsed: HashSet<SidebarSelection>,
-    pub sidebar_list_state: ListState,
     /// Selection and rendered rows for the PROGRESS pane.
     pub(super) progress_list_state: ListState,
     pub(super) progress_table_state: TableState,
@@ -162,6 +151,10 @@ pub struct App {
 }
 
 impl App {
+    pub fn cycle_pane_focus(&mut self) {
+        self.progress_focused = !self.progress_focused;
+    }
+
     /// Creates a new App instance with initial session data.
     /// Selects the focused session, the highest-priority user turn, or the
     /// previous selection, in that order.
@@ -177,7 +170,6 @@ impl App {
         let focus_session_id = std::env::var("ARMYKNIFE_FOCUS_SESSION")
             .ok()
             .filter(|s| !s.is_empty());
-        let sidebar_focused = focus_session_id.is_none();
         let last_selected_session_id = store::load_last_selected_session().ok().flatten();
 
         let mut app = Self::with_initial_selection(
@@ -187,9 +179,6 @@ impl App {
             last_selected_session_id.as_deref(),
         );
         app.vibe_enabled_session_ids = vibe_enabled_session_ids;
-        app.sidebar_visible = true;
-        app.sidebar_focused = sidebar_focused;
-
         Ok(app)
     }
 
@@ -247,15 +236,7 @@ impl App {
             task_by_session: HashMap::new(),
             tq_snapshot: None,
             tq_refreshing: false,
-            tq_refresh_failed: false,
-            sidebar_visible: false,
-            sidebar_focused: false,
-            sidebar_available: false,
             narrow_layout: false,
-            sidebar_selection: SidebarSelection::All,
-            sidebar_cursor: SidebarSelection::All,
-            sidebar_collapsed: HashSet::new(),
-            sidebar_list_state: ListState::default(),
             progress_list_state: ListState::default(),
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),

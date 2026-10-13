@@ -65,7 +65,7 @@ fn store_to(path: &Path, snapshot: &TqSnapshot) -> Result<()> {
         )
     })?;
     serde_json::to_writer(&mut temp_file, snapshot)
-        .context("failed to serialize tq sidebar snapshot")?;
+        .context("failed to serialize tq task snapshot")?;
     temp_file.write_all(b"\n")?;
     temp_file.as_file().sync_all()?;
     temp_file
@@ -79,4 +79,62 @@ fn store_to(path: &Path, snapshot: &TqSnapshot) -> Result<()> {
 enum CachedSnapshot {
     Snapshot(TqSnapshot),
     Legacy(HashMap<String, SessionTask>),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use chrono::DateTime;
+    use indoc::indoc;
+
+    use super::*;
+
+    #[test]
+    fn load_previous_snapshot_keeps_task_links_and_ignores_extra_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("watch-tq-session-tasks.json");
+        fs::write(
+            &path,
+            indoc! {r#"
+                {
+                  "formatVersion": 1,
+                  "fetchedAt": "2026-01-02T03:04:05Z",
+                  "sessionTasks": {
+                    "session-placeholder": [
+                      {
+                        "task_id": "task-placeholder",
+                        "task_number": 23,
+                        "task_title": "Sample task",
+                        "parent_task_id": null,
+                        "is_closed": false
+                      }
+                    ]
+                  },
+                  "tasks": {"task-placeholder": {"id": "task-placeholder"}},
+                  "projects": {"project-placeholder": {"id": "project-placeholder"}}
+                }
+            "#},
+        )
+        .unwrap();
+
+        let expected = TqSnapshot {
+            format_version: 1,
+            fetched_at: DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            session_tasks: HashMap::from([(
+                "session-placeholder".to_string(),
+                vec![SessionTask {
+                    task_id: "task-placeholder".to_string(),
+                    task_number: 23,
+                    task_title: "Sample task".to_string(),
+                    parent_task_id: None,
+                    is_closed: false,
+                }],
+            )]),
+        };
+
+        assert_eq!(load_from(&path).unwrap(), Some(expected));
+    }
 }

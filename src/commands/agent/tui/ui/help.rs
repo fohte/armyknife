@@ -77,43 +77,6 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
         return build_narrow_session_help_lines(app, bold);
     }
 
-    if app.mode == AppMode::Normal && app.sidebar_focused {
-        if app.show_help {
-            return vec![
-                Line::from(vec![
-                    Span::styled("  j/k", bold),
-                    Span::raw(": move  "),
-                    Span::styled("Enter", bold),
-                    Span::raw(": filter  "),
-                    Span::styled("h/←", bold),
-                    Span::raw(": parent / collapse"),
-                ]),
-                Line::from(vec![
-                    Span::styled("  l/→", bold),
-                    Span::raw(": expand  "),
-                    Span::styled("r", bold),
-                    Span::raw(": refresh  "),
-                    Span::styled("Tab", bold),
-                    Span::raw(": list  "),
-                    Span::styled("C-b", bold),
-                    Span::raw(": hide  "),
-                    Span::styled("q", bold),
-                    Span::raw(": quit"),
-                ]),
-            ];
-        }
-        return build_compact_help_line(
-            bold,
-            &[
-                ("j/k", "move"),
-                ("Enter", "filter"),
-                ("r", "refresh"),
-                ("Tab", "list"),
-                ("C-b", "hide"),
-            ],
-        );
-    }
-
     match &app.mode {
         AppMode::Confirm {
             is_alive,
@@ -159,7 +122,7 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             Span::raw(": cancel"),
         ])],
         AppMode::Normal if app.show_help && app.has_filter() => {
-            let mut lines = vec![
+            vec![
                 Line::from(vec![
                     Span::styled("  j/k", bold),
                     Span::raw(": move  "),
@@ -186,104 +149,35 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                     Span::styled("Esc", bold),
                     Span::raw(": clear"),
                 ]),
-            ];
-            if app.sidebar_available {
-                lines.push(Line::from(vec![
-                    Span::styled("  Tab", bold),
-                    Span::raw(": focus  "),
-                    Span::styled("C-b", bold),
-                    Span::raw(": sidebar"),
-                ]));
-            }
-            lines
+                Line::from(vec![Span::styled("  Tab", bold), Span::raw(": pane")]),
+            ]
         }
         AppMode::Normal if app.show_help => {
             let mut lines = build_full_session_list_help_lines(bold);
-            if app.sidebar_available {
-                lines.push(Line::from(vec![
-                    Span::styled("  Tab", bold),
-                    Span::raw(": focus  "),
-                    Span::styled("C-b", bold),
-                    Span::raw(": toggle sidebar"),
-                ]));
-            }
+            lines.push(Line::from(vec![
+                Span::styled("  Tab", bold),
+                Span::raw(": pane"),
+            ]));
             lines
         }
-        AppMode::Normal if app.has_filter() && app.sidebar_available => build_compact_help_line(
+        AppMode::Normal if app.has_filter() => build_compact_help_line(
             bold,
             &[
                 ("/", "search"),
-                ("Tab", "focus"),
-                ("C-b", "sidebar"),
+                ("Tab", "pane"),
                 ("Esc", "clear filter"),
                 ("q", "quit"),
             ],
         ),
-        AppMode::Normal if app.has_filter() => build_compact_help_line(
-            bold,
-            &[("/", "search"), ("Esc", "clear filter"), ("q", "quit")],
-        ),
-        AppMode::Normal if app.sidebar_available => build_compact_help_line(
-            bold,
-            &[
-                ("/", "search"),
-                ("Tab", "focus"),
-                ("C-b", "sidebar"),
-                ("q", "quit"),
-            ],
-        ),
-        AppMode::Normal => build_compact_help_line(bold, &[("/", "search"), ("q", "quit")]),
+        AppMode::Normal => {
+            build_compact_help_line(bold, &[("/", "search"), ("Tab", "pane"), ("q", "quit")])
+        }
     }
 }
 
 fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
-    if app.sidebar_focused {
-        if app.show_help {
-            let escape_label = if app.has_filter() {
-                "clear filter"
-            } else {
-                "quit"
-            };
-            vec![
-                Line::from(vec![
-                    Span::styled("  j/k", bold),
-                    Span::raw(": move  "),
-                    Span::styled("Enter", bold),
-                    Span::raw(": select  "),
-                    Span::styled("h/←", bold),
-                    Span::raw(": parent / collapse"),
-                ]),
-                Line::from(vec![
-                    Span::styled("  l/→", bold),
-                    Span::raw(": expand  "),
-                    Span::styled("r", bold),
-                    Span::raw(": refresh  "),
-                    Span::styled("Tab", bold),
-                    Span::raw(": pane  "),
-                    Span::styled("Esc", bold),
-                    Span::raw(format!(": {escape_label}  ")),
-                    Span::styled("q", bold),
-                    Span::raw(": quit"),
-                ]),
-            ]
-        } else {
-            build_compact_help_line(
-                bold,
-                &[
-                    ("j/k", "move"),
-                    ("h/l", "tree"),
-                    ("Enter", "select"),
-                    ("r", "refresh"),
-                    ("Tab", "pane"),
-                ],
-            )
-        }
-    } else if app.show_help {
-        let escape_label = if app.has_non_sidebar_filter() {
-            "clear filters"
-        } else {
-            "tasks"
-        };
+    if app.show_help {
+        let escape_label = if app.has_filter() { "clear" } else { "quit" };
         let mut lines = build_full_session_list_help_lines(bold);
         lines.push(Line::from(vec![
             Span::styled("  Tab", bold),
@@ -293,11 +187,7 @@ fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>>
         ]));
         lines
     } else {
-        let escape_label = if app.has_non_sidebar_filter() {
-            "clear"
-        } else {
-            "sidebar"
-        };
+        let escape_label = if app.has_filter() { "clear" } else { "quit" };
         build_compact_help_line(bold, &[("Tab", "pane"), ("Esc", escape_label)])
     }
 }
