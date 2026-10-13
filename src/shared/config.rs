@@ -370,7 +370,7 @@ pub struct RepoConfig {
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
-    /// Whether vibe mode is allowed for this repository. Overrides the org setting.
+    /// Whether vibe mode is allowed for this repository. When omitted, the org setting applies.
     #[serde(default)]
     pub vibe: Option<bool>,
 
@@ -384,7 +384,7 @@ pub struct RepoConfig {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OrgConfig {
-    /// Whether vibe mode is allowed for repositories owned by this organization.
+    /// Whether vibe mode is allowed for repositories owned by this organization (default: false).
     #[serde(default)]
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub vibe: bool,

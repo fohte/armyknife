@@ -8,7 +8,7 @@ use crate::infra::git::cmd::run_git;
 use crate::infra::github::{
     CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
-use crate::shared::config::load_config;
+use crate::shared::config::{Config, load_config};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -23,7 +23,7 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub draft: bool,
 
-    /// Skip draft approval verification (vibe mode only)
+    /// Skip draft approval verification when vibe mode and the target repository are allowed
     #[arg(long)]
     pub no_review: bool,
 }
@@ -44,16 +44,21 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
-        |owner, repo| {
-            if !is_vibe_enabled()? {
-                anyhow::bail!(
-                    "The --no-review option is only available when vibe mode is enabled."
-                );
-            }
-            ensure_repo_vibe_access(&load_config()?, owner, repo)
-        },
+        |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
+}
+
+fn ensure_no_review_access(
+    vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
+    load_config: impl FnOnce() -> anyhow::Result<Config>,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    if !vibe_enabled()? {
+        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
+    }
+    ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
 async fn run_impl(
@@ -472,12 +477,7 @@ mod tests {
         let client = env.mock.client();
         let vibe_access_check = |owner: &str, repo: &str| {
             target_repo.replace(Some((owner.to_string(), repo.to_string())));
-            if !vibe_enabled {
-                anyhow::bail!(
-                    "The --no-review option is only available when vibe mode is enabled."
-                );
-            }
-            ensure_repo_vibe_access(&config, owner, repo)
+            ensure_no_review_access(|| Ok(vibe_enabled), || Ok(config), owner, repo)
         };
         let result = run_impl(
             &args,

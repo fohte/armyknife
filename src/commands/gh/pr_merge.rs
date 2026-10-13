@@ -30,9 +30,7 @@ pub fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_vibe_access(in_agent_session, vibe_enabled)?;
 
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
-    if in_agent_session {
-        ensure_repo_vibe_access_for_session(in_agent_session, &load_config()?, &owner, &repo)?;
-    }
+    ensure_repo_vibe_access_for_session(in_agent_session, load_config, &owner, &repo)?;
 
     let client = GhCli;
     run_merge(
@@ -55,12 +53,12 @@ fn ensure_vibe_access(in_agent_session: bool, vibe_enabled: bool) -> anyhow::Res
 
 fn ensure_repo_vibe_access_for_session(
     in_agent_session: bool,
-    config: &Config,
+    load_config: impl FnOnce() -> anyhow::Result<Config>,
     owner: &str,
     repo: &str,
 ) -> anyhow::Result<()> {
     if in_agent_session {
-        ensure_repo_vibe_access(config, owner, repo)?;
+        ensure_repo_vibe_access(&load_config()?, owner, repo)?;
     }
     Ok(())
 }
@@ -579,7 +577,7 @@ mod tests {
         assert_eq!(
             ensure_repo_vibe_access_for_session(
                 in_agent_session,
-                &config,
+                || Ok(config),
                 "example-org",
                 "example-repo",
             )

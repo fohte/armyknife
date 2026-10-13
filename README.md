@@ -103,6 +103,8 @@ orgs: # per-org defaults, keyed by GitHub owner (org or user)
     ai:
       review:
         reviewers: [coderabbit] # default reviewers for `a ai review wait`/`request` in this org
+  example-org:
+    vibe: true # allow vibe-gated actions in this owner's repositories (default: false)
 
 repos: # per-repository overrides, keyed by "owner/repo"
   fohte/dotfiles:
@@ -111,6 +113,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
     ai:
       review:
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
+  example-org/example-repo:
+    vibe: false # override the org vibe setting (default: inherit)
 ```
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
@@ -207,11 +211,11 @@ Manage PR body drafts with human-in-the-loop review.
 
 `submit` options:
 
-| Option         | Description                                                                   |
-| -------------- | ----------------------------------------------------------------------------- |
-| `--base <ref>` | Base branch for the PR                                                        |
-| `--draft`      | Create as draft PR                                                            |
-| `--no-review`  | Skip approval verification (requires vibe mode, enabled by `a agent vibe on`) |
+| Option         | Description                                                                      |
+| -------------- | -------------------------------------------------------------------------------- |
+| `--base <ref>` | Base branch for the PR                                                           |
+| `--draft`      | Create as draft PR                                                               |
+| `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
 
 #### `a ai review`
 
@@ -369,7 +373,7 @@ a gh pr-review reply review <pr-number> [options]
 
 #### `a gh pr-merge`
 
-Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging is allowed only when vibe mode is enabled.
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
 
 ```sh
 a gh pr-merge <pr-number> [options]
@@ -414,7 +418,9 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
-Vibe mode is an opt-in marker recorded by armyknife. `a ai pr-draft submit --no-review` only skips approval validation when vibe mode is enabled. `a agent new --vibe` requires vibe mode, and `a gh pr-merge` checks it inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 when the current session or a stored ancestor has enabled the marker, and nonzero otherwise:
+Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
+
+`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and `a gh pr-merge` applies both checks inside agent sessions. `a agent vibe on` also requires the current repository to be allowed. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 only when the current session or a stored ancestor enabled the marker and the current repository is allowed:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then
@@ -422,7 +428,7 @@ if a agent vibe status >/dev/null 2>&1; then
 fi
 ```
 
-Run `a agent vibe on` in a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
+Run `a agent vibe on` in an allowed repository and a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
@@ -494,7 +500,7 @@ The command sends Ctrl+D and waits up to five seconds for the agent to exit, the
 | `--from <ref>`                                       | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                                                                                                                                                                                                                                                       |
 | `--force`                                            | Force create new branch even if it already exists (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                |
 | `--skip-hooks`                                       | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                               |
-| `--vibe`                                             | Require vibe mode in the current or an ancestor session; the flag does not enable it                                                                                                                                                                                                                                                                                                                                     |
+| `--vibe`                                             | Require vibe mode in the current or an ancestor session and an allowed target repository; the flag does not enable it                                                                                                                                                                                                                                                                                                    |
 | `-R, --repo <path>`                                  | Target repository path (default: current directory)                                                                                                                                                                                                                                                                                                                                                                      |
 | `--prompt <text>`                                    | Initial prompt to send to the agent (Claude Code or Codex)                                                                                                                                                                                                                                                                                                                                                               |
 | `--agent`                                            | Mark this invocation as coming from another Claude Code session (wraps prompt with delegation context)                                                                                                                                                                                                                                                                                                                   |
@@ -866,16 +872,7 @@ Get a configuration value by dot-separated key. Supports any config field (e.g.,
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
-Vibe mode is disabled by default. Set `orgs.<owner>.vibe` to allow it for that owner's repositories, then set `repos.<owner>/<repo>.vibe` to `false` for individual exceptions or `true` to override a disabled org setting. `a config get repo.vibe` prints the effective value for the current repository.
-
-```yaml
-orgs:
-  example-org:
-    vibe: true
-repos:
-  example-org/example-repo:
-    vibe: false
-```
+`a config get repo.vibe` prints the effective allowlist value for the current repository.
 
 ```sh
 $ a config get agent.worktree.branch_prefix
