@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.397](https://github.com/fohte/armyknife/compare/v0.1.396...v0.1.397) (2026-10-13)
+
+
+### Features
+
+* **agent:** require vibe mode for --vibe launches ([#1125](https://github.com/fohte/armyknife/issues/1125)) ([d8ce007](https://github.com/fohte/armyknife/commit/d8ce0077a0ffff7b50b69fcdcada866b42360dbf))
+
 ## [0.1.396](https://github.com/fohte/armyknife/compare/v0.1.395...v0.1.396) (2026-10-13)
 
 
