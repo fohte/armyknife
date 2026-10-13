@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.401](https://github.com/fohte/armyknife/compare/v0.1.400...v0.1.401) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent:** mark Claude API failures as failed ([#1135](https://github.com/fohte/armyknife/issues/1135)) ([8e10c1d](https://github.com/fohte/armyknife/commit/8e10c1d55b7efe4447c06fd6592ff5e0af5eb798))
+
 ## [0.1.400](https://github.com/fohte/armyknife/compare/v0.1.399...v0.1.400) (2026-10-13)
 
 
