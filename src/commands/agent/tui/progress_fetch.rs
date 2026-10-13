@@ -205,9 +205,13 @@ fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
 }
 
 fn branch_query_for(session: &Session) -> BranchLookup {
-    let live_resolution = GitRepo::open_at(&session.cwd)
-        .ok()
-        .map(|repo| session_pr_context::resolve(&repo));
+    let live_resolution = if session.pr_context.is_some() {
+        None
+    } else {
+        GitRepo::open_at(&session.cwd)
+            .ok()
+            .map(|repo| session_pr_context::resolve(&repo))
+    };
     branch_lookup_for_resolution(live_resolution, session.pr_context.as_ref())
 }
 
@@ -215,15 +219,16 @@ fn branch_lookup_for_resolution(
     live_resolution: Option<Resolution>,
     saved_context: Option<&SessionPrContext>,
 ) -> BranchLookup {
+    if let Some(context) = saved_context {
+        return branch_query_from_context(context.clone());
+    }
+
     match live_resolution {
         Some(Resolution::Context(context)) => branch_query_from_context(context),
         Some(Resolution::ChecklistOnly(item_id)) => BranchLookup::ChecklistOnly(item_id),
         Some(Resolution::NotApplicable) => BranchLookup::NotApplicable,
         Some(Resolution::Unavailable) => BranchLookup::Unavailable,
-        None => saved_context
-            .cloned()
-            .map(branch_query_from_context)
-            .unwrap_or(BranchLookup::Unavailable),
+        None => BranchLookup::Unavailable,
     }
 }
 
@@ -244,7 +249,7 @@ mod tests {
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::{BranchLookup, Resolution, branch_lookup_for_resolution, direct_delegates};
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
@@ -269,62 +274,121 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::unavailable(None, BranchLookup::Unavailable)]
-    #[case::saved_context_after_worktree_removal(
-        Some(SessionPrContext {
-            owner: "sample-owner".to_string(),
-            repo: "sample-repo".to_string(),
-            branch: "sample-branch".to_string(),
-            checklist_item_id: Some("sample-item".to_string()),
-        }),
-        BranchLookup::Query {
-            query: BranchPrQuery {
-                owner: "sample-owner".to_string(),
-                repo: "sample-repo".to_string(),
-                branch: "sample-branch".to_string(),
-            },
-            checklist_item_id: Some("sample-item".to_string()),
-        },
-    )]
-    fn falls_back_to_saved_context_when_live_resolution_is_unavailable(
-        #[case] saved_context: Option<SessionPrContext>,
-        #[case] expected: BranchLookup,
-    ) {
-        assert_eq!(
-            branch_lookup_for_resolution(None, saved_context.as_ref()),
-            expected,
-        );
-    }
-
-    #[test]
-    fn prefers_live_branch_context_to_saved_context() {
-        let saved_context = SessionPrContext {
+    #[fixture]
+    fn saved_context() -> SessionPrContext {
+        SessionPrContext {
             owner: "sample-owner".to_string(),
             repo: "sample-repo".to_string(),
             branch: "saved-branch".to_string(),
             checklist_item_id: Some("saved-item".to_string()),
-        };
-        let live_context = SessionPrContext {
+        }
+    }
+
+    #[rstest]
+    #[case::unavailable_without_saved_context(None, false, BranchLookup::Unavailable)]
+    #[case::saved_context_after_worktree_removal(
+        None,
+        true,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "saved-branch".to_string(),
+            },
+            checklist_item_id: Some("saved-item".to_string()),
+        },
+    )]
+    #[case::saved_context_over_residual_worktree(
+        Some(Resolution::NotApplicable),
+        true,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "saved-branch".to_string(),
+            },
+            checklist_item_id: Some("saved-item".to_string()),
+        },
+    )]
+    #[case::saved_context_over_checklist_only(
+        Some(Resolution::ChecklistOnly("live-item".to_string())),
+        true,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "saved-branch".to_string(),
+            },
+            checklist_item_id: Some("saved-item".to_string()),
+        },
+    )]
+    #[case::saved_context_over_unavailable_live_resolution(
+        Some(Resolution::Unavailable),
+        true,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "saved-branch".to_string(),
+            },
+            checklist_item_id: Some("saved-item".to_string()),
+        },
+    )]
+    #[case::saved_context_over_live_branch(
+        Some(Resolution::Context(SessionPrContext {
             owner: "sample-owner".to_string(),
             repo: "sample-repo".to_string(),
             branch: "live-branch".to_string(),
             checklist_item_id: Some("live-item".to_string()),
-        };
+        })),
+        true,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "saved-branch".to_string(),
+            },
+            checklist_item_id: Some("saved-item".to_string()),
+        },
+    )]
+    #[case::live_context_when_no_saved_context(
+        Some(Resolution::Context(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "live-branch".to_string(),
+            checklist_item_id: Some("live-item".to_string()),
+        })),
+        false,
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "live-branch".to_string(),
+            },
+            checklist_item_id: Some("live-item".to_string()),
+        },
+    )]
+    #[case::live_resolution_without_saved_context(
+        Some(Resolution::ChecklistOnly("live-item".to_string())),
+        false,
+        BranchLookup::ChecklistOnly("live-item".to_string()),
+    )]
+    #[case::not_applicable_without_saved_context(
+        Some(Resolution::NotApplicable),
+        false,
+        BranchLookup::NotApplicable
+    )]
+    fn prefers_saved_context_and_uses_live_resolution_without_it(
+        #[case] live_resolution: Option<Resolution>,
+        #[case] has_saved_context: bool,
+        #[case] expected: BranchLookup,
+        saved_context: SessionPrContext,
+    ) {
+        let saved_context = has_saved_context.then_some(saved_context);
 
         assert_eq!(
-            branch_lookup_for_resolution(
-                Some(Resolution::Context(live_context)),
-                Some(&saved_context),
-            ),
-            BranchLookup::Query {
-                query: BranchPrQuery {
-                    owner: "sample-owner".to_string(),
-                    repo: "sample-repo".to_string(),
-                    branch: "live-branch".to_string(),
-                },
-                checklist_item_id: Some("live-item".to_string()),
-            },
+            branch_lookup_for_resolution(live_resolution, saved_context.as_ref()),
+            expected,
         );
     }
 
