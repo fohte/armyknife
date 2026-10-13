@@ -457,7 +457,7 @@ a agent watch
 set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
 ```
 
-On wide terminals, `a agent watch` shows the YOUR TURN/TASKS session list and the PROGRESS pane side by side. On narrow terminals, each pane uses the full screen; `Tab` switches between TASKS and PROGRESS. `Esc` from PROGRESS returns to TASKS. TASKS is focused at startup.
+`a agent watch` shows the YOUR TURN/TASKS session list and the PROGRESS pane side by side. `Tab` switches focus between TASKS and PROGRESS, and `Esc` from PROGRESS returns to TASKS. On narrow terminals, the focused pane uses the full screen. In TASKS, `Esc` clears an active filter or quits. TASKS is focused at startup.
 
 PROGRESS follows the selected TASKS session. Its first row shows that session's role and current state. Rows below show its direct delegates, their session or PR title and PR number when available, and marks for implementation, diff review, PR body, CI, and merge. A row says `(PR unavailable)` when its worktree, branch, or GitHub `origin` remote cannot be resolved. `✓` means done, `◐` needs user attention, `●` is active, `◷` is waiting, and `○` is not started or unknown. An existing PR marks implementation, diff review, and PR body done unless a linked review is active; otherwise implementation follows the delegate's session state. Linked Crit and PR-body review activity updates their stage marks. CI follows the latest commit's check rollup; merge follows PR state and CI progress. Press `Enter` on a row to focus its session pane when available; for an ended delegate, the known PR link opens instead.
 

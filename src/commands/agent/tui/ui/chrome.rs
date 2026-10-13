@@ -326,18 +326,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::session_view_default(View::Session, false, vec![
+    #[case::session_view_default(View::Session, false, false, vec![
         " ?: keys   /: search   Tab: pane   q: quit".to_string(),
     ])]
-    #[case::session_view_expanded(View::Session, true, vec![
+    #[case::session_view_expanded(View::Session, true, false, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
         "  C-r/w/s/p: filter  o: open crit  q: quit".to_string(),
         "  Tab: pane".to_string(),
     ])]
+    #[case::progress_view(View::Session, false, true, vec![
+        " ?: keys   j/k: move   Enter: open   Tab: pane   Esc: tasks   q: quit".to_string(),
+    ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,
         #[case] show_help: bool,
+        #[case] progress_focused: bool,
         #[case] expected_lines: Vec<String>,
     ) {
         let now = Utc::now();
@@ -346,6 +350,7 @@ mod tests {
         let output = render_to_string_with(&sessions, None, now, 120, height, |app| {
             app.view = view;
             app.show_help = show_help;
+            app.progress_focused = progress_focused;
         });
 
         let actual_lines: Vec<&str> = output

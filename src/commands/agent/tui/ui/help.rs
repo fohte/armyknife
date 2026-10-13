@@ -176,8 +176,9 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
 }
 
 fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
+    let escape_label = if app.has_filter() { "clear" } else { "quit" };
+
     if app.show_help {
-        let escape_label = if app.has_filter() { "clear" } else { "quit" };
         let mut lines = build_full_session_list_help_lines(bold);
         lines.push(Line::from(vec![
             Span::styled("  Tab", bold),
@@ -187,7 +188,6 @@ fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>>
         ]));
         lines
     } else {
-        let escape_label = if app.has_filter() { "clear" } else { "quit" };
         build_compact_help_line(bold, &[("Tab", "pane"), ("Esc", escape_label)])
     }
 }

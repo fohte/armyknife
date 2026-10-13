@@ -819,6 +819,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_successful_empty_tq_snapshot_clears_previous_task_links() {
+        let mut app = create_test_app_with_sessions(1);
+        app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::from([(
+            "session-0".to_string(),
+            vec![test_task("task-1")],
+        )])));
+
+        assert_eq!(
+            app.task_by_session,
+            HashMap::from([("session-0".to_string(), test_task("task-1"))]),
+        );
+
+        app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::new()));
+
+        assert_eq!(app.task_by_session, HashMap::new());
+    }
+
     // =========================================================================
     // =========================================================================
     // Status filter key binding tests
