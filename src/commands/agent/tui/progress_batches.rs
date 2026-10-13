@@ -1,18 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::types::Session;
-use crate::infra::github::{PrCiState, PrNumberQuery, PrProgressInfo, PrState};
+use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
 
 use super::progress::{
-    FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks, pr_progress_row,
-    work_progress_row,
+    FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks, completed_stage_marks,
+    pr_ci_merge_marks, pr_progress_row, work_progress_row,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ImplementationPlan {
     batches: Vec<ImplementationBatch>,
+    unmatched_delegates: Vec<UnmatchedDelegate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +29,13 @@ struct ImplementationItem {
     title: String,
     delegate_session_id: Option<String>,
     github_link: Option<TqGithubLink>,
+    pull_request: Option<PrProgressInfo>,
+    lookup_unavailable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnmatchedDelegate {
+    session_id: String,
     pull_request: Option<PrProgressInfo>,
     lookup_unavailable: bool,
 }
@@ -96,6 +104,7 @@ pub(super) fn build_implementation_plan(
         .map(|link| (link.id.as_str(), link))
         .collect::<HashMap<_, _>>();
     let mut batches = Vec::new();
+    let mut matched_delegate_session_ids = HashSet::new();
 
     for batch in &checklist.items {
         let mut leaves = Vec::new();
@@ -115,6 +124,9 @@ pub(super) fn build_implementation_plan(
             let delegate = delegates
                 .iter()
                 .find(|delegate| delegate.checklist_item_id.as_deref() == Some(&leaf.id));
+            if let Some(delegate) = delegate {
+                matched_delegate_session_ids.insert(delegate.session.session_id.clone());
+            }
             let linked_progress = github_link.as_ref().and_then(|link| {
                 let key = pr_number_query(link)?.key();
                 pull_requests.get(&key).and_then(Option::as_ref)
@@ -151,7 +163,20 @@ pub(super) fn build_implementation_plan(
         }
     }
 
-    ImplementationPlan { batches }
+    let unmatched_delegates = delegates
+        .iter()
+        .filter(|delegate| !matched_delegate_session_ids.contains(&delegate.session.session_id))
+        .map(|delegate| UnmatchedDelegate {
+            session_id: delegate.session.session_id.clone(),
+            pull_request: delegate.pull_request.clone(),
+            lookup_unavailable: delegate.lookup_unavailable,
+        })
+        .collect();
+
+    ImplementationPlan {
+        batches,
+        unmatched_delegates,
+    }
 }
 
 pub(super) fn build_progress_rows(
@@ -180,6 +205,7 @@ pub(super) fn build_progress_rows(
         collapsed: !implementation_expanded,
     });
     if !implementation_expanded {
+        append_unmatched_delegate_rows(&mut rows, delegates, plan, agent_config);
         return rows;
     }
 
@@ -243,7 +269,40 @@ pub(super) fn build_progress_rows(
         }
     }
 
+    append_unmatched_delegate_rows(&mut rows, delegates, plan, agent_config);
     rows
+}
+
+fn append_unmatched_delegate_rows(
+    rows: &mut Vec<ProgressRow>,
+    delegates: &[Session],
+    plan: &ImplementationPlan,
+    agent_config: &AgentConfig,
+) {
+    let mapped_sessions = plan
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.items)
+        .filter_map(|item| item.delegate_session_id.as_deref())
+        .collect::<HashSet<_>>();
+    for session in delegates
+        .iter()
+        .filter(|session| !mapped_sessions.contains(session.session_id.as_str()))
+    {
+        let fetched = plan
+            .unmatched_delegates
+            .iter()
+            .find(|delegate| delegate.session_id == session.session_id);
+        rows.push(ProgressRow::PullRequest(pr_progress_row(
+            &FetchedDelegate {
+                session: session.clone(),
+                checklist_item_id: None,
+                pull_request: fetched.and_then(|delegate| delegate.pull_request.clone()),
+                lookup_unavailable: fetched.is_some_and(|delegate| delegate.lookup_unavailable),
+            },
+            agent_config,
+        )));
+    }
 }
 
 fn pr_only_row(item: &ImplementationItem) -> PrProgressRow {
@@ -271,47 +330,13 @@ fn pr_only_row(item: &ImplementationItem) -> PrProgressRow {
 }
 
 fn pr_only_stage_marks(progress: Option<&PrProgressInfo>) -> StageMarks {
-    let (ci, merge) = match progress {
-        Some(progress) => {
-            let ci = match progress.ci_state {
-                PrCiState::Waiting => ProgressMark::Waiting,
-                PrCiState::InProgress => ProgressMark::Working,
-                PrCiState::Successful => ProgressMark::Done,
-                PrCiState::Unknown => ProgressMark::NotStarted,
-            };
-            let merge = match progress.pull_request.state {
-                PrState::Merged => ProgressMark::Done,
-                PrState::Open if progress.ci_state == PrCiState::Successful => ProgressMark::User,
-                PrState::Open
-                    if matches!(
-                        progress.ci_state,
-                        PrCiState::Waiting | PrCiState::InProgress
-                    ) =>
-                {
-                    ProgressMark::Waiting
-                }
-                PrState::Open | PrState::Closed => ProgressMark::NotStarted,
-            };
-            (ci, merge)
-        }
-        None => (ProgressMark::NotStarted, ProgressMark::NotStarted),
-    };
+    let (ci, merge) = pr_ci_merge_marks(progress);
     StageMarks {
         implementation: ProgressMark::Done,
         diff_review: ProgressMark::NotStarted,
         pr_body: ProgressMark::NotStarted,
         ci,
         merge,
-    }
-}
-
-fn completed_stage_marks() -> StageMarks {
-    StageMarks {
-        implementation: ProgressMark::Done,
-        diff_review: ProgressMark::Done,
-        pr_body: ProgressMark::Done,
-        ci: ProgressMark::Done,
-        merge: ProgressMark::Done,
     }
 }
 
@@ -383,13 +408,22 @@ mod tests {
                     content: "Batch 1".to_string(),
                     checked_at: None,
                     github_link_id: None,
-                    children: vec![TqChecklistItem {
-                        id: "item-1".to_string(),
-                        content: "PR 1: Add a sample feature".to_string(),
-                        checked_at: None,
-                        github_link_id: Some("link-1".to_string()),
-                        children: Vec::new(),
-                    }],
+                    children: vec![
+                        TqChecklistItem {
+                            id: "item-1".to_string(),
+                            content: "PR 1: Add a sample feature".to_string(),
+                            checked_at: None,
+                            github_link_id: Some("link-1".to_string()),
+                            children: Vec::new(),
+                        },
+                        TqChecklistItem {
+                            id: "item-note".to_string(),
+                            content: "Write a release note".to_string(),
+                            checked_at: None,
+                            github_link_id: None,
+                            children: Vec::new(),
+                        },
+                    ],
                 },
                 TqChecklistItem {
                     id: "batch-2".to_string(),
@@ -485,6 +519,7 @@ mod tests {
                             }],
                         },
                     ],
+                    unmatched_delegates: Vec::new(),
                 },
             ),
         );
@@ -557,6 +592,215 @@ mod tests {
     }
 
     #[test]
+    fn keeps_delegates_without_a_matching_checklist_pr_as_regular_rows() {
+        let mut delegate_session = create_test_session("unmapped-delegate");
+        delegate_session.label = Some("Unplanned delegated work".to_string());
+        let plan = build_implementation_plan(
+            &checklist(),
+            &[github_link()],
+            &[FetchedDelegate {
+                session: delegate_session.clone(),
+                checklist_item_id: Some("unlisted-item".to_string()),
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 23,
+                        title: "Unplanned delegated change".to_string(),
+                        state: PrState::Open,
+                        url: "https://github.com/sample-org/sample-project/pull/23".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
+                lookup_unavailable: false,
+            }],
+            &HashMap::new(),
+            false,
+        );
+
+        assert_eq!(
+            build_progress_rows(
+                &create_test_session("selected"),
+                &[delegate_session],
+                &plan,
+                false,
+                &HashMap::new(),
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(super::super::progress::WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 1,
+                    total_pr_count: 2,
+                    collapsed: true,
+                },
+                ProgressRow::PullRequest(super::super::progress::PrProgressRow {
+                    session_id: "unmapped-delegate".to_string(),
+                    title: "Unplanned delegated change".to_string(),
+                    number: Some(23),
+                    url: Some("https://github.com/sample-org/sample-project/pull/23".to_string()),
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Working,
+                        merge: ProgressMark::Waiting,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn includes_new_unmapped_delegate_while_reusing_the_checklist_plan() {
+        let plan =
+            build_implementation_plan(&checklist(), &[github_link()], &[], &HashMap::new(), false);
+        let mut delegate_session = create_test_session("new-delegate");
+        delegate_session.label = Some("New delegated work".to_string());
+
+        assert_eq!(
+            build_progress_rows(
+                &create_test_session("selected"),
+                &[delegate_session],
+                &plan,
+                false,
+                &HashMap::new(),
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(super::super::progress::WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 1,
+                    total_pr_count: 2,
+                    collapsed: true,
+                },
+                ProgressRow::PullRequest(super::super::progress::PrProgressRow {
+                    session_id: "new-delegate".to_string(),
+                    title: "New delegated work".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn renders_an_open_linked_pr_without_a_delegate_as_a_complete_row() {
+        let checklist = TqChecklist {
+            id: "checklist-1".to_string(),
+            name: "実装".to_string(),
+            items: vec![TqChecklistItem {
+                id: "batch-1".to_string(),
+                content: "Batch 1".to_string(),
+                checked_at: None,
+                github_link_id: None,
+                children: vec![TqChecklistItem {
+                    id: "item-1".to_string(),
+                    content: "PR 1: Add a sample feature".to_string(),
+                    checked_at: None,
+                    github_link_id: Some("link-1".to_string()),
+                    children: Vec::new(),
+                }],
+            }],
+        };
+        let github_link = TqGithubLink {
+            state: Some("open".to_string()),
+            ..github_link()
+        };
+        let pull_request = PrProgressInfo {
+            pull_request: PrInfo {
+                number: 17,
+                title: "Add a sample feature".to_string(),
+                state: PrState::Open,
+                url: "https://github.com/sample-org/sample-project/pull/17".to_string(),
+            },
+            ci_state: PrCiState::Successful,
+        };
+        let plan = build_implementation_plan(
+            &checklist,
+            &[github_link],
+            &[],
+            &HashMap::from([(
+                ("sample-org".to_string(), "sample-project".to_string(), 17),
+                Some(pull_request),
+            )]),
+            false,
+        );
+
+        assert_eq!(
+            build_progress_rows(
+                &create_test_session("selected"),
+                &[],
+                &plan,
+                true,
+                &HashMap::new(),
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(super::super::progress::WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-1".to_string(),
+                    row: super::super::progress::PrProgressRow {
+                        session_id: "checklist-item:item-1".to_string(),
+                        title: "Add a sample feature".to_string(),
+                        number: Some(17),
+                        url: Some(
+                            "https://github.com/sample-org/sample-project/pull/17".to_string(),
+                        ),
+                        pane_id: None,
+                        is_ended: true,
+                        lookup_unavailable: false,
+                        stages: StageMarks {
+                            implementation: ProgressMark::Done,
+                            diff_review: ProgressMark::NotStarted,
+                            pr_body: ProgressMark::NotStarted,
+                            ci: ProgressMark::Done,
+                            merge: ProgressMark::User,
+                        },
+                    },
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn omits_batch_heading_when_the_plan_has_one_batch() {
         let plan = ImplementationPlan {
             batches: vec![ImplementationBatch {
@@ -571,6 +815,7 @@ mod tests {
                     lookup_unavailable: false,
                 }],
             }],
+            unmatched_delegates: Vec::new(),
         };
 
         assert_eq!(
@@ -656,6 +901,7 @@ mod tests {
                     lookup_unavailable: false,
                 }],
             }],
+            unmatched_delegates: Vec::new(),
         };
 
         assert_eq!(

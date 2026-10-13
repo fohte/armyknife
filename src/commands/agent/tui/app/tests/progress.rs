@@ -64,6 +64,43 @@ fn stale_progress_response_keeps_the_new_selection_state() {
 }
 
 #[test]
+fn falls_back_to_delegate_rows_when_checklist_progress_is_unavailable() {
+    let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+    let selected = create_test_session_at("selected", timestamp);
+    let mut delegate = create_test_session_at("delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec!["selected".to_string()];
+    let fetched_delegate = FetchedDelegate {
+        session: delegate.clone(),
+        checklist_item_id: None,
+        pull_request: None,
+        lookup_unavailable: false,
+    };
+    let expected = build_progress_rows(
+        &selected,
+        std::slice::from_ref(&fetched_delegate),
+        &AgentConfig::default(),
+    );
+    let mut app = create_test_app(vec![selected, delegate]);
+    if app.selected_session_id() != Some("selected") {
+        app.select_next();
+    }
+    app.progress_session_id = Some("selected".to_string());
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: vec![fetched_delegate],
+            implementation: None,
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(app.progress_rows, expected);
+}
+
+#[test]
 fn local_progress_refresh_preserves_the_selected_delegate_row() {
     let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
     let selected = create_test_session_at("selected", timestamp);

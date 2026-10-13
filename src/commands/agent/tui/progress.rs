@@ -352,34 +352,32 @@ fn session_mark(
     }
 }
 
-pub(super) fn stage_marks(
+fn stage_marks(
     session: &Session,
     progress: Option<&PrProgressInfo>,
     agent_config: &AgentConfig,
 ) -> StageMarks {
     let is_merged = progress.is_some_and(|progress| progress.pull_request.state == PrState::Merged);
     if is_merged {
-        return StageMarks {
-            implementation: ProgressMark::Done,
-            diff_review: ProgressMark::Done,
-            pr_body: ProgressMark::Done,
-            ci: ProgressMark::Done,
-            merge: ProgressMark::Done,
-        };
+        return completed_stage_marks();
     }
 
     let mut stages = session_stage_marks(session, progress.is_some(), agent_config);
+    (stages.ci, stages.merge) = pr_ci_merge_marks(progress);
+    stages
+}
 
-    let (ci, merge) = match progress {
+pub(super) fn pr_ci_merge_marks(progress: Option<&PrProgressInfo>) -> (ProgressMark, ProgressMark) {
+    match progress {
         None => (ProgressMark::NotStarted, ProgressMark::NotStarted),
         Some(progress) => {
-            let ci_mark = match progress.ci_state {
+            let ci = match progress.ci_state {
                 PrCiState::Waiting => ProgressMark::Waiting,
                 PrCiState::InProgress => ProgressMark::Working,
                 PrCiState::Successful => ProgressMark::Done,
                 PrCiState::Unknown => ProgressMark::NotStarted,
             };
-            let merge_mark = match progress.pull_request.state {
+            let merge = match progress.pull_request.state {
                 PrState::Merged => ProgressMark::Done,
                 PrState::Open if progress.ci_state == PrCiState::Successful => ProgressMark::User,
                 PrState::Open
@@ -392,13 +390,19 @@ pub(super) fn stage_marks(
                 }
                 PrState::Open | PrState::Closed => ProgressMark::NotStarted,
             };
-            (ci_mark, merge_mark)
+            (ci, merge)
         }
-    };
+    }
+}
 
-    stages.ci = ci;
-    stages.merge = merge;
-    stages
+pub(super) fn completed_stage_marks() -> StageMarks {
+    StageMarks {
+        implementation: ProgressMark::Done,
+        diff_review: ProgressMark::Done,
+        pr_body: ProgressMark::Done,
+        ci: ProgressMark::Done,
+        merge: ProgressMark::Done,
+    }
 }
 
 fn session_stage_marks(

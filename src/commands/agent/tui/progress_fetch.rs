@@ -112,6 +112,7 @@ pub(super) async fn fetch_progress(
     })
 }
 
+// Checklist metadata is optional so tq outages keep the existing delegate view available.
 async fn fetch_implementation_checklist(
     task_id: Option<&str>,
 ) -> Option<(TqChecklist, Vec<TqGithubLink>)> {
