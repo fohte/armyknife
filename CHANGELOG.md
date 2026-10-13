@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.399](https://github.com/fohte/armyknife/compare/v0.1.398...v0.1.399) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent:** preserve YOUR TURN labels ([#1131](https://github.com/fohte/armyknife/issues/1131)) ([6a771b0](https://github.com/fohte/armyknife/commit/6a771b072a9e7b370f268b14d4c4ff2fced44c4d))
+
 ## [0.1.398](https://github.com/fohte/armyknife/compare/v0.1.397...v0.1.398) (2026-10-13)
 
 
