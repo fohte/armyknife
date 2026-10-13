@@ -25,14 +25,14 @@ struct ProgressScope {
 
 impl App {
     pub(in crate::commands::agent::tui) fn begin_progress_refresh(&mut self, session_id: &str) {
-        self.refresh_local_progress(session_id, None);
+        self.refresh_local_progress(session_id, None, false);
     }
 
     pub(in crate::commands::agent::tui) fn refresh_progress_from_sessions(
         &mut self,
         session_id: &str,
     ) {
-        self.refresh_local_progress(session_id, None);
+        self.refresh_local_progress(session_id, None, false);
     }
 
     pub(in crate::commands::agent::tui) fn apply_progress_result(
@@ -80,10 +80,11 @@ impl App {
                         error,
                         implementation,
                     },
+                    true,
                 );
             }
             Ok(_) => {}
-            Err(error) => self.refresh_local_progress(session_id, Some(error)),
+            Err(error) => self.refresh_local_progress(session_id, Some(error), true),
         }
     }
 
@@ -159,14 +160,19 @@ impl App {
         }
     }
 
-    fn refresh_local_progress(&mut self, session_id: &str, error: Option<String>) {
+    fn refresh_local_progress(
+        &mut self,
+        session_id: &str,
+        error: Option<String>,
+        resolve_initial_selection: bool,
+    ) {
         let Some(selected) = self.session_by_id(session_id) else {
             return;
         };
         let rows = self.existing_progress_rows(session_id);
         let mut snapshot = self.local_progress_snapshot(&selected, &rows);
         snapshot.error = error.or(snapshot.error);
-        self.store_progress_snapshot(session_id, snapshot);
+        self.store_progress_snapshot(session_id, snapshot, resolve_initial_selection);
     }
 
     fn local_progress_snapshot(
@@ -203,22 +209,59 @@ impl App {
         }
     }
 
-    fn store_progress_snapshot(&mut self, session_id: &str, snapshot: CachedProgress) {
+    fn store_progress_snapshot(
+        &mut self,
+        session_id: &str,
+        snapshot: CachedProgress,
+        resolve_initial_selection: bool,
+    ) {
         self.progress_cache
             .insert(session_id.to_string(), snapshot.clone());
         if self.selected_session_id() != Some(session_id) {
             return;
         }
+        if self
+            .initial_progress_selection
+            .as_ref()
+            .is_some_and(|selection| selection.parent_session_id != session_id)
+        {
+            self.initial_progress_selection = None;
+        }
         if self.progress_session_id.as_deref() != Some(session_id) {
             self.progress_implementation_expanded = true;
             self.progress_batch_expanded.clear();
         }
-        let (selected_index, selected_key) =
-            if self.progress_session_id.as_deref() == Some(session_id) {
-                self.current_progress_selection()
-            } else {
-                (0, None)
-            };
+        let initial_target = self.initial_progress_target(session_id).map(str::to_owned);
+        if let Some(delegate_id) = initial_target.as_deref() {
+            self.progress_implementation_expanded = true;
+            if let Some(plan) = snapshot.implementation.as_ref() {
+                expand_initial_target_batch(
+                    plan,
+                    Some(delegate_id),
+                    &mut self.progress_batch_expanded,
+                );
+            }
+        }
+        let initial_selection_index =
+            self.initial_progress_row_target(session_id)
+                .and_then(|delegate_id| {
+                    snapshot
+                        .rows
+                        .iter()
+                        .position(|row| row.selection_key() == Some(delegate_id))
+                });
+        let (selected_index, selected_key) = if let Some(index) = initial_selection_index {
+            let key = snapshot.rows[index].selection_key().map(str::to_owned);
+            (index, key)
+        } else if self.progress_session_id.as_deref() == Some(session_id) {
+            self.current_progress_selection()
+        } else {
+            (0, None)
+        };
+        self.resolve_initial_progress_selection(
+            session_id,
+            snapshot.implementation.is_some() || resolve_initial_selection,
+        );
         self.progress_session_id = Some(session_id.to_string());
         self.progress_error = snapshot.error.clone();
         self.replace_progress_rows(snapshot.rows, selected_key, selected_index);
@@ -342,20 +385,58 @@ impl App {
         let use_current_expansion = self.progress_session_id.as_deref()
             == Some(selected.session_id.as_str())
             && self.selected_session_id() == Some(selected.session_id.as_str());
-        let default_expanded_batches = HashMap::new();
-        let expanded_batches = if use_current_expansion {
-            &self.progress_batch_expanded
+        let mut expanded_batches = if use_current_expansion {
+            self.progress_batch_expanded.clone()
         } else {
-            &default_expanded_batches
+            HashMap::new()
         };
+        let initial_target = self.initial_progress_target(&selected.session_id);
+        expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
         build_checklist_progress_rows(
             work_sessions,
             delegated,
             plan,
-            !use_current_expansion || self.progress_implementation_expanded,
-            expanded_batches,
+            initial_target.is_some()
+                || !use_current_expansion
+                || self.progress_implementation_expanded,
+            &expanded_batches,
             &self.agent_config,
         )
+    }
+
+    fn initial_progress_target(&self, parent_session_id: &str) -> Option<&str> {
+        self.initial_progress_selection
+            .as_ref()
+            .filter(|selection| {
+                selection.parent_session_id == parent_session_id && selection.expand_batch
+            })
+            .map(|selection| selection.delegate_session_id.as_str())
+    }
+
+    fn initial_progress_row_target(&self, parent_session_id: &str) -> Option<&str> {
+        self.initial_progress_selection
+            .as_ref()
+            .filter(|selection| {
+                selection.parent_session_id == parent_session_id && selection.select_row
+            })
+            .map(|selection| selection.delegate_session_id.as_str())
+    }
+
+    fn resolve_initial_progress_selection(&mut self, parent_session_id: &str, resolve_batch: bool) {
+        let Some(selection) = self
+            .initial_progress_selection
+            .as_mut()
+            .filter(|selection| selection.parent_session_id == parent_session_id)
+        else {
+            return;
+        };
+        selection.select_row = false;
+        if resolve_batch {
+            selection.expand_batch = false;
+        }
+        if !selection.select_row && !selection.expand_batch {
+            self.initial_progress_selection = None;
+        }
     }
 
     fn current_progress_implementation(&self) -> Option<&ImplementationPlan> {
@@ -388,6 +469,16 @@ impl App {
         self.progress_list_state.select(Some(selected_index));
         self.progress_table_state
             .select(table_selection_index(&self.progress_rows, selected_index));
+    }
+}
+
+fn expand_initial_target_batch(
+    plan: &ImplementationPlan,
+    target: Option<&str>,
+    expanded_batches: &mut HashMap<String, bool>,
+) {
+    if let Some(batch_id) = target.and_then(|delegate_id| plan.batch_id_for_delegate(delegate_id)) {
+        expanded_batches.insert(batch_id.to_string(), true);
     }
 }
 
