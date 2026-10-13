@@ -8,7 +8,24 @@ pub(super) fn is_project_manager(session: &Session) -> bool {
     session.work_type.as_deref() == Some("project-manager")
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::commands::agent::tui) enum ProgressScopeKind {
+    OwnOnly,
+    Direct,
+    Task {
+        task_id: String,
+        session_ids: Vec<String>,
+    },
+}
+
+impl ProgressScopeKind {
+    pub(super) fn includes_fetched_progress(&self) -> bool {
+        !matches!(self, Self::OwnOnly)
+    }
+}
+
 pub(super) struct ProgressScope {
+    pub(super) kind: ProgressScopeKind,
     pub(super) work_sessions: Vec<Session>,
     pub(super) delegated: Vec<Session>,
 }
@@ -41,31 +58,18 @@ impl App {
             .collect()
     }
 
-    pub(in crate::commands::agent::tui) fn progress_fetch_task_scope(
+    pub(in crate::commands::agent::tui) fn progress_fetch_scope(
         &self,
         session_id: &str,
-    ) -> (Option<String>, Option<Vec<String>>) {
-        if self
-            .session_by_id(session_id)
-            .is_some_and(|session| is_project_manager(&session))
-        {
-            return (None, Some(Vec::new()));
-        }
-
-        let task_id = self
-            .task_by_session
-            .get(session_id)
-            .map(|task| task.task_id.clone());
-        let task_session_ids = task_id
-            .as_deref()
-            .map(|task_id| self.progress_task_session_ids(task_id));
-
-        (task_id, task_session_ids)
+    ) -> Option<ProgressScopeKind> {
+        let selected = self.session_by_id(session_id)?;
+        Some(self.progress_scope(&selected).kind)
     }
 
     pub(super) fn progress_scope(&self, selected: &Session) -> ProgressScope {
         if is_project_manager(selected) {
             return ProgressScope {
+                kind: ProgressScopeKind::OwnOnly,
                 work_sessions: vec![selected.clone()],
                 delegated: Vec::new(),
             };
@@ -74,29 +78,32 @@ impl App {
         let Some(task_id) = self
             .task_by_session
             .get(&selected.session_id)
-            .map(|task| task.task_id.as_str())
+            .map(|task| task.task_id.clone())
         else {
             return ProgressScope {
+                kind: ProgressScopeKind::Direct,
                 work_sessions: vec![selected.clone()],
                 delegated: direct_delegates(self.sessions.clone(), &selected.session_id),
             };
         };
 
-        let mut task_session_ids = self
-            .progress_task_session_ids(task_id)
-            .into_iter()
-            .collect::<HashSet<_>>();
-        task_session_ids.insert(selected.session_id.clone());
+        let task_session_ids = self.progress_task_session_ids(&task_id);
+        let mut task_session_ids_set = task_session_ids.iter().cloned().collect::<HashSet<_>>();
+        task_session_ids_set.insert(selected.session_id.clone());
         let work_sessions = self
             .sessions
             .iter()
-            .filter(|session| task_session_ids.contains(&session.session_id))
+            .filter(|session| task_session_ids_set.contains(&session.session_id))
             .cloned()
             .collect::<Vec<_>>();
 
         ProgressScope {
+            kind: ProgressScopeKind::Task {
+                task_id,
+                session_ids: task_session_ids,
+            },
             work_sessions,
-            delegated: task_descendant_delegates(&self.sessions, &task_session_ids),
+            delegated: task_descendant_delegates(&self.sessions, &task_session_ids_set),
         }
     }
 }

@@ -54,6 +54,8 @@ mod reload;
 mod tq;
 mod worktree;
 
+pub(super) use progress_scope::ProgressScopeKind;
+
 use reload::{
     SelectionAnchor, build_title_cache, get_title_display_name, load_sessions,
     load_vibe_enabled_session_ids,

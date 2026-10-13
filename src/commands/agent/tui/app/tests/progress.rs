@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::super::App;
+use super::super::{App, ProgressScopeKind};
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
     FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
@@ -382,10 +382,7 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
         ])));
     }
 
-    assert_eq!(
-        app.progress_fetch_task_scope("project-manager"),
-        (None, Some(Vec::new())),
-    );
+    let fetch_scope = app.progress_fetch_scope("project-manager");
 
     app.apply_progress_result(
         "project-manager",
@@ -407,24 +404,25 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
         Some(0),
         None,
     );
-    assert_eq!(
-        (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
-        ),
-        expected.clone(),
+    let fetched_progress = (
+        app.progress_rows.clone(),
+        app.progress_list_state.selected(),
+        app.progress_table_state.selected(),
     );
 
     app.refresh_progress_from_sessions("project-manager");
 
     assert_eq!(
         (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
+            fetch_scope,
+            fetched_progress,
+            (
+                app.progress_rows.clone(),
+                app.progress_list_state.selected(),
+                app.progress_table_state.selected(),
+            ),
         ),
-        expected,
+        (Some(ProgressScopeKind::OwnOnly), expected.clone(), expected,),
     );
 }
 

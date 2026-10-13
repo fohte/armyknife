@@ -8,7 +8,6 @@ use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
 };
 use super::App;
-use super::progress_scope::is_project_manager;
 use crate::commands::agent::types::Session;
 
 #[derive(Clone)]
@@ -41,13 +40,11 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let project_manager = is_project_manager(&selected);
-                let implementation = (!project_manager)
+                let includes_fetched_progress = scope.kind.includes_fetched_progress();
+                let implementation = includes_fetched_progress
                     .then_some(progress.implementation)
                     .flatten();
-                let delegated = if project_manager {
-                    Vec::new()
-                } else {
+                let delegated = if includes_fetched_progress {
                     progress
                         .delegated
                         .into_iter()
@@ -58,6 +55,8 @@ impl App {
                             fetched
                         })
                         .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
                 };
                 let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
