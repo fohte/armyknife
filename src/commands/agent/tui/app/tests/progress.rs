@@ -349,7 +349,10 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
 }
 
 #[rstest]
-fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
+#[case::task_linked(true)]
+#[case::unlinked(false)]
+fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
+    #[case] task_linked: bool,
     timestamp: DateTime<Utc>,
     linked_checklist_plan: ImplementationPlan,
 ) {
@@ -369,13 +372,15 @@ fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
         Some("child-delegate"),
     ]);
     app.list_state.select(Some(1));
-    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
-        (
-            "project-manager".to_string(),
-            vec![task_link("parent-task")],
-        ),
-        ("child-task".to_string(), vec![task_link("parent-task")]),
-    ])));
+    if task_linked {
+        app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+            (
+                "project-manager".to_string(),
+                vec![task_link("parent-task")],
+            ),
+            ("child-task".to_string(), vec![task_link("parent-task")]),
+        ])));
+    }
 
     assert_eq!(
         app.progress_fetch_task_scope("project-manager"),

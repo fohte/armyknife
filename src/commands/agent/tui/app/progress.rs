@@ -8,6 +8,7 @@ use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
 };
 use super::App;
+use super::progress_scope::is_project_manager;
 use crate::commands::agent::types::Session;
 
 #[derive(Clone)]
@@ -40,13 +41,11 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let task_linked_project_manager = selected.work_type.as_deref()
-                    == Some("project-manager")
-                    && self.task_by_session.contains_key(session_id);
-                let implementation = (!task_linked_project_manager)
+                let project_manager = is_project_manager(&selected);
+                let implementation = (!project_manager)
                     .then_some(progress.implementation)
                     .flatten();
-                let delegated = if task_linked_project_manager {
+                let delegated = if project_manager {
                     Vec::new()
                 } else {
                     progress

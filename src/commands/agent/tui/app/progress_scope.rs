@@ -4,6 +4,10 @@ use super::super::progress_fetch::{direct_delegates, task_descendant_delegates};
 use super::App;
 use crate::commands::agent::types::Session;
 
+pub(super) fn is_project_manager(session: &Session) -> bool {
+    session.work_type.as_deref() == Some("project-manager")
+}
+
 pub(super) struct ProgressScope {
     pub(super) work_sessions: Vec<Session>,
     pub(super) delegated: Vec<Session>,
@@ -41,29 +45,32 @@ impl App {
         &self,
         session_id: &str,
     ) -> (Option<String>, Option<Vec<String>>) {
+        if self
+            .session_by_id(session_id)
+            .is_some_and(|session| is_project_manager(&session))
+        {
+            return (None, Some(Vec::new()));
+        }
+
         let task_id = self
             .task_by_session
             .get(session_id)
             .map(|task| task.task_id.clone());
-        let task_linked_project_manager = task_id.is_some()
-            && self
-                .session_by_id(session_id)
-                .is_some_and(|session| session.work_type.as_deref() == Some("project-manager"));
-        let task_session_ids = task_id.as_deref().map(|task_id| {
-            if task_linked_project_manager {
-                Vec::new()
-            } else {
-                self.progress_task_session_ids(task_id)
-            }
-        });
+        let task_session_ids = task_id
+            .as_deref()
+            .map(|task_id| self.progress_task_session_ids(task_id));
 
-        (
-            (!task_linked_project_manager).then_some(task_id).flatten(),
-            task_session_ids,
-        )
+        (task_id, task_session_ids)
     }
 
     pub(super) fn progress_scope(&self, selected: &Session) -> ProgressScope {
+        if is_project_manager(selected) {
+            return ProgressScope {
+                work_sessions: vec![selected.clone()],
+                delegated: Vec::new(),
+            };
+        }
+
         let Some(task_id) = self
             .task_by_session
             .get(&selected.session_id)
@@ -74,13 +81,6 @@ impl App {
                 delegated: direct_delegates(self.sessions.clone(), &selected.session_id),
             };
         };
-
-        if selected.work_type.as_deref() == Some("project-manager") {
-            return ProgressScope {
-                work_sessions: vec![selected.clone()],
-                delegated: Vec::new(),
-            };
-        }
 
         let mut task_session_ids = self
             .progress_task_session_ids(task_id)
