@@ -398,6 +398,7 @@ mod tests {
     use tungstenite::{Message, WebSocket, client};
 
     use super::super::TURN_START_REQUEST_ID;
+    use super::super::test_support::{accept_with_read_timeout, join_server};
     use super::*;
 
     const THREAD_ID: &str = "thread-a";
@@ -407,9 +408,7 @@ mod tests {
     #[fixture]
     fn connected_sockets() -> anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)> {
         let (client_stream, server_stream) = UnixStream::pair()?;
-        let server = std::thread::spawn(move || {
-            tungstenite::accept(server_stream).map_err(anyhow::Error::from)
-        });
+        let server = std::thread::spawn(move || accept_with_read_timeout(server_stream));
         let (client_socket, _) = client("ws://localhost/rpc", client_stream)?;
         let server_socket = server
             .join()
@@ -573,9 +572,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain(std::iter::once(thread_read_request(THREAD_READ_REQUEST_ID)))
@@ -626,9 +623,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
 
         assert_eq!((result, requests), (Ok(()), start_and_subscribe_requests()));
         Ok(())
@@ -658,9 +653,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
 
         assert_eq!(
             (result, requests),
@@ -724,9 +717,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
@@ -785,9 +776,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
 
         assert_eq!((result, requests), (Ok(()), start_and_subscribe_requests()));
         Ok(())
@@ -854,9 +843,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
@@ -936,9 +923,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
@@ -1008,9 +993,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
@@ -1076,9 +1059,7 @@ mod tests {
             CLIENT_USER_MESSAGE_ID,
             Duration::from_millis(10),
         ));
-        let requests = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([

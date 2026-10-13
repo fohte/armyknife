@@ -457,15 +457,57 @@ fn rpc_error(error: &Value) -> String {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    use anyhow::anyhow;
+    use tungstenite::{WebSocket, accept};
+
+    pub(crate) fn accept_with_read_timeout(
+        stream: UnixStream,
+    ) -> anyhow::Result<WebSocket<UnixStream>> {
+        // Bound server reads so a broken client path cannot strand the test thread.
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        accept(stream).map_err(anyhow::Error::from)
+    }
+
+    pub(crate) fn join_server<T>(
+        client_socket: &WebSocket<UnixStream>,
+        client_result: &std::result::Result<(), String>,
+        server: JoinHandle<anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        if client_result.is_err() {
+            // Release the peer before joining so a failed client cannot leave its read blocked.
+            let _ = client_socket.get_ref().shutdown(Shutdown::Both);
+        }
+
+        let server_result = server.join().map_err(|_| match client_result {
+            Err(client_error) => anyhow!(
+                "Codex app-server test thread panicked after client operation failed: {client_error}"
+            ),
+            Ok(()) => anyhow!("Codex app-server test thread panicked"),
+        })?;
+        server_result.map_err(|server_error| match client_result {
+            Err(client_error) => {
+                server_error.context(format!("client operation also failed: {client_error}"))
+            }
+            Ok(()) => server_error,
+        })
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
+    use test_support::{accept_with_read_timeout, join_server};
 
     fn connected_client_and_server() -> anyhow::Result<(Client, WebSocket<UnixStream>)> {
         let (client_stream, server_stream) = UnixStream::pair()?;
-        let server = std::thread::spawn(move || {
-            tungstenite::accept(server_stream).map_err(anyhow::Error::from)
-        });
+        let server = std::thread::spawn(move || accept_with_read_timeout(server_stream));
         let (socket, _) = client("ws://localhost/rpc", client_stream)?;
         let server = server
             .join()
@@ -862,9 +904,8 @@ mod tests {
         let result = client
             .start_turn(&thread_id, "hello there", None)
             .map_err(|error| error.to_string());
-        let (snapshot_request, request, resume_request) = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+        let (snapshot_request, request, resume_request) =
+            join_server(&client.socket, &result, server)?;
         let mut normalized_request = request;
         normalized_request["params"]["clientUserMessageId"] = json!("message-a");
         let actual = (
@@ -905,6 +946,96 @@ mod tests {
                     "params": {"threadId": "thread-a"},
                 }),
                 Some(TURN_START_RESPONSE_TIMEOUT),
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn start_turn_failure_closes_the_server_connection_before_joining() -> anyhow::Result<()> {
+        let (mut client, server_socket) = connected_client_and_server()?;
+        server_socket
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(2)))?;
+        let server = std::thread::spawn(move || -> anyhow::Result<(Value, Value, bool)> {
+            let mut socket = server_socket;
+            let Message::Text(snapshot_request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let snapshot_request = serde_json::from_str(&snapshot_request)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": 2,
+                    "result": {"thread": {"turns": []}},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            let Message::Text(turn_start_request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let mut turn_start_request: Value = serde_json::from_str(&turn_start_request)?;
+            turn_start_request["params"]["clientUserMessageId"] = json!("message-a");
+            socket.send(Message::Text(
+                json!({
+                    "id": TURN_START_REQUEST_ID,
+                    "error": {"code": -1, "message": "turn rejected"},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            let client_closed = match socket.read() {
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    true
+                }
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                    ) =>
+                {
+                    true
+                }
+                Err(tungstenite::Error::Protocol(
+                    tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                )) => true,
+                Ok(_) => false,
+                Err(error) => return Err(error.into()),
+            };
+            Ok((snapshot_request, turn_start_request, client_closed))
+        });
+
+        let result = client
+            .start_turn("thread-a", "hello there", None)
+            .map_err(|error| error.to_string());
+        let server_result =
+            join_server(&client.socket, &result, server).map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (result, server_result),
+            (
+                Err("Codex app-server `turn/start` failed: turn rejected (code -1)".to_string()),
+                Ok((
+                    json!({
+                        "id": 2,
+                        "method": "thread/read",
+                        "params": {"threadId": "thread-a", "includeTurns": true},
+                    }),
+                    json!({
+                        "id": TURN_START_REQUEST_ID,
+                        "method": "turn/start",
+                        "params": {
+                            "threadId": "thread-a",
+                            "clientUserMessageId": "message-a",
+                            "input": [{
+                                "type": "text",
+                                "text": "hello there",
+                                "textElements": [],
+                            }],
+                        },
+                    }),
+                    true,
+                )),
             ),
         );
         Ok(())
