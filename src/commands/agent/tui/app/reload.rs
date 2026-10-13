@@ -432,6 +432,55 @@ mod tests {
         App::with_sessions(sessions)
     }
 
+    #[test]
+    fn test_modified_ancestor_disabling_vibe_clears_inherited_task_marker() {
+        let cache_home = tempfile::tempdir().expect("temp cache home should be created");
+        let cache_home_path = cache_home.path().to_string_lossy().into_owned();
+        let sessions_dir = cache_home
+            .path()
+            .join("armyknife")
+            .join("cc")
+            .join("sessions");
+        let mut ancestor = create_test_session("ancestor-session");
+        ancestor.status = SessionStatus::Ended;
+        store::save_session_to(&sessions_dir, &ancestor).expect("ancestor session should save");
+
+        let mut descendant = create_test_session("descendant-session");
+        descendant
+            .ancestor_session_ids
+            .push(ancestor.session_id.clone());
+        let mut app = create_test_app(vec![descendant]);
+        app.vibe_enabled_session_ids
+            .insert(ancestor.session_id.clone());
+
+        temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home_path.as_str()))], || {
+            app.reload_sessions(Some(&[SessionChange {
+                session_id: ancestor.session_id,
+                change_type: SessionChangeType::Modified,
+            }]))
+            .expect("incremental reload should succeed");
+        });
+
+        let sessions = app.sessions.iter().collect::<Vec<_>>();
+        let rows = build_session_rows_with_vibe(
+            &sessions,
+            &app.task_by_session,
+            &app.agent_config,
+            &app.vibe_enabled_session_ids,
+        );
+        let vibe_modes = rows
+            .into_iter()
+            .filter_map(|row| match row {
+                super::super::super::session_rows::SessionRow::Session(entry) => {
+                    Some(entry.vibe_mode)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(vibe_modes, vec![None]);
+    }
+
     // =========================================================================
     // Row-order / selection-persistence tests (TRIAGE inbox layout)
     // =========================================================================

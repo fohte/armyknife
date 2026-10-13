@@ -199,16 +199,10 @@ impl App {
 
         // Build title cache for fast UI rendering
         let title_cache = build_title_cache(&sessions);
-        let vibe_enabled_session_ids = sessions
-            .iter()
-            .filter(|session| session.vibe_enabled)
-            .map(|session| session.session_id.clone())
-            .collect();
-
         let mut app = Self {
             sessions,
             agent_config,
-            vibe_enabled_session_ids,
+            vibe_enabled_session_ids: HashSet::new(),
             list_state,
             should_quit: false,
             error_message: None,
