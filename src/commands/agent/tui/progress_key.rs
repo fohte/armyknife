@@ -56,15 +56,12 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::tui::progress::{
-        FetchedDelegate, PrProgressRow, ProgressMark, ProgressOpenTarget, ProgressRow, StageMarks,
-        WorkProgressRow,
+        FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressOpenTarget,
+        ProgressRow, StageMarks, WorkProgressRow,
     };
-    use crate::commands::agent::tui::progress_batches::{
-        build_implementation_plan, build_progress_rows as build_checklist_progress_rows,
-    };
+    use crate::commands::agent::tui::progress_batches::build_implementation_plan;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::infra::tq::{TqChecklist, TqChecklistItem};
-    use crate::shared::config::AgentConfig;
 
     fn session(session_id: &str) -> Session {
         let now = Utc::now();
@@ -162,7 +159,7 @@ mod tests {
                 ],
             }],
         };
-        let fetched_delegates = [FetchedDelegate {
+        let fetched_delegates = vec![FetchedDelegate {
             session: delegate.clone(),
             checklist_item_id: Some("item-1".to_string()),
             pull_request: None,
@@ -177,15 +174,16 @@ mod tests {
         );
         let mut app = App::with_sessions(vec![selected.clone(), delegate.clone()]);
         app.progress_focused = true;
-        app.progress_session_id = Some("selected".to_string());
-        app.progress_checklist = Some(plan.clone());
-        app.progress_rows = build_checklist_progress_rows(
-            &selected,
-            std::slice::from_ref(&delegate),
-            &plan,
-            true,
-            &Default::default(),
-            &AgentConfig::default(),
+        app.update_row_order(&[None, Some("selected"), Some("delegate")]);
+        app.list_state.select(Some(1));
+        app.apply_progress_result(
+            "selected",
+            Ok(FetchedProgress {
+                selected_session_id: "selected".to_string(),
+                delegated: fetched_delegates,
+                implementation: Some(plan),
+                github_error: None,
+            }),
         );
         app.progress_list_state.select(Some(2));
         app.progress_table_state.select(Some(1));

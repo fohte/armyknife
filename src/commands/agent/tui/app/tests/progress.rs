@@ -1,10 +1,16 @@
+use std::collections::HashMap;
+
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
     FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
     WorkProgressRow, build_progress_rows,
 };
+use crate::commands::agent::tui::progress_batches::{
+    ImplementationPlan, build_implementation_plan,
+};
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
+use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
 use chrono::{DateTime, TimeZone, Utc};
 use rstest::{fixture, rstest};
@@ -20,6 +26,75 @@ fn delegated_session(timestamp: DateTime<Utc>) -> Session {
     session.is_delegated = true;
     session.ancestor_session_ids = vec!["selected".to_string()];
     session
+}
+
+#[fixture]
+fn linked_checklist_plan() -> ImplementationPlan {
+    let checklist = TqChecklist {
+        id: "checklist-a".to_string(),
+        name: "実装".to_string(),
+        items: vec![TqChecklistItem {
+            id: "batch-a".to_string(),
+            content: "Batch 1".to_string(),
+            checked_at: None,
+            github_link_id: None,
+            children: vec![TqChecklistItem {
+                id: "item-a".to_string(),
+                content: "PR 1: Placeholder change".to_string(),
+                checked_at: None,
+                github_link_id: Some("link-a".to_string()),
+                children: Vec::new(),
+            }],
+        }],
+    };
+    let github_link = TqGithubLink {
+        id: "link-a".to_string(),
+        kind: Some("pull_request".to_string()),
+        owner: Some("example-org".to_string()),
+        repo: Some("example-project".to_string()),
+        number: Some(23),
+        title: Some("Placeholder change".to_string()),
+        url: Some("https://example.test/pull/23".to_string()),
+        state: Some("open".to_string()),
+    };
+    build_implementation_plan(&checklist, &[github_link], &[], &HashMap::new(), true)
+}
+
+fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
+    vec![
+        ProgressRow::Work(WorkProgressRow {
+            session_id: session_id.to_string(),
+            role: "session".to_string(),
+            mark: ProgressMark::Working,
+            status_label: None,
+            note: None,
+            pane_id: None,
+        }),
+        ProgressRow::ImplementationHeader {
+            merged_pr_count: 0,
+            total_pr_count: 1,
+            collapsed: false,
+        },
+        ProgressRow::ChecklistPullRequest {
+            batch_id: "batch-a".to_string(),
+            row: PrProgressRow {
+                session_id: "checklist-item:item-a".to_string(),
+                title: "Placeholder change".to_string(),
+                number: Some(23),
+                url: Some("https://example.test/pull/23".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: true,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            },
+        },
+    ]
 }
 
 #[rstest]
@@ -440,15 +515,147 @@ fn preserves_local_delegate_rows_and_selection_when_fetch_fails(
     );
 }
 
-#[test]
-fn falls_back_to_delegate_rows_when_checklist_progress_is_unavailable() {
-    let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+#[rstest]
+fn restores_checklist_progress_when_returning_to_a_session(
+    timestamp: DateTime<Utc>,
+    linked_checklist_plan: ImplementationPlan,
+) {
+    let mut app = create_test_app(vec![
+        create_test_session_at("selected", timestamp),
+        create_test_session_at("other", timestamp),
+    ]);
+    app.update_row_order(&[None, Some("selected"), Some("other")]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: Vec::new(),
+            implementation: Some(linked_checklist_plan),
+            github_error: None,
+        }),
+    );
+
+    app.list_state.select(Some(2));
+    app.begin_progress_refresh("other");
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+
+    assert_eq!(
+        app.progress_rows,
+        expected_unavailable_checklist_rows("selected"),
+    );
+}
+
+#[rstest]
+fn resets_checklist_folds_when_selection_changes_during_refresh(
+    timestamp: DateTime<Utc>,
+    linked_checklist_plan: ImplementationPlan,
+) {
+    let mut app = create_test_app(vec![
+        create_test_session_at("selected", timestamp),
+        create_test_session_at("other", timestamp),
+    ]);
+    app.update_row_order(&[None, Some("selected"), Some("other")]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: Vec::new(),
+            implementation: Some(linked_checklist_plan.clone()),
+            github_error: None,
+        }),
+    );
+    app.set_progress_batch_collapsed(true);
+
+    app.list_state.select(Some(2));
+    app.refresh_progress_from_sessions("other");
+    app.begin_progress_refresh("other");
+    app.apply_progress_result(
+        "other",
+        Ok(FetchedProgress {
+            selected_session_id: "other".to_string(),
+            delegated: Vec::new(),
+            implementation: Some(linked_checklist_plan),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        expected_unavailable_checklist_rows("other"),
+    );
+}
+
+#[rstest]
+fn keeps_linked_pr_lookup_error_when_checklist_has_no_delegates(
+    timestamp: DateTime<Utc>,
+    linked_checklist_plan: ImplementationPlan,
+) {
+    let mut app = create_test_app(vec![create_test_session_at("selected", timestamp)]);
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: Vec::new(),
+            implementation: Some(linked_checklist_plan),
+            github_error: Some("GitHub unavailable".to_string()),
+        }),
+    );
+
+    assert_eq!(
+        (app.progress_rows, app.progress_error),
+        (
+            expected_unavailable_checklist_rows("selected"),
+            Some("GitHub unavailable".to_string()),
+        ),
+    );
+}
+
+#[rstest]
+fn preserves_fetch_error_when_no_delegate_rows_exist(timestamp: DateTime<Utc>) {
+    let mut app = create_test_app(vec![create_test_session_at("selected", timestamp)]);
+    app.begin_progress_refresh("selected");
+
+    app.apply_progress_result("selected", Err("progress fetch failed".to_string()));
+
+    assert_eq!(
+        (
+            app.progress_rows,
+            app.progress_error,
+            app.progress_session_id,
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        (
+            vec![ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "session".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            })],
+            Some("progress fetch failed".to_string()),
+            Some("selected".to_string()),
+            Some(0),
+            None,
+        ),
+    );
+}
+
+#[rstest]
+fn falls_back_to_delegate_rows_when_checklist_progress_is_unavailable(
+    timestamp: DateTime<Utc>,
+    delegated_session: Session,
+) {
     let selected = create_test_session_at("selected", timestamp);
-    let mut delegate = create_test_session_at("delegate", timestamp);
-    delegate.is_delegated = true;
-    delegate.ancestor_session_ids = vec!["selected".to_string()];
     let fetched_delegate = FetchedDelegate {
-        session: delegate.clone(),
+        session: delegated_session.clone(),
         checklist_item_id: None,
         pull_request: None,
         lookup_unavailable: false,
@@ -458,7 +665,7 @@ fn falls_back_to_delegate_rows_when_checklist_progress_is_unavailable() {
         std::slice::from_ref(&fetched_delegate),
         &AgentConfig::default(),
     );
-    let mut app = create_test_app(vec![selected, delegate]);
+    let mut app = create_test_app(vec![selected, delegated_session]);
     if app.selected_session_id() != Some("selected") {
         app.select_next();
     }

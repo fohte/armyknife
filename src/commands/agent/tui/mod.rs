@@ -8,6 +8,7 @@ mod progress;
 mod progress_batches;
 mod progress_fetch;
 mod progress_key;
+mod progress_refresh;
 mod session_key;
 mod session_preview;
 mod session_rows;
@@ -33,6 +34,7 @@ use self::app::App;
 use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler, SessionChange, SessionChangeType};
 use self::progress::ProgressOpenTarget;
+use self::progress_refresh::start_progress_refresh;
 use self::session_key::handle_key_event;
 use self::session_preview::PreviewError;
 use crate::shared::command;
@@ -217,12 +219,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     event_handler.start_tq_task_fetch(local_session_ids);
     let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
     if let Some(session_id) = progress_refresh_schedule.start_pending() {
-        app.begin_progress_refresh(&session_id);
-        let task_id = app
-            .task_by_session
-            .get(&session_id)
-            .map(|task| task.task_id.clone());
-        event_handler.start_progress_fetch(session_id, task_id);
+        start_progress_refresh(&mut app, &event_handler, session_id);
     }
 
     loop {
@@ -420,12 +417,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
 
         if let Some(session_id) = progress_refresh_schedule.start_pending() {
-            app.begin_progress_refresh(&session_id);
-            let task_id = app
-                .task_by_session
-                .get(&session_id)
-                .map(|task| task.task_id.clone());
-            event_handler.start_progress_fetch(session_id, task_id);
+            start_progress_refresh(&mut app, &event_handler, session_id);
         }
 
         if app.should_quit {
