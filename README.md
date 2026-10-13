@@ -866,6 +866,17 @@ Get a configuration value by dot-separated key. Supports any config field (e.g.,
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
+Vibe mode is disabled by default. Set `orgs.<owner>.vibe` to allow it for that owner's repositories, then set `repos.<owner>/<repo>.vibe` to `false` for individual exceptions or `true` to override a disabled org setting. `a config get repo.vibe` prints the effective value for the current repository.
+
+```yaml
+orgs:
+  example-org:
+    vibe: true
+repos:
+  example-org/example-repo:
+    vibe: false
+```
+
 ```sh
 $ a config get agent.worktree.branch_prefix
 fohte/

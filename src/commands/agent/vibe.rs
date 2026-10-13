@@ -3,6 +3,7 @@ use clap::Subcommand;
 
 use super::error::CcError;
 use super::store;
+use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
 
 #[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,14 @@ pub fn is_vibe_enabled() -> Result<bool> {
     };
 
     is_vibe_enabled_for(&store::sessions_dir()?, &session_id)
+}
+
+pub(crate) fn ensure_repo_vibe_access(config: &Config, owner: &str, repo: &str) -> Result<()> {
+    if !config.is_vibe_allowed_for_repo(owner, repo) {
+        bail!("Vibe mode is disabled by configuration for repository {owner}/{repo}.");
+    }
+
+    Ok(())
 }
 
 fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Result<bool> {
@@ -93,8 +102,10 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use crate::shared::config::Config;
     use chrono::Utc;
     use clap::Parser;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -158,6 +169,32 @@ mod tests {
 
         assert!(
             cli.command == Commands::Agent(super::super::AgentCommands::Vibe(VibeCommands::On))
+        );
+    }
+
+    #[rstest]
+    #[case::allowed(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Ok(())
+    )]
+    #[case::denied_by_default(
+        "{}",
+        Err("Vibe mode is disabled by configuration for repository example-org/example-repo.")
+    )]
+    fn repo_vibe_access_uses_effective_config(
+        #[case] yaml: &str,
+        #[case] expected: std::result::Result<(), &str>,
+    ) {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            ensure_repo_vibe_access(&config, "example-org", "example-repo")
+                .map_err(|error| error.to_string()),
+            expected.map_err(str::to_owned),
         );
     }
 

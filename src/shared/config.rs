@@ -91,6 +91,13 @@ impl Config {
     /// Returns the raw JSON value at the path, or None if the path is missing
     /// or resolves to null. Callers format scalars and collections as needed.
     pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<serde_json::Value> {
+        if key == "repo.vibe" {
+            let (owner, repo) = repo_id?.split_once('/')?;
+            return Some(serde_json::Value::Bool(
+                self.is_vibe_allowed_for_repo(owner, repo),
+            ));
+        }
+
         if let Some(repo_key) = key.strip_prefix("repo.") {
             // Fall back to RepoConfig::default() when no entry exists for this
             // repo, so per-field serde defaults (e.g. direct_commit = false)
@@ -113,6 +120,15 @@ impl Config {
             let value = serde_json::to_value(self).ok()?;
             resolve_json_path(&value, key)
         }
+    }
+
+    /// Resolve whether vibe mode is allowed for a repository.
+    /// An explicit repository setting overrides its owner's setting.
+    pub fn is_vibe_allowed_for_repo(&self, owner: &str, repo: &str) -> bool {
+        self.repos
+            .get(&format!("{owner}/{repo}"))
+            .and_then(|config| config.vibe)
+            .unwrap_or_else(|| self.orgs.get(owner).is_some_and(|config| config.vibe))
     }
 
     /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).
@@ -354,6 +370,10 @@ pub struct RepoConfig {
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
+    /// Whether vibe mode is allowed for this repository. Overrides the org setting.
+    #[serde(default)]
+    pub vibe: Option<bool>,
+
     /// AI-related per-repo overrides (e.g., reviewer set for `a ai review wait`).
     #[serde(default)]
     pub ai: AiConfig,
@@ -364,6 +384,11 @@ pub struct RepoConfig {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OrgConfig {
+    /// Whether vibe mode is allowed for repositories owned by this organization.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema-gen", schemars(default))]
+    pub vibe: bool,
+
     /// AI-related per-org defaults (e.g., reviewer set for `a ai review wait`).
     #[serde(default)]
     pub ai: AiConfig,

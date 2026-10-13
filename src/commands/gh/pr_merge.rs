@@ -4,9 +4,13 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use clap::Args;
 
-use crate::commands::agent::is_vibe_enabled;
+use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::{external_tool::ExternalTool, git, github::PrState, process};
-use crate::shared::{env_var::EnvVars, hooks};
+use crate::shared::{
+    config::{Config, load_config},
+    env_var::EnvVars,
+    hooks,
+};
 
 const REQUIRED_CHECKS_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -26,6 +30,10 @@ pub fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_vibe_access(in_agent_session, vibe_enabled)?;
 
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
+    if in_agent_session {
+        ensure_repo_vibe_access_for_session(in_agent_session, &load_config()?, &owner, &repo)?;
+    }
+
     let client = GhCli;
     run_merge(
         &client,
@@ -41,6 +49,18 @@ pub fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
 fn ensure_vibe_access(in_agent_session: bool, vibe_enabled: bool) -> anyhow::Result<()> {
     if in_agent_session && !vibe_enabled {
         bail!("PR merge is only allowed in vibe mode inside an agent session.");
+    }
+    Ok(())
+}
+
+fn ensure_repo_vibe_access_for_session(
+    in_agent_session: bool,
+    config: &Config,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    if in_agent_session {
+        ensure_repo_vibe_access(config, owner, repo)?;
     }
     Ok(())
 }
@@ -272,7 +292,10 @@ fn required_checks_succeeded(status_success: bool, output: &str) -> bool {
 mod tests {
     use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+    use indoc::indoc;
     use rstest::{fixture, rstest};
+
+    use crate::shared::config::Config;
 
     use super::*;
 
@@ -527,6 +550,41 @@ mod tests {
         assert_eq!(
             ensure_vibe_access(in_agent_session, vibe_enabled).is_ok(),
             expected,
+        );
+    }
+
+    #[rstest]
+    #[case::human_ignores_repo_setting(false, "{}", Ok(()))]
+    #[case::agent_uses_org_setting(
+        true,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Ok(())
+    )]
+    #[case::agent_is_denied_by_default(
+        true,
+        "{}",
+        Err("Vibe mode is disabled by configuration for repository example-org/example-repo.")
+    )]
+    fn repo_vibe_access_only_gates_agent_sessions(
+        #[case] in_agent_session: bool,
+        #[case] yaml: &str,
+        #[case] expected: std::result::Result<(), &str>,
+    ) {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            ensure_repo_vibe_access_for_session(
+                in_agent_session,
+                &config,
+                "example-org",
+                "example-repo",
+            )
+            .map_err(|error| error.to_string()),
+            expected.map_err(str::to_owned),
         );
     }
 
