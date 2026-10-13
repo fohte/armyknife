@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::commands::agent::session_pr_context::Capture;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
 use crate::infra::tmux::layout::AgentLaunchRoute;
@@ -41,7 +42,7 @@ fn record_from_env_in(
     session_id: &str,
     cwd: &Path,
     env_vars: &[(&str, &str)],
-    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
+    capture_pr_context: Option<Capture>,
 ) -> Result<()> {
     let metadata = metadata_from_env(env_vars);
     if metadata.label.is_none()
@@ -143,6 +144,7 @@ fn record_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::session_pr_context::fixed_context_capture;
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -277,7 +279,7 @@ mod tests {
             "thread-a",
             Path::new("/workspace/delegate"),
             &env_vars,
-            None,
+            Some(fixed_context_capture),
         )
         .expect("record should succeed");
 
@@ -286,6 +288,12 @@ mod tests {
         actual["updated_at"] = json!("<timestamp>");
         let mut expected = json!({
             "session_id": "thread-a",
+            "pr_context": {
+                "owner": "sample-owner",
+                "repo": "sample-repo",
+                "branch": "sample-branch",
+                "checklist_item_id": "sample-item"
+            },
             "cwd": "/workspace/delegate",
             "transcript_path": null,
             "tty": null,

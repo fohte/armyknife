@@ -18,7 +18,7 @@ use super::error::CcError;
 use super::session_status;
 use super::store;
 use super::types::{
-    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionPrContext, SessionStatus,
+    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
     TMUX_SESSION_OPTION, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
@@ -131,13 +131,7 @@ enum ProcessResult {
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl_with_context_capture(
-        event,
-        input,
-        &sessions_dir,
-        &SideEffects::all(),
-        Some(super::session_pr_context::capture),
-    )
+    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all())
 }
 
 /// Marks a Codex session ended after its CLI process exits.
@@ -217,60 +211,29 @@ fn session_needs_pane_binding(sessions_dir: &Path, session_id: &str) -> Result<b
 
 /// Internal implementation that returns ProcessResult for testing.
 /// Accepts sessions_dir as a parameter to allow testing with temporary directories.
-#[cfg(test)]
 fn process_hook_event_impl(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
-    process_hook_event_impl_with_context_capture(event, input, sessions_dir, side_effects, None)
-}
-
-fn process_hook_event_impl_with_context_capture(
-    event: HookEvent,
-    input: HookInput,
-    sessions_dir: &Path,
-    side_effects: &SideEffects,
-    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
-) -> Result<ProcessResult> {
     let agent_config = (event == HookEvent::Stop).then(|| config::load_config_or_default().agent);
     let stop_hook_instruction = agent_config.as_ref().and_then(stop::configured_instruction);
-    process_hook_event_impl_with_instruction_and_context_capture(
+    process_hook_event_impl_with_instruction(
         event,
         input,
         sessions_dir,
         side_effects,
         stop_hook_instruction,
-        capture_pr_context,
     )
 }
 
-#[cfg(test)]
 fn process_hook_event_impl_with_instruction(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
-) -> Result<ProcessResult> {
-    process_hook_event_impl_with_instruction_and_context_capture(
-        event,
-        input,
-        sessions_dir,
-        side_effects,
-        stop_hook_instruction,
-        None,
-    )
-}
-
-fn process_hook_event_impl_with_instruction_and_context_capture(
-    event: HookEvent,
-    input: HookInput,
-    sessions_dir: &Path,
-    side_effects: &SideEffects,
-    stop_hook_instruction: Option<&str>,
-    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
@@ -418,7 +381,9 @@ fn process_hook_event_impl_with_instruction_and_context_capture(
             .unwrap_or_default();
 
         Session {
-            pr_context: capture_pr_context.and_then(|capture| capture(&input.cwd)),
+            pr_context: side_effects
+                .capture_pr_context
+                .and_then(|capture| capture(&input.cwd)),
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
             // A new ID in a pane that already tracked a session is a restart or
@@ -1265,7 +1230,8 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::AgentStatus;
+    use crate::commands::agent::session_pr_context::fixed_context_capture;
+    use crate::commands::agent::types::{AgentStatus, SessionPrContext};
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -2449,6 +2415,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
@@ -2856,6 +2823,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed.clone()),
@@ -3379,6 +3347,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed_notification_groups.clone()),
@@ -3701,6 +3670,34 @@ mod tests {
                 result,
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
+            );
+        }
+
+        #[test]
+        fn user_prompt_submit_persists_captured_pr_context() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut side_effects = SideEffects::none();
+            side_effects.capture_pr_context = Some(fixed_context_capture);
+
+            process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                create_test_input(None),
+                temp_dir.path(),
+                &side_effects,
+            )
+            .expect("user-prompt-submit should succeed");
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            assert_eq!(
+                session.pr_context,
+                Some(SessionPrContext {
+                    owner: "sample-owner".to_string(),
+                    repo: "sample-repo".to_string(),
+                    branch: "sample-branch".to_string(),
+                    checklist_item_id: Some("sample-item".to_string()),
+                }),
             );
         }
 

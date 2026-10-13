@@ -4,8 +4,9 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::commands::agent::session_pr_context::Capture;
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::parse_ancestor_session_ids;
 
 pub(super) fn record_ancestor_session_ids_if_empty(
@@ -13,7 +14,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     session_id: &str,
     cwd: &Path,
     ancestor_session_ids: &str,
-    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
+    capture_pr_context: Option<Capture>,
 ) -> Result<()> {
     let ancestor_session_ids = parse_ancestor_session_ids(ancestor_session_ids);
     if ancestor_session_ids.is_empty() {
@@ -72,6 +73,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
     #[fixture]
@@ -158,7 +160,7 @@ mod tests {
             "missing-session",
             Path::new("/workspace/resume"),
             "root, parent",
-            None,
+            Some(fixed_context_capture),
         )
         .expect("record should succeed");
 
@@ -173,6 +175,12 @@ mod tests {
             actual,
             serde_json::json!({
                 "session_id": "missing-session",
+                "pr_context": {
+                    "owner": "sample-owner",
+                    "repo": "sample-repo",
+                    "branch": "sample-branch",
+                    "checklist_item_id": "sample-item"
+                },
                 "cwd": "/workspace/resume",
                 "transcript_path": null,
                 "tty": null,

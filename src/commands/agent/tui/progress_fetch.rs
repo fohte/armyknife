@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::Session;
-use crate::infra::git::{GitRepo, github_owner_and_repo};
+use crate::commands::agent::types::{Session, SessionPrContext};
+use crate::infra::git::GitRepo;
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
+use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress};
 use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
@@ -148,6 +149,7 @@ struct BranchQueries {
     unavailable: HashSet<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum BranchLookup {
     Query {
         query: BranchPrQuery,
@@ -203,49 +205,39 @@ fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
 }
 
 fn branch_query_for(session: &Session) -> BranchLookup {
-    if let Some(context) = &session.pr_context {
-        return BranchLookup::Query {
-            query: BranchPrQuery {
-                owner: context.owner.clone(),
-                repo: context.repo.clone(),
-                branch: context.branch.clone(),
-            },
-            checklist_item_id: context.checklist_item_id.clone(),
-        };
-    }
-
-    let repo = match GitRepo::open_at(&session.cwd) {
-        Ok(repo) => repo,
-        Err(_) => return BranchLookup::Unavailable,
-    };
-    if !repo.is_worktree() {
-        return BranchLookup::NotApplicable;
-    }
-    let branch = match repo.current_branch() {
-        Ok(branch) => branch,
-        Err(_) => return BranchLookup::Unavailable,
-    };
-    if branch == "HEAD" {
-        return BranchLookup::NotApplicable;
-    }
-    let checklist_item_id = repo.local_config_value(&branch_checklist_item_config_key(&branch));
-    match github_owner_and_repo(&repo) {
-        Ok((owner, repo_name)) => BranchLookup::Query {
-            query: BranchPrQuery {
-                owner,
-                repo: repo_name,
-                branch,
-            },
-            checklist_item_id,
-        },
-        Err(_) => checklist_item_id
-            .map(BranchLookup::ChecklistOnly)
-            .unwrap_or(BranchLookup::Unavailable),
-    }
+    let live_resolution = GitRepo::open_at(&session.cwd)
+        .ok()
+        .map(|repo| session_pr_context::resolve(&repo));
+    branch_lookup_for_resolution(live_resolution, session.pr_context.as_ref())
 }
 
-fn branch_checklist_item_config_key(branch: &str) -> String {
-    format!("branch.{branch}.x-tq-checklist-item-id")
+fn branch_lookup_for_resolution(
+    live_resolution: Option<Resolution>,
+    saved_context: Option<&SessionPrContext>,
+) -> BranchLookup {
+    match live_resolution {
+        Some(Resolution::Context(context)) => BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: context.owner,
+                repo: context.repo,
+                branch: context.branch,
+            },
+            checklist_item_id: context.checklist_item_id,
+        },
+        Some(Resolution::ChecklistOnly(item_id)) => BranchLookup::ChecklistOnly(item_id),
+        Some(Resolution::NotApplicable) => BranchLookup::NotApplicable,
+        Some(Resolution::Unavailable) => BranchLookup::Unavailable,
+        None => saved_context
+            .map(|context| BranchLookup::Query {
+                query: BranchPrQuery {
+                    owner: context.owner.clone(),
+                    repo: context.repo.clone(),
+                    branch: context.branch.clone(),
+                },
+                checklist_item_id: context.checklist_item_id.clone(),
+            })
+            .unwrap_or(BranchLookup::Unavailable),
+    }
 }
 
 #[cfg(test)]
@@ -255,7 +247,10 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
-    use super::{branch_queries_for_sessions, direct_delegates};
+    use super::{
+        BranchLookup, Resolution, branch_lookup_for_resolution, branch_queries_for_sessions,
+        direct_delegates,
+    };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
 
@@ -336,6 +331,37 @@ mod tests {
                 HashMap::from([("recorded".to_string(), "sample-item".to_string())]),
                 HashSet::new(),
             ),
+        );
+    }
+
+    #[test]
+    fn prefers_live_branch_context_to_saved_context() {
+        let saved_context = SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "saved-branch".to_string(),
+            checklist_item_id: Some("saved-item".to_string()),
+        };
+        let live_context = SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "live-branch".to_string(),
+            checklist_item_id: Some("live-item".to_string()),
+        };
+
+        assert_eq!(
+            branch_lookup_for_resolution(
+                Some(Resolution::Context(live_context)),
+                Some(&saved_context),
+            ),
+            BranchLookup::Query {
+                query: BranchPrQuery {
+                    owner: "sample-owner".to_string(),
+                    repo: "sample-repo".to_string(),
+                    branch: "live-branch".to_string(),
+                },
+                checklist_item_id: Some("live-item".to_string()),
+            },
         );
     }
 
