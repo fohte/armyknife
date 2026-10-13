@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.405](https://github.com/fohte/armyknife/compare/v0.1.404...v0.1.405) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/tui:** handle failed sessions in PROGRESS ([#1143](https://github.com/fohte/armyknife/issues/1143)) ([a2a3e39](https://github.com/fohte/armyknife/commit/a2a3e395baa0d5f8b0015e56ad268cd5d5b5604d))
+
 ## [0.1.404](https://github.com/fohte/armyknife/compare/v0.1.403...v0.1.404) (2026-10-13)
 
 
