@@ -151,33 +151,16 @@ async fn close_worktree(
 }
 
 pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
-    let args = CloseArgs {
+    let args = close_worktree_path_args();
+    close_worktree(worktree_path, &args, true).await
+}
+
+fn close_worktree_path_args() -> CloseArgs {
+    CloseArgs {
         target: None,
         force: false,
         skip_hooks: false,
-    };
-    let sessions = super::store::list_sessions()?;
-    let session = select_worktree_session(&sessions, worktree_path)?;
-    let caller_pane_id = if session.is_some() {
-        crate::shared::caller_pane::resolve_caller_pane_id()
-    } else {
-        None
-    };
-    let caller_session_id = EnvVars::load().own_session_id();
-    let context = WorktreeCloseContext {
-        args: &args,
-        session,
-        caller_session_id: caller_session_id.as_deref(),
-        caller_pane_id: caller_pane_id.as_deref(),
-    };
-    let skip_hooks = args.skip_hooks;
-    close_worktree_path_with(
-        context,
-        worktree_delete::prepare(worktree_path, args.force),
-        close_worktree_session,
-        |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
-    )
-    .await
+    }
 }
 
 struct WorktreeCloseContext<'a> {
@@ -185,18 +168,6 @@ struct WorktreeCloseContext<'a> {
     session: Option<&'a Session>,
     caller_session_id: Option<&'a str>,
     caller_pane_id: Option<&'a str>,
-}
-
-async fn close_worktree_path_with<P, F>(
-    context: WorktreeCloseContext<'_>,
-    prepare: impl Future<Output = Result<P>>,
-    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
-    remove_worktree: impl FnOnce(P) -> F,
-) -> Result<()>
-where
-    F: Future<Output = Result<()>>,
-{
-    close_worktree_with(context, true, prepare, close_session, remove_worktree).await
 }
 
 async fn close_worktree_with<P, F>(
@@ -1122,11 +1093,7 @@ mod tests {
     #[tokio::test]
     async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
         let target_session = session();
-        let args = CloseArgs {
-            target: None,
-            force: false,
-            skip_hooks: false,
-        };
+        let args = close_worktree_path_args();
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
@@ -1134,8 +1101,9 @@ mod tests {
             caller_session_id: Some("session-1"),
             caller_pane_id: None,
         };
-        let result = close_worktree_path_with(
+        let result = close_worktree_with(
             context,
+            true,
             async {
                 calls.borrow_mut().push("prepare");
                 Ok::<(), anyhow::Error>(())
@@ -1161,6 +1129,51 @@ mod tests {
                         .to_string()
                 ),
                 vec![],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_merge_close_refuses_to_close_other_sessions_without_force() {
+        let target_session = session();
+        let args = close_worktree_path_args();
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: Some(&target_session),
+            caller_session_id: Some("caller-session"),
+            caller_pane_id: None,
+        };
+        let result = close_worktree_with(
+            context,
+            true,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, force, _| {
+                calls.borrow_mut().push(if force {
+                    "close session with force"
+                } else {
+                    "close session safely"
+                });
+                anyhow::bail!("running session refused to close")
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (
+                Err("running session refused to close".to_string()),
+                vec!["prepare", "close session safely"],
             ),
         );
     }
