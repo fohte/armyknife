@@ -218,7 +218,7 @@
       ]
     },
     "AgentWorkTypeColor": {
-      "description": "A terminal color accepted for an agent work type.",
+      "description": "A terminal color accepted for an agent watch marker.",
       "anyOf": [
         {
           "$ref": "#/$defs/AgentWorkTypeNamedColor"
@@ -243,15 +243,15 @@
       ]
     },
     "AgentWorkTypeConfig": {
-      "description": "Display settings for an agent work type.",
+      "description": "Display settings for an agent watch marker.",
       "type": "object",
       "properties": {
         "color": {
-          "description": "Terminal color for this work type.",
+          "description": "Terminal color used in the agent watch marker.",
           "$ref": "#/$defs/AgentWorkTypeColor"
         },
         "icon": {
-          "description": "Icon shown for this work type.",
+          "description": "Icon shown in the agent watch marker.",
           "type": "string"
         }
       },
@@ -262,7 +262,7 @@
       ]
     },
     "AgentWorkTypeNamedColor": {
-      "description": "A named terminal color accepted for an agent work type.",
+      "description": "A named terminal color accepted for an agent watch marker.",
       "type": "string",
       "enum": [
         "reset",

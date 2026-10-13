@@ -38,7 +38,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub work_types: HashMap<String, AgentWorkTypeConfig>,
 
-    /// Display configuration used by `a agent watch` when a session has no recorded work type.
+    /// Display configuration used in `a agent watch` when a session has no recorded work type.
     #[serde(default)]
     pub work_type_fallback: Option<AgentWorkTypeConfig>,
 
