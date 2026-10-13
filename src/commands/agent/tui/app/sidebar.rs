@@ -119,25 +119,35 @@ impl App {
         }
     }
 
-    pub fn toggle_sidebar_focus(&mut self) {
-        if self.sidebar_visible && self.sidebar_available {
-            if self.sidebar_focused {
-                self.move_session_cursor_to_sidebar_cursor();
-                self.sidebar_focused = false;
-            } else {
+    pub fn cycle_pane_focus(&mut self) {
+        let has_sidebar = self.narrow_layout || (self.sidebar_visible && self.sidebar_available);
+        if has_sidebar && self.sidebar_focused {
+            self.move_session_cursor_to_sidebar_cursor();
+            self.sidebar_focused = false;
+            self.progress_focused = false;
+        } else if self.progress_focused {
+            self.progress_focused = false;
+            self.sidebar_focused = has_sidebar;
+            if has_sidebar {
                 self.move_sidebar_cursor_to_selected_session();
-                self.sidebar_focused = true;
             }
+        } else if has_sidebar {
+            self.progress_focused = true;
+            self.sidebar_focused = false;
+        } else {
+            self.progress_focused = true;
         }
     }
 
     pub fn show_narrow_sidebar_screen(&mut self) {
         self.move_sidebar_cursor_to_selected_session();
         self.sidebar_focused = true;
+        self.progress_focused = false;
     }
 
     pub fn show_narrow_session_list_screen(&mut self) {
         self.sidebar_focused = false;
+        self.progress_focused = false;
     }
 
     pub fn move_sidebar_cursor(&mut self, delta: isize) {

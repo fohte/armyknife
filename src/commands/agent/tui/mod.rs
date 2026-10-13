@@ -4,7 +4,11 @@ mod clean_view;
 mod crit_key;
 mod event;
 mod pr_fetch;
+mod progress;
+mod progress_fetch;
+mod progress_key;
 mod session_key;
+mod session_preview;
 mod session_rows;
 mod sidebar_key;
 mod title_edit;
@@ -19,27 +23,25 @@ mod worktree;
 mod worktree_session_children;
 
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
 use ratatui::DefaultTerminal;
 
 use self::app::App;
 #[cfg(test)]
 use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler, SessionChange, SessionChangeType};
+use self::progress::ProgressOpenTarget;
 use self::session_key::handle_key_event;
+use self::session_preview::PreviewError;
 use crate::shared::command;
 #[cfg(test)]
 use crossterm::event::{KeyCode, KeyModifiers};
 
 const TQ_SESSION_TASKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 struct TqRefreshSchedule {
     in_flight: bool,
@@ -82,6 +84,47 @@ impl TqRefreshSchedule {
     }
 }
 
+struct ProgressRefreshSchedule {
+    in_flight: bool,
+    pending_session_id: Option<String>,
+    next_periodic_refresh: Instant,
+}
+
+impl ProgressRefreshSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            in_flight: false,
+            pending_session_id: None,
+            next_periodic_refresh: now + PROGRESS_REFRESH_INTERVAL,
+        }
+    }
+
+    fn request(&mut self, session_id: Option<String>) {
+        self.pending_session_id = session_id;
+    }
+
+    fn periodic_refresh_due(&mut self, now: Instant) -> bool {
+        if now < self.next_periodic_refresh {
+            return false;
+        }
+        self.next_periodic_refresh = now + PROGRESS_REFRESH_INTERVAL;
+        true
+    }
+
+    fn fetch_completed(&mut self) {
+        self.in_flight = false;
+    }
+
+    fn start_pending(&mut self) -> Option<String> {
+        if self.in_flight {
+            return None;
+        }
+        let session_id = self.pending_session_id.take()?;
+        self.in_flight = true;
+        Some(session_id)
+    }
+}
+
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
     let mut terminal = ratatui::init();
@@ -117,6 +160,8 @@ struct KeyEffects {
     fetch_task_url: Option<String>,
     /// User pressed `o`: leave watch and open this session's crit pane.
     open_crit_session_id: Option<String>,
+    /// User pressed Enter on a PROGRESS pane row.
+    open_progress_target: Option<ProgressOpenTarget>,
 }
 
 impl KeyEffects {
@@ -142,6 +187,9 @@ impl KeyEffects {
         if other.open_crit_session_id.is_some() {
             self.open_crit_session_id = other.open_crit_session_id;
         }
+        if other.open_progress_target.is_some() {
+            self.open_progress_target = other.open_progress_target;
+        }
     }
 }
 
@@ -166,6 +214,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let event_handler = EventHandler::new()?;
     let mut crit_session_id = None;
 
+    let mut progress_refresh_schedule = ProgressRefreshSchedule::new(Instant::now());
+    progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
+
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
     app.tq_refresh_started();
@@ -181,8 +232,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         let first_event = event_handler.next()?;
+        let selected_session_before_events = app.selected_session_id().map(str::to_owned);
         let mut needs_full_reload = false;
         let mut periodic_tq_refresh_due = false;
+        let mut periodic_progress_refresh_due = false;
         let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
         let mut effects = KeyEffects::default();
 
@@ -202,6 +255,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 AppEvent::Tick => {
                     if tq_refresh_schedule.periodic_refresh_due(Instant::now()) {
                         periodic_tq_refresh_due = true;
+                    }
+                    if progress_refresh_schedule.periodic_refresh_due(Instant::now()) {
+                        periodic_progress_refresh_due = true;
                     }
                 }
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
@@ -223,6 +279,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 }
                 AppEvent::CleanPrFetched(Err(err)) => {
                     app.set_clean_failed(err);
+                }
+                AppEvent::ProgressFetched { session_id, result } => {
+                    progress_refresh_schedule.fetch_completed();
+                    app.apply_progress_result(&session_id, result);
                 }
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
@@ -262,7 +322,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             event_handler.start_clean_pr_fetch(rows, sessions);
         }
         if let Some(path) = effects.preview_session_path {
-            match preview_session(terminal, &path) {
+            match session_preview::preview_session(terminal, &path) {
                 Ok(()) => {}
                 Err(PreviewError::Viewer(e)) => {
                     app.set_error(format!("Failed to preview session: {e}"));
@@ -300,6 +360,16 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         if effects.open_crit_session_id.is_some() {
             crit_session_id = effects.open_crit_session_id;
         }
+        if let Some(target) = effects.open_progress_target {
+            match target {
+                ProgressOpenTarget::FocusPane(pane_id) => {
+                    if let Err(error) = crate::infra::tmux::focus_pane(&pane_id) {
+                        app.set_error(format!("Failed to focus pane: {error}"));
+                    }
+                }
+                ProgressOpenTarget::OpenUrl(url) => open_url(&mut app, &url),
+            }
+        }
 
         // Apply merged session changes in a single reload
         let mut sessions_changed = false;
@@ -318,6 +388,20 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
         if sessions_changed {
             app.refresh_worktree_session_counts();
+            if let Some(session_id) = app.selected_session_id().map(str::to_owned)
+                && app.progress_session_id.as_deref() == Some(session_id.as_str())
+            {
+                app.refresh_progress_from_sessions(&session_id);
+                if progress_refresh_schedule.in_flight {
+                    progress_refresh_schedule.request(Some(session_id));
+                }
+            }
+        }
+        let selected_session_after_events = app.selected_session_id().map(str::to_owned);
+        if selected_session_before_events != selected_session_after_events
+            || periodic_progress_refresh_due
+        {
+            progress_refresh_schedule.request(selected_session_after_events.clone());
         }
         // A new session may already be tq-linked; refresh its prefix along
         // with periodic refreshes, coalescing requests while one is running.
@@ -329,6 +413,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 app.sessions.iter().map(|s| s.session_id.clone()).collect();
             app.tq_refresh_started();
             event_handler.start_tq_sidebar_fetch(local_session_ids);
+        }
+
+        if let Some(session_id) = progress_refresh_schedule.start_pending() {
+            app.begin_progress_refresh(&session_id);
+            event_handler.start_progress_fetch(session_id);
         }
 
         if app.should_quit {
@@ -358,93 +447,6 @@ fn merge_session_changes(
             })
             .collect(),
     )
-}
-
-/// Preview a session's JSONL with `claude-history`.
-fn preview_session(
-    terminal: &mut DefaultTerminal,
-    jsonl_path: &Path,
-) -> std::result::Result<(), PreviewError> {
-    let suspend_err = suspend_terminal().err();
-    // Even if suspend partially failed (raw mode disabled but alt screen
-    // still active), we must still try to restore — the alternative is
-    // leaving the TUI in a broken state.
-    let status = if suspend_err.is_none() {
-        Some(command::new("claude-history").arg(jsonl_path).status())
-    } else {
-        None
-    };
-    let restore_err = resume_terminal(terminal).err();
-    combine_preview_result(suspend_err, status, restore_err)
-}
-
-/// Categorized failure from `preview_session`. `Fatal` means the terminal
-/// itself is in a bad state (suspend or restore failed) — the caller must
-/// bail so `ratatui::restore()` runs. `Viewer` means only the child failed,
-/// so the TUI can keep going.
-#[derive(Debug)]
-enum PreviewError {
-    Fatal(anyhow::Error),
-    Viewer(anyhow::Error),
-}
-
-impl std::fmt::Display for PreviewError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PreviewError::Fatal(e) | PreviewError::Viewer(e) => write!(f, "{e:#}"),
-        }
-    }
-}
-
-fn combine_preview_result(
-    suspend_err: Option<io::Error>,
-    status: Option<io::Result<std::process::ExitStatus>>,
-    restore_err: Option<io::Error>,
-) -> std::result::Result<(), PreviewError> {
-    // A non-zero exit is a viewer failure the user should see, not just a
-    // spawn failure — collapse both into the same "child error" slot.
-    let child_err = status.and_then(|r| match r {
-        Ok(st) if !st.success() => {
-            Some(io::Error::other(format!("claude-history exited with {st}")))
-        }
-        Ok(_) => None,
-        Err(e) => Some(e),
-    });
-    match (suspend_err, child_err, restore_err) {
-        (None, None, None) => Ok(()),
-        (Some(e), _, None) => Err(PreviewError::Fatal(
-            anyhow::Error::from(e).context("failed to leave alt screen"),
-        )),
-        // Restore is the state that governs the next frame, so its error
-        // surfaces first with the suspend error folded in.
-        (Some(se), _, Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
-            format!("failed to restore terminal (suspend also failed: {se})"),
-        ))),
-        (None, None, Some(re)) => Err(PreviewError::Fatal(
-            anyhow::Error::from(re).context("failed to restore terminal"),
-        )),
-        (None, Some(e), None) => Err(PreviewError::Viewer(
-            anyhow::Error::from(e).context("failed to run claude-history"),
-        )),
-        // Restore failure surfaces first — a broken terminal is more urgent
-        // than a missing viewer — with the child error folded in.
-        (None, Some(ce), Some(re)) => Err(PreviewError::Fatal(anyhow::Error::from(re).context(
-            format!("failed to restore terminal (child also failed: {ce})"),
-        ))),
-    }
-}
-
-fn suspend_terminal() -> io::Result<()> {
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    Ok(())
-}
-
-fn resume_terminal(terminal: &mut DefaultTerminal) -> io::Result<()> {
-    enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    terminal.clear()?;
-    Ok(())
 }
 
 /// Opens `url` in the browser via the platform's default opener. Unlike a
@@ -828,110 +830,6 @@ mod tests {
     }
 
     // =========================================================================
-    // combine_preview_result tests
-    // =========================================================================
-
-    fn io_err(msg: &str) -> io::Error {
-        io::Error::other(msg)
-    }
-
-    fn exit_ok() -> io::Result<std::process::ExitStatus> {
-        exit_status(0)
-    }
-
-    fn exit_nonzero() -> io::Result<std::process::ExitStatus> {
-        // On unix, from_raw takes a wait(2) status; 1 << 8 == exit code 1.
-        exit_status(1 << 8)
-    }
-
-    fn exit_status(raw: i32) -> io::Result<std::process::ExitStatus> {
-        // The repository is Unix-only (tmux + Unix APIs throughout), so no
-        // Windows path.
-        use std::os::unix::process::ExitStatusExt;
-        Ok(std::process::ExitStatus::from_raw(raw))
-    }
-
-    /// Categorized outcome for whole-value equality on `combine_preview_result`.
-    /// The tag identifies whether the caller should treat the failure as fatal
-    /// (terminal broken) or viewer-only.
-    #[derive(Debug, PartialEq, Eq)]
-    enum ExpectedOutcome {
-        Ok,
-        Fatal(String),
-        Viewer(String),
-    }
-
-    fn categorize(res: std::result::Result<(), PreviewError>) -> ExpectedOutcome {
-        match res {
-            Ok(()) => ExpectedOutcome::Ok,
-            Err(PreviewError::Fatal(e)) => ExpectedOutcome::Fatal(format!("{e:#}")),
-            Err(PreviewError::Viewer(e)) => ExpectedOutcome::Viewer(format!("{e:#}")),
-        }
-    }
-
-    fn fatal(s: &str) -> ExpectedOutcome {
-        ExpectedOutcome::Fatal(s.to_string())
-    }
-
-    fn viewer(s: &str) -> ExpectedOutcome {
-        ExpectedOutcome::Viewer(s.to_string())
-    }
-
-    #[rstest]
-    #[case::all_ok(None, Some(exit_ok()), None, ExpectedOutcome::Ok)]
-    #[case::child_spawn_error(
-        None,
-        Some(Err(io_err("boom"))),
-        None,
-        viewer("failed to run claude-history: boom")
-    )]
-    #[case::child_nonzero_exit(
-        None,
-        Some(exit_nonzero()),
-        None,
-        viewer("failed to run claude-history: claude-history exited with exit status: 1")
-    )]
-    #[case::restore_error(
-        None,
-        Some(exit_ok()),
-        Some(io_err("bad")),
-        fatal("failed to restore terminal: bad")
-    )]
-    // When both child and restore fail the restore error surfaces first —
-    // a broken terminal is more urgent than a missing viewer — with the
-    // child error folded in as context.
-    #[case::child_and_restore_error(
-        None,
-        Some(Err(io_err("no bin"))),
-        Some(io_err("no tty")),
-        fatal("failed to restore terminal (child also failed: no bin): no tty")
-    )]
-    // If suspend fails, callers pass status=None (no spawn happened) but
-    // restore is still attempted; the suspend error surfaces as fatal.
-    #[case::suspend_error_only(
-        Some(io_err("suspend")),
-        None,
-        None,
-        fatal("failed to leave alt screen: suspend")
-    )]
-    #[case::suspend_and_restore_error(
-        Some(io_err("suspend")),
-        None,
-        Some(io_err("no tty")),
-        fatal("failed to restore terminal (suspend also failed: suspend): no tty")
-    )]
-    fn test_combine_preview_result(
-        #[case] suspend_err: Option<io::Error>,
-        #[case] status: Option<io::Result<std::process::ExitStatus>>,
-        #[case] restore_err: Option<io::Error>,
-        #[case] expected: ExpectedOutcome,
-    ) {
-        assert_eq!(
-            categorize(combine_preview_result(suspend_err, status, restore_err)),
-            expected,
-        );
-    }
-
     // =========================================================================
     // Status filter key binding tests
     // =========================================================================

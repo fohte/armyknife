@@ -420,20 +420,38 @@ impl GitHubMockServer {
 
     /// Mock a one-branch GraphQL pull request query.
     pub async fn graphql_batch_pull_request(&self, pull_request: serde_json::Value) {
-        Mock::given(method("POST"))
+        self.mount_graphql_batch_pull_request(pull_request, false)
+            .await;
+    }
+
+    /// Mock a batched pull request query that also requests the latest CI state.
+    pub async fn graphql_batch_pull_request_with_ci(&self, pull_request: serde_json::Value) {
+        self.mount_graphql_batch_pull_request(pull_request, true)
+            .await;
+    }
+
+    async fn mount_graphql_batch_pull_request(
+        &self,
+        pull_request: serde_json::Value,
+        require_ci: bool,
+    ) {
+        let mut mock = Mock::given(method("POST"))
             .and(path("/graphql"))
-            .and(body_string_contains("number title state url mergedAt"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": {
-                    "repo0": {
-                        "branch0": {
-                            "nodes": [pull_request]
-                        }
+            .and(body_string_contains("number title state url mergedAt"));
+        if require_ci {
+            mock = mock.and(body_string_contains("statusCheckRollup { state }"));
+        }
+        mock.respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "repo0": {
+                    "branch0": {
+                        "nodes": [pull_request]
                     }
                 }
-            })))
-            .mount(&self.server)
-            .await;
+            }
+        })))
+        .mount(&self.server)
+        .await;
     }
 
     /// Mock GET /user for current user.

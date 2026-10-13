@@ -11,6 +11,7 @@ use crate::commands::agent::tui::app::{App, View};
 use crate::commands::agent::tui::tq_sidebar::SidebarSelection;
 
 use super::clean_list::render_clean_list;
+use super::progress::render_progress;
 use super::session_list::render_session_list;
 use super::tq_sidebar::{SIDEBAR_PERCENTAGE, minimum_total_width, render_tq_sidebar};
 
@@ -22,19 +23,29 @@ pub(super) fn render_main_list(frame: &mut Frame, area: Rect, app: &mut App, now
             if app.narrow_layout {
                 if app.sidebar_focused {
                     render_tq_sidebar(frame, area, app);
+                } else if app.progress_focused {
+                    render_progress(frame, area, app);
                 } else {
                     render_session_list(frame, area, app, now);
                 }
             } else if app.sidebar_visible && sidebar_available {
-                let [sidebar_area, session_area] = Layout::horizontal([
+                let [sidebar_area, session_area, progress_area] = Layout::horizontal([
                     Constraint::Percentage(SIDEBAR_PERCENTAGE),
-                    Constraint::Percentage(100 - SIDEBAR_PERCENTAGE),
+                    Constraint::Percentage((100 - SIDEBAR_PERCENTAGE) / 2),
+                    Constraint::Percentage(
+                        100 - SIDEBAR_PERCENTAGE - (100 - SIDEBAR_PERCENTAGE) / 2,
+                    ),
                 ])
                 .areas(area);
                 render_tq_sidebar(frame, sidebar_area, app);
                 render_session_list(frame, session_area, app, now);
+                render_progress(frame, progress_area, app);
             } else {
-                render_session_list(frame, area, app, now);
+                let [session_area, progress_area] =
+                    Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .areas(area);
+                render_session_list(frame, session_area, app, now);
+                render_progress(frame, progress_area, app);
             }
         }
         View::Clean => render_clean_list(frame, area, app, now),

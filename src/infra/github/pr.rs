@@ -36,6 +36,22 @@ pub struct PrInfo {
     pub url: String,
 }
 
+/// Aggregated check status for a pull request's latest commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrCiState {
+    Waiting,
+    InProgress,
+    Successful,
+    Unknown,
+}
+
+/// Pull request details used by the agent watch progress pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrProgressInfo {
+    pub pull_request: PrInfo,
+    pub ci_state: PrCiState,
+}
+
 /// Parameters for updating a pull request.
 #[derive(Debug, Clone)]
 pub struct UpdatePrParams {
@@ -179,15 +195,36 @@ impl GitHubClient {
         &self,
         queries: &[BranchPrQuery],
     ) -> Result<HashMap<(String, String, String), Option<PrInfo>>> {
+        let progress = self.query_prs_batch(queries, false).await?;
+        Ok(progress
+            .into_iter()
+            .map(|(key, info)| (key, info.map(|info| info.pull_request)))
+            .collect())
+    }
+
+    /// Fetch PR and latest-commit check status for multiple repo/branch pairs.
+    pub async fn get_pr_progress_for_branches_batch(
+        &self,
+        queries: &[BranchPrQuery],
+    ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
+        self.query_prs_batch(queries, true).await
+    }
+
+    async fn query_prs_batch(
+        &self,
+        queries: &[BranchPrQuery],
+        include_ci_state: bool,
+    ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
         if queries.is_empty() {
             return Ok(HashMap::new());
         }
 
-        let mut all_results: HashMap<(String, String, String), Option<PrInfo>> = HashMap::new();
+        let mut all_results: HashMap<(String, String, String), Option<PrProgressInfo>> =
+            HashMap::new();
 
         // Split into chunks to stay within GraphQL complexity limits
         for chunk in queries.chunks(BATCH_SIZE) {
-            let chunk_results = self.execute_batch_query(chunk).await?;
+            let chunk_results = self.execute_batch_query(chunk, include_ci_state).await?;
             all_results.extend(chunk_results);
         }
 
@@ -201,7 +238,8 @@ impl GitHubClient {
     async fn execute_batch_query(
         &self,
         queries: &[BranchPrQuery],
-    ) -> Result<HashMap<(String, String, String), Option<PrInfo>>> {
+        include_ci_state: bool,
+    ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
         // Group queries by (owner, repo) so each repo appears once in the GraphQL query
         let mut repo_branches: HashMap<(String, String), Vec<(usize, String)>> = HashMap::new();
         for (i, q) in queries.iter().enumerate() {
@@ -231,6 +269,11 @@ impl GitHubClient {
 
             let mut branch_parts = Vec::new();
             let mut branch_alias_map = HashMap::new();
+            let pr_fields = if include_ci_state {
+                "number title state url mergedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+            } else {
+                "number title state url mergedAt"
+            };
 
             for (branch_idx, (_, branch)) in branches.iter().enumerate() {
                 let branch_alias = format!("branch{branch_idx}");
@@ -243,7 +286,7 @@ impl GitHubClient {
                 );
 
                 branch_parts.push(format!(
-                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ number title state url mergedAt }} }}"
+                    "{branch_alias}: pullRequests(headRefName: ${branch_var}, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ {pr_fields} }} }}"
                 ));
                 branch_alias_map
                     .insert(branch_alias, (owner.clone(), repo.clone(), branch.clone()));
@@ -267,7 +310,7 @@ impl GitHubClient {
             .graphql::<serde_json::Value>(&query, serde_json::Value::Object(variables))
             .await?;
 
-        let mut results: HashMap<(String, String, String), Option<PrInfo>> = HashMap::new();
+        let mut results: HashMap<(String, String, String), Option<PrProgressInfo>> = HashMap::new();
 
         for (repo_alias, branch_aliases) in &alias_map {
             let repo_data = response.get(repo_alias);
@@ -278,7 +321,7 @@ impl GitHubClient {
                     .and_then(|pr_connection| pr_connection.get("nodes"))
                     .and_then(|nodes| nodes.as_array())
                     .and_then(|nodes| nodes.first())
-                    .and_then(parse_pr_node);
+                    .and_then(parse_pr_progress_node);
 
                 results.insert(key.clone(), pr_info);
             }
@@ -320,6 +363,30 @@ fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
     })
 }
 
+fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgressInfo> {
+    let pull_request = parse_pr_node(node)?;
+    let ci_state = node
+        .get("commits")
+        .and_then(|commits| commits.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|nodes| nodes.first())
+        .and_then(|node| node.get("commit"))
+        .and_then(|commit| commit.get("statusCheckRollup"))
+        .and_then(|rollup| rollup.get("state"))
+        .and_then(serde_json::Value::as_str)
+        .map_or(PrCiState::Unknown, |state| match state {
+            "EXPECTED" => PrCiState::Waiting,
+            "PENDING" => PrCiState::InProgress,
+            "SUCCESS" => PrCiState::Successful,
+            _ => PrCiState::Unknown,
+        });
+
+    Some(PrProgressInfo {
+        pull_request,
+        ci_state,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -327,7 +394,10 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{BranchPrQuery, PrInfo, PrState, parse_pr_node};
+    use super::{
+        BranchPrQuery, PrCiState, PrInfo, PrProgressInfo, PrState, parse_pr_node,
+        parse_pr_progress_node,
+    };
 
     #[tokio::test]
     async fn batch_lookup_requests_and_returns_pull_request_title() {
@@ -361,6 +431,53 @@ mod tests {
                     title: "A merged change".to_string(),
                     state: PrState::Merged,
                     url: "https://github.com/owner/repo/pull/42".to_string(),
+                }),
+            )]),
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_progress_lookup_returns_latest_commit_check_state() {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.graphql_batch_pull_request_with_ci(json!({
+            "number": 7,
+            "title": "Example change",
+            "state": "OPEN",
+            "url": "https://github.com/example-org/example-project/pull/7",
+            "mergedAt": null,
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {"state": "PENDING"}
+                    }
+                }]
+            }
+        }))
+        .await;
+
+        let client = mock.client();
+        let query = BranchPrQuery {
+            owner: "example-org".to_string(),
+            repo: "example-project".to_string(),
+            branch: "example-branch".to_string(),
+        };
+        let actual = client
+            .get_pr_progress_for_branches_batch(std::slice::from_ref(&query))
+            .await
+            .expect("batch progress lookup");
+
+        assert_eq!(
+            actual,
+            HashMap::from([(
+                query.key(),
+                Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 7,
+                        title: "Example change".to_string(),
+                        state: PrState::Open,
+                        url: "https://github.com/example-org/example-project/pull/7".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
                 }),
             )]),
         );
@@ -402,5 +519,40 @@ mod tests {
         #[case] expected: Option<PrInfo>,
     ) {
         assert_eq!(parse_pr_node(&input), expected);
+    }
+
+    #[rstest]
+    #[case::waiting("EXPECTED", PrCiState::Waiting)]
+    #[case::in_progress("PENDING", PrCiState::InProgress)]
+    #[case::successful("SUCCESS", PrCiState::Successful)]
+    #[case::unhandled_failure("FAILURE", PrCiState::Unknown)]
+    fn parses_supported_ci_states(#[case] state: &str, #[case] expected: PrCiState) {
+        let input = json!({
+            "number": 7,
+            "title": "Example change",
+            "state": "OPEN",
+            "url": "https://github.com/example-org/example-project/pull/7",
+            "mergedAt": null,
+            "commits": {
+                "nodes": [{
+                    "commit": {
+                        "statusCheckRollup": {"state": state}
+                    }
+                }]
+            }
+        });
+
+        assert_eq!(
+            parse_pr_progress_node(&input),
+            Some(PrProgressInfo {
+                pull_request: PrInfo {
+                    number: 7,
+                    title: "Example change".to_string(),
+                    state: PrState::Open,
+                    url: "https://github.com/example-org/example-project/pull/7".to_string(),
+                },
+                ci_state: expected,
+            }),
+        );
     }
 }

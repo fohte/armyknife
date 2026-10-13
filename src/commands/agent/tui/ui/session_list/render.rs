@@ -239,7 +239,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -389,7 +389,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -465,7 +465,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -507,7 +507,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -622,7 +622,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
 
@@ -659,7 +659,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -673,7 +673,7 @@ mod tests {
              agent watch1 needs you · 0 running
              ── YOUR TURN ──────────────────────
             >◐  you     session-name ch just now
-             ?: keys   /: search   Esc: tasks"}
+             ?: keys   Tab: pane   Esc: sidebar"}
     )]
     #[case::omitted_note(
         "needs_attention",
@@ -683,7 +683,7 @@ mod tests {
              agent watch1 needs you · 0 running · 0 idl
              ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  session-name  just now
-             ?: keys   /: search   Esc: tasks   q: quit"}
+             ?: keys   Tab: pane   Esc: sidebar"}
     )]
     #[case::long_session_name_keeps_time_column(
         "needs_attention",
@@ -693,7 +693,7 @@ mod tests {
              agent watch1 needs you · 0 running · 0 idl
              ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  a-long-ses... just now
-             ?: keys   /: search   Esc: tasks   q: quit"}
+             ?: keys   Tab: pane   Esc: sidebar"}
     )]
     fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
         mut you_user_turn_session: Session,
@@ -745,7 +745,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -778,7 +778,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -829,7 +829,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -877,7 +877,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }
@@ -906,7 +906,7 @@ mod tests {
 
 
 
-             ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
+             ?: keys   Tab: pane   Esc: sidebar"};
 
         assert_eq!(output, expected);
     }

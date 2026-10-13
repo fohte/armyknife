@@ -16,11 +16,11 @@ use crate::commands::agent::types::DisplayStatus;
 
 use super::helpers::{DIM_FG, status_color, truncate};
 
-pub(super) const SIDEBAR_PERCENTAGE: u16 = 40;
-pub(super) const MIN_SESSION_LIST_WIDTH: u16 = 48;
+pub(super) const SIDEBAR_PERCENTAGE: u16 = 25;
+const MIN_TASK_OR_PROGRESS_WIDTH: u16 = 36;
 
 pub(super) fn minimum_total_width() -> u16 {
-    (MIN_SESSION_LIST_WIDTH * 100).div_ceil(100 - SIDEBAR_PERCENTAGE)
+    (MIN_TASK_OR_PROGRESS_WIDTH * 2 * 100).div_ceil(100 - SIDEBAR_PERCENTAGE)
 }
 
 pub(super) fn render_tq_sidebar(frame: &mut Frame, area: Rect, app: &mut App) {

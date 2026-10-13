@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::KeyEffects;
 use super::app::{App, AppMode, View};
 use super::event::KeyEvent;
-use super::{crit_key, sidebar_key, title_edit, worktree_session_children};
+use super::{crit_key, progress_key, sidebar_key, title_edit, worktree_session_children};
 use crate::commands::agent::resume;
 use crate::commands::agent::types::SessionStatus;
 use crate::infra::tmux;
@@ -219,6 +219,12 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 }
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
+    if app.mode == AppMode::Normal
+        && let Some(effects) = progress_key::handle(app, key)
+    {
+        return effects;
+    }
+
     if app.mode == AppMode::Normal && app.narrow_layout && app.sidebar_focused {
         return handle_narrow_sidebar_key_event(app, key);
     }
