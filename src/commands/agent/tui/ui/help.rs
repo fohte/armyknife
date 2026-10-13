@@ -24,7 +24,24 @@ pub(super) fn build_help_lines(app: &App) -> Vec<Line<'static>> {
         return vec![line];
     }
 
+    if app.mode == AppMode::Normal && app.progress_focused {
+        return build_progress_help_lines(bold);
+    }
+
     build_session_help_lines(app, bold)
+}
+
+fn build_progress_help_lines(bold: Style) -> Vec<Line<'static>> {
+    build_compact_help_line(
+        bold,
+        &[
+            ("j/k", "move"),
+            ("Enter", "open"),
+            ("Tab", "pane"),
+            ("Esc", "tasks"),
+            ("q", "quit"),
+        ],
+    )
 }
 
 fn clean_status_line(app: &App, bold: Style) -> Option<Line<'static>> {
@@ -241,6 +258,8 @@ fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>>
                     Span::raw(": expand  "),
                     Span::styled("r", bold),
                     Span::raw(": refresh  "),
+                    Span::styled("Tab", bold),
+                    Span::raw(": pane  "),
                     Span::styled("Esc", bold),
                     Span::raw(format!(": {escape_label}  ")),
                     Span::styled("q", bold),
@@ -255,6 +274,7 @@ fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>>
                     ("h/l", "tree"),
                     ("Enter", "select"),
                     ("r", "refresh"),
+                    ("Tab", "pane"),
                 ],
             )
         }
@@ -266,20 +286,19 @@ fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>>
         };
         let mut lines = build_full_session_list_help_lines(bold);
         lines.push(Line::from(vec![
-            Span::styled("  Esc", bold),
+            Span::styled("  Tab", bold),
+            Span::raw(": pane  "),
+            Span::styled("Esc", bold),
             Span::raw(format!(": {escape_label}")),
         ]));
         lines
     } else {
         let escape_label = if app.has_non_sidebar_filter() {
-            "clear filter"
+            "clear"
         } else {
-            "tasks"
+            "sidebar"
         };
-        build_compact_help_line(
-            bold,
-            &[("/", "search"), ("Esc", escape_label), ("q", "quit")],
-        )
+        build_compact_help_line(bold, &[("Tab", "pane"), ("Esc", escape_label)])
     }
 }
 

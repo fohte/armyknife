@@ -367,7 +367,7 @@ mod tests {
         let now = Utc::now();
         let sessions: Vec<Session> = vec![];
         let height = 8 + expected_lines.len() as u16;
-        let output = render_to_string_with(&sessions, None, now, 80, height, |app| {
+        let output = render_to_string_with(&sessions, None, now, 120, height, |app| {
             app.view = view;
             app.show_help = show_help;
         });

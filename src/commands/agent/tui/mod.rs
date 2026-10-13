@@ -4,6 +4,9 @@ mod clean_view;
 mod crit_key;
 mod event;
 mod pr_fetch;
+mod progress;
+mod progress_fetch;
+mod progress_key;
 mod session_key;
 mod session_rows;
 mod sidebar_key;
@@ -34,12 +37,14 @@ use self::app::App;
 #[cfg(test)]
 use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler, SessionChange, SessionChangeType};
+use self::progress::ProgressOpenTarget;
 use self::session_key::handle_key_event;
 use crate::shared::command;
 #[cfg(test)]
 use crossterm::event::{KeyCode, KeyModifiers};
 
 const TQ_SESSION_TASKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 struct TqRefreshSchedule {
     in_flight: bool,
@@ -82,6 +87,47 @@ impl TqRefreshSchedule {
     }
 }
 
+struct ProgressRefreshSchedule {
+    in_flight: bool,
+    pending_session_id: Option<String>,
+    next_periodic_refresh: Instant,
+}
+
+impl ProgressRefreshSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            in_flight: false,
+            pending_session_id: None,
+            next_periodic_refresh: now + PROGRESS_REFRESH_INTERVAL,
+        }
+    }
+
+    fn request(&mut self, session_id: Option<String>) {
+        self.pending_session_id = session_id;
+    }
+
+    fn periodic_refresh_due(&mut self, now: Instant) -> bool {
+        if now < self.next_periodic_refresh {
+            return false;
+        }
+        self.next_periodic_refresh = now + PROGRESS_REFRESH_INTERVAL;
+        true
+    }
+
+    fn fetch_completed(&mut self) {
+        self.in_flight = false;
+    }
+
+    fn start_pending(&mut self) -> Option<String> {
+        if self.in_flight {
+            return None;
+        }
+        let session_id = self.pending_session_id.take()?;
+        self.in_flight = true;
+        Some(session_id)
+    }
+}
+
 /// Runs the TUI application.
 pub fn run() -> Result<()> {
     let mut terminal = ratatui::init();
@@ -117,6 +163,8 @@ struct KeyEffects {
     fetch_task_url: Option<String>,
     /// User pressed `o`: leave watch and open this session's crit pane.
     open_crit_session_id: Option<String>,
+    /// User pressed Enter on a PROGRESS pane row.
+    open_progress_target: Option<ProgressOpenTarget>,
 }
 
 impl KeyEffects {
@@ -142,6 +190,9 @@ impl KeyEffects {
         if other.open_crit_session_id.is_some() {
             self.open_crit_session_id = other.open_crit_session_id;
         }
+        if other.open_progress_target.is_some() {
+            self.open_progress_target = other.open_progress_target;
+        }
     }
 }
 
@@ -166,6 +217,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let event_handler = EventHandler::new()?;
     let mut crit_session_id = None;
 
+    let mut progress_refresh_schedule = ProgressRefreshSchedule::new(Instant::now());
+    progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
+
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
     app.tq_refresh_started();
@@ -181,8 +235,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         let first_event = event_handler.next()?;
+        let selected_session_before_events = app.selected_session_id().map(str::to_owned);
         let mut needs_full_reload = false;
         let mut periodic_tq_refresh_due = false;
+        let mut periodic_progress_refresh_due = false;
         let mut change_map: HashMap<String, SessionChangeType> = HashMap::new();
         let mut effects = KeyEffects::default();
 
@@ -202,6 +258,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 AppEvent::Tick => {
                     if tq_refresh_schedule.periodic_refresh_due(Instant::now()) {
                         periodic_tq_refresh_due = true;
+                    }
+                    if progress_refresh_schedule.periodic_refresh_due(Instant::now()) {
+                        periodic_progress_refresh_due = true;
                     }
                 }
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
@@ -223,6 +282,10 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 }
                 AppEvent::CleanPrFetched(Err(err)) => {
                     app.set_clean_failed(err);
+                }
+                AppEvent::ProgressFetched { session_id, result } => {
+                    progress_refresh_schedule.fetch_completed();
+                    app.apply_progress_result(&session_id, result);
                 }
                 AppEvent::CleanLogEvents(events) => {
                     app.apply_clean_log_events(&events);
@@ -300,6 +363,16 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         if effects.open_crit_session_id.is_some() {
             crit_session_id = effects.open_crit_session_id;
         }
+        if let Some(target) = effects.open_progress_target {
+            match target {
+                ProgressOpenTarget::FocusPane(pane_id) => {
+                    if let Err(error) = crate::infra::tmux::focus_pane(&pane_id) {
+                        app.set_error(format!("Failed to focus pane: {error}"));
+                    }
+                }
+                ProgressOpenTarget::OpenUrl(url) => open_url(&mut app, &url),
+            }
+        }
 
         // Apply merged session changes in a single reload
         let mut sessions_changed = false;
@@ -319,6 +392,13 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         if sessions_changed {
             app.refresh_worktree_session_counts();
         }
+        let selected_session_after_events = app.selected_session_id().map(str::to_owned);
+        if selected_session_before_events != selected_session_after_events
+            || sessions_changed
+            || periodic_progress_refresh_due
+        {
+            progress_refresh_schedule.request(selected_session_after_events.clone());
+        }
         // A new session may already be tq-linked; refresh its prefix along
         // with periodic refreshes, coalescing requests while one is running.
         if new_session_created || periodic_tq_refresh_due {
@@ -329,6 +409,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 app.sessions.iter().map(|s| s.session_id.clone()).collect();
             app.tq_refresh_started();
             event_handler.start_tq_sidebar_fetch(local_session_ids);
+        }
+
+        if let Some(session_id) = progress_refresh_schedule.start_pending() {
+            app.begin_progress_refresh(&session_id);
+            event_handler.start_progress_fetch(session_id);
         }
 
         if app.should_quit {

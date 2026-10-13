@@ -6,12 +6,13 @@ use crate::commands::agent::user_turn::next_user_turn;
 use crate::shared::config::AgentConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use ratatui::widgets::ListState;
+use ratatui::widgets::{ListState, TableState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
+use super::progress::{FetchedProgress, ProgressRow, build_progress_rows};
 use super::session_rows::SessionTask;
 use super::tq_sidebar::SidebarSelection;
 use super::tq_snapshot::TqSnapshot;
@@ -141,6 +142,15 @@ pub struct App {
     pub sidebar_cursor: SidebarSelection,
     pub sidebar_collapsed: HashSet<SidebarSelection>,
     pub sidebar_list_state: ListState,
+    /// Selection and rendered rows for the PROGRESS pane.
+    pub(super) progress_list_state: ListState,
+    pub(super) progress_table_state: TableState,
+    pub(super) progress_rows: Vec<ProgressRow>,
+    pub(super) progress_session_id: Option<String>,
+    pub(super) progress_loading: bool,
+    pub(super) progress_error: Option<String>,
+    /// Whether the PROGRESS pane currently receives keyboard input.
+    pub progress_focused: bool,
 }
 
 impl App {
@@ -230,6 +240,13 @@ impl App {
             sidebar_cursor: SidebarSelection::All,
             sidebar_collapsed: HashSet::new(),
             sidebar_list_state: ListState::default(),
+            progress_list_state: ListState::default(),
+            progress_table_state: TableState::default(),
+            progress_rows: Vec::new(),
+            progress_session_id: None,
+            progress_loading: false,
+            progress_error: None,
+            progress_focused: false,
         };
         app.rebuild_row_order();
         app.list_state
@@ -255,6 +272,92 @@ impl App {
             .and_then(|i| self.row_sessions.get(i))
             .and_then(|opt| *opt)
             .and_then(|idx| self.sessions.get(idx))
+    }
+
+    pub(super) fn selected_session_id(&self) -> Option<&str> {
+        self.selected_session()
+            .map(|session| session.session_id.as_str())
+    }
+
+    pub(super) fn begin_progress_refresh(&mut self, session_id: &str) {
+        let Some(session) = self
+            .selected_session()
+            .filter(|session| session.session_id == session_id)
+            .cloned()
+        else {
+            return;
+        };
+        let work_row = build_progress_rows(&session, &[], &self.agent_config)
+            .into_iter()
+            .next();
+        if self.progress_session_id.as_deref() != Some(session_id) {
+            self.progress_rows = work_row.into_iter().collect();
+            self.progress_list_state.select(Some(0));
+            self.progress_table_state.select(None);
+            self.progress_session_id = Some(session_id.to_string());
+        } else if let Some(work_row) = work_row {
+            if let Some(first_row) = self.progress_rows.first_mut() {
+                *first_row = work_row;
+            } else {
+                self.progress_rows.push(work_row);
+            }
+        }
+        self.progress_loading = true;
+        self.progress_error = None;
+    }
+
+    pub(super) fn apply_progress_result(
+        &mut self,
+        session_id: &str,
+        result: Result<FetchedProgress, String>,
+    ) {
+        if self.selected_session_id() != Some(session_id) {
+            return;
+        }
+        match result {
+            Ok(progress) if progress.selected_session_id == session_id => {
+                let Some(selected) = self.selected_session().cloned() else {
+                    return;
+                };
+                let selected_progress_session_id = self
+                    .progress_list_state
+                    .selected()
+                    .and_then(|index| self.progress_rows.get(index))
+                    .map(|row| row.session_id().to_string());
+                self.progress_rows =
+                    build_progress_rows(&selected, &progress.delegated, &self.agent_config);
+                let selected_index = selected_progress_session_id
+                    .and_then(|selected_id| {
+                        self.progress_rows
+                            .iter()
+                            .position(|row| row.session_id() == selected_id)
+                    })
+                    .unwrap_or(0);
+                self.progress_list_state.select(Some(selected_index));
+                self.progress_table_state
+                    .select(selected_index.checked_sub(1));
+                self.progress_session_id = Some(session_id.to_string());
+                self.progress_loading = false;
+                self.progress_error = progress.github_error;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.progress_loading = false;
+                self.progress_error = Some(error);
+            }
+        }
+    }
+
+    pub(super) fn select_progress_row(&mut self, delta: isize) {
+        if self.progress_rows.is_empty() {
+            return;
+        }
+        let current = self.progress_list_state.selected().unwrap_or(0);
+        let next = current
+            .saturating_add_signed(delta)
+            .min(self.progress_rows.len() - 1);
+        self.progress_list_state.select(Some(next));
+        self.progress_table_state.select(next.checked_sub(1));
     }
 
     fn restore_initial_selection(

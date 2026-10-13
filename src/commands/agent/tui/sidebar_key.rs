@@ -6,8 +6,7 @@ use super::event::KeyEvent;
 
 pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     if app.narrow_layout
-        && (!app.sidebar_focused
-            || matches!(key.code, KeyCode::Tab)
+        && ((!app.sidebar_focused && key.code != KeyCode::Tab)
             || (key.code == KeyCode::Char('b') && key.modifiers == KeyModifiers::CONTROL))
     {
         return None;

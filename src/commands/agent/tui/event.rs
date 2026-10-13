@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
+use super::progress::FetchedProgress;
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
@@ -56,6 +57,11 @@ pub enum AppEvent {
     SessionLabelsResolved(Vec<(PathBuf, String, String)>),
     /// PR status fetch for the clean view completed.
     CleanPrFetched(std::result::Result<Vec<CleanRow>, String>),
+    /// PR progress for the currently selected session finished loading.
+    ProgressFetched {
+        session_id: String,
+        result: std::result::Result<FetchedProgress, String>,
+    },
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
     /// tq sidebar snapshot fetch completed. `Ok(None)` means the fetch was
@@ -165,6 +171,22 @@ impl EventHandler {
         rt.spawn(async move {
             let result = super::pr_fetch::fetch_clean_inputs(rows, sessions).await;
             let _ = tx.send(AppEvent::CleanPrFetched(result));
+        });
+    }
+
+    /// Fetch delegated sessions and their PR progress for the selected task.
+    pub fn start_progress_fetch(&self, session_id: String) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::ProgressFetched {
+                session_id,
+                result: Err("tokio runtime is not available".to_string()),
+            });
+            return;
+        };
+        rt.spawn(async move {
+            let result = super::progress_fetch::fetch_progress(session_id.clone()).await;
+            let _ = tx.send(AppEvent::ProgressFetched { session_id, result });
         });
     }
 
