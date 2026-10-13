@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::client::GitHubClient;
 use super::error::Result;
-use super::pr::{PrProgressInfo, parse_pr_progress_node};
+use super::pr::{PR_PROGRESS_FIELDS, PrProgressInfo, parse_pr_progress_node};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Identifies a pull request by repository and number.
@@ -62,8 +62,8 @@ impl GitHubClient {
             let repo_alias = format!("repo{repo_index}");
             let owner_var = format!("owner_{repo_index}");
             let repo_var = format!("repoName_{repo_index}");
-            variable_defs.push(format!("{}{}: String!", "$", owner_var));
-            variable_defs.push(format!("{}{}: String!", "$", repo_var));
+            variable_defs.push(format!("${owner_var}: String!"));
+            variable_defs.push(format!("${repo_var}: String!"));
             variables.insert(owner_var.clone(), serde_json::Value::String(owner.clone()));
             variables.insert(repo_var.clone(), serde_json::Value::String(repo.clone()));
 
@@ -72,14 +72,13 @@ impl GitHubClient {
             for (pull_request_index, (query_index, number)) in pull_requests.iter().enumerate() {
                 let pull_request_alias = format!("pr{pull_request_index}");
                 let number_var = format!("number_{repo_index}_{pull_request_index}");
-                variable_defs.push(format!("{}{}: Int!", "$", number_var));
+                variable_defs.push(format!("${number_var}: Int!"));
                 variables.insert(
                     number_var.clone(),
                     serde_json::Value::Number((*number).into()),
                 );
                 pull_request_parts.push(format!(
-                    "{}: pullRequest(number: {}{}) {{ number title state url mergedAt commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ state }} }} }} }} }}",
-                    pull_request_alias, "$", number_var
+                    "{pull_request_alias}: pullRequest(number: ${number_var}) {{ {PR_PROGRESS_FIELDS} }}"
                 ));
                 repo_aliases.insert(pull_request_alias, queries[*query_index].clone());
             }
@@ -102,7 +101,7 @@ impl GitHubClient {
             query_parts.join("\n  ")
         );
         let response: serde_json::Value = self
-            .graphql(&query, serde_json::Value::Object(variables))
+            .graphql_with_partial_data(&query, serde_json::Value::Object(variables))
             .await?;
 
         let mut results = HashMap::new();
@@ -175,6 +174,65 @@ mod tests {
                     ci_state: PrCiState::Successful,
                 }),
             )]),
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_valid_pr_when_another_number_is_missing() {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.graphql_pull_requests_by_number_with_ci(
+            vec![
+                None,
+                Some(json!({
+                    "number": 18,
+                    "title": "Add another sample feature",
+                    "state": "OPEN",
+                    "url": "https://github.com/example-org/example-project/pull/18",
+                    "mergedAt": null,
+                    "commits": {
+                        "nodes": [{
+                            "commit": {
+                                "statusCheckRollup": { "state": "SUCCESS" }
+                            }
+                        }]
+                    }
+                })),
+            ],
+            &[0],
+        )
+        .await;
+
+        let missing_query = PrNumberQuery {
+            owner: "example-org".to_string(),
+            repo: "example-project".to_string(),
+            number: 17,
+        };
+        let valid_query = PrNumberQuery {
+            number: 18,
+            ..missing_query.clone()
+        };
+
+        assert_eq!(
+            mock.client()
+                .get_pr_progress_for_numbers_batch(&[missing_query.clone(), valid_query.clone(),])
+                .await
+                .unwrap(),
+            HashMap::from([
+                (missing_query.key(), None),
+                (
+                    valid_query.key(),
+                    Some(PrProgressInfo {
+                        pull_request: PrInfo {
+                            number: 18,
+                            title: "Add another sample feature".to_string(),
+                            state: PrState::Open,
+                            url: "https://github.com/example-org/example-project/pull/18"
+                                .to_string(),
+                        },
+                        ci_state: PrCiState::Successful,
+                    }),
+                ),
+            ]),
         );
     }
 
